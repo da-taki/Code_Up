@@ -1,0 +1,300 @@
+/* =========================================================
+   ROOT VARIABLES (STRUCTURE ONLY)
+========================================================= */
+
+:root {
+  --bg-main: #0d1117;
+  --bg-panel: #0b1220;
+  --bg-soft: #161b22;
+
+  --text-main: #e6edf3;
+  --text-dim: #9da7b3;
+
+  --border-soft: rgba(148, 163, 184, 0.25);
+  --border-strong: rgba(148, 163, 184, 0.45);
+
+  --radius-lg: 16px;
+  --radius-md: 12px;
+  --radius-sm: 8px;
+
+  --gap-lg: 20px;
+  --gap-md: 14px;
+  --gap-sm: 8px;
+
+  --font-main: "JetBrains Mono", monospace;
+}
+
+/* =========================================================
+   RESET
+========================================================= */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+}
+
+/* =========================================================
+   BODY
+========================================================= */
+
+.cu-body {
+  min-height: 100vh;
+  background: var(--bg-main);
+  color: var(--text-main);
+  font-family: var(--font-main);
+  line-height: 1.5;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* =========================================================
+   HEADER
+========================================================= */
+
+.cu-header {
+  padding: 18px 5% 14px;
+  background: var(--bg-soft);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.cu-header-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.cu-title {
+  font-size: 1.9rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.cu-status-pill {
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-panel);
+}
+
+.cu-subtitle {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+
+.cu-hotkey {
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-soft);
+}
+
+/* =========================================================
+   MAIN LAYOUT
+========================================================= */
+
+.cu-main {
+  flex: 1;
+  display: flex;
+  gap: var(--gap-lg);
+  padding: 20px 5% 10px;
+  align-items: stretch;
+}
+
+/* =========================================================
+   PANELS (GENERIC)
+========================================================= */
+
+.cu-panel {
+  background: var(--bg-panel);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-soft);
+  padding: 12px;
+}
+
+/* =========================================================
+   SNIPPETS PANEL
+========================================================= */
+
+.cu-snippets {
+  width: 250px;
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+}
+
+.cu-panel-title {
+  font-size: 1rem;
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+
+.cu-snippet-list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.snippet-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-soft);
+  cursor: pointer;
+}
+
+.snippet-name {
+  font-size: 0.8rem;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.snippet-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.mini-btn {
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: var(--bg-soft);
+  border: 1px solid var(--border-soft);
+  font-size: 0.7rem;
+  color: var(--text-main);
+  cursor: pointer;
+}
+
+/* =========================================================
+   EDITOR PANEL
+========================================================= */
+
+.cu-editor-wrapper {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-md);
+}
+
+.cu-editor-region {
+  flex: 1;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  border: 1px solid var(--border-soft);
+}
+
+.cu-editor {
+  width: 100%;
+  height: 100%;
+}
+
+/* =========================================================
+   COMMAND BAR
+========================================================= */
+
+.cu-command-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-sm);
+}
+
+/* =========================================================
+   BUTTONS (BASE ONLY)
+========================================================= */
+
+.cu-button,
+.cu-button-secondary,
+.cu-button-voice {
+  padding: 10px 18px;
+  font-size: 0.85rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-soft);
+  cursor: pointer;
+  background: var(--bg-soft);
+  color: var(--text-main);
+}
+
+.cu-button-secondary {
+  background: #1f2933;
+}
+
+.cu-button-voice {
+  background: #5b0000;
+  color: white;
+}
+
+/* =========================================================
+   OUTPUT PANEL
+========================================================= */
+
+.cu-output-wrapper {
+  margin: 10px 5% 12px;
+  padding: 10px;
+}
+
+.cu-output {
+  width: 100%;
+  min-height: 90px;
+  border-radius: var(--radius-md);
+  background: #020617;
+  border: 1px solid var(--border-soft);
+  padding: 10px;
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+}
+
+/* =========================================================
+   RESPONSIVE
+========================================================= */
+
+@media (max-width: 900px) {
+  .cu-main {
+    flex-direction: column;
+  }
+
+  .cu-snippets {
+    width: 100%;
+  }
+}
+
+.ai-bubble {
+  margin-top: 8px;
+  padding: 8px 12px;
+  font-size: 0.8rem;
+  border-radius: 10px;
+  background: rgba(248,113,113,0.15);
+  border: 1px solid rgba(248,113,113,0.4);
+  box-shadow: 0 0 12px rgba(248,113,113,0.4);
+}
+
+.cu-voice-console {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.cu-voice-input {
+  flex: 1;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(148,163,184,0.45);
+  background: #020617;
+  color: #e5e7eb;
+  font-size: 0.8rem;
+}
+

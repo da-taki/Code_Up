@@ -1,0 +1,242 @@
+/* =========================================================
+   UI IMPROVEMENTS - Modern, responsive, accessible design
+========================================================= */
+
+/* Better button styling */
+.cu-button {
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--border-soft);
+}
+
+.cu-button:hover:not(:disabled) {
+  background: var(--bg-soft);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  transform: translateY(-2px);
+}
+
+.cu-button:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+}
+
+.cu-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Primary button (Run) */
+.cu-button-primary {
+  background: linear-gradient(135deg, #00d9ff, #0099cc);
+  color: #000;
+  font-weight: 600;
+  border: none;
+}
+
+.cu-button-primary:hover:not(:disabled) {
+  background: linear-gradient(135deg, #00f0ff, #00aadd);
+  box-shadow: 0 4px 16px rgba(0, 217, 255, 0.4);
+}
+
+/* Better subtitle info */
+.cu-subtitle-info {
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  margin-top: 4px;
+  opacity: 0.8;
+}
+
+/* Improved command bar spacing */
+.cu-command-bar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 12px;
+  background: var(--bg-panel);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-soft);
+}
+
+/* Enhanced AI bubble styling */
+.ai-bubble {
+  background: linear-gradient(135deg, rgba(0, 217, 255, 0.1), rgba(0, 153, 204, 0.1));
+  border: 1px solid rgba(0, 217, 255, 0.3);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  margin: 8px;
+  font-size: 0.85rem;
+  animation: fadeInUp 0.3s ease;
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Better snippet list styling */
+.cu-snippet-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cu-snippet-item {
+  padding: 8px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  background: var(--bg-panel);
+  transition: all 0.2s ease;
+  word-break: break-word;
+}
+
+.cu-snippet-item:hover {
+  background: var(--bg-soft);
+  border-color: var(--border-strong);
+  transform: translateX(2px);
+}
+
+.cu-snippet-item.active {
+  background: rgba(0, 217, 255, 0.15);
+  border-color: rgba(0, 217, 255, 0.4);
+}
+
+/* Improved output formatting */
+.cu-output {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  max-height: 400px;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.cu-output-error {
+  color: #ff6b6b;
+  background: rgba(255, 107, 107, 0.1);
+  border-left: 3px solid #ff6b6b;
+  padding: 8px;
+  border-radius: 4px;
+  margin: 8px 0;
+}
+
+.cu-output-success {
+  color: #51cf66;
+  background: rgba(81, 207, 102, 0.1);
+  border-left: 3px solid #51cf66;
+  padding: 8px;
+  border-radius: 4px;
+  margin: 8px 0;
+}
+
+.cu-output-info {
+  color: #74c0fc;
+  background: rgba(116, 192, 252, 0.1);
+  border-left: 3px solid #74c0fc;
+  padding: 8px;
+  border-radius: 4px;
+  margin: 8px 0;
+}
+
+/* Enhanced voice input */
+.cu-voice-input {
+  width: 100%;
+  padding: 10px;
+  background: var(--bg-soft);
+  color: var(--text-main);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-main);
+  font-size: 0.85rem;
+  transition: border-color 0.2s ease;
+}
+
+.cu-voice-input:focus {
+  outline: none;
+  border-color: rgba(0, 217, 255, 0.6);
+  box-shadow: 0 0 8px rgba(0, 217, 255, 0.2);
+}
+
+/* Panel improvements */
+.cu-panel {
+  border-radius: var(--radius-md);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+/* Panel title styling */
+.cu-panel-title {
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: rgba(0, 217, 255, 0.9);
+  margin-bottom: 12px;
+  font-size: 0.9rem;
+}
+
+/* Responsive improvements */
+@media (max-width: 1024px) {
+  .cu-button {
+    padding: 8px 12px;
+    font-size: 0.8rem;
+  }
+  
+  .cu-command-bar {
+    gap: 6px;
+  }
+}
+
+@media (max-width: 768px) {
+  .theme-controls {
+    width: 100%;
+    margin-left: 0 !important;
+  }
+  
+  .cu-command-bar {
+    flex-direction: column;
+  }
+  
+  .cu-button {
+    width: 100%;
+  }
+}
+
+/* Loading state */
+.cu-loading {
+  position: relative;
+  pointer-events: none;
+  opacity: 0.7;
+}
+
+.cu-loading::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  width: 16px;
+  height: 16px;
+  margin-top: -8px;
+  border: 2px solid var(--text-dim);
+  border-top-color: var(--text-main);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* Focus visible for keyboard navigation */
+.cu-button:focus-visible,
+.cu-voice-input:focus-visible {
+  outline: 2px solid rgba(0, 217, 255, 0.6);
+  outline-offset: 2px;
+}
+

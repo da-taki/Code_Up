@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>CodeUp – Blind-first Python IDE</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Blind-first, offline Python IDE with AI assistance.">
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;600;800&family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
+
+  <!-- CSS -->
+  <link rel="stylesheet" href="/static/style/core.css">
+  <link rel="stylesheet" href="/static/style/cyberpunk.css">
+  <link rel="stylesheet" href="/static/style/accessibility.css">
+  <link rel="stylesheet" href="/static/style/ui-improvements.css">
+
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs/editor/editor.main.min.css">
+</head>
+
+<body class="cu-body theme-default">
+
+  <canvas id="matrixCanvas"></canvas>
+
+  <header class="cu-header">
+    <div class="cu-header-top">
+      <div class="cu-title">CODEUP</div>
+      <div class="cu-status-pill">OLLAMA • PHI3:MINI</div>
+    </div>
+    <div class="cu-subtitle">
+      Blind-first, cyberpunk Python IDE with offline AI.
+      <span class="cu-hotkey">CTRL + ENTER</span> to run.
+        <div class="cu-subtitle-info">
+          <small>Fully keyboard accessible · Real-time execution · No external dependencies needed</small>
+        </div>
+        <select id="colorVisionMode" class="theme-selector" aria-label="Color vision mode">
+          <option value="default">Default Colors</option>
+          <option value="protanopia">Protanopia (Red-blind)</option>
+          <option value="deuteranopia">Deuteranopia (Green-blind)</option>
+          <option value="tritanopia">Tritanopia (Blue-blind)</option>
+          <option value="high-contrast">High Contrast</option>
+        </select>
+        
+        <button id="dyslexiaToggle" class="theme-toggle" aria-pressed="false" aria-label="Toggle dyslexia-friendly mode">
+          Dyslexia Mode
+        </button>
+        
+        <button id="motionToggle" class="theme-toggle" aria-pressed="false" aria-label="Toggle reduced motion">
+          Reduce Motion
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="cu-main">
+
+    <!-- SNIPPETS -->
+    <aside class="cu-panel cu-snippets">
+      <div class="cu-panel-title">SNIPPETS</div>
+      <div id="snippetList" class="cu-snippet-list"></div>
+    </aside>
+
+    <!-- EDITOR -->
+    <section class="cu-panel cu-editor-wrapper">
+
+      <div class="cu-editor-region">
+        <div id="editor" class="cu-editor"></div>
+      </div>
+
+      <div class="cu-command-bar">
+        <button class="cu-button cu-button-primary" onclick="runCode()" aria-label="Run Python code (Ctrl+Enter)">▶ Run</button>
+        <button class="cu-button" onclick="analyzeCode()" aria-label="Analyze code with AI">🔍 Analyze</button>
+        <button class="cu-button" onclick="fixCode()" aria-label="Fix code automatically">🔧 Fix</button>
+        <button class="cu-button cu-button-voice" onclick="toggleVoice()" id="voiceButton" aria-label="Toggle voice control">
+          🎤 Voice (Off)
+        </button>
+        <button class="cu-button cu-button-secondary" onclick="saveSnippet()" aria-label="Save current code as snippet">💾 Save</button>
+      </div>
+
+    </section>
+  </main>
+
+  <!-- OUTPUT + AI BUBBLE + COMMAND CONSOLE -->
+  <section class="cu-panel cu-output-wrapper">
+    <div id="output" class="cu-output"></div>
+
+    <div id="aiBubble" class="ai-bubble" style="display:none;">
+      Idle.
+    </div>
+
+    <div class="cu-voice-console">
+      <div class="cu-panel-title" style="font-size:0.75rem; margin-bottom:4px;">
+        COMMAND INPUT
+      </div>
+      <input
+        id="voiceText"
+        class="cu-voice-input"
+        type="text"
+        placeholder="Voice & typed commands appear here..."
+        aria-label="Command input"
+      />
+      <button class="cu-button-secondary" onclick="submitCommand()">Send</button>
+    </div>
+  </section>
+
+  <script src="/static/bg.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs/loader.min.js"></script>
+  <script src="/static/app.js"></script>
+  
+  <!-- ACCESSIBILITY THEME SWITCHER -->
+  <script>
+    // Load saved preferences
+    function loadAccessibilityPreferences() {
+      const colorMode = localStorage.getItem('colorVisionMode') || 'default';
+      const dyslexiaMode = localStorage.getItem('dyslexiaMode') === 'true';
+      const reducedMotion = localStorage.getItem('reducedMotion') === 'true';
+      
+      // Apply color vision mode
+      document.getElementById('colorVisionMode').value = colorMode;
+      applyColorVisionMode(colorMode);
+      
+      // Apply dyslexia mode
+      if (dyslexiaMode) {
+        document.body.classList.add('theme-dyslexia');
+        document.getElementById('dyslexiaToggle').classList.add('active');
+        document.getElementById('dyslexiaToggle').setAttribute('aria-pressed', 'true');
+      }
+      
+      // Apply reduced motion
+      if (reducedMotion) {
+        document.body.classList.add('theme-reduced-motion');
+        document.getElementById('motionToggle').classList.add('active');
+        document.getElementById('motionToggle').setAttribute('aria-pressed', 'true');
+      }
+    }
+    
+    // Apply color vision mode
+    function applyColorVisionMode(mode) {
+      // Remove all color vision classes
+      document.body.classList.remove('theme-protanopia', 'theme-deuteranopia', 'theme-tritanopia', 'theme-high-contrast', 'theme-default');
+      
+      // Add selected class
+      if (mode !== 'default') {
+        document.body.classList.add('theme-' + mode);
+      } else {
+        document.body.classList.add('theme-default');
+      }
+      
+      // Save preference
+      localStorage.setItem('colorVisionMode', mode);
+      
+      // Announce change
+      if (window.speechSynthesis) {
+        const modeNames = {
+          'default': 'Default colors',
+          'protanopia': 'Protanopia mode for red-blind users',
+          'deuteranopia': 'Deuteranopia mode for green-blind users',
+          'tritanopia': 'Tritanopia mode for blue-blind users',
+          'high-contrast': 'High contrast mode'
+        };
+        speak(modeNames[mode] + ' activated.');
+      }
+    }
+    
+    // Color vision mode selector
+    document.getElementById('colorVisionMode').addEventListener('change', function(e) {
+      applyColorVisionMode(e.target.value);
+    });
+    
+    // Dyslexia toggle
+    document.getElementById('dyslexiaToggle').addEventListener('click', function() {
+      const isActive = document.body.classList.toggle('theme-dyslexia');
+      this.classList.toggle('active');
+      this.setAttribute('aria-pressed', isActive);
+      localStorage.setItem('dyslexiaMode', isActive);
+      
+      if (window.speechSynthesis) {
+        speak(isActive ? 'Dyslexia-friendly mode activated.' : 'Dyslexia-friendly mode deactivated.');
+      }
+    });
+    
+    // Reduced motion toggle
+    document.getElementById('motionToggle').addEventListener('click', function() {
+      const isActive = document.body.classList.toggle('theme-reduced-motion');
+      this.classList.toggle('active');
+      this.setAttribute('aria-pressed', isActive);
+      localStorage.setItem('reducedMotion', isActive);
+      
+      if (window.speechSynthesis) {
+        speak(isActive ? 'Reduced motion mode activated.' : 'Reduced motion mode deactivated.');
+      }
+    });
+    
+    // Load preferences on page load
+    window.addEventListener('DOMContentLoaded', loadAccessibilityPreferences);
+    
+    // Detect system preference for reduced motion
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      if (!localStorage.getItem('reducedMotion')) {
+        document.body.classList.add('theme-reduced-motion');
+        document.getElementById('motionToggle').classList.add('active');
+        document.getElementById('motionToggle').setAttribute('aria-pressed', 'true');
+      }
+    }
+    
+    // Add keyboard shortcuts for accessibility
+    document.addEventListener('keydown', function(e) {
+      // Alt+A: Toggle color vision mode
+      if (e.altKey && e.key === 'a') {
+        e.preventDefault();
+        const selector = document.getElementById('colorVisionMode');
+        const currentIndex = selector.selectedIndex;
+        const nextIndex = (currentIndex + 1) % selector.options.length;
+        selector.selectedIndex = nextIndex;
+        applyColorVisionMode(selector.value);
+      }
+      
+      // Alt+D: Toggle dyslexia mode
+      if (e.altKey && e.key === 'd') {
+        e.preventDefault();
+        document.getElementById('dyslexiaToggle').click();
+      }
+      
+      // Alt+M: Toggle reduced motion
+      if (e.altKey && e.key === 'm') {
+        e.preventDefault();
+        document.getElementById('motionToggle').click();
+      }
+    });
+    
+    // Announce shortcuts on first load
+    if (!localStorage.getItem('accessibilityAnnouncementMade')) {
+      setTimeout(() => {
+        if (window.speechSynthesis) {
+          speak('Accessibility features available. Press Alt+A to cycle color modes, Alt+D for dyslexia mode, Alt+M for reduced motion.');
+        }
+        localStorage.setItem('accessibilityAnnouncementMade', 'true');
+      }, 2000);
+    }
+  </script>
+
+</body>
+</html>

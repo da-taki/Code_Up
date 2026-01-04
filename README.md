@@ -14,6 +14,7 @@ Static and semantic analysis
 AI assistance is optional, strictly separated from deterministic tooling, and never required to use the system.
 
 Core Features
+
 🔹 Code Execution with Trace
 
 Executes Python code inside a restricted sandbox

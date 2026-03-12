@@ -765,6 +765,9 @@ require(["vs/editor/editor.main"], function () {
     try{ fn(); } catch(e){ console.warn('editor queued fn failed', e); }
   }
   
+  // Register Python autocomplete provider
+  registerPythonAutocomplete();
+  
   // Register shortcuts ONCE here
   registerEditorShortcuts();
   loadSnippets();
@@ -1775,3 +1778,1022 @@ function speakNextStep() {
     speak(`Line ${step.line}. ${step.changes.join(". ")}`);
   }
 }
+
+// ==========================================
+// STRUCTURE PANEL (CODE NAVIGATION)
+// ==========================================
+
+let lastStructureData = null;
+
+/**
+ * Parse and display code structure for navigation
+ */
+async function updateStructurePanel() {
+  if (!editor) return;
+  
+  const code = editor.getValue();
+  const panel = document.getElementById("structurePanel");
+  const content = document.getElementById("structureContent");
+  
+  if (!code.trim()) {
+    panel.style.display = "none";
+    return;
+  }
+  
+  try {
+    const res = await fetch("/structure", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code })
+    });
+    
+    const data = await res.json();
+    
+    if (!data.success || !data.structure) {
+      content.innerHTML = '<p class="structure-info">Unable to parse structure.</p>';
+      panel.style.display = "block";
+      return;
+    }
+    
+    lastStructureData = data.structure;
+    
+    // Build HTML for structure
+    let html = '';
+    
+    const { imports, functions, classes, loops } = data.structure;
+    
+    // Imports
+    if (imports.length > 0) {
+      html += '<div class="structure-group">';
+      html += '<div class="structure-group-title">📦 Imports</div>';
+      imports.forEach(imp => {
+        html += `<div class="structure-item" onclick="gotoLine(1)" role="button" tabindex="0">
+          <span class="structure-item-icon">📦</span>
+          <span class="structure-item-label">${escapeHtml(imp)}</span>
+        </div>`;
+      });
+      html += '</div>';
+    }
+    
+    // Classes
+    if (classes.length > 0) {
+      html += '<div class="structure-group">';
+      html += '<div class="structure-group-title">🏛️ Classes</div>';
+      classes.forEach(cls => {
+        html += `<div class="structure-item" onclick="gotoLine(${cls.line})" role="button" tabindex="0" aria-label="Go to class ${cls.name} at line ${cls.line}">
+          <span class="structure-item-icon">🏛️</span>
+          <span class="structure-item-label">${escapeHtml(cls.name)}</span>
+          <span class="structure-item-line">L${cls.line}</span>
+        </div>`;
+      });
+      html += '</div>';
+    }
+    
+    // Functions
+    if (functions.length > 0) {
+      html += '<div class="structure-group">';
+      html += '<div class="structure-group-title">⚙️ Functions</div>';
+      functions.forEach(fn => {
+        const params = fn.params.join(", ");
+        html += `<div class="structure-item" onclick="gotoLine(${fn.line})" role="button" tabindex="0" aria-label="Go to function ${fn.name} at line ${fn.line}">
+          <span class="structure-item-icon">⚙️</span>
+          <span class="structure-item-label">${escapeHtml(fn.name)}(${escapeHtml(params)})</span>
+          <span class="structure-item-line">L${fn.line}</span>
+        </div>`;
+      });
+      html += '</div>';
+    }
+    
+    // Loops
+    if (loops.length > 0) {
+      html += '<div class="structure-group">';
+      html += '<div class="structure-group-title">🔄 Loops</div>';
+      loops.forEach((loop, idx) => {
+        html += `<div class="structure-item" onclick="gotoLine(${loop.line})" role="button" tabindex="0" aria-label="Go to loop at line ${loop.line}">
+          <span class="structure-item-icon">🔄</span>
+          <span class="structure-item-label">Loop #${idx + 1}</span>
+          <span class="structure-item-line">L${loop.line}</span>
+        </div>`;
+      });
+      html += '</div>';
+    }
+    
+    if (!imports.length && !functions.length && !classes.length && !loops.length) {
+      html = '<p class="structure-info">No structures found.</p>';
+    }
+    
+    content.innerHTML = html;
+    panel.style.display = "block";
+    
+    // Add keyboard handlers
+    const items = content.querySelectorAll(".structure-item");
+    items.forEach(item => {
+      item.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          item.click();
+        }
+      });
+    });
+    
+  } catch (e) {
+    console.error("Structure parse error:", e);
+    content.innerHTML = '<p class="structure-info">Error parsing structure.</p>';
+    panel.style.display = "block";
+  }
+}
+
+/**
+ * Escape HTML to prevent XSS
+ */
+function escapeHtml(text) {
+  const div = document.createElement("div");
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+// Update structure panel when editor changes
+if (typeof editor !== 'undefined' && editor) {
+  editor.onDidChangeModelContent(() => {
+    updateStructurePanel();
+  });
+}
+
+// ==========================================
+// CODE AUTOCOMPLETE
+// ==========================================
+
+const PYTHON_KEYWORDS = [
+  "False", "None", "True", "and", "as", "assert", "async", "await",
+  "break", "class", "continue", "def", "del", "elif", "else", "except",
+  "finally", "for", "from", "global", "if", "import", "in", "is",
+  "lambda", "nonlocal", "not", "or", "pass", "raise", "return", "try",
+  "while", "with", "yield"
+];
+
+const PYTHON_BUILTINS = [
+  "abs", "all", "any", "ascii", "bin", "bool", "bytearray", "bytes",
+  "callable", "chr", "classmethod", "compile", "complex", "delattr",
+  "dict", "dir", "divmod", "enumerate", "eval", "exec", "filter",
+  "float", "format", "frozenset", "getattr", "globals", "hasattr",
+  "hash", "help", "hex", "id", "input", "int", "isinstance", "issubclass",
+  "iter", "len", "list", "locals", "map", "max", "memoryview", "min",
+  "next", "object", "oct", "open", "ord", "pow", "print", "property",
+  "range", "repr", "reversed", "round", "set", "setattr", "slice",
+  "sorted", "staticmethod", "str", "sum", "super", "tuple", "type",
+  "vars", "zip"
+];
+
+const PYTHON_SNIPPETS = {
+  "if": { label: "if statement", insertText: "if ${1:condition}:\n\t${0:pass}", kind: "Snippet" },
+  "for": { label: "for loop", insertText: "for ${1:item} in ${2:items}:\n\t${0:pass}", kind: "Snippet" },
+  "while": { label: "while loop", insertText: "while ${1:condition}:\n\t${0:pass}", kind: "Snippet" },
+  "def": { label: "function", insertText: "def ${1:function_name}(${2:args}):\n\t\"\"\"${3:docstring}\"\"\"\n\t${0:pass}", kind: "Snippet" },
+  "class": { label: "class", insertText: "class ${1:ClassName}:\n\t\"\"\"${2:docstring}\"\"\"\n\tdef __init__(self):\n\t\t${0:pass}", kind: "Snippet" },
+  "try": { label: "try-except", insertText: "try:\n\t${1:pass}\nexcept ${2:Exception} as ${3:e}:\n\t${0:pass}", kind: "Snippet" },
+  "with": { label: "with statement", insertText: "with ${1:context} as ${2:var}:\n\t${0:pass}", kind: "Snippet" },
+  "lambda": { label: "lambda function", insertText: "lambda ${1:x}: ${0:x}", kind: "Snippet" },
+  "list-comp": { label: "list comprehension", insertText: "[${1:x} for ${2:x} in ${3:items}]", kind: "Snippet" },
+  "dict-comp": { label: "dict comprehension", insertText: "{${1:k}: ${2:v} for ${3:k}, ${4:v} in ${5:items}}", kind: "Snippet" },
+  "__main__": { label: "main block", insertText: "if __name__ == \"__main__\":\n\t${0:main()}", kind: "Snippet" },
+};
+
+// Register Python autocomplete provider with Monaco
+function registerPythonAutocomplete() {
+  if (!monaco || !monaco.languages) return;
+  
+  monaco.languages.registerCompletionItemProvider("python", {
+    provideCompletionItems: function(model, position) {
+      const word = model.getWordUntilPosition(position);
+      const range = {
+        startLineNumber: position.lineNumber,
+        endLineNumber: position.lineNumber,
+        startColumn: word.startColumn,
+        endColumn: word.endColumn
+      };
+
+      const suggestions = [];
+
+      // Extract variable names from current code
+      const codeText = model.getValue();
+      const variableMatches = codeText.match(/^[a-zA-Z_]\w*/gm) || [];
+      const variables = [...new Set(variableMatches)];
+
+      // Add Python keywords
+      PYTHON_KEYWORDS.forEach(keyword => {
+        suggestions.push({
+          label: keyword,
+          kind: monaco.languages.CompletionItemKind.Keyword,
+          insertText: keyword,
+          range: range
+        });
+      });
+
+      // Add Python built-in functions
+      PYTHON_BUILTINS.forEach(fn => {
+        suggestions.push({
+          label: fn + "()",
+          kind: monaco.languages.CompletionItemKind.Function,
+          insertText: fn + "($0)",
+          range: range,
+          sortText: "1_" + fn  // Sort after keywords
+        });
+      });
+
+      // Add snippets
+      Object.entries(PYTHON_SNIPPETS).forEach(([key, snippet]) => {
+        suggestions.push({
+          label: snippet.label,
+          kind: monaco.languages.CompletionItemKind.Snippet,
+          insertText: snippet.insertText,
+          insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+          range: range,
+          sortText: "2_" + key  // Sort after keywords and functions
+        });
+      });
+
+      // Add detected variables
+      variables.forEach(varName => {
+        if (!PYTHON_KEYWORDS.includes(varName) && !PYTHON_BUILTINS.includes(varName)) {
+          suggestions.push({
+            label: varName,
+            kind: monaco.languages.CompletionItemKind.Variable,
+            insertText: varName,
+            range: range,
+            sortText: "3_" + varName  // Sort after snippets
+          });
+        }
+      });
+
+      return { suggestions: suggestions };
+    },
+    triggerCharacters: []
+  });
+}
+
+// ==========================================
+// EXECUTION TIMELINE PLAYBACK
+// ==========================================
+
+let executionPlayback = {
+  trace: [],
+  isPlaying: false,
+  currentStep: 0,
+  playSpeed: 1, // 1.0 = normal, 0.5 = slow, 2.0 = fast
+};
+
+/**
+ * Start execution playback (replay the last execution)
+ */
+async function replayExecution() {
+  if (!window.executionTrace || window.executionTrace.length === 0) {
+    speak("No execution to replay. Run code first.");
+    out("No execution trace available.");
+    return;
+  }
+  
+  executionPlayback.trace = window.executionTrace;
+  executionPlayback.currentStep = 0;
+  executionPlayback.isPlaying = true;
+  
+  speak("Starting execution playback.");
+  out("Execution playback started. " + executionPlayback.trace.length + " steps.");
+  
+  await playbackStep();
+}
+
+/**
+ * Play next step in execution
+ */
+async function playbackStep() {
+  if (!executionPlayback.isPlaying || executionPlayback.currentStep >= executionPlayback.trace.length) {
+    executionPlayback.isPlaying = false;
+    if (executionPlayback.currentStep >= executionPlayback.trace.length) {
+      speak("Execution playback complete.");
+    }
+    return;
+  }
+  
+  const step = executionPlayback.trace[executionPlayback.currentStep];
+  
+  // Build description of this step
+  let description = `Step ${executionPlayback.currentStep + 1}. Line ${step.line || "unknown"}.`;
+  if (step.changes && step.changes.length > 0) {
+    description += " " + step.changes[0];
+  }
+  if (step.output) {
+    description += ` Output: ${step.output}`;
+  }
+  
+  // Speak the step
+  await SpeechManager.enqueue(description);
+  
+  // Highlight the line in editor if possible
+  if (step.line && editor) {
+    editor.setPosition({ lineNumber: step.line, column: 1 });
+  }
+  
+  // Play a sonified tone for this line
+  try {
+    const lineContent = getCode().split("\n")[step.line - 1] || "";
+    sonifyLine(lineContent, 0);
+  } catch (e) {}
+  
+  // Move to next step
+  executionPlayback.currentStep++;
+  
+  // Schedule next step
+  const delay = 2000 / executionPlayback.playSpeed; // 2 seconds per step at normal speed
+  setTimeout(playbackStep, delay);
+}
+
+/**
+ * Pause playback
+ */
+function pausePlayback() {
+  executionPlayback.isPlaying = false;
+  speak("Playback paused.");
+}
+
+/**
+ * Resume playback
+ */
+async function resumePlayback() {
+  if (executionPlayback.currentStep >= executionPlayback.trace.length) {
+    speak("Execution playback complete.");
+    return;
+  }
+  
+  executionPlayback.isPlaying = true;
+  speak("Resuming playback.");
+  await playbackStep();
+}
+
+/**
+ * Set playback speed (0.5x, 1x, 2x, etc)
+ */
+function setPlaybackSpeed(speed) {
+  if (speed <= 0) {
+    speak("Invalid speed.");
+    return;
+  }
+  executionPlayback.playSpeed = speed;
+  const speedText = (speed).toFixed(1);
+  speak(`Playback speed set to ${speedText}x.`);
+}
+
+// ==========================================
+// FUNCTION/CLASS LEVEL SONIFICATION
+// ==========================================
+
+/**
+ * Sonify a specific function by name
+ */
+async function sonifyFunction(functionName) {
+  const code = getCode();
+  const lines = code.split("\n");
+  
+  // Find function definition
+  let startLine = -1;
+  let endLine = -1;
+  const funcPattern = new RegExp(`^\\s*def\\s+${functionName}\\s*\\(`, 'i');
+  
+  for (let i = 0; i < lines.length; i++) {
+    if (funcPattern.test(lines[i])) {
+      startLine = i + 1; // 1-indexed
+      
+      // Find end of function (next def/class or EOF)
+      const baseIndent = lines[i].search(/\S/);
+      for (let j = i + 1; j < lines.length; j++) {
+        const line = lines[j];
+        if (line.trim() === "") continue; // Skip empty lines
+        
+        const indent = line.search(/\S/);
+        if (indent <= baseIndent && line.trim() !== "") {
+          endLine = j;
+          break;
+        }
+      }
+      
+      if (endLine === -1) endLine = lines.length;
+      break;
+    }
+  }
+  
+  if (startLine === -1) {
+    speak(`Function ${functionName} not found.`);
+    return;
+  }
+  
+  speak(`Sonifying function ${functionName} from line ${startLine} to ${endLine}.`);
+  await sonifyRange(startLine, endLine, "function");
+}
+
+/**
+ * Sonify a specific class by name
+ */
+async function sonifyClass(className) {
+  const code = getCode();
+  const lines = code.split("\n");
+  
+  // Find class definition
+  let startLine = -1;
+  let endLine = -1;
+  const classPattern = new RegExp(`^\\s*class\\s+${className}\\s*[:\\(]`, 'i');
+  
+  for (let i = 0; i < lines.length; i++) {
+    if (classPattern.test(lines[i])) {
+      startLine = i + 1; // 1-indexed
+      
+      // Find end of class (next class/def at base indent or EOF)
+      const baseIndent = lines[i].search(/\S/);
+      for (let j = i + 1; j < lines.length; j++) {
+        const line = lines[j];
+        if (line.trim() === "") continue; // Skip empty lines
+        
+        const indent = line.search(/\S/);
+        if (indent <= baseIndent && line.trim() !== "") {
+          endLine = j;
+          break;
+        }
+      }
+      
+      if (endLine === -1) endLine = lines.length;
+      break;
+    }
+  }
+  
+  if (startLine === -1) {
+    speak(`Class ${className} not found.`);
+    return;
+  }
+  
+  speak(`Sonifying class ${className} from line ${startLine} to ${endLine}.`);
+  await sonifyRange(startLine, endLine, "class");
+}
+
+/**
+ * Sonify a range of lines with context tone
+ */
+async function sonifyRange(startLine, endLine, context = "block") {
+  const code = getCode();
+  const lines = code.split("\n");
+  
+  // Determine base frequency based on context
+  const contextFreqs = {
+    "function": 900,
+    "class": 1000,
+    "loop": 400,
+    "block": 600
+  };
+  
+  const baseFreq = contextFreqs[context] || 600;
+  
+  // Sonify each line with variation
+  for (let i = startLine - 1; i < Math.min(endLine, lines.length); i++) {
+    const line = lines[i];
+    const indent = line.search(/\S/);
+    
+    // Frequency increases with nesting depth
+    const freqVar = 50 * Math.min(indent / 2, 5);
+    const finalFreq = baseFreq + freqVar;
+    
+    // Play short beep for this line
+    playTone(finalFreq, 50, 0.3);
+    await sleep(100);
+  }
+  
+  speak(`Finished sonifying ${context}.`);
+}
+
+/**
+ * Sleep helper for async operations
+ */
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Play a single tone
+ */
+function playTone(frequency, duration, volume) {
+  if (!SonificationManager || !audioCtx) return;
+  
+  if (audioCtx.state === "suspended") {
+    audioCtx.resume();
+  }
+  
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  
+  osc.frequency.value = frequency;
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  
+  gain.gain.setValueAtTime(volume, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration / 1000);
+  
+  osc.start(audioCtx.currentTime);
+  osc.stop(audioCtx.currentTime + duration / 1000);
+}
+
+// ==========================================
+// AUDIO CODE FORMATTING FEEDBACK
+// ==========================================
+
+let formattingFeedbackEnabled = true;
+let lastIndentation = new Map(); // Track indentation per line
+
+/**
+ * Track indentation changes and provide audio feedback
+ */
+function trackFormattingChanges() {
+  if (!formattingFeedbackEnabled || !editor) return;
+  
+  const code = getCode();
+  const lines = code.split("\n");
+  
+  lines.forEach((line, idx) => {
+    if (line.trim() === "") return; // Skip empty lines
+    
+    const currentIndent = line.search(/\S/);
+    const lastIndent = lastIndentation.get(idx) || 0;
+    
+    // Track changes for next detection
+    lastIndentation.set(idx, currentIndent);
+    
+    // Don't play sound for initial load
+    if (lastIndent === 0 && currentIndent === 0) return;
+    
+    // Report indentation change via audio
+    if (currentIndent > lastIndent) {
+      // Rising tone for increased indentation
+      const freq = 600 + (currentIndent * 50);
+      playTone(freq, 100, 0.2);
+    } else if (currentIndent < lastIndent) {
+      // Falling tone for decreased indentation
+      const freq = 600 - ((lastIndent - currentIndent) * 50);
+      playTone(freq, 100, 0.2);
+    }
+  });
+}
+
+/**
+ * Analyze and sonify syntax block boundaries
+ */
+function analyzeCodeBlocks() {
+  const code = getCode();
+  const lines = code.split("\n");
+  
+  const blockKeywords = ["def", "class", "if", "elif", "else", "for", "while", "try", "except", "finally", "with"];
+  const indents = [];
+  
+  lines.forEach((line, idx) => {
+    const trimmed = line.trim();
+    
+    // Check for block start
+    blockKeywords.forEach(keyword => {
+      if (new RegExp(`^${keyword}\\s+`).test(trimmed) || new RegExp(`^${keyword}:`).test(trimmed)) {
+        const indent = line.search(/\S/);
+        indents.push({
+          line: idx + 1,
+          keyword: keyword,
+          indent: indent,
+          isStart: true
+        });
+      }
+    });
+  });
+  
+  return indents;
+}
+
+/**
+ * Describe indentation for current line (for accessibility)
+ */
+function describeCurrentIndentation() {
+  if (!editor) return;
+  
+  const model = editor.getModel();
+  const pos = editor.getPosition();
+  const line = model.getLineContent(pos.lineNumber);
+  const indent = line.search(/\S/) === -1 ? 0 : line.search(/\S/);
+  
+  const indentLevel = Math.floor(indent / 4); // Assuming 4-space indents
+  const indentText = indentLevel > 0 ? `${indentLevel} indentation level${indentLevel !== 1 ? 's' : ''}` : "no indentation";
+  
+  out(`Line ${pos.lineNumber}: ${indentText}. ${line.trim()}`);
+  speak(`Line ${pos.lineNumber}. ${indentText}. ${line.trim()}`);
+}
+
+/**
+ * Enable or disable formatting feedback
+ */
+function toggleFormattingFeedback(enabled) {
+  formattingFeedbackEnabled = enabled !== undefined ? enabled : !formattingFeedbackEnabled;
+  speak(formattingFeedbackEnabled ? "Formatting feedback enabled." : "Formatting feedback disabled.");
+}
+
+// ==========================================
+// ERROR SONIFICATION HEATMAP
+// ==========================================
+
+const ERROR_SONIFICATION_MAP = {
+  "SyntaxError": { freq: 200, duration: 300, label: "syntax error", severity: 3 },      // Harsh, low tone
+  "IndentationError": { freq: 250, duration: 250, label: "indentation error", severity: 2.5 },
+  "NameError": { freq: 400, duration: 200, label: "name error", severity: 2.5 },        // Medium-low
+  "TypeError": { freq: 500, duration: 200, label: "type error", severity: 2.5 },
+  "ValueError": { freq: 550, duration: 200, label: "value error", severity: 2 },
+  "AttributeError": { freq: 600, duration: 150, label: "attribute error", severity: 2 },
+  "KeyError": { freq: 650, duration: 150, label: "key error", severity: 2 },
+  "IndexError": { freq: 700, duration: 150, label: "index error", severity: 1.5 },
+  "ImportError": { freq: 800, duration: 150, label: "import error", severity: 1.5 }, // Medium tone
+  "RuntimeError": { freq: 900, duration: 150, label: "runtime error", severity: 2 },
+  "ZeroDivisionError": { freq: 950, duration: 150, label: "division by zero", severity: 2 }, // Higher freq
+  "Warning": { freq: 1100, duration: 100, label: "warning", severity: 1 },             // Soft, high tone
+  "Style": { freq: 1200, duration: 80, label: "style issue", severity: 0.5 },          // Very soft
+};
+
+/**
+ * Get error type from error message
+ */
+function classifyError(errorMessage) {
+  const lower = errorMessage.toLowerCase();
+  
+  for (const [errorType, config] of Object.entries(ERROR_SONIFICATION_MAP)) {
+    if (lower.includes(errorType.toLowerCase())) {
+      return errorType;
+    }
+  }
+  
+  // Try to detect by pattern
+  if (lower.includes("unexpected") || lower.includes("invalid")) {
+    return "SyntaxError";
+  }
+  if (lower.includes("not defined") || lower.includes("undefined")) {
+    return "NameError";
+  }
+  if (lower.includes("warning")) {
+    return "Warning";
+  }
+  
+  return "RuntimeError"; // Default
+}
+
+/**
+ * Sonify an error with appropriate tone based on severity
+ */
+function sonifyError(errorMessage, errorLine = null) {
+  const errorType = classifyError(errorMessage);
+  const config = ERROR_SONIFICATION_MAP[errorType] || ERROR_SONIFICATION_MAP["RuntimeError"];
+  
+  // Play error tone
+  playTone(config.freq, config.duration, 0.4);
+  
+  // Speak error description
+  const msg = `${config.label} on line ${errorLine || "unknown"}. ${errorMessage.substring(0, 50)}`;
+  speak(msg);
+}
+
+/**
+ * Scan code for potential issues and sonify them
+ */
+async function sonifyCodeIssues() {
+  const code = getCode();
+  const lines = code.split("\n");
+  
+  const issues = [];
+  
+  // Check for common issues
+  lines.forEach((line, idx) => {
+    const indent = line.search(/\S/);
+    
+    // Check indentation consistency
+    if (indent % 4 !== 0 && indent !== 0) {
+      issues.push({
+        line: idx + 1,
+        type: "Style",
+        message: "Inconsistent indentation"
+      });
+    }
+    
+    // Check for syntax issues
+    if (line.includes("==") && line.includes("=") && !line.includes("==")) {
+      // Possible assignment instead of comparison
+      if (line.includes("if ") || line.includes("while ")) {
+        issues.push({
+          line: idx + 1,
+          type: "Warning",
+          message: "Possible assignment in condition"
+        });
+      }
+    }
+  });
+  
+  if (issues.length === 0) {
+    speak("No code issues detected.");
+    return;
+  }
+  
+  speak(`Found ${issues.length} issue${issues.length !== 1 ? 's' : ''}.`);
+  
+  // Sonify each issue
+  for (const issue of issues) {
+    sonifyError(issue.message, issue.line);
+    await sleep(300);
+  }
+}
+
+// ==========================================
+// INLINE DEBUG SUGGESTIONS
+// ==========================================
+
+/**
+ * Show inline debug suggestions
+ */
+async function getDebugSuggestions() {
+  const code = getCode();
+  const lang = getLanguage();
+  
+  if (!code.trim()) {
+    speak("Code is empty.");
+    return;
+  }
+  
+  speak("Analyzing code for improvement suggestions...");
+  
+  try {
+    const res = await fetch("/debug-suggestions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code, language: lang })
+    });
+    
+    const data = await res.json();
+    
+    if (!data.success || !data.suggestions) {
+      out("No suggestions available.");
+      speak("Could not generate suggestions.");
+      return;
+    }
+    
+    if (data.suggestions.length === 0) {
+      out("Code looks good! No issues found.");
+      speak("Code looks good. No issues found.");
+      return;
+    }
+    
+    // Build and display suggestions
+    let output = "DEBUG SUGGESTIONS:\n\n";
+    let speech = `Found ${data.suggestions.length} suggestion${data.suggestions.length !== 1 ? 's' : ''}. `;
+    
+    data.suggestions.forEach((sugg, idx) => {
+      output += `${sugg.icon} ${sugg.text}\n\n`;
+      speech += `Item ${idx + 1}: ${sugg.text}. `;
+    });
+    
+    out(output);
+    speak(speech);
+    
+    // Show suggestions as inline markers
+    displayInlineSuggestions(data.suggestions);
+  } catch (e) {
+    console.error("Debug suggestions error:", e);
+    speak("Error getting suggestions.");
+  }
+}
+
+/**
+ * Display inline suggestions as decorations in editor
+ */
+function displayInlineSuggestions(suggestions) {
+  if (!editor) return;
+  
+  // Get all decorations
+  const decorations = suggestions.map((sugg, idx) => ({
+    range: new monaco.Range(1, 1, 1, 1), // Attach to top of file
+    options: {
+      glyphMarginClassName: "debug-glyph",
+      glyphMarginHoverMessage: { value: sugg.text },
+      minimap: {
+        color: sugg.type === "warning" ? "#ff9800" : "#2196f3",
+        position: 2
+      }
+    }
+  }));
+  
+  // Apply decorations (note: this is a simplified version)
+  // In a real implementation, you'd want to parse line numbers from suggestions
+}
+
+
+// ==========================================
+// COMMAND PALETTE (CTRL+SHIFT+P)
+// =========================================
+
+
+const COMMAND_PALETTE_COMMANDS = [
+  { id: "run", title: "Run Code", desc: "Execute Python code", icon: "▶", keys: "Ctrl+Enter", action: () => runCode() },
+  { id: "analyze", title: "Analyze Code", desc: "AI analysis of code", icon: "🔍", keys: "Ctrl+Alt+A", action: () => analyzeCode() },
+  { id: "fix", title: "Fix Code", desc: "Automatically fix errors", icon: "🔧", keys: "Ctrl+Alt+F", action: () => fixCode() },
+  { id: "advise", title: "Get Advice", desc: "Suggestions for improvements", icon: "💡", keys: "Ctrl+Alt+I", action: () => adviseCode() },
+  
+  { id: "goto_line", title: "Go to Line", desc: "Jump to specific line", icon: "➡️", keys: "Ctrl+G", action: () => showInputDialog("Enter line number:", gotoLine) },
+  { id: "read_line", title: "Read Line", desc: "Read current line with context", icon: "📖", keys: "", action: () => readCurrentLine() },
+  { id: "next_line", title: "Next Line", desc: "Move to next line", icon: "↓", keys: "Down", action: () => nextLine() },
+  { id: "prev_line", title: "Previous Line", desc: "Move to previous line", icon: "↑", keys: "Up", action: () => prevLine() },
+  
+  { id: "show_structure", title: "Show Structure", desc: "Display code navigation map", icon: "🗺️", keys: "Ctrl+Shift+S", action: () => toggleStructurePanel() },
+  { id: "sonify_block", title: "Sonify Block", desc: "Hear current code block", icon: "🔊", keys: "Alt+S", action: () => sonifyCurrentBlock() },
+  
+  { id: "replay_execution", title: "Replay Execution", desc: "Play execution timeline with audio", icon: "⏯️", keys: "", action: () => replayExecution() },
+  { id: "pause_playback", title: "Pause Playback", desc: "Pause execution replay", icon: "⏸️", keys: "", action: () => pausePlayback() },
+  { id: "resume_playback", title: "Resume Playback", desc: "Resume execution replay", icon: "▶️", keys: "", action: () => resumePlayback() },
+  
+  { id: "save_snippet", title: "Save Snippet", desc: "Save code as snippet", icon: "💾", keys: "Ctrl+S", action: () => saveSnippet() },
+  { id: "list_variables", title: "List Variables", desc: "Show all variables in scope", icon: "📊", keys: "Ctrl+Alt+V", action: () => listVariables() },
+  
+  { id: "check_errors", title: "Check Errors", desc: "Find syntax errors", icon: "⚠️", keys: "", action: () => checkSyntaxErrors() },
+  { id: "locate_error", title: "Locate Error", desc: "Jump to first error", icon: "🎯", keys: "Ctrl+Alt+E", action: () => locateError() },
+  
+  { id: "clear_editor", title: "Clear Editor", desc: "Delete all code", icon: "🗑️", keys: "", action: () => clearEditor() },
+  { id: "copy_code", title: "Copy Code", desc: "Copy to clipboard", icon: "📋", keys: "Ctrl+C", action: () => copyCode() },
+  { id: "paste_code", title: "Paste Code", desc: "Paste from clipboard", icon: "📌", keys: "Ctrl+V", action: () => pasteCode() },
+  
+  { id: "debug_suggestions", title: "Debug Suggestions", desc: "Get AI debugging hints", icon: "🔬", keys: "", action: () => getDebugSuggestions() },
+  { id: "sonify_issues", title: "Sonify Issues", desc: "Hear code problems", icon: "🔊", keys: "", action: () => sonifyCodeIssues() },
+  
+  { id: "help", title: "Show Help", desc: "Display all commands", icon: "❓", keys: "F1", action: () => showHelp() },
+];
+
+let commandPaletteSelectedIndex = 0;
+
+/**
+ * Open command palette
+ */
+function openCommandPalette() {
+  const overlay = document.getElementById("commandPaletteOverlay");
+  const input = document.getElementById("commandPaletteInput");
+  
+  overlay.style.display = "flex";
+  setTimeout(() => input.focus(), 0);
+  
+  commandPaletteSelectedIndex = 0;
+  renderCommandPalette("");
+}
+
+/**
+ * Close command palette
+ */
+function closeCommandPalette() {
+  const overlay = document.getElementById("commandPaletteOverlay");
+  overlay.style.display = "none";
+}
+
+/**
+ * Render command palette results
+ */
+function renderCommandPalette(filterText) {
+  const resultsContainer = document.getElementById("commandPaletteResults");
+  const query = filterText.toLowerCase().trim();
+  
+  // Filter commands
+  let filtered = COMMAND_PALETTE_COMMANDS;
+  if (query) {
+    filtered = COMMAND_PALETTE_COMMANDS.filter(cmd =>
+      cmd.title.toLowerCase().includes(query) ||
+      cmd.desc.toLowerCase().includes(query) ||
+      cmd.id.toLowerCase().includes(query)
+    );
+  }
+  
+  if (filtered.length === 0) {
+    resultsContainer.innerHTML = '<div class="command-palette-empty">No commands found</div>';
+    commandPaletteSelectedIndex = -1;
+    return;
+  }
+  
+  commandPaletteSelectedIndex = Math.max(0, Math.min(commandPaletteSelectedIndex, filtered.length - 1));
+  
+  // Build HTML
+  let html = filtered.map((cmd, idx) => `
+    <div class="command-palette-item ${idx === commandPaletteSelectedIndex ? 'selected' : ''}" 
+         data-index="${idx}"
+         onclick="executeCommandPaletteItem(${filtered.indexOf(cmd)}, true)">
+      <span class="command-palette-item-icon">${cmd.icon}</span>
+      <div class="command-palette-item-main">
+        <div class="command-palette-item-title">${escapeHtml(cmd.title)}</div>
+        <div class="command-palette-item-desc">${escapeHtml(cmd.desc)}</div>
+      </div>
+      ${cmd.keys ? `<div class="command-palette-item-shortcut">${escapeHtml(cmd.keys)}</div>` : ''}
+    </div>
+  `).join('');
+  
+  resultsContainer.innerHTML = html;
+  
+  // Update click handlers
+  document.querySelectorAll(".command-palette-item").forEach((item, idx) => {
+    item.addEventListener("click", () => executeCommandPaletteItem(idx, true));
+  });
+}
+
+/**
+ * Execute selected command
+ */
+function executeCommandPaletteItem(index, fromClick = false) {
+  const resultsContainer = document.getElementById("commandPaletteResults");
+  const items = resultsContainer.querySelectorAll(".command-palette-item");
+  
+  if (index < 0 || index >= items.length) return;
+  
+  const input = document.getElementById("commandPaletteInput");
+  const query = input.value.toLowerCase().trim();
+  
+  let filtered = COMMAND_PALETTE_COMMANDS;
+  if (query) {
+    filtered = COMMAND_PALETTE_COMMANDS.filter(cmd =>
+      cmd.title.toLowerCase().includes(query) ||
+      cmd.desc.toLowerCase().includes(query) ||
+      cmd.id.toLowerCase().includes(query)
+    );
+  }
+  
+  if (index >= filtered.length) return;
+  
+  const cmd = filtered[index];
+  closeCommandPalette();
+  
+  try {
+    cmd.action();
+  } catch (e) {
+    console.error("Command error:", e);
+    speak("Error executing command.");
+  }
+}
+
+/**
+ * Toggle structure panel visibility
+ */
+function toggleStructurePanel() {
+  const panel = document.getElementById("structurePanel");
+  panel.style.display = panel.style.display === "none" ? "block" : "none";
+  if (panel.style.display === "block") {
+    speak("Structure panel shown.");
+  }
+}
+
+/**
+ * Show simple input dialog
+ */
+function showInputDialog(prompt, callback) {
+  const value = window.prompt(prompt);
+  if (value !== null && value !== "") {
+    callback(parseInt(value) || 1);
+  }
+}
+
+// Keyboard handler for command palette
+document.addEventListener("keydown", (e) => {
+  // CTRL+SHIFT+P opens command palette
+  if (e.ctrlKey && e.shiftKey && e.key === "P") {
+    e.preventDefault();
+    openCommandPalette();
+    return;
+  }
+  
+  const overlay = document.getElementById("commandPaletteOverlay");
+  if (overlay.style.display === "none") return;
+  
+  // Handle command palette navigation
+  if (e.key === "Escape") {
+    e.preventDefault();
+    closeCommandPalette();
+  } else if (e.key === "ArrowDown") {
+    e.preventDefault();
+    commandPaletteSelectedIndex++;
+    const input = document.getElementById("commandPaletteInput");
+    renderCommandPalette(input.value);
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    commandPaletteSelectedIndex--;
+    const input = document.getElementById("commandPaletteInput");
+    renderCommandPalette(input.value);
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    executeCommandPaletteItem(commandPaletteSelectedIndex);
+  }
+});
+
+// Command palette search input handler
+if (typeof document !== 'undefined') {
+  const paletteInput = document.getElementById("commandPaletteInput");
+  if (paletteInput) {
+    paletteInput.addEventListener("input", (e) => {
+      commandPaletteSelectedIndex = 0;
+      renderCommandPalette(e.target.value);
+    });
+  }
+}
+
+
+

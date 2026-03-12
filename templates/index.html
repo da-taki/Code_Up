@@ -84,6 +84,15 @@
       </div>
 
     </section>
+
+    <!-- STRUCTURE NAVIGATOR PANEL -->
+    <aside class="cu-panel cu-structure" id="structurePanel" style="display:none;">
+      <div class="cu-panel-title">STRUCTURE</div>
+      <div id="structureContent" class="cu-structure-content">
+        <p class="structure-info">Parse code to show structure...</p>
+      </div>
+    </aside>
+
   </main>
 
   <!-- OUTPUT + AI BUBBLE + COMMAND CONSOLE -->
@@ -128,6 +137,27 @@
       <p style="font-size: 0.85rem; margin-top: 10px; color: #888;">
         Get your API key at <a href="https://ai.google.dev/" target="_blank">ai.google.dev</a>
       </p>
+    </div>
+  </div>
+
+  <!-- COMMAND PALETTE MODAL -->
+  <div id="commandPaletteOverlay" class="command-palette-overlay" style="display:none;">
+    <div class="command-palette-container">
+      <div class="command-palette-header">
+        <span style="color: #888;">COMMAND PALETTE</span>
+        <small style="float:right; color: #666;">ESC to close</small>
+      </div>
+      <input 
+        id="commandPaletteInput"
+        class="command-palette-input"
+        type="text"
+        placeholder="Type command name or action..."
+        aria-label="Command palette search"
+        autocomplete="off"
+      />
+      <div id="commandPaletteResults" class="command-palette-results">
+        <!-- Results appear here -->
+      </div>
     </div>
   </div>
 

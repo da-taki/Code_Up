@@ -4,6 +4,9 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import List, Tuple, Optional
 from rapidfuzz import fuzz
 import google.generativeai as genai
+from structure_parser import CodeAnalyzer
+from intent_parser import parse_intent
+from sandboxed_fs import get_sandbox
 
 # Thread-local storage for request-scoped sys.settrace
 _trace_context = threading.local()
@@ -450,6 +453,15 @@ def run_code():
             return self._func(*args, **kwargs)
         def __getattr__(self, name):
             raise AttributeError(f"Access to '{name}' is blocked")
+    
+    # Safe file operations (restricted to workspace only)
+    def safe_open(filepath, mode="r", encoding="utf-8"):
+        """Open file within sandboxed workspace only."""
+        sandbox = get_sandbox()
+        # Validate path is within workspace
+        abs_path = sandbox._validate_path(filepath)
+        # Open file normally, but path is guaranteed safe
+        return open(abs_path, mode, encoding=encoding)
 
     SAFE_GLOBALS = {
         "print": SafeFunction(safe_print),
@@ -492,6 +504,7 @@ def run_code():
         "repr": SafeFunction(repr),
         "any": SafeFunction(any),
         "all": SafeFunction(all),
+        "open": safe_open,  # Safe file operations
         "__builtins__": {},
         "input": SafeFunction(lambda *a: ""),
         "__import__": restricted_import,
@@ -702,6 +715,72 @@ def advise():
     return jsonify({"advice": advice})
 
 # ==========================
+# INLINE DEBUG SUGGESTIONS
+# ==========================
+
+@app.route("/debug-suggestions", methods=["POST"])
+def debug_suggestions():
+    """
+    Provide inline debugging suggestions for code issues.
+    Returns suggestions for:
+    - Inefficient patterns
+    - Unused variables
+    - Potential bugs
+    - Improvements (list comprehensions, etc)
+    """
+    body = safejson()
+    code = safe(body.get("code"), "")
+    language = safe(body.get("language"), "en")
+    
+    if len(code) > MAX_CODE_SIZE:
+        return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
+    if not code.strip():
+        return jsonify({"success": True, "suggestions": []})
+    
+    if language == "hi":
+        system = (
+            "आप एक पायथन डीबगर सहायक हैं।\n"
+            "कोड को देखें और सुधार के लिए विशिष्ट सुझाव दें।\n"
+            "प्रत्येक सुझाव अलग लाइन पर हो:\n"
+            "⚠️ [समस्या description]\n"
+            "💡 [सुझाव]\n"
+            "केवल वास्तविक समस्याओं को सूचीबद्ध करें।"
+        )
+    else:
+        system = (
+            "You are a Python debugging assistant.\n"
+            "Review the code and suggest specific improvements.\n"
+            "Each suggestion on a separate line:\n"
+            "⚠️ [issue description]\n"
+            "💡 [suggestion]\n"
+            "Only list actual problems."
+        )
+    
+    user = f"Code:\n```python\n{code}\n```"
+    suggestions = call_gemini(system, user, language=language)
+    
+    # Parse suggestions into structured format
+    lines = suggestions.split('\n')
+    parsed_suggestions = []
+    
+    for line in lines:
+        line = line.strip()
+        if line.startswith('⚠️'):
+            parsed_suggestions.append({
+                "type": "warning",
+                "icon": "⚠️",
+                "text": line[2:].strip()
+            })
+        elif line.startswith('💡'):
+            parsed_suggestions.append({
+                "type": "suggestion",
+                "icon": "💡",
+                "text": line[2:].strip()
+            })
+    
+    return jsonify({"success": True, "suggestions": parsed_suggestions})
+
+# ==========================
 # DESCRIBE LINE
 # ==========================
 
@@ -737,6 +816,35 @@ def describe():
     desc = call_gemini(system, user, language=language)
 
     return jsonify({"success": True, "description": desc})
+
+# ==========================
+# STRUCTURE PANEL (CODE NAVIGATION)
+# ==========================
+
+@app.route("/structure", methods=["POST"])
+def structure():
+    """
+    Parse code and return structured metadata for navigation panel.
+    Returns: functions, classes, loops, imports with line numbers.
+    """
+    body = safejson()
+    code = safe(body.get("code"), "")
+    
+    if len(code) > MAX_CODE_SIZE:
+        return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
+    if not code.strip():
+        return jsonify({"success": True, "structure": {
+            "imports": [], "functions": [], "classes": [], "loops": []
+        }})
+    
+    analyzer = CodeAnalyzer()
+    structure_data = analyzer.analyze(code)
+    
+    # If there was a parse error, return it
+    if "error" in structure_data:
+        return jsonify({"success": False, "error": structure_data["error"]})
+    
+    return jsonify({"success": True, "structure": structure_data})
 
 # =========================
 # READ LINE WITH CONTEXT
@@ -1511,6 +1619,7 @@ def diff_explain():
 def voice():
     """
     Voice command dispatcher with explicit confidence levels.
+    Now uses intent-based parsing with fallback to regex matching.
     
     Response Schema:
     - success: bool (endpoint worked)
@@ -1525,6 +1634,52 @@ def voice():
     """
     text = safe(safejson().get("text"), "")
     lower = text.lower().strip()
+
+    # ============================================================
+    # TRY INTENT-BASED PARSING FIRST (NEW)
+    # ============================================================
+    intent_result = parse_intent(text)
+    if intent_result.get("intent") and intent_result.get("confidence", 0) > 0.8:
+        intent = intent_result["intent"]
+        slots = intent_result.get("slots", {})
+        
+        # Map intent to action and build response
+        if intent == "goto_line" and "line_number" in slots:
+            return jsonify({"success": True, "action": "goto_line", "line": slots["line_number"], "confidence": 0.9})
+        elif intent == "read_line" and "line_number" in slots:
+            return jsonify({"success": True, "action": "read_line", "line": slots["line_number"], "confidence": 0.9})
+        elif intent == "read_function" and "function_name" in slots:
+            return jsonify({"success": True, "action": "read_function", "function_name": slots["function_name"], "confidence": 0.85})
+        elif intent == "find_class" and "class_name" in slots:
+            return jsonify({"success": True, "action": "find_class", "class_name": slots["class_name"], "confidence": 0.85})
+        elif intent == "find_function" and "function_name" in slots:
+            return jsonify({"success": True, "action": "find_function", "function_name": slots["function_name"], "confidence": 0.85})
+        elif intent == "sonify_function" and "function_name" in slots:
+            return jsonify({"success": True, "action": "sonify_function", "function_name": slots["function_name"], "confidence": 0.85})
+        elif intent == "sonify_class" and "class_name" in slots:
+            return jsonify({"success": True, "action": "sonify_class", "class_name": slots["class_name"], "confidence": 0.85})
+        elif intent == "run":
+            return jsonify({"success": True, "action": "run", "confidence": 0.95})
+        elif intent == "analyze":
+            return jsonify({"success": True, "action": "analyze", "confidence": 0.95})
+        elif intent == "fix":
+            return jsonify({"success": True, "action": "fix", "confidence": 0.95})
+        elif intent == "advise":
+            return jsonify({"success": True, "action": "advise", "confidence": 0.9})
+        elif intent == "show_structure":
+            return jsonify({"success": True, "action": "show_structure", "confidence": 0.9})
+        elif intent == "sonify_block":
+            return jsonify({"success": True, "action": "sonify_block", "confidence": 0.9})
+        elif intent == "locate_error":
+            return jsonify({"success": True, "action": "locate_error", "confidence": 0.9})
+        elif intent == "help":
+            return jsonify({"success": True, "action": "help", "confidence": 0.95})
+        elif intent == "speak_output":
+            return jsonify({"success": True, "action": "read_output", "confidence": 0.95})
+
+    # ============================================================
+    # FALLBACK: REGEX-BASED MATCHING (LEGACY)
+    # ============================================================
 
     # EXACT MATCHES (confidence 1.0): Regex with captured groups
     # describe line X
@@ -1715,6 +1870,95 @@ def voice():
 
     # confident
     return jsonify({"success": True, "action": best, "confidence": bscore / 100.0})
+
+# ==========================
+# SANDBOXED FILE SYSTEM
+# ==========================
+
+@app.route("/fs/write", methods=["POST"])
+def fs_write():
+    """Write file to sandboxed workspace."""
+    body = safejson()
+    filepath = safe(body.get("path"), "")
+    content = safe(body.get("content"), "")
+    
+    if not filepath:
+        return jsonify({"success": False, "error": "Path is required"}), 400
+    
+    sandbox = get_sandbox()
+    result = sandbox.write(filepath, content)
+    return jsonify(result)
+
+@app.route("/fs/read", methods=["POST"])
+def fs_read():
+    """Read file from sandboxed workspace."""
+    body = safejson()
+    filepath = safe(body.get("path"), "")
+    
+    if not filepath:
+        return jsonify({"success": False, "error": "Path is required"}), 400
+    
+    sandbox = get_sandbox()
+    result = sandbox.read(filepath)
+    return jsonify(result)
+
+@app.route("/fs/delete", methods=["POST"])
+def fs_delete():
+    """Delete file from sandboxed workspace."""
+    body = safejson()
+    filepath = safe(body.get("path"), "")
+    
+    if not filepath:
+        return jsonify({"success": False, "error": "Path is required"}), 400
+    
+    sandbox = get_sandbox()
+    result = sandbox.delete(filepath)
+    return jsonify(result)
+
+@app.route("/fs/list", methods=["POST"])
+def fs_list():
+    """List files in sandboxed workspace."""
+    body = safejson()
+    dirpath = safe(body.get("path"), ".")
+    
+    sandbox = get_sandbox()
+    result = sandbox.list_files(dirpath)
+    return jsonify(result)
+
+@app.route("/fs/info", methods=["GET"])
+def fs_info():
+    """Get workspace information."""
+    sandbox = get_sandbox()
+    result = sandbox.get_workspace_info()
+    return jsonify(result)
+
+# ==========================
+# EXECUTION TRACE (for playback)
+# ==========================
+
+@app.route("/execution-trace", methods=["GET"])
+def get_execution_trace():
+    """
+    Get the last execution trace for playback.
+    
+    Trace format:
+    {
+        "trace": [
+            {"type": "state_change", "line": 5, "changes": ["x = 10"]},
+            {"type": "print", "line": 6, "output": "Hello"},
+            ...
+        ],
+        "total_lines_executed": 42,
+        "duration_ms": 125
+    }
+    """
+    # This would normally be stored per session/request
+    # For now, return empty - trace is returned with /run response
+    return jsonify({
+        "trace": [],
+        "total_lines_executed": 0,
+        "duration_ms": 0
+    })
 
 # ==========================
 

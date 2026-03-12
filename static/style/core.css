@@ -317,3 +317,85 @@ html, body {
   font-size: 0.8rem;
 }
 
+/* =========================================================
+   STRUCTURE PANEL
+========================================================= */
+
+.cu-structure {
+  width: 260px;
+  min-width: 240px;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 200px);
+}
+
+.cu-structure-content {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.9rem;
+}
+
+.structure-info {
+  color: var(--text-dim);
+  font-style: italic;
+  margin: 10px 0;
+}
+
+.structure-item {
+  padding: 8px 10px;
+  background: var(--bg-soft);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.structure-item:hover {
+  background: rgba(79, 200, 250, 0.1);
+  border-color: rgba(79, 200, 250, 0.3);
+  transform: translateX(4px);
+}
+
+.structure-item:focus {
+  outline: 2px solid #4FC8FA;
+  outline-offset: 2px;
+}
+
+.structure-item-icon {
+  font-weight: bold;
+  min-width: 20px;
+  color: #4FC8FA;
+}
+
+.structure-item-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.structure-item-line {
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  min-width: 40px;
+  text-align: right;
+}
+
+.structure-group {
+  margin-top: 12px;
+}
+
+.structure-group-title {
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  padding: 6px 10px 4px;
+  opacity: 0.7;
+}

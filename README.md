@@ -113,8 +113,14 @@ Tests use tests/conftest.py to launch the dev server in a subprocess
 
 External LLM calls are disabled during tests
 To enable real LLM usage, set:
-OLLAMA_ENABLED=1
-and configure OLLAMA_URL and OLLAMA_MODEL
+GEMINI_ENABLED=1
+and configure GEMINI_API_KEY with your Google Generative AI API key from https://ai.google.dev/
+
+Language Support
+The application now supports English and Hindi (हिंदी) for all AI interactions.
+Users can select their preferred language from the language selector dropdown in the UI.
+All AI responses (analysis, code fixes, explanations) will be provided in the selected language.
+Text-to-speech support includes both English and Hindi pronunciations.
 
 Design Principles
 Accessibility first

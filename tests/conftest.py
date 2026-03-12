@@ -17,8 +17,8 @@ def server_process():
     # ensure the app binds to 127.0.0.1:5000 unless overridden
     base = env.get("CODEUP_BASE", "http://127.0.0.1:5000")
     env["CODEUP_BASE"] = base
-    # disable external Ollama calls during tests to avoid timeouts
-    env.setdefault("OLLAMA_ENABLED", "0")
+    # disable external Gemini API calls during tests to avoid timeouts
+    env.setdefault("GEMINI_ENABLED", "0")
 
     # Launch the app using the same Python interpreter running pytest
     # Write server output to a log file so we can inspect errors without blocking

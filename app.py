@@ -3,15 +3,12 @@ import json, os, traceback, io, contextlib, re, requests, ast, sys, time, thread
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Tuple, Optional
 from rapidfuzz import fuzz
+import google.generativeai as genai
 
 # Thread-local storage for request-scoped sys.settrace
 _trace_context = threading.local()
-# Semaphore to limit concurrent LLM calls and avoid exhausting workers
-_ollama_semaphore = threading.BoundedSemaphore(int(os.environ.get('OLLAMA_CONCURRENCY', '2')))
-# Simple circuit breaker for Ollama failures
-_ollama_failures = 0
-_ollama_failure_lock = threading.Lock()   
-_ollama_executor = ThreadPoolExecutor(max_workers=2)
+# Executor for LLM calls
+_gemini_executor = ThreadPoolExecutor(max_workers=2)
 app = Flask(__name__)
 
 
@@ -21,7 +18,7 @@ app = Flask(__name__)
 # Hard limits to prevent resource exhaustion
 MAX_REQUEST_SIZE = 1_000_000  # 1 MB max request body
 MAX_CODE_SIZE = 100_000       # 100 KB max code
-MAX_OLLAMA_TIMEOUT = 30       # 30 second timeout for LLM calls
+MAX_GEMINI_TIMEOUT = 30       # 30 second timeout for LLM calls
 
 @app.before_request
 def validate_request_size():
@@ -113,65 +110,50 @@ def save_snippets(d: dict) -> None:
                 pass
             raise
 # ==========================
-# OLLAMA CONFIG
+# GEMINI API CONFIG
 # ==========================
 
-OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434/api/chat")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "phi3:mini")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "Insert_API_Key_Here")
+GEMINI_MODEL = "gemini-pro"
 
-def call_ollama(system_prompt, user_prompt, temperature=0.2):
-    """Call Ollama with hard timeout to prevent hanging."""
-    # Allow tests and offline usage to disable Ollama via env var
-    if os.environ.get("OLLAMA_ENABLED", "1") != "1":
+# Configure Gemini API
+if GEMINI_API_KEY != "Insert_API_Key_Here":
+    genai.configure(api_key=GEMINI_API_KEY)
+
+def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en"):
+    """Call Gemini API with hard timeout to prevent hanging."""
+    # Allow tests and offline usage to disable Gemini via env var
+    if os.environ.get("GEMINI_ENABLED", "1") != "1":
         return "AI service disabled"
-    # Fast-fail if circuit is open
-    global _ollama_failures
-    with _ollama_failure_lock:
-        if _ollama_failures >= 3:
-            return "AI service is currently unavailable (circuit open)."
+    
+    # Check if API key is configured
+    if GEMINI_API_KEY == "Insert_API_Key_Here":
+        return "AI service not configured. Please set GEMINI_API_KEY environment variable."
 
-    acquired = _ollama_semaphore.acquire(blocking=False)
-    if not acquired:
-        return "AI service busy. Please try again shortly."
+    def _do_call():
+        try:
+            # Adapt system prompt based on language
+            if language == "hi":
+                system_prompt = f"आप एक सहायक हैं जो हिंदी में सहायता प्रदान करते हैं। {system_prompt}"
+            
+            model = genai.GenerativeModel(GEMINI_MODEL, system_instruction=system_prompt)
+            response = model.generate_content(
+                user_prompt,
+                generation_config=genai.types.GenerationConfig(
+                    temperature=temperature,
+                    max_output_tokens=1024
+                )
+            )
+            return response.text.strip() if response.text else "No response generated"
+        except Exception as e:
+            return f"AI service error: {str(e)}"
 
     try:
-        def _do_call():
-            try:
-                res = requests.post(
-                    OLLAMA_URL,
-                    json={
-                        "model": OLLAMA_MODEL,
-                        "messages": [
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_prompt}
-                        ],
-                        "stream": False,
-                        "options": {"temperature": temperature}
-                    },
-                    timeout=MAX_OLLAMA_TIMEOUT
-                )
-                res.raise_for_status()
-                data = res.json()
-                return (data.get("message") or {}).get("content", "").strip()
-            except Exception:
-                raise
-
-        future = _ollama_executor.submit(_do_call)
-        try:
-            result = future.result(timeout=MAX_OLLAMA_TIMEOUT + 1)
-            # reset failure counter on success
-            with _ollama_failure_lock:
-                _ollama_failures = 0
-            return result
-        except Exception:
-            with _ollama_failure_lock:
-                _ollama_failures += 1
-            return "AI service is currently unavailable. Please try again."
-    finally:
-        try:
-            _ollama_semaphore.release()
-        except Exception:
-            pass
+        future = _gemini_executor.submit(_do_call)
+        result = future.result(timeout=MAX_GEMINI_TIMEOUT + 1)
+        return result
+    except Exception as e:
+        return f"AI service is currently unavailable: {str(e)}"
 
 def extract_code(text: str):
     m = re.search(r"```(?:python)?\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
@@ -191,6 +173,30 @@ def extract_code(text: str):
 @app.route("/")
 def index():
     return render_template("index.html")
+
+# ==========================
+# API KEY CONFIGURATION
+# ==========================
+
+@app.route("/api-config", methods=["POST"])
+def api_config():
+    """Set the Gemini API key for the session."""
+    body = safejson()
+    api_key = safe(body.get("api_key"), "")
+    
+    if not api_key or api_key == "Insert_API_Key_Here":
+        return jsonify({"success": False, "error": "Invalid API key"}), 400
+    
+    try:
+        # Try to set and configure the API key
+        set_gemini_api_key(api_key)
+        # Test the API key by making a simple call
+        test_response = call_gemini("Say 'OK'", "Test", language="en")
+        if "error" in test_response.lower() or "invalid" in test_response.lower():
+            return jsonify({"success": False, "error": "API key is invalid or Gemini API is unavailable"}), 401
+        return jsonify({"success": True, "message": "API key configured successfully"})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 # ==========================
 # ERROR EXPLAINER
@@ -214,20 +220,31 @@ def sanitize_traceback(traceback_str: str) -> str:
         sanitized.append(line)
     return '\n'.join(sanitized)
 
-def explain_error(code: str, err_text: str) -> str:
-    system = (
-        "You are a Python tutor in a blind-first IDE.\n"
-        "Given the user's code and the error, explain:\n"
-        "- What error happened\n"
-        "- On which line (if visible)\n"
-        "- What it means in simple terms\n"
-        "- How to fix it\n"
-        "Max 6 short lines. Be direct."
-    )
+def explain_error(code: str, err_text: str, language="en") -> str:
+    if language == "hi":
+        system = (
+            "आप एक पायथन ट्यूटर हैं जो एक अंधे प्रथम IDE में काम करते हैं।\n"
+            "उपयोगकर्ता के कोड और त्रुटि को देखते हुए, समझाएं:\n"
+            "- क्या त्रुटि हुई\n"
+            "- किस पंक्ति पर (यदि दृश्यमान हो)\n"
+            "- इसका सरल शब्दों में क्या अर्थ है\n"
+            "- इसे कैसे ठीक करें\n"
+            "अधिकतम 6 छोटी पंक्तियां। सीधे रहें।"
+        )
+    else:
+        system = (
+            "You are a Python tutor in a blind-first IDE.\n"
+            "Given the user's code and the error, explain:\n"
+            "- What error happened\n"
+            "- On which line (if visible)\n"
+            "- What it means in simple terms\n"
+            "- How to fix it\n"
+            "Max 6 short lines. Be direct."
+        )
     # Sanitize traceback to remove paths before sending to LLM
     safe_error = sanitize_traceback(err_text)
     user = f"Code:\n```python\n{code}\n```\n\nError:\n```\n{safe_error}\n```"
-    return call_ollama(system, user)
+    return call_gemini(system, user, language=language)
 
 # ==========================
 # RUN CODE (WITH AI ERROR EXPLANATION)
@@ -583,7 +600,7 @@ def run_code():
         error = stderr_buf.getvalue()
 
         if error.strip():
-            explanation = explain_error(code, error)
+            explanation = explain_error(code, error, language=safe(body.get("language"), "en"))
             return jsonify({
                 "success": False,
                 "error": error,
@@ -599,7 +616,7 @@ def run_code():
     
     except Exception:
         tb = traceback.format_exc()
-        explanation = explain_error(code, tb)
+        explanation = explain_error(code, tb, language=safe(body.get("language"), "en"))
         return jsonify({
             "success": False,
             "error": tb,
@@ -612,24 +629,37 @@ def run_code():
 
 @app.route("/analyze", methods=["POST"])
 def analyze():
-    code = safe(safejson().get("code"), "")
+    body = safejson()
+    code = safe(body.get("code"), "")
+    language = safe(body.get("language"), "en")  # Default to English
+    
     if len(code) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
     if not code.strip():
         return jsonify({"success": False, "error": "Code cannot be empty"}), 400
 
-    system = (
-        "You are an expert Python tutor inside a blind-first IDE.\n"
-        "Analyze the given Python code. Report:\n"
-        "- What it does\n"
-        "- Any bugs or edge cases\n"
-        "- Any bad practices\n"
-        "No fluff. Max 10 lines."
-    )
+    if language == "hi":
+        system = (
+            "आप एक अंधे-पहले IDE में एक विशेषज्ञ पायथन ट्यूटर हैं।\n"
+            "दिए गए पायथन कोड का विश्लेषण करें। रिपोर्ट करें:\n"
+            "- यह क्या करता है\n"
+            "- कोई बग या edge cases\n"
+            "- कोई बुरी प्रथाएं\n"
+            "कोई फ्लफ नहीं। अधिकतम 10 पंक्तियां।"
+        )
+    else:
+        system = (
+            "You are an expert Python tutor inside a blind-first IDE.\n"
+            "Analyze the given Python code. Report:\n"
+            "- What it does\n"
+            "- Any bugs or edge cases\n"
+            "- Any bad practices\n"
+            "No fluff. Max 10 lines."
+        )
 
     user = f"Python code:\n```python\n{code}\n```"
 
-    analysis = call_ollama(system, user)
+    analysis = call_gemini(system, user, language=language)
 
     return jsonify({"analysis": analysis})
 
@@ -639,23 +669,36 @@ def analyze():
 
 @app.route("/advise", methods=["POST"])
 def advise():
-    code = safe(safejson().get("code"), "")
+    body = safejson()
+    code = safe(body.get("code"), "")
+    language = safe(body.get("language"), "en")  # Default to English
+    
     if len(code) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
     if not code.strip():
         return jsonify({"success": False, "error": "Code cannot be empty"}), 400
 
-    system = (
-        "You are a senior Python engineer mentoring a beginner.\n"
-        "Given their code, suggest 3–7 concrete improvements:\n"
-        "- New features they could add\n"
-        "- Refactors to make it cleaner\n"
-        "- Edge cases to handle\n"
-        "Return clear bullet points. Short, direct."
-    )
+    if language == "hi":
+        system = (
+            "आप एक शुरुआती को मेंटर करने वाले एक वरिष्ठ पायथन इंजीनियर हैं।\n"
+            "उनके कोड को देखते हुए, 3-7 ठोस सुधार सुझाएं:\n"
+            "- नई सुविधाएं जो वे जोड़ सकते हैं\n"
+            "- इसे साफ करने के लिए रीफैक्टर\n"
+            "- संभालने के लिए edge cases\n"
+            "स्पष्ट बुलेट पॉइंट्स लौटाएं। संक्षिप्त, सीधा।"
+        )
+    else:
+        system = (
+            "You are a senior Python engineer mentoring a beginner.\n"
+            "Given their code, suggest 3–7 concrete improvements:\n"
+            "- New features they could add\n"
+            "- Refactors to make it cleaner\n"
+            "- Edge cases to handle\n"
+            "Return clear bullet points. Short, direct."
+        )
 
     user = f"Code:\n```python\n{code}\n```"
-    advice = call_ollama(system, user)
+    advice = call_gemini(system, user, language=language)
     return jsonify({"advice": advice})
 
 # ==========================
@@ -667,6 +710,7 @@ def describe():
     body = safejson()
     code = safe(body.get("code"), "")
     line = int(body.get("line", 1))
+    language = safe(body.get("language"), "en")  # Default to English
 
     lines = code.splitlines()
     if not lines or line < 1 or line > len(lines):
@@ -677,14 +721,20 @@ def describe():
 
     context = "\n".join(f"{i+1}: {lines[i]}" for i in range(start - 1, end))
 
-    system = (
-        "You explain ONLY the target Python line for a blind developer.\n"
-        "Use simple language. Max 3 short lines."
-    )
+    if language == "hi":
+        system = (
+            "आप एक अंधे डेवलपर के लिए केवल TARGET Python पंक्ति की व्याख्या करते हैं।\n"
+            "सरल भाषा का प्रयोग करें। अधिकतम 3 छोटी पंक्तियां।"
+        )
+    else:
+        system = (
+            "You explain ONLY the target Python line for a blind developer.\n"
+            "Use simple language. Max 3 short lines."
+        )
 
     user = f"Code context:\n{context}\nTarget line: {line}"
 
-    desc = call_ollama(system, user)
+    desc = call_gemini(system, user, language=language)
 
     return jsonify({"success": True, "description": desc})
 
@@ -1159,21 +1209,31 @@ def check_syntax():
 def fix():
     body = safejson()
     code = safe(body.get("code"), "")
+    language = safe(body.get("language"), "en")  # Default to English
+    
     if len(code) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
     if not code.strip():
         return jsonify({"success": False, "error": "Code cannot be empty"}), 400
 
-    system = (
-        "You are a Python auto-fixer.\n"
-        "Fix syntax and obvious runtime errors.\n"
-        "Keep the same intent. Improve clarity slightly.\n"
-        "RETURN ONLY VALID PYTHON CODE. NO COMMENTS. NO MARKDOWN."
-    )
+    if language == "hi":
+        system = (
+            "आप एक Python ऑटो-फिक्सर हैं।\n"
+            "सिंटैक्स और स्पष्ट runtime त्रुटियों को ठीक करें।\n"
+            "एक ही मकसद रखें। स्पष्टता को थोड़ा सुधारें।\n"
+            "केवल वैध पायथन कोड लौटाएं। कोई टिप्पणी नहीं। कोई MARKDOWN नहीं।"
+        )
+    else:
+        system = (
+            "You are a Python auto-fixer.\n"
+            "Fix syntax and obvious runtime errors.\n"
+            "Keep the same intent. Improve clarity slightly.\n"
+            "RETURN ONLY VALID PYTHON CODE. NO COMMENTS. NO MARKDOWN."
+        )
 
     user = f"Fix this code:\n```python\n{code}\n```"
 
-    raw = call_ollama(system, user, temperature=0.1)
+    raw = call_gemini(system, user, temperature=0.1, language=language)
     fixed = extract_code(raw)
 
     return jsonify({"success": True, "code": fixed})
@@ -1186,22 +1246,33 @@ def fix():
 def generate_code():
     body = safejson()
     prompt = safe(body.get("prompt"), "")
+    language = safe(body.get("language"), "en")  # Default to English
+    
     if len(prompt) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": f"Prompt too large (max {MAX_CODE_SIZE} bytes)"}), 413
     if not prompt.strip():
         return jsonify({"success": False, "error": "Prompt cannot be empty"}), 400
 
-    system = (
-        "You are a Python code generator for a beginner-friendly, blind-first IDE.\n"
-        "The user will describe a task in natural language.\n"
-        "You must return ONLY valid Python code that solves the task.\n"
-        "Do not add comments, markdown, or explanations.\n"
-        "Just the code."
-    )
+    if language == "hi":
+        system = (
+            "आप एक शुरुआत-अनुकूल, अंधे-प्रथम IDE के लिए एक पायथन कोड जेनरेटर हैं।\n"
+            "उपयोगकर्ता एक कार्य को प्राकृतिक भाषा में वर्णित करेगा।\n"
+            "आपको केवल वैध पायथन कोड लौटाना चाहिए जो कार्य को हल करता है।\n"
+            "टिप्पणी, markdown, या व्याख्या न जोड़ें।\n"
+            "बस कोड।"
+        )
+    else:
+        system = (
+            "You are a Python code generator for a beginner-friendly, blind-first IDE.\n"
+            "The user will describe a task in natural language.\n"
+            "You must return ONLY valid Python code that solves the task.\n"
+            "Do not add comments, markdown, or explanations.\n"
+            "Just the code."
+        )
 
     user = f"Task description:\n{prompt}"
 
-    raw = call_ollama(system, user, temperature=0.2)
+    raw = call_gemini(system, user, temperature=0.2, language=language)
     code = extract_code(raw)
 
     return jsonify({"success": True, "code": code})
@@ -1372,21 +1443,35 @@ def best_two_commands(text: str):
 
 @app.route("/summarize", methods=["POST"])
 def summarize():
-    code = safe(safejson().get("code"), "")
+    body = safejson()
+    code = safe(body.get("code"), "")
+    language = safe(body.get("language"), "en")  # Default to English
 
-    system = (
-        "You summarize Python code for a blind beginner.\n"
-        "Explain in 4 to 7 short bullet points:\n"
-        "- Purpose\n"
-        "- Inputs\n"
-        "- Outputs\n"
-        "- Main logic\n"
-        "- Any risks\n"
-        "No markdown, no emojis."
-    )
+    if language == "hi":
+        system = (
+            "आप एक अंधे शुरुआत के लिए पायथन कोड को सारांशित करते हैं।\n"
+            "4 से 7 छोटे बुलेट पॉइंट्स में समझाएं:\n"
+            "- उद्देश्य\n"
+            "- इनपुट\n"
+            "- आउटपुट\n"
+            "- मुख्य तर्क\n"
+            "- कोई जोखिम\n"
+            "कोई मार्कडाउन नहीं, कोई इमोजी नहीं।"
+        )
+    else:
+        system = (
+            "You summarize Python code for a blind beginner.\n"
+            "Explain in 4 to 7 short bullet points:\n"
+            "- Purpose\n"
+            "- Inputs\n"
+            "- Outputs\n"
+            "- Main logic\n"
+            "- Any risks\n"
+            "No markdown, no emojis."
+        )
 
     user = f"Code:\n```python\n{code}\n```"
-    summary = call_ollama(system, user)
+    summary = call_gemini(system, user, language=language)
 
     return jsonify({"summary": summary})
 
@@ -1399,16 +1484,25 @@ def diff_explain():
     body = safejson()
     before = safe(body.get("before"), "")
     after = safe(body.get("after"), "")
+    language = safe(body.get("language"), "en")  # Default to English
 
-    system = (
-        "You explain what changed between two versions of Python code.\n"
-        "Explain in simple terms for a blind student.\n"
-        "Mention what was fixed and why.\n"
-        "Max 6 short lines."
-    )
+    if language == "hi":
+        system = (
+            "आप Python कोड के दो संस्करणों के बीच क्या बदला है यह समझाते हैं।\n"
+            "एक अंधे छात्र के लिए सरल शब्दों में समझाएं।\n"
+            "उल्लेख करें कि क्या ठीक किया गया और क्यों।\n"
+            "अधिकतम 6 छोटी पंक्तियां।"
+        )
+    else:
+        system = (
+            "You explain what changed between two versions of Python code.\n"
+            "Explain in simple terms for a blind student.\n"
+            "Mention what was fixed and why.\n"
+            "Max 6 short lines."
+        )
 
     user = f"BEFORE:\n```python\n{before}\n```\n\nAFTER:\n```python\n{after}\n```"
-    explanation = call_ollama(system, user)
+    explanation = call_gemini(system, user, language=language)
 
     return jsonify({"explanation": explanation})
 

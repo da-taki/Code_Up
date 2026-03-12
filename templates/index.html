@@ -27,7 +27,7 @@
   <header class="cu-header">
     <div class="cu-header-top">
       <div class="cu-title">CODEUP</div>
-      <div class="cu-status-pill">OLLAMA • PHI3:MINI</div>
+      <div class="cu-status-pill">GEMINI • PRO</div>
     </div>
     <div class="cu-subtitle">
       Blind-first, cyberpunk Python IDE with offline AI.
@@ -77,6 +77,10 @@
           🎤 Voice (Off)
         </button>
         <button class="cu-button cu-button-secondary" onclick="saveSnippet()" aria-label="Save current code as snippet">💾 Save</button>
+        <select id="languageSelector" class="cu-language-selector" aria-label="Select language for AI responses">
+          <option value="en">English</option>
+          <option value="hi">हिंदी (Hindi)</option>
+        </select>
       </div>
 
     </section>
@@ -104,6 +108,28 @@
       <button class="cu-button-secondary" onclick="submitCommand()">Send</button>
     </div>
   </section>
+
+  <!-- GEMINI API KEY MODAL -->
+  <div id="apiKeyModal" class="modal" style="display:none;">
+    <div class="modal-content">
+      <h2>Configure Gemini API Key</h2>
+      <p>Please enter your Gemini API key to enable AI features:</p>
+      <input 
+        id="apiKeyInput" 
+        type="password" 
+        placeholder="Enter your Gemini API key" 
+        class="api-key-input"
+        aria-label="Gemini API key input"
+      />
+      <div class="modal-buttons">
+        <button class="cu-button cu-button-primary" onclick="submitApiKey()">Configure</button>
+        <button class="cu-button" onclick="closeApiKeyModal()">Cancel</button>
+      </div>
+      <p style="font-size: 0.85rem; margin-top: 10px; color: #888;">
+        Get your API key at <a href="https://ai.google.dev/" target="_blank">ai.google.dev</a>
+      </p>
+    </div>
+  </div>
 
   <script src="/static/bg.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs/loader.min.js"></script>

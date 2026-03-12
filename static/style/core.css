@@ -238,6 +238,25 @@ html, body {
 }
 
 /* =========================================================
+   LANGUAGE SELECTOR
+========================================================= */
+
+.cu-language-selector {
+  padding: 10px 14px;
+  font-size: 0.85rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-soft);
+  background: var(--bg-soft);
+  color: var(--text-main);
+  cursor: pointer;
+  font-family: var(--font-main);
+}
+
+.cu-language-selector:hover {
+  border-color: var(--border-strong);
+}
+
+/* =========================================================
    OUTPUT PANEL
 ========================================================= */
 

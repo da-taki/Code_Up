@@ -775,6 +775,9 @@ function getModel(){ return editor?.getModel(); }
 
 // ---------- HELPERS ----------
 function getCode(){ return editor?.getValue() || ""; }
+function getLanguage(){ 
+  return document.getElementById("languageSelector")?.value || "en"; 
+}
 function setCode(v){
   if (typeof ErrorBeaconManager !== 'undefined') ErrorBeaconManager.stop();
   if (typeof SpeechManager !== 'undefined') SpeechManager.cancelAll();
@@ -825,7 +828,7 @@ async function runCode(){
     const res = await fetch("/run", {
       method: "POST",
       headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({ code: getCode() })
+      body: JSON.stringify({ code: getCode(), language: getLanguage() })
     });
     const data = await res.json();
     window.executionTrace = (data.trace || []).slice(0, 1000);
@@ -877,7 +880,7 @@ async function analyzeCode(){
     const res = await fetch("/analyze", {
       method: "POST",
       headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({ code: getCode() })
+      body: JSON.stringify({ code: getCode(), language: getLanguage() })
     });
     const data = await res.json();
     out(data.analysis || "No analysis.");
@@ -909,7 +912,7 @@ async function summarizeFile(){
     const res = await fetch("/summarize", {
       method: "POST",
       headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({ code: getCode() })
+      body: JSON.stringify({ code: getCode(), language: getLanguage() })
     });
 
     const data = await res.json();
@@ -938,7 +941,7 @@ async function adviseCode(){
     const res = await fetch("/advise", {
       method: "POST",
       headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({ code: getCode() })
+      body: JSON.stringify({ code: getCode(), language: getLanguage() })
     });
     const data = await res.json();
     const advice = data.advice || "No advice generated.";
@@ -969,7 +972,7 @@ async function fixCode(){
     const res = await fetch("/fix", {
       method: "POST",
       headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({ code: before })
+      body: JSON.stringify({ code: before, language: getLanguage() })
     });
 
     const data = await res.json();
@@ -984,7 +987,7 @@ async function fixCode(){
       const diffRes = await fetch("/diff-explain", {
         method: "POST",
         headers: {"Content-Type":"application/json"},
-        body: JSON.stringify({ before, after })
+        body: JSON.stringify({ before, after, language: getLanguage() })
       });
 
       const diffData = await diffRes.json();
@@ -1016,7 +1019,7 @@ async function describeLine(line){
     const res = await fetch("/describe", {
       method: "POST",
       headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({ code: getCode(), line })
+      body: JSON.stringify({ code: getCode(), line, language: getLanguage() })
     });
     const data = await res.json();
     if(data.success){
@@ -1049,7 +1052,7 @@ async function generateCode(prompt){
     const res = await fetch("/generate-code", {
       method: "POST",
       headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({ prompt })
+      body: JSON.stringify({ prompt, language: getLanguage() })
     });
     const data = await res.json();
     if (data.success && data.code){

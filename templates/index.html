@@ -155,7 +155,7 @@
         aria-label="Command palette search"
         autocomplete="off"
       />
-      <div id="commandPaletteResults" class="command-palette-results">
+      <div id="commandPaletteResults" class="command-palette-results" role="listbox">
         <!-- Results appear here -->
       </div>
     </div>
@@ -167,6 +167,10 @@
   
   <!-- ACCESSIBILITY THEME SWITCHER -->
   <script>
+    // ensure speak() exists even if app.js failed to load early
+    if (typeof speak !== 'function') {
+      window.speak = function(){};
+    }
     // Load saved preferences
     function loadAccessibilityPreferences() {
       const colorMode = localStorage.getItem('colorVisionMode') || 'default';

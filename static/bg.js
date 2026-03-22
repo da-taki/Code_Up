@@ -29,6 +29,12 @@ resize();
 window.addEventListener("resize", resize);
 
 function draw() {
+    // if user has hidden the page or requested reduced motion, skip animation
+    if (document.hidden || (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches)) {
+        requestAnimationFrame(draw);
+        return;
+    }
+
     ctx.clearRect(0, 0, width, height);
 
     for (const dot of dots) {

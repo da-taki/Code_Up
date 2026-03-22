@@ -1367,6 +1367,11 @@ async function handleConfirmedAction(action, payload){
   else if(action === "speak")      speakOutput();
   else if(action === "read_output") speakOutput();
   else if(action === "describe_line") await describeLine(payload?.line || 1);
+  else if(action === "next_step" || action === "previous_step" || action === "what_changed") {
+    const text = payload?.speech || payload?.message || "No trace event available.";
+    out(text);
+    speak(text);
+  }
   else if(action === "generate_code") await generateCode(payload?.prompt || "");
   else if(action === "save_snippet_named") await saveSnippetWithName(payload?.name || "Untitled");
   else if(action === "load_snippet")   await loadSnippetById(payload?.id);
@@ -2678,6 +2683,7 @@ function renderCommandPalette(filterText) {
   // Build HTML
   let html = filtered.map((cmd, idx) => `
     <div class="command-palette-item ${idx === commandPaletteSelectedIndex ? 'selected' : ''}" 
+         role="option" aria-selected="${idx === commandPaletteSelectedIndex}"
          data-index="${idx}"
          onclick="executeCommandPaletteItem(${filtered.indexOf(cmd)}, true)">
       <span class="command-palette-item-icon">${cmd.icon}</span>

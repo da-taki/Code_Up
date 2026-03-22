@@ -46,16 +46,19 @@ class SandboxedFileSystem:
             ValueError: If path attempts to escape workspace
         """
         # Normalize and make absolute
+        # Normalize and make absolute path joined to workspace
         abs_path = os.path.abspath(os.path.join(self.workspace_dir, filepath))
-        
-        # Ensure it's within workspace (prevent directory traversal)
+        # Use pathlib to perform relative check (needed since abs_path is a string)
+        abs_path_obj = Path(abs_path)
+        workspace_obj = Path(self.workspace_dir)
         try:
-            abs_path.relative_to(self.workspace_dir)
+            abs_path_obj.relative_to(workspace_obj)
         except ValueError:
             raise ValueError(f"Path '{filepath}' is outside workspace")
-        
-        return abs_path
+        return str(abs_path_obj)
     
+    MAX_FILE_SIZE = 5_000_000  # bytes, arbitrary safety cap
+
     def write(self, filepath: str, content: str, encoding: str = "utf-8") -> Dict:
         """
         Write file to workspace.
@@ -69,6 +72,10 @@ class SandboxedFileSystem:
             {"success": bool, "path": str, "size": int, "error": str}
         """
         try:
+            # enforce size limit before writing to avoid resource exhaustion
+            if len(content.encode(encoding)) > self.MAX_FILE_SIZE:
+                raise ValueError(f"File exceeds maximum size of {self.MAX_FILE_SIZE} bytes")
+
             abs_path = self._validate_path(filepath)
             
             # Ensure parent directory exists
@@ -254,9 +261,32 @@ class SandboxedFileSystem:
                 "error": str(e)
             }
 
+    def cleanup(self):
+        """Remove the entire workspace directory (use with caution)."""
+        try:
+            if os.path.exists(self.workspace_dir):
+                import shutil
+                shutil.rmtree(self.workspace_dir)
+                return {"success": True}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+        return {"success": True}
+
 
 # Module-level instance
 _sandbox = None
+
+# ensure temp workspaces are cleaned up on exit
+import atexit
+
+@atexit.register
+def _cleanup_sandbox_on_exit():
+    global _sandbox
+    if _sandbox is not None:
+        try:
+            _sandbox.cleanup()
+        except Exception:
+            pass
 
 def get_sandbox() -> SandboxedFileSystem:
     """Get or create the global sandbox instance."""

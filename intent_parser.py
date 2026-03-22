@@ -30,10 +30,11 @@ class IntentParser:
     """Parse voice commands into structured intents and slots."""
     
     # Navigation intents
+    # only match when "line" is explicitly mentioned; we rely on slot
+    # extraction to validate that the captured word is numeric
     GOTO_LINE_PATTERNS = [
         r"(?:go|jump|navigate)\s+to\s+line\s+(\w+)",
-        r"(?:line)\s+(\w+)",
-        r"(?:goto)\s+(\w+)",
+        r"\bline\s+(\w+)\b",
     ]
     
     READ_LINE_PATTERNS = [
@@ -75,11 +76,15 @@ class IntentParser:
     ]
     
     ADVISE_PATTERNS = [
-        r"^advise$",
-        r"^give\s+(?:me\s+)?(?:suggestions|advice)$",
+        r"advise(?: on code)?",
+        r"(?:give\s+)?advice(?: on code)?",
+        r"how can i improve (?:this )?code",
+        r"what features can i add"
     ]
-    
-    # Structure intents
+
+    SPEAK_OUTPUT_PATTERNS = [
+        r"(?:speak|read|say)\s+(?:the\s+)?output",
+    ]
     SHOW_STRUCTURE_PATTERNS = [
         r"(?:show|display|list)\s+structure",
         r"show\s+(?:code\s+)?map",
@@ -108,6 +113,64 @@ class IntentParser:
         r"where\s+is\s+(?:the\s+)?error",
         r"next\s+error",
     ]
+
+    DESCRIBE_LINE_PATTERNS = [
+        r"describe\s+line\s+(\w+)",
+        r"what\s+is\s+on\s+line\s+(\w+)"
+    ]
+
+    CLEAR_EDITOR_PATTERNS = [
+        r"clear\s+(?:editor|code|file)",
+        r"reset\s+(?:editor|code|file)"
+    ]
+
+    DELETE_LINE_PATTERNS = [
+        r"delete\s+line\s+(\w+)"
+    ]
+
+    SUMMARIZE_PATTERNS = [
+        r"summarize",
+        r"summary of (?:this )?file"
+    ]
+
+    GENERATE_CODE_PATTERNS = [
+        r"(?:generate|write|create|make)\s+(?:python\s+)?code(?:\s+for\s+(.+))?",
+        r"i want (?:python )?code (?:for|to) (.+)"
+    ]
+
+
+    RENAME_SNIPPET_PATTERNS = [
+        r"rename\s+snippet\s+([a-z0-9\-]+)\s+to\s+(.+)"
+    ]
+
+    NEXT_STEP_PATTERNS = [
+        r"next\s+step",
+        r"forward\s+step",
+        r"step\s+forward"
+    ]
+
+    PREVIOUS_STEP_PATTERNS = [
+        r"previous\s+step",
+        r"back\s+step",
+        r"step\s+back"
+    ]
+
+    WHAT_CHANGED_PATTERNS = [
+        r"what\s+changed(?:\s+here)?",
+        r"state\s+change",
+        r"show\s+change"
+    ]
+
+    READ_OUTPUT_PATTERNS = [
+        r"(?:speak|read|say)\s+output"
+    ]
+    
+    REPEAT_PATTERNS = [
+        r"^repeat(?:\s+that)?$",
+        r"^again$",
+        r"say that again",
+        r"repeat(?:\s+that)?",
+    ]
     
     # Help intents
     HELP_PATTERNS = [
@@ -116,12 +179,6 @@ class IntentParser:
         r"what\s+can\s+i\s+(?:do|say)",
     ]
     
-    # Speech control
-    SPEAK_OUTPUT_PATTERNS = [
-        r"^speak\s+(?:the\s+)?output$",
-        r"^read\s+(?:the\s+)?output$",
-        r"^say\s+(?:the\s+)?output$",
-    ]
     
     def __init__(self):
         """Initialize the intent parser."""
@@ -129,23 +186,41 @@ class IntentParser:
     
     def _build_intent_map(self) -> Dict[str, List[Tuple[str, str]]]:
         """Build a map of intents to their patterns."""
+    def _build_intent_map(self) -> Dict[str, List[Tuple[str, str]]]:
+        """Build a map of intents to their patterns. Order matters: more specific intents first."""
+        # Order matters! More specific patterns should be checked first.
         return {
-            "goto_line": self.GOTO_LINE_PATTERNS,
+            # Most specific: patterns with "read"/"describe"/"delete" keywords
             "read_line": self.READ_LINE_PATTERNS,
+            "describe_line": self.DESCRIBE_LINE_PATTERNS,
+            "delete_line": self.DELETE_LINE_PATTERNS,
+            # Then general line navigation
+            "goto_line": self.GOTO_LINE_PATTERNS,
+            # Then function/class navigation (specific)
             "read_function": self.READ_FUNCTION_PATTERNS,
-            "find_class": self.FIND_CLASS_PATTERNS,
             "find_function": self.FIND_FUNCTION_PATTERNS,
+            "sonify_function": self.SONIFY_FUNCTION_PATTERNS,
+            "find_class": self.FIND_CLASS_PATTERNS,
+            "sonify_class": self.SONIFY_CLASS_PATTERNS,
+            # Execution and analysis
             "run": self.RUN_PATTERNS,
             "analyze": self.ANALYZE_PATTERNS,
             "fix": self.FIX_PATTERNS,
             "advise": self.ADVISE_PATTERNS,
+            "summarize": self.SUMMARIZE_PATTERNS,
+            "generate_code": self.GENERATE_CODE_PATTERNS,
+            "rename_snippet": self.RENAME_SNIPPET_PATTERNS,
+            "clear_editor": self.CLEAR_EDITOR_PATTERNS,
+            "read_output": self.READ_OUTPUT_PATTERNS,
+            # Structure and playback
             "show_structure": self.SHOW_STRUCTURE_PATTERNS,
-            "sonify_function": self.SONIFY_FUNCTION_PATTERNS,
-            "sonify_class": self.SONIFY_CLASS_PATTERNS,
             "sonify_block": self.SONIFY_BLOCK_PATTERNS,
             "locate_error": self.ERROR_PATTERNS,
+            "next_step": self.NEXT_STEP_PATTERNS,
+            "previous_step": self.PREVIOUS_STEP_PATTERNS,
+            "what_changed": self.WHAT_CHANGED_PATTERNS,
+            "repeat": self.REPEAT_PATTERNS,
             "help": self.HELP_PATTERNS,
-            "speak_output": self.SPEAK_OUTPUT_PATTERNS,
         }
     
     def _word_to_number(self, word: str) -> Optional[int]:
@@ -185,6 +260,13 @@ class IntentParser:
                 match = re.search(pattern, text, re.IGNORECASE)
                 if match:
                     slots = self._extract_slots(intent, match, text)
+                    # if a slot is expected but none could be parsed, skip this match
+                    if intent in ("goto_line", "read_line") and "line_number" not in slots:
+                        continue
+                    if intent in ("read_function", "find_function", "sonify_function") and "function_name" not in slots:
+                        continue
+                    if intent in ("find_class", "sonify_class") and "class_name" not in slots:
+                        continue
                     return {
                         "intent": intent,
                         "slots": slots,
@@ -204,19 +286,31 @@ class IntentParser:
         """Extract slots from regex match."""
         slots = {}
         
-        if intent in ["goto_line", "read_line"]:
+        if intent in ["goto_line", "read_line", "describe_line", "delete_line"]:
             if match.groups():
                 num = self._word_to_number(match.group(1))
-                if num:
+                if num is not None:
                     slots["line_number"] = num
-        
+
         elif intent in ["read_function", "find_function", "sonify_function"]:
             if match.groups():
                 slots["function_name"] = match.group(1)
-        
+
         elif intent in ["find_class", "sonify_class"]:
             if match.groups():
                 slots["class_name"] = match.group(1)
+
+        elif intent == "generate_code":
+            if match.groups():
+                prompt = match.group(1) or ""
+                prompt = prompt.strip()
+                if prompt:
+                    slots["prompt"] = prompt
+
+        elif intent == "rename_snippet":
+            if match.groups() and len(match.groups()) >= 2:
+                slots["id"] = match.group(1)
+                slots["new_name"] = match.group(2).strip()
         
         return slots
     

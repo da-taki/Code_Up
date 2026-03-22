@@ -1,5 +1,5 @@
 from flask import Flask, render_template, request, jsonify
-import json, os, traceback, io, contextlib, re, requests, ast, sys, time, threading, uuid, subprocess, tempfile
+import json, os, traceback, io, contextlib, re, ast, sys, time, threading, subprocess, tempfile
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Tuple, Optional
 from rapidfuzz import fuzz
@@ -8,8 +8,12 @@ from structure_parser import CodeAnalyzer
 from intent_parser import parse_intent
 from sandboxed_fs import get_sandbox
 
-# Thread-local storage for request-scoped sys.settrace
-_trace_context = threading.local()
+# Thread-local storage helpers
+_trace_context = threading.local()  # used by run_with_trace
+_api_context = threading.local()   # stores per-request Gemini API key
+
+# lock used to serialize tracer installation to avoid cross-thread interference
+_tracer_lock = threading.Lock()
 # Executor for LLM calls
 _gemini_executor = ThreadPoolExecutor(max_workers=2)
 app = Flask(__name__)
@@ -116,30 +120,40 @@ def save_snippets(d: dict) -> None:
 # GEMINI API CONFIG
 # ==========================
 
+# default global fallback key (will only be used if session key missing)
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "Insert_API_Key_Here")
 GEMINI_MODEL = "gemini-pro"
 
-# Configure Gemini API
+# Configure default key (used when no session key set)
 if GEMINI_API_KEY != "Insert_API_Key_Here":
     genai.configure(api_key=GEMINI_API_KEY)
 
+# helper to retrieve current API key (session overrides global)
+def _current_api_key():
+    return getattr(_api_context, 'gemini_key', GEMINI_API_KEY)
+
 def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en"):
-    """Call Gemini API with hard timeout to prevent hanging."""
+    """Call Gemini API with hard timeout to prevent hanging.
+
+    Uses a per-session key if set via /api-config; otherwise falls back to a global key.
+    """
     # Allow tests and offline usage to disable Gemini via env var
     if os.environ.get("GEMINI_ENABLED", "1") != "1":
         return "AI service disabled"
     
     # Check if API key is configured
-    if GEMINI_API_KEY == "Insert_API_Key_Here":
-        return "AI service not configured. Please set GEMINI_API_KEY environment variable."
+    key = _current_api_key()
+    if not key or key == "Insert_API_Key_Here":
+        return "AI service not configured. Please set GEMINI_API_KEY environment variable or configure via /api-config."
 
     def _do_call():
         try:
             # Adapt system prompt based on language
+            sp = system_prompt
             if language == "hi":
-                system_prompt = f"आप एक सहायक हैं जो हिंदी में सहायता प्रदान करते हैं। {system_prompt}"
+                sp = f"आप एक सहायक हैं जो हिंदी में सहायता प्रदान करते हैं। {system_prompt}"
             
-            model = genai.GenerativeModel(GEMINI_MODEL, system_instruction=system_prompt)
+            model = genai.GenerativeModel(GEMINI_MODEL, system_instruction=sp)
             response = model.generate_content(
                 user_prompt,
                 generation_config=genai.types.GenerationConfig(
@@ -151,6 +165,8 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en"):
         except Exception as e:
             return f"AI service error: {str(e)}"
 
+    # always configure with the key we're using so that genai library picks it up
+    genai.configure(api_key=key)
     try:
         future = _gemini_executor.submit(_do_call)
         result = future.result(timeout=MAX_GEMINI_TIMEOUT + 1)
@@ -180,6 +196,16 @@ def index():
 # ==========================
 # API KEY CONFIGURATION
 # ==========================
+
+def set_gemini_api_key(key):
+    """Configure the Gemini API key for the current request/session.
+
+    This stores the key in thread-local storage so concurrent sessions
+    can each use a different key. It also updates the `genai` config
+    for the running thread.
+    """
+    _api_context.gemini_key = key
+    genai.configure(api_key=key)
 
 @app.route("/api-config", methods=["POST"])
 def api_config():
@@ -357,6 +383,106 @@ def run_with_trace(compiled_code, globals_dict, locals_dict, time_limit=1.0):
     
     return events
 
+# Legacy `run_with_trace` definition left above for reference.  The
+# following implementation shadowing it includes event capping, safer
+# repr handling, and a global lock to avoid concurrency races.
+
+def run_with_trace(compiled_code, globals_dict, locals_dict, time_limit=1.0):
+    """Enhanced tracer with memory and concurrency safeguards.
+
+    This function intentionally shadows the earlier definition so that
+    existing call sites continue to work without modification.  It
+    imposes a hard cap on the number of events recorded, truncates the
+    `repr` of objects to avoid enormous outputs, and serializes
+    `sys.settrace` calls with a process-wide lock.  It also uses a
+    per-thread start time and does not expose introspective data.
+    """
+    events = []
+    last_locals = {}
+    start_time = time.time()
+
+    MAX_CALL_DEPTH = 50
+    MAX_LINE_EXECS = 10000
+    MAX_EVENTS = 5000
+
+    def safe_repr(obj):
+        try:
+            r = repr(obj)
+        except Exception:
+            try:
+                r = str(obj)
+            except Exception:
+                r = f"<{type(obj).__name__}?>"
+        if len(r) > 200:
+            return r[:197] + "..."
+        return r
+
+    call_depth = [0]
+    line_count = [0]
+
+    def append_event(ev):
+        if len(events) < MAX_EVENTS:
+            events.append(ev)
+        elif len(events) == MAX_EVENTS:
+            events.append({"type": "overflow", "note": "event limit reached; additional events dropped"})
+
+    def tracer(frame, event, arg):
+        nonlocal last_locals
+        
+        # Only trace user code (filename is '<user>')
+        if frame.f_code.co_filename != '<user>':
+            return tracer
+
+        if event == "call":
+            call_depth[0] += 1
+            if call_depth[0] > MAX_CALL_DEPTH:
+                raise RuntimeError("Recursion depth exceeded (%d)." % MAX_CALL_DEPTH)
+        elif event == "return":
+            call_depth[0] = max(0, call_depth[0] - 1)
+
+        if time.time() - start_time > time_limit:
+            raise TimeoutError(f"Execution timed out after {time_limit}s")
+
+        if event == "line":
+            line_count[0] += 1
+            if line_count[0] > MAX_LINE_EXECS:
+                raise RuntimeError("Execution exceeded line limit; possible infinite loop.")
+            lineno = frame.f_lineno
+            append_event({"type": "line_exec", "line": lineno})
+
+            current = frame.f_locals.copy()
+            changes = []
+            for k, v in current.items():
+                if k not in last_locals:
+                    changes.append(f"{k} initialized to {safe_repr(v)}")
+                elif last_locals[k] != v:
+                    changes.append(f"{k} changed from {safe_repr(last_locals[k])} to {safe_repr(v)}")
+            for k in last_locals:
+                if k not in current:
+                    changes.append(f"{k} went out of scope")
+            if changes:
+                append_event({"type": "state_change", "line": lineno, "changes": changes})
+
+        elif event == "call":
+            append_event({"type": "call", "function": frame.f_code.co_name, "line": frame.f_lineno})
+        elif event == "return":
+            append_event({"type": "return", "value": safe_repr(arg)})
+
+        return tracer
+
+    old_tracer = sys.gettrace()
+    if old_tracer is not None and old_tracer is not tracer:
+        raise RuntimeError("Another tracer active on this thread; aborting.")
+
+    with _tracer_lock:
+        sys.settrace(tracer)
+        try:
+            exec(compiled_code, globals_dict, locals_dict)
+        finally:
+            sys.settrace(old_tracer)
+
+    return events
+
 def classify_semantic_errors(trace):
     """
     ⚠️ HEURISTIC DETECTION (Assistance Signal, Not Guaranteed)
@@ -386,6 +512,13 @@ def classify_semantic_errors(trace):
             })
 
     return issues
+
+
+def save_execution_trace(trace):
+    """Store trace in thread-local context for replay features."""
+    _trace_context.last_trace = trace or []
+    _trace_context.current_trace_index = -1
+    _trace_context.trace_timestamp = time.time()
 
 
 class SafeModule:
@@ -454,9 +587,11 @@ def run_code():
         def __getattr__(self, name):
             raise AttributeError(f"Access to '{name}' is blocked")
     
-    # Safe file operations (restricted to workspace only)
+    # Safe file operations (restricted to workspace only).
+    # These functions are not exposed to untrusted user code in SAFE_GLOBALS.
+    # External code should use /fs/* APIs for guaranteed sandboxed access.
     def safe_open(filepath, mode="r", encoding="utf-8"):
-        """Open file within sandboxed workspace only."""
+        """Open file within sandboxed workspace only (internal helper)."""
         sandbox = get_sandbox()
         # Validate path is within workspace
         abs_path = sandbox._validate_path(filepath)
@@ -487,10 +622,11 @@ def run_code():
         "map": SafeFunction(map),
         "filter": SafeFunction(filter),
         "isinstance": SafeFunction(isinstance),
-        "type": SafeFunction(type),
-        "hasattr": SafeFunction(hasattr),
-        "getattr": SafeFunction(getattr),
-        "callable": SafeFunction(callable),
+        # Introspection functions removed for security
+        # "type": SafeFunction(type),
+        # "hasattr": SafeFunction(hasattr),
+        # "getattr": SafeFunction(getattr),
+        # "callable": SafeFunction(callable),
         "id": SafeFunction(id),
         "hash": SafeFunction(hash),
         "ord": SafeFunction(ord),
@@ -504,13 +640,15 @@ def run_code():
         "repr": SafeFunction(repr),
         "any": SafeFunction(any),
         "all": SafeFunction(all),
-        "open": safe_open,  # Safe file operations
+        # File operations should be done through /fs API in sandbox mode.
+        # "open": safe_open,
         "__builtins__": {},
         "input": SafeFunction(lambda *a: ""),
         "__import__": restricted_import,
     }
 
     try:
+        execution_start = time.time()
         compiled = compile(code, "<user>", "exec")
         # Pre-compute short-circuit call targets from AST so we can detect skipped calls
         short_circuit_map = {}
@@ -559,29 +697,144 @@ def run_code():
 
         # Execution time limit (seconds) - configurable via env
         time_limit = float(os.environ.get("EXECUTION_TIME_LIMIT", "1.0"))
-        # If the runtime is configured to use a subprocess sandbox, run there for safety.
-        USE_SUBPROCESS = os.environ.get("USE_SUBPROCESS_SANDBOX", "0") == "1"
+        # Default to subprocess sandbox for safety.
+        USE_SUBPROCESS = os.environ.get("USE_SUBPROCESS_SANDBOX", "1") == "1"
         if USE_SUBPROCESS:
-            # Write code to a temporary file and execute with a subprocess and a hard timeout.
-            tf = None
+            sandbox = get_sandbox()
+            workspace_dir = sandbox.workspace_dir
+            trace_file = os.path.join(workspace_dir, "last_trace.json")
+
+            # Construct subprocess script as a proper Python string
+            code_json = json.dumps(code)
+            trace_file_json = json.dumps(trace_file)
+            
+            subprocess_script = f"""
+import sys, time, json, traceback
+
+ALLOWED_MODULES = {{'math','random','string','datetime','date'}}
+
+class SafeFunction:
+    def __init__(self, func):
+        self._func = func
+    def __call__(self, *args, **kwargs):
+        return self._func(*args, **kwargs)
+    def __getattr__(self, name):
+        raise AttributeError(f'Access to {{name}} is blocked')
+
+def restricted_import(name, *args, **kwargs):
+    if name not in ALLOWED_MODULES:
+        raise ImportError(f"Module '{{name}}' is not allowed.")
+    return __import__(name, *args, **kwargs)
+
+SAFE_GLOBALS = {{
+    'print': SafeFunction(print),
+    'range': SafeFunction(range),
+    'len': SafeFunction(len),
+    'int': SafeFunction(int),
+    'float': SafeFunction(float),
+    'str': SafeFunction(str),
+    'bool': SafeFunction(bool),
+    'list': SafeFunction(list),
+    'dict': SafeFunction(dict),
+    'tuple': SafeFunction(tuple),
+    'set': SafeFunction(set),
+    'sum': SafeFunction(sum),
+    'min': SafeFunction(min),
+    'max': SafeFunction(max),
+    'abs': SafeFunction(abs),
+    'round': SafeFunction(round),
+    'sorted': SafeFunction(sorted),
+    'enumerate': SafeFunction(enumerate),
+    'zip': SafeFunction(zip),
+    'map': SafeFunction(map),
+    'filter': SafeFunction(filter),
+    'pow': SafeFunction(pow),
+    'repr': SafeFunction(repr),
+    '__builtins__': {{'None': None, 'False': False, 'True': True}},
+    '__import__': restricted_import,
+}}
+
+code = {code_json}
+trace = []
+last_locals = {{}}
+start = time.time()
+
+def safe_repr(v):
+    try:
+        r = repr(v)
+    except Exception:
+        try:
+            r = str(v)
+        except Exception:
+            r = "<" + type(v).__name__ + ">"
+    if len(r) > 200:
+        return r[:197] + '...'
+    return r
+
+def tracer(frame, event, arg):
+    global last_locals
+    # Only trace user code (filename is '<user>')
+    if frame.f_code.co_filename != '<user>':
+        return tracer
+        
+    if event == 'line':
+        line = frame.f_lineno
+        trace.append({{'type':'line_exec','line':line}})
+        current = frame.f_locals.copy()
+        changes = []
+        for k,v in current.items():
+            if k not in last_locals:
+                changes.append(k + " initialized to " + safe_repr(v))
+            elif last_locals[k] != v:
+                changes.append(k + " changed from " + safe_repr(last_locals[k]) + " to " + safe_repr(v))
+        for k in last_locals:
+            if k not in current:
+                changes.append(k + " went out of scope")
+        if changes:
+            trace.append({{'type':'state_change','line':line,'changes':changes}})
+        last_locals = current
+    elif event == 'call':
+        trace.append({{'type':'call','function':frame.f_code.co_name,'line':frame.f_lineno}})
+    elif event == 'return':
+        trace.append({{'type':'return','value':safe_repr(arg)}})
+    return tracer
+
+try:
+    compiled = compile(code, '<user>', 'exec')
+    sys.settrace(tracer)
+    exec(compiled, SAFE_GLOBALS, {{}})
+except Exception:
+    traceback.print_exc(file=sys.stderr)
+finally:
+    sys.settrace(None)
+    with open({trace_file_json}, 'w', encoding='utf-8') as f:
+        json.dump({{'trace':trace,'duration_ms':int((time.time()-start)*1000)}}, f)
+"""
+
             try:
-                fd, tf = tempfile.mkstemp(suffix=".py", prefix="usercode_")
-                with os.fdopen(fd, 'w', encoding='utf-8') as f:
-                    f.write(code)
-                # Execute in separate process with timeout; capture stdout/stderr
-                proc = subprocess.run([sys.executable, tf], capture_output=True, text=True, timeout=max(1, int(time_limit)))
+                proc = subprocess.run([sys.executable, '-u', '-c', subprocess_script], capture_output=True, text=True, timeout=max(1, int(time_limit)))
                 stdout_buf.write(proc.stdout)
                 stderr_buf.write(proc.stderr)
-                trace = [{ 'type': 'subprocess_exec', 'note': 'Executed in subprocess; detailed trace unavailable.' }]
             except subprocess.TimeoutExpired:
                 stderr_buf.write(f"Execution timed out after {time_limit}s (subprocess)")
-                trace = []
-            finally:
-                try:
-                    if tf and os.path.exists(tf):
-                        os.remove(tf)
-                except Exception:
-                    pass
+
+            trace = []
+            trace_error = None
+            try:
+                if os.path.exists(trace_file):
+                    with open(trace_file, 'r', encoding='utf-8') as tfh:
+                        data = json.load(tfh)
+                        trace = data.get('trace', [])
+                else:
+                    trace_error = 'Trace file not found in workspace'
+            except json.JSONDecodeError:
+                trace_error = 'Trace data was corrupted or incomplete'
+            except Exception as e:
+                trace_error = f'Error reading trace: {str(e)}'
+
+            if not trace:
+                msg = trace_error or 'No detailed trace available from subprocess (likely timed out or crashed)'
+                trace = [{'type': 'subprocess_exec', 'note': msg}]
         else:
             with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
                 # Use both globals and locals to prevent locals from polluting globals
@@ -607,7 +860,9 @@ def run_code():
                         else:
                             trace.insert(idx+1, sc_event)
 
-            semantic_issues = classify_semantic_errors(trace)
+        semantic_issues = classify_semantic_errors(trace) if trace else []
+        _trace_context.trace_duration_ms = int((time.time() - execution_start) * 1000)
+        save_execution_trace(trace)
 
         output = stdout_buf.getvalue()
         error = stderr_buf.getvalue()
@@ -673,8 +928,33 @@ def analyze():
     user = f"Python code:\n```python\n{code}\n```"
 
     analysis = call_gemini(system, user, language=language)
+    
+    # Extract parameter type information for speech
+    analyzer = CodeAnalyzer()
+    structure = analyzer.analyze(code)
+    param_info = []
+    
+    if structure.get("functions"):
+        for func in structure["functions"]:
+            if func.get("params"):
+                typed_params = []
+                for param in func["params"]:
+                    if isinstance(param, dict) and param.get("type"):
+                        typed_params.append(f"{param['name']} ({param['type']})")
+                    elif isinstance(param, dict):
+                        typed_params.append(param.get("name", "unknown"))
+                    else:
+                        # Legacy format: just the name
+                        typed_params.append(str(param))
+                if typed_params:
+                    param_info.append(f"Function {func['name']} takes: {', '.join(typed_params)}")
+    
+    # Build speech output: analysis + parameter info
+    speech_text = analysis
+    if param_info:
+        speech_text = analysis + "\n" + "Parameters: " + " ".join(param_info)
 
-    return jsonify({"analysis": analysis})
+    return jsonify({"analysis": analysis, "param_info": param_info, "speech": speech_text, "auto_speak": True})
 
 # ==========================
 # ADVISE (FEATURE / IMPROVEMENT SUGGESTIONS)
@@ -1392,7 +1672,22 @@ def generate_code():
 @app.route("/snippets", methods=["GET", "POST"])
 def snippets():
     if request.method == "GET":
-        return jsonify(load_snippets())
+        data = load_snippets()
+        snippets_list = data.get("snippets", [])
+        
+        # Generate speech output with snippet names
+        speech_text = None
+        if snippets_list:
+            names = [s.get("name", f"Snippet {i+1}") for i, s in enumerate(snippets_list)]
+            if len(names) == 1:
+                speech_text = f"You have 1 snippet: {names[0]}."
+            else:
+                speech_text = f"You have {len(names)} snippets: {', '.join(names[:-1])}, and {names[-1]}."
+        else:
+            speech_text = "You have no saved snippets."
+        
+        data["speech"] = speech_text
+        return jsonify(data)
 
     data = load_snippets()
     body = safejson()
@@ -1411,27 +1706,38 @@ def snippets():
     data["snippets"].append({"id": new_id, "name": name, "code": code})
     save_snippets(data)
 
-    return jsonify({"success": True, "id": new_id})
+    return jsonify({"success": True, "id": new_id, "speech": f"Saved snippet: {name}"})
 
 @app.route("/snippets/<sid>", methods=["PUT", "DELETE"])
 def snippet_detail(sid):
     data = load_snippets()
 
     if request.method == "DELETE":
+        # Find snippet name for speech feedback
+        deleted_name = None
+        for s in data["snippets"]:
+            if str(s["id"]) == str(sid):
+                deleted_name = s.get("name", f"Snippet {sid}")
+                break
+        
         data["snippets"] = [s for s in data["snippets"] if str(s["id"]) != str(sid)]
         save_snippets(data)
-        return jsonify({"success": True})
+        speech = f"Deleted snippet: {deleted_name}." if deleted_name else "Snippet deleted."
+        return jsonify({"success": True, "speech": speech})
 
     body = safejson()
     found = False
+    snippet_name = None
     for s in data["snippets"]:
         if str(s["id"]) == str(sid):
             found = True
+            snippet_name = s.get("name", "Snippet")
             if "name" in body:
                 new_name = str(body["name"])
                 if len(new_name) > 256:
                     return jsonify({"success": False, "error": "Name too long (max 256 chars)"}), 400
                 s["name"] = new_name
+                snippet_name = new_name
             if "code" in body:
                 new_code = str(body["code"])
                 if len(new_code) > MAX_CODE_SIZE:
@@ -1440,7 +1746,8 @@ def snippet_detail(sid):
     if not found:
         return jsonify({"success": False, "error": "Snippet not found"}), 404
     save_snippets(data)
-    return jsonify({"success": True})
+    speech = f"Updated snippet: {snippet_name}." if snippet_name else "Snippet updated."
+    return jsonify({"success": True, "speech": speech})
 
 # ==========================
 # VOICE COMMANDS (WITH CONFIRMATION + NAV/EDIT/ADVISE)
@@ -1615,84 +1922,173 @@ def diff_explain():
     return jsonify({"explanation": explanation})
 
 
+def _trace_playback(direction):
+    trace = getattr(_trace_context, 'last_trace', []) or []
+    if not trace:
+        return "No execution trace available."
+
+    idx = getattr(_trace_context, 'current_trace_index', -1)
+    if direction == 'next':
+        idx = min(len(trace) - 1, idx + 1)
+    elif direction == 'prev':
+        idx = max(0, idx - 1)
+    elif direction == 'current_change':
+        if idx < 0:
+            return "No current trace step selected. Say 'next step' to begin." 
+    else:
+        return "Unknown trace navigation command."
+
+    _trace_context.current_trace_index = idx
+    event = _get_trace_event(idx)
+    if direction == 'current_change' and event and event.get('type') != 'state_change':
+        return _event_to_speech(event, idx, len(trace))
+    return _event_to_speech(event, idx, len(trace))
+
+
 @app.route("/voice-command", methods=["POST"])
 def voice():
-    """
-    Voice command dispatcher with explicit confidence levels.
-    Now uses intent-based parsing with fallback to regex matching.
-    
-    Response Schema:
-    - success: bool (endpoint worked)
-    - action: str (parsed action)
-    - confidence: float 0–1 (how sure the system is)
-      - 1.0: exact regex match (e.g., "go to line 5")
-      - 0.75–0.99: pattern match (e.g., "read line 2")
-      - 0.5–0.74: fuzzy match (may need confirmation)
-      - < 0.5: unknown/ambiguous
-    - heard: str (what was heard, for user feedback)
-    - options: list (if ambiguous, ask frontend to confirm)
-    """
     text = safe(safejson().get("text"), "")
-    lower = text.lower().strip()
+    parsed = parse_intent(text)
+    intent = parsed.get("intent")
+    slots = parsed.get("slots", {})
+    confidence = parsed.get("confidence", 0.0)
 
-    # ============================================================
-    # TRY INTENT-BASED PARSING FIRST (NEW)
-    # ============================================================
-    intent_result = parse_intent(text)
-    if intent_result.get("intent") and intent_result.get("confidence", 0) > 0.8:
-        intent = intent_result["intent"]
-        slots = intent_result.get("slots", {})
-        
-        # Map intent to action and build response
-        if intent == "goto_line" and "line_number" in slots:
-            return jsonify({"success": True, "action": "goto_line", "line": slots["line_number"], "confidence": 0.9})
-        elif intent == "read_line" and "line_number" in slots:
-            return jsonify({"success": True, "action": "read_line", "line": slots["line_number"], "confidence": 0.9})
-        elif intent == "read_function" and "function_name" in slots:
-            return jsonify({"success": True, "action": "read_function", "function_name": slots["function_name"], "confidence": 0.85})
-        elif intent == "find_class" and "class_name" in slots:
-            return jsonify({"success": True, "action": "find_class", "class_name": slots["class_name"], "confidence": 0.85})
-        elif intent == "find_function" and "function_name" in slots:
-            return jsonify({"success": True, "action": "find_function", "function_name": slots["function_name"], "confidence": 0.85})
-        elif intent == "sonify_function" and "function_name" in slots:
-            return jsonify({"success": True, "action": "sonify_function", "function_name": slots["function_name"], "confidence": 0.85})
-        elif intent == "sonify_class" and "class_name" in slots:
-            return jsonify({"success": True, "action": "sonify_class", "class_name": slots["class_name"], "confidence": 0.85})
-        elif intent == "run":
-            return jsonify({"success": True, "action": "run", "confidence": 0.95})
-        elif intent == "analyze":
-            return jsonify({"success": True, "action": "analyze", "confidence": 0.95})
-        elif intent == "fix":
-            return jsonify({"success": True, "action": "fix", "confidence": 0.95})
-        elif intent == "advise":
-            return jsonify({"success": True, "action": "advise", "confidence": 0.9})
-        elif intent == "show_structure":
-            return jsonify({"success": True, "action": "show_structure", "confidence": 0.9})
-        elif intent == "sonify_block":
-            return jsonify({"success": True, "action": "sonify_block", "confidence": 0.9})
-        elif intent == "locate_error":
-            return jsonify({"success": True, "action": "locate_error", "confidence": 0.9})
-        elif intent == "help":
-            return jsonify({"success": True, "action": "help", "confidence": 0.95})
-        elif intent == "speak_output":
-            return jsonify({"success": True, "action": "read_output", "confidence": 0.95})
+    # Handle repeat command
+    if intent == "repeat":
+        last_action = getattr(_trace_context, 'last_voice_action', None)
+        if not last_action:
+            return jsonify({"success": True, "action": "unknown", "heard": "repeat", "message": "No previous command to repeat"})
+        # Re-execute the last action
+        return last_action
 
-    # ============================================================
-    # FALLBACK: REGEX-BASED MATCHING (LEGACY)
-    # ============================================================
+    # If intent is recognized with good confidence, process it directly
+    if intent and confidence >= 0.75:
+        if intent == "goto_line":
+            response = jsonify({"success": True, "action": "goto_line", "line": slots.get("line_number", 1), "confidence": confidence})
+            _trace_context.last_voice_action = response.get_json()
+            return response
+        if intent == "read_line":
+            response = jsonify({"success": True, "action": "read_line", "line": slots.get("line_number", 1), "confidence": confidence})
+            _trace_context.last_voice_action = response.get_json()
+            return response
+        if intent == "describe_line":
+            response = jsonify({"success": True, "action": "describe_line", "line": slots.get("line_number", 1), "confidence": confidence})
+            _trace_context.last_voice_action = response.get_json()
+            return response
+        if intent == "delete_line":
+            response = jsonify({"success": True, "action": "delete_line", "line": slots.get("line_number", 1), "confidence": confidence})
+            _trace_context.last_voice_action = response.get_json()
+            return response
+        if intent == "read_function":
+            response = jsonify({"success": True, "action": "read_function", "function_name": slots.get("function_name"), "confidence": confidence})
+            _trace_context.last_voice_action = response.get_json()
+            return response
+        if intent == "find_function":
+            response = jsonify({"success": True, "action": "find_function", "function_name": slots.get("function_name"), "confidence": confidence})
+            _trace_context.last_voice_action = response.get_json()
+            return response
+        if intent == "find_class":
+            response = jsonify({"success": True, "action": "find_class", "class_name": slots.get("class_name"), "confidence": confidence})
+            _trace_context.last_voice_action = response.get_json()
+            return response
+        if intent == "sonify_function":
+            response = jsonify({"success": True, "action": "sonify_function", "function_name": slots.get("function_name"), "confidence": confidence})
+            _trace_context.last_voice_action = response.get_json()
+            return response
+        if intent == "sonify_class":
+            response = jsonify({"success": True, "action": "sonify_class", "class_name": slots.get("class_name"), "confidence": confidence})
+            _trace_context.last_voice_action = response.get_json()
+            return response
+        if intent == "show_structure":
+            response = jsonify({"success": True, "action": "show_structure", "confidence": confidence})
+            _trace_context.last_voice_action = response.get_json()
+            return response
+        if intent == "run":
+            response = jsonify({"success": True, "action": "run", "confidence": confidence})
+            _trace_context.last_voice_action = response.get_json()
+            return response
+        if intent == "analyze":
+            response = jsonify({"success": True, "action": "analyze", "confidence": confidence})
+            _trace_context.last_voice_action = response.get_json()
+            return response
+        if intent == "fix":
+            response = jsonify({"success": True, "action": "fix", "confidence": confidence})
+            _trace_context.last_voice_action = response.get_json()
+            return response
+        if intent == "advise":
+            response = jsonify({"success": True, "action": "advise", "confidence": confidence})
+            _trace_context.last_voice_action = response.get_json()
+            return response
+        if intent == "summarize":
+            response = jsonify({"success": True, "action": "summarize", "confidence": confidence})
+            _trace_context.last_voice_action = response.get_json()
+            return response
+        if intent == "generate_code":
+            response = jsonify({"success": True, "action": "generate_code", "prompt": slots.get("prompt", ""), "confidence": confidence})
+            _trace_context.last_voice_action = response.get_json()
+            return response
+        if intent == "rename_snippet":
+            response = jsonify({"success": True, "action": "rename_snippet", "id": slots.get("id"), "new_name": slots.get("new_name"), "confidence": confidence})
+            _trace_context.last_voice_action = response.get_json()
+            return response
+        if intent == "clear_editor":
+            response = jsonify({"success": True, "action": "clear_editor", "confidence": confidence})
+            _trace_context.last_voice_action = response.get_json()
+            return response
+        if intent == "read_output":
+            response = jsonify({"success": True, "action": "read_output", "confidence": confidence})
+            _trace_context.last_voice_action = response.get_json()
+            return response
+        if intent == "next_step":
+            response = jsonify({"success": True, "action": "next_step", "speech": _trace_playback("next"), "confidence": confidence})
+            _trace_context.last_voice_action = response.get_json()
+            return response
+        if intent == "previous_step":
+            response = jsonify({"success": True, "action": "previous_step", "speech": _trace_playback("prev"), "confidence": confidence})
+            _trace_context.last_voice_action = response.get_json()
+            return response
+        if intent == "what_changed":
+            response = jsonify({"success": True, "action": "what_changed", "speech": _trace_playback("current_change"), "confidence": confidence})
+            _trace_context.last_voice_action = response.get_json()
+            return response
 
-    # EXACT MATCHES (confidence 1.0): Regex with captured groups
-    # describe line X
-    m = re.search(r"describe line (\d+)", lower)
-    if m:
-        line = int(m.group(1))
-        return jsonify({"success": True, "action": "describe_line", "line": line, "confidence": 1.0})
+    # Fallback: fuzzy matching on COMMANDS for voice confirmation
+    lower_text = text.lower().strip()
+    best, bscore, second, sscore = best_two_commands(lower_text)
+    
+    if best and bscore >= 40:
+        # If ambiguous or low confidence, ask for confirmation
+        if bscore < 75 or (second and (bscore - sscore) < 15):
+            options = [best, second] if second else [best]
+            return jsonify({
+                "success": True,
+                "action": "confirm",
+                "options": options,
+                "heard": text,
+                "confidence": bscore / 100.0
+            })
+        # Otherwise execute the best match
+        return jsonify({"success": True, "action": best, "confidence": bscore / 100.0})
+    
+    # No match found
+    return jsonify({"success": True, "action": "unknown", "heard": text, "confidence": 0.0})
 
-    # navigation: go to line X
-    m = re.search(r"go to line (\d+)", lower)
-    if m:
-        line = int(m.group(1))
-        return jsonify({"success": True, "action": "goto_line", "line": line, "confidence": 1.0})
+    if intent == "generate_code":
+        return jsonify({"success": True, "action": "generate_code", "prompt": slots.get("prompt", ""), "confidence": confidence})
+    if intent == "rename_snippet":
+        return jsonify({"success": True, "action": "rename_snippet", "id": slots.get("id"), "new_name": slots.get("new_name"), "confidence": confidence})
+    if intent == "clear_editor":
+        return jsonify({"success": True, "action": "clear_editor", "confidence": confidence})
+    if intent == "read_output":
+        return jsonify({"success": True, "action": "read_output", "confidence": confidence})
+    if intent == "next_step":
+        return jsonify({"success": True, "action": "next_step", "speech": _trace_playback("next"), "confidence": confidence})
+    if intent == "previous_step":
+        return jsonify({"success": True, "action": "previous_step", "speech": _trace_playback("prev"), "confidence": confidence})
+    if intent == "what_changed":
+        return jsonify({"success": True, "action": "what_changed", "speech": _trace_playback("current_change"), "confidence": confidence})
+
+    return jsonify({"success": True, "action": "unknown", "heard": text, "confidence": confidence})
 
     # navigation: read line X
     m = re.search(r"read line (\d+)", lower)
@@ -1938,27 +2334,45 @@ def fs_info():
 
 @app.route("/execution-trace", methods=["GET"])
 def get_execution_trace():
-    """
-    Get the last execution trace for playback.
-    
-    Trace format:
-    {
-        "trace": [
-            {"type": "state_change", "line": 5, "changes": ["x = 10"]},
-            {"type": "print", "line": 6, "output": "Hello"},
-            ...
-        ],
-        "total_lines_executed": 42,
-        "duration_ms": 125
-    }
-    """
-    # This would normally be stored per session/request
-    # For now, return empty - trace is returned with /run response
+    """Get the last execution trace for playback."""
+    trace = getattr(_trace_context, 'last_trace', []) or []
+    idx = getattr(_trace_context, 'current_trace_index', -1)
+    duration = getattr(_trace_context, 'trace_duration_ms', 0)
+
     return jsonify({
-        "trace": [],
-        "total_lines_executed": 0,
-        "duration_ms": 0
+        "trace": trace,
+        "current_index": idx,
+        "total_lines_executed": sum(1 for e in trace if e.get('type') == 'line_exec'),
+        "duration_ms": duration,
+        "message": "Trace playback data"
     })
+
+
+def _get_trace_event(index):
+    trace = getattr(_trace_context, 'last_trace', []) or []
+    if index < 0 or index >= len(trace):
+        return None
+    return trace[index]
+
+
+def _event_to_speech(event, idx=None, total=None):
+    if not event:
+        return "No trace event at this position."
+    
+    # Add step counter prefix if provided
+    step_prefix = f"Step {idx + 1} of {total}: " if idx is not None and total is not None else ""
+    
+    t = event.get('type')
+    if t == 'line_exec':
+        return f"{step_prefix}Executed line {event.get('line')}"
+    if t == 'state_change':
+        changes = '; '.join(event.get('changes', []))
+        return f"{step_prefix}State changed on line {event.get('line')}: {changes}"
+    if t == 'call':
+        return f"{step_prefix}Called function {event.get('function')} at line {event.get('line')}"
+    if t == 'return':
+        return f"{step_prefix}Returned value {event.get('value')}"
+    return f"{step_prefix}{t}: {event}"
 
 # ==========================
 

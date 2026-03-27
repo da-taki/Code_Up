@@ -1,0 +1,19 @@
+{
+    "snippets": [
+        {
+            "id": "9985e37c-f833-45c6-bd5e-8ee71a72864a",
+            "name": "test_snippet",
+            "code": "print('hello')"
+        },
+        {
+            "id": "5e8ffe47-f84a-43d3-baed-a052290d89da",
+            "name": "test_snippet",
+            "code": "print('hello')"
+        },
+        {
+            "id": "94c0e2c3-bacb-404f-b310-0ae36e72710b",
+            "name": "test_snippet",
+            "code": "print('hello')"
+        }
+    ]
+}

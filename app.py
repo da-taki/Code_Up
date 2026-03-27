@@ -1,5 +1,5 @@
 from flask import Flask, render_template, request, jsonify
-import json, os, traceback, io, contextlib, re, ast, sys, time, threading, subprocess, tempfile
+import json, os, traceback, io, contextlib, re, ast, sys, time, threading, subprocess, tempfile, uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Tuple, Optional
 from rapidfuzz import fuzz
@@ -12,11 +12,87 @@ from sandboxed_fs import get_sandbox
 _trace_context = threading.local()  # used by run_with_trace
 _api_context = threading.local()   # stores per-request Gemini API key
 
+# Session-based trace storage (prevents concurrent user interference)
+# Keys: session_id (UUID), Values: {last_trace, current_trace_index, trace_timestamp, trace_duration_ms, last_voice_action}
+_session_traces = {}  # dict[str, dict]
+_session_traces_lock = threading.Lock()
+_session_ttl = 3600  # 1 hour session TTL
+
+# Background cleanup thread for old sessions
+def _session_cleanup_worker():
+    """Background thread that periodically cleans up expired sessions."""
+    while True:
+        time.sleep(300)  # Run cleanup every 5 minutes
+        try:
+            cleanup_old_sessions()
+        except Exception as e:
+            print(f"Session cleanup error: {e}", file=sys.stderr)
+
+_cleanup_thread = threading.Thread(target=_session_cleanup_worker, daemon=True)
+_cleanup_thread.start()
+
+# Bounded ThreadPoolExecutor for Gemini API calls (prevents resource exhaustion)
+# Max 3 concurrent requests with queue size limit
+_gemini_executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="gemini")
+
 # lock used to serialize tracer installation to avoid cross-thread interference
 _tracer_lock = threading.Lock()
-# Executor for LLM calls
-_gemini_executor = ThreadPoolExecutor(max_workers=2)
 app = Flask(__name__)
+app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'dev-secret-key-change-in-production')
+
+# Session configuration
+SESSION_COOKIE_NAME = 'codeup_session'
+SESSION_COOKIE_MAX_AGE = 3600 * 24 * 7  # 7 days
+SESSION_COOKIE_SECURE = False  # Set to True in production with HTTPS
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = 'Lax'
+
+
+def get_session_id():
+    """Get or create a persistent session ID using cookies."""
+    session_id = request.cookies.get(SESSION_COOKIE_NAME)
+    if not session_id:
+        session_id = str(uuid.uuid4())
+        # Set cookie in response (will be sent after request processing)
+        @app.after_request
+        def set_session_cookie(response):
+            if not request.cookies.get(SESSION_COOKIE_NAME):
+                response.set_cookie(
+                    SESSION_COOKIE_NAME,
+                    session_id,
+                    max_age=SESSION_COOKIE_MAX_AGE,
+                    secure=SESSION_COOKIE_SECURE,
+                    httponly=SESSION_COOKIE_HTTPONLY,
+                    samesite=SESSION_COOKIE_SAMESITE
+                )
+            return response
+    return session_id
+
+
+def get_trace_storage():
+    """Get the trace storage dict for current session."""
+    session_id = get_session_id()
+    with _session_traces_lock:
+        if session_id not in _session_traces:
+            _session_traces[session_id] = {
+                'last_trace': [],
+                'current_trace_index': -1,
+                'trace_timestamp': time.time(),
+                'trace_duration_ms': 0,
+                'last_voice_action': None,
+                'created_at': time.time()
+            }
+        return _session_traces[session_id]
+
+
+def cleanup_old_sessions():
+    """Clean up old sessions periodically."""
+    now = time.time()
+    with _session_traces_lock:
+        expired = [sid for sid, data in _session_traces.items() 
+                   if now - data.get('created_at', 0) > _session_ttl]
+        for sid in expired:
+            del _session_traces[sid]
 
 
 # ==========================
@@ -101,12 +177,19 @@ def save_snippets(d: dict) -> None:
     dirpath = os.path.dirname(path) or "."
 
     with _snippets_lock:
-        temp_fd = None
         temp_path = None
         try:
             fd, temp_path = tempfile.mkstemp(suffix=".json", prefix="snippets_", dir=dirpath)
-            with os.fdopen(fd, 'w', encoding="utf-8") as f:
-                json.dump(d, f, indent=4)
+            try:
+                with os.fdopen(fd, 'w', encoding="utf-8") as f:
+                    json.dump(d, f, indent=4)
+            except:
+                # If fdopen fails or dump fails, manually close fd to prevent leak
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+                raise
             # Atomic replace
             os.replace(temp_path, path)
         except Exception:
@@ -167,6 +250,15 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en"):
 
     # always configure with the key we're using so that genai library picks it up
     genai.configure(api_key=key)
+    
+    # Check executor queue to prevent resource exhaustion
+    # Reject if too many requests are queued (max 5 pending + active)
+    active_threads = len([t for t in _gemini_executor._threads if t.is_alive()])
+    queued_tasks = _gemini_executor._work_queue.qsize() if hasattr(_gemini_executor, '_work_queue') else 0
+    
+    if active_threads + queued_tasks >= 8:  # Max 3 active + 5 queued
+        return "AI service is busy. Please try again later."
+    
     try:
         future = _gemini_executor.submit(_do_call)
         result = future.result(timeout=MAX_GEMINI_TIMEOUT + 1)
@@ -221,7 +313,11 @@ def api_config():
         set_gemini_api_key(api_key)
         # Test the API key by making a simple call
         test_response = call_gemini("Say 'OK'", "Test", language="en")
-        if "error" in test_response.lower() or "invalid" in test_response.lower():
+        # Check for error prefixes instead of substring matching
+        if test_response.startswith("AI service error:") or \
+           test_response.startswith("AI service is currently unavailable:") or \
+           test_response == "AI service not configured. Please set GEMINI_API_KEY environment variable or configure via /api-config." or \
+           test_response == "AI service disabled":
             return jsonify({"success": False, "error": "API key is invalid or Gemini API is unavailable"}), 401
         return jsonify({"success": True, "message": "API key configured successfully"})
     except Exception as e:
@@ -280,122 +376,16 @@ def explain_error(code: str, err_text: str, language="en") -> str:
 # ==========================
 
 def run_with_trace(compiled_code, globals_dict, locals_dict, time_limit=1.0):
-    """
-    Execute code with hard limits to prevent unbounded execution.
-    Uses THREAD-LOCAL storage to isolate concurrent requests (no cross-request trace pollution).
-    
-    HARD LIMITS (not best-effort):
-    - Max recursion depth: 50 calls (prevents deep recursion exploits)
-    - Max line executions: 10,000 total (prevents infinite loops)
-    - Max timeout: 1.0 sec (timeout as backup, not primary guard)
-    
-    If any limit is exceeded, execution aborts with clear error.
-    """
-    # Store trace state in thread-local storage to prevent concurrent request interference
-    events = []
-    last_locals = {}
-    start_time = time.time()
-    
-    # Hard execution limits
-    MAX_CALL_DEPTH = 50
-    MAX_LINE_EXECS = 10000
-    call_depth = [0]  # mutable to track in tracer
-    line_count = [0]   # mutable to track in tracer
-
-    def tracer(frame, event, arg):
-        nonlocal last_locals
-
-        # HARD LIMIT 1: Call depth
-        if event == "call":
-            call_depth[0] += 1
-            if call_depth[0] > MAX_CALL_DEPTH:
-                raise RuntimeError(f"Recursion depth exceeded ({MAX_CALL_DEPTH} calls). Code may have infinite recursion.")
-        elif event == "return":
-            call_depth[0] = max(0, call_depth[0] - 1)
-
-        # HARD LIMIT 2: Timeout (backup, not primary)
-        if time.time() - start_time > time_limit:
-            raise TimeoutError(f"Execution timed out after {time_limit}s")
-
-        if event == "line":
-            # HARD LIMIT 3: Total line executions
-            line_count[0] += 1
-            if line_count[0] > MAX_LINE_EXECS:
-                raise RuntimeError(f"Execution exceeded line limit ({MAX_LINE_EXECS} lines). Code may be in an infinite loop.")
-            
-            lineno = frame.f_lineno
-
-            events.append({
-                "type": "line_exec",
-                "line": lineno
-            })
-
-            current = frame.f_locals.copy()
-            changes = []
-
-            for k, v in current.items():
-                if k not in last_locals:
-                    changes.append(f"{k} initialized to {v}")
-                elif last_locals[k] != v:
-                    changes.append(f"{k} changed from {last_locals[k]} to {v}")
-
-            for k in last_locals:
-                if k not in current:
-                    changes.append(f"{k} went out of scope")
-
-            if changes:
-                events.append({
-                    "type": "state_change",
-                    "line": lineno,
-                    "changes": changes
-                })
-
-            last_locals = current
-
-        elif event == "call":
-            events.append({
-                "type": "call",
-                "function": frame.f_code.co_name,
-                "line": frame.f_lineno
-            })
-
-        elif event == "return":
-            events.append({
-                "type": "return",
-                "value": str(arg)
-            })
-
-        return tracer
-
-    # Save the previous tracer (if any, from parent context)
-    old_tracer = sys.gettrace()
-    # If another tracer is active (not ours), refuse to run to avoid cross-request contamination
-    if old_tracer is not None and old_tracer is not tracer:
-        raise RuntimeError("Another tracing function is active in this process; cannot safely trace execution. Consider configuring USE_SUBPROCESS_SANDBOX=1 to run code in an isolated process.")
-
-    # Set our tracer for this request
-    sys.settrace(tracer)
-    try:
-        exec(compiled_code, globals_dict, locals_dict)
-    finally:
-        # Restore the previous tracer (critical for thread safety)
-        sys.settrace(old_tracer)
-    
-    return events
-
-# Legacy `run_with_trace` definition left above for reference.  The
-# following implementation shadowing it includes event capping, safer
-# repr handling, and a global lock to avoid concurrency races.
-
-def run_with_trace(compiled_code, globals_dict, locals_dict, time_limit=1.0):
     """Enhanced tracer with memory and concurrency safeguards.
 
-    This function intentionally shadows the earlier definition so that
-    existing call sites continue to work without modification.  It
-    imposes a hard cap on the number of events recorded, truncates the
-    `repr` of objects to avoid enormous outputs, and serializes
-    `sys.settrace` calls with a process-wide lock.  It also uses a
-    per-thread start time and does not expose introspective data.
+    Executes code with hard limits to prevent unbounded execution.
+    - Max recursion depth: 50 calls (prevents deep recursion exploits)
+    - Max line executions: 10,000 total (prevents infinite loops)
+    - Max event buffer: 5,000 events (caps memory usage)
+    - Max timeout: 1.0 sec (timeout as backup, not primary guard)
+
+    Uses thread-local storage and a global lock to safely handle concurrent requests.
+    If any limit is exceeded, execution aborts with clear error.
     """
     events = []
     last_locals = {}
@@ -515,10 +505,12 @@ def classify_semantic_errors(trace):
 
 
 def save_execution_trace(trace):
-    """Store trace in thread-local context for replay features."""
-    _trace_context.last_trace = trace or []
-    _trace_context.current_trace_index = -1
-    _trace_context.trace_timestamp = time.time()
+    """Store trace in session storage for replay features (prevents concurrent user interference)."""
+    storage = get_trace_storage()
+    storage['last_trace'] = trace or []
+    storage['current_trace_index'] = -1
+    storage['trace_timestamp'] = time.time()
+    cleanup_old_sessions()  # Periodic cleanup
 
 
 class SafeModule:
@@ -654,6 +646,33 @@ def run_code():
         short_circuit_map = {}
         try:
             parsed = ast.parse(code)
+            
+            # Check AST bounds to prevent DoS attacks
+            def get_ast_depth(node, current_depth=0):
+                max_depth = current_depth
+                for child in ast.iter_child_nodes(node):
+                    child_depth = get_ast_depth(child, current_depth + 1)
+                    max_depth = max(max_depth, child_depth)
+                    if max_depth > 50:  # Max depth limit
+                        return max_depth
+                return max_depth
+            
+            def count_ast_nodes(node):
+                count = 1
+                for child in ast.iter_child_nodes(node):
+                    count += count_ast_nodes(child)
+                    if count > 10000:  # Max node limit
+                        return count
+                return count
+            
+            depth = get_ast_depth(parsed)
+            node_count = count_ast_nodes(parsed)
+            
+            if depth > 50:
+                raise ValueError(f"AST too deep (max 50 levels)")
+            if node_count > 10000:
+                raise ValueError(f"AST too complex (max 10000 nodes)")
+            
             for node in ast.walk(parsed):
                 # boolean short-circuit (and/or)
                 if isinstance(node, ast.BoolOp):
@@ -697,19 +716,15 @@ def run_code():
 
         # Execution time limit (seconds) - configurable via env
         time_limit = float(os.environ.get("EXECUTION_TIME_LIMIT", "1.0"))
-        # Default to subprocess sandbox for safety.
-        USE_SUBPROCESS = os.environ.get("USE_SUBPROCESS_SANDBOX", "1") == "1"
-        if USE_SUBPROCESS:
-            sandbox = get_sandbox()
-            workspace_dir = sandbox.workspace_dir
-            trace_file = os.path.join(workspace_dir, "last_trace.json")
+        
+        # Use subprocess sandbox for security (process isolation)
+        sandbox = get_sandbox()
+        workspace_dir = sandbox.workspace_dir
+        trace_file = os.path.join(workspace_dir, "last_trace.json")
 
-            # Construct subprocess script as a proper Python string
-            code_json = json.dumps(code)
-            trace_file_json = json.dumps(trace_file)
-            
-            subprocess_script = f"""
-import sys, time, json, traceback
+        # Create a temporary script file to avoid string injection risks
+        script_content = f'''
+import sys, time, json, traceback, os
 
 ALLOWED_MODULES = {{'math','random','string','datetime','date'}}
 
@@ -754,7 +769,8 @@ SAFE_GLOBALS = {{
     '__import__': restricted_import,
 }}
 
-code = {code_json}
+# Read code from environment variable to avoid command line length limits
+code = os.environ.get('CODEUP_EXEC_CODE', '')
 trace = []
 last_locals = {{}}
 start = time.time()
@@ -807,61 +823,63 @@ except Exception:
     traceback.print_exc(file=sys.stderr)
 finally:
     sys.settrace(None)
-    with open({trace_file_json}, 'w', encoding='utf-8') as f:
-        json.dump({{'trace':trace,'duration_ms':int((time.time()-start)*1000)}}, f)
-"""
+    trace_file = os.environ.get('CODEUP_TRACE_FILE', '')
+    if trace_file:
+        with open(trace_file, 'w', encoding='utf-8') as f:
+            json.dump({{'trace':trace,'duration_ms':int((time.time()-start)*1000)}}, f)
+'''
 
+        # Write script to temporary file and execute it
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as script_file:
+            script_file.write(script_content)
+            script_file_path = script_file.name
+
+        try:
+            # Pass code via environment variable to avoid command line issues
+            env = os.environ.copy()
+            env['CODEUP_EXEC_CODE'] = code
+            env['CODEUP_TRACE_FILE'] = trace_file
+            
+            proc = subprocess.run(
+                [sys.executable, script_file_path], 
+                capture_output=True, 
+                text=True, 
+                timeout=max(1, int(time_limit)),
+                env=env
+            )
+            stdout_buf.write(proc.stdout)
+            stderr_buf.write(proc.stderr)
+        except subprocess.TimeoutExpired:
+            stderr_buf.write(f"Execution timed out after {time_limit}s (subprocess)")
+        finally:
+            # Clean up temporary script file
             try:
-                proc = subprocess.run([sys.executable, '-u', '-c', subprocess_script], capture_output=True, text=True, timeout=max(1, int(time_limit)))
-                stdout_buf.write(proc.stdout)
-                stderr_buf.write(proc.stderr)
-            except subprocess.TimeoutExpired:
-                stderr_buf.write(f"Execution timed out after {time_limit}s (subprocess)")
+                os.unlink(script_file_path)
+            except OSError:
+                pass
 
-            trace = []
-            trace_error = None
-            try:
-                if os.path.exists(trace_file):
-                    with open(trace_file, 'r', encoding='utf-8') as tfh:
-                        data = json.load(tfh)
-                        trace = data.get('trace', [])
-                else:
-                    trace_error = 'Trace file not found in workspace'
-            except json.JSONDecodeError:
-                trace_error = 'Trace data was corrupted or incomplete'
-            except Exception as e:
-                trace_error = f'Error reading trace: {str(e)}'
+        trace = []
+        trace_error = None
+        try:
+            if os.path.exists(trace_file):
+                with open(trace_file, 'r', encoding='utf-8') as tfh:
+                    data = json.load(tfh)
+                    trace = data.get('trace', [])
+            else:
+                trace_error = 'Trace file not found in workspace'
+        except json.JSONDecodeError:
+            trace_error = 'Trace data was corrupted or incomplete'
+        except Exception as e:
+            trace_error = f'Error reading trace: {str(e)}'
 
-            if not trace:
-                msg = trace_error or 'No detailed trace available from subprocess (likely timed out or crashed)'
-                trace = [{'type': 'subprocess_exec', 'note': msg}]
-        else:
-            with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
-                # Use both globals and locals to prevent locals from polluting globals
-                exec_locals = {}
-                trace = run_with_trace(compiled, SAFE_GLOBALS, exec_locals, time_limit=time_limit)
-            # Post-process trace to add synthetic events for short-circuited calls
-            if short_circuit_map:
-                for lineno, fnset in short_circuit_map.items():
-                    # check if any call with that line and function name occurred
-                    called = False
-                    for ev in trace:
-                        if ev.get('type') == 'call' and ev.get('line') == lineno:
-                            if ev.get('function') in fnset:
-                                called = True
-                                break
-                    # if not called but line executed, mark short-circuit
-                    if not called:
-                        # find insertion point after first line_exec for that line
-                        idx = next((i for i,e in enumerate(trace) if e.get('type')=='line_exec' and e.get('line')==lineno), None)
-                        sc_event = { 'type': 'short_circuit', 'line': lineno, 'skipped_calls': list(fnset) }
-                        if idx is None:
-                            trace.append(sc_event)
-                        else:
-                            trace.insert(idx+1, sc_event)
+        if not trace:
+            msg = trace_error or 'No detailed trace available from subprocess (likely timed out or crashed)'
+            trace = [{'type': 'subprocess_exec', 'note': msg}]
 
         semantic_issues = classify_semantic_errors(trace) if trace else []
-        _trace_context.trace_duration_ms = int((time.time() - execution_start) * 1000)
+        
+        storage = get_trace_storage()
+        storage['trace_duration_ms'] = int((time.time() - execution_start) * 1000)
         save_execution_trace(trace)
 
         output = stdout_buf.getvalue()
@@ -1146,19 +1164,24 @@ def read_line_context():
 
     current_line = lines[line - 1]
     
-    # Calculate indentation
-    indent_level = (len(current_line) - len(current_line.lstrip())) // 4
+    # Calculate indentation (handle both spaces and tabs)
+    # Expand tabs to spaces for consistent measurement, then count leading spaces
+    expanded_line = current_line.expandtabs(tabsize=4)
+    indent_level = (len(expanded_line) - len(expanded_line.lstrip())) // 4
     
     # Determine code structure context
     context = "top level"
     if line > 1:
         for i in range(line - 2, -1, -1):
             prev = lines[i].strip()
-            if prev.startswith("def "):
-                context = f"inside function {prev[4:].split('(')[0]}"
+            # Use regex to safely extract function/class names
+            func_match = re.match(r'^def\s+(\w+)\s*\(', prev)
+            if func_match:
+                context = f"inside function {func_match.group(1)}"
                 break
-            elif prev.startswith("class "):
-                context = f"inside class {prev[6:].split('(')[0].split(':')[0]}"
+            class_match = re.match(r'^class\s+(\w+)\s*[\(:]', prev)
+            if class_match:
+                context = f"inside class {class_match.group(1)}"
                 break
             elif prev.startswith("if ") or prev.startswith("elif "):
                 context = "inside if block"
@@ -1375,13 +1398,24 @@ def track_variables():
 def pronounce_variable(var_name: str) -> str:
     """
     Convert variable name to phonetic pronunciation for screen readers.
+    Handles None/empty strings and various naming conventions.
     """
+    # Validate input
+    if not var_name or not isinstance(var_name, str):
+        return "unknown variable"
+    
+    var_name = var_name.strip()
+    if not var_name:
+        return "unknown variable"
+    
     parts = []
     
     # Handle underscores
     if "_" in var_name:
         segments = var_name.split("_")
         parts = [seg for seg in segments if seg]
+        if not parts:
+            return "underscore"
         return " underscore ".join(parts)
     
     # Handle camelCase
@@ -1569,7 +1603,26 @@ def check_syntax():
         UseCollector().visit(tree)
 
         # Check for undefined variables used at module level (heuristic)
-        builtins = {"print", "range", "len", "int", "float", "str", "list", "dict"}
+        # Includes all standard Python builtins to reduce false positives
+        builtins = {
+            "abs", "all", "any", "ascii", "bin", "bool", "bytearray", "bytes",
+            "chr", "classmethod", "compile", "complex", "delattr", "dict", "dir",
+            "divmod", "enumerate", "eval", "exec", "filter", "float", "format",
+            "frozenset", "getattr", "globals", "hasattr", "hash", "help", "hex",
+            "id", "input", "int", "isinstance", "issubclass", "iter", "len",
+            "list", "locals", "map", "max", "memoryview", "min", "next", "object",
+            "oct", "open", "ord", "pow", "print", "property", "range", "repr",
+            "reversed", "round", "set", "setattr", "slice", "sorted",
+            "staticmethod", "str", "sum", "super", "tuple", "type", "vars", "zip",
+            # Common exception types
+            "BaseException", "Exception", "ArithmeticError", "AssertionError",
+            "AttributeError", "EOFError", "ImportError", "IndexError", "KeyError",
+            "KeyboardInterrupt", "MemoryError", "NameError", "NotImplementedError",
+            "OSError", "RuntimeError", "SyntaxError", "SystemError", "SystemExit",
+            "TypeError", "ValueError", "ZeroDivisionError",
+            # Common constants
+            "True", "False", "None", "NotImplemented", "Ellipsis", "__debug__"
+        }
         undefined = used_module_level - defined - builtins - params
 
         for var in sorted(undefined):
@@ -1923,11 +1976,12 @@ def diff_explain():
 
 
 def _trace_playback(direction):
-    trace = getattr(_trace_context, 'last_trace', []) or []
+    storage = get_trace_storage()
+    trace = storage.get('last_trace', []) or []
     if not trace:
         return "No execution trace available."
 
-    idx = getattr(_trace_context, 'current_trace_index', -1)
+    idx = storage.get('current_trace_index', -1)
     if direction == 'next':
         idx = min(len(trace) - 1, idx + 1)
     elif direction == 'prev':
@@ -1938,7 +1992,7 @@ def _trace_playback(direction):
     else:
         return "Unknown trace navigation command."
 
-    _trace_context.current_trace_index = idx
+    storage['current_trace_index'] = idx
     event = _get_trace_event(idx)
     if direction == 'current_change' and event and event.get('type') != 'state_change':
         return _event_to_speech(event, idx, len(trace))
@@ -1952,10 +2006,13 @@ def voice():
     intent = parsed.get("intent")
     slots = parsed.get("slots", {})
     confidence = parsed.get("confidence", 0.0)
+    
+    # Get session storage for this request
+    storage = get_trace_storage()
 
     # Handle repeat command
     if intent == "repeat":
-        last_action = getattr(_trace_context, 'last_voice_action', None)
+        last_action = storage.get('last_voice_action', None)
         if not last_action:
             return jsonify({"success": True, "action": "unknown", "heard": "repeat", "message": "No previous command to repeat"})
         # Re-execute the last action
@@ -1965,91 +2022,91 @@ def voice():
     if intent and confidence >= 0.75:
         if intent == "goto_line":
             response = jsonify({"success": True, "action": "goto_line", "line": slots.get("line_number", 1), "confidence": confidence})
-            _trace_context.last_voice_action = response.get_json()
+            storage['last_voice_action'] = response.get_json()
             return response
         if intent == "read_line":
             response = jsonify({"success": True, "action": "read_line", "line": slots.get("line_number", 1), "confidence": confidence})
-            _trace_context.last_voice_action = response.get_json()
+            storage['last_voice_action'] = response.get_json()
             return response
         if intent == "describe_line":
             response = jsonify({"success": True, "action": "describe_line", "line": slots.get("line_number", 1), "confidence": confidence})
-            _trace_context.last_voice_action = response.get_json()
+            storage['last_voice_action'] = response.get_json()
             return response
         if intent == "delete_line":
             response = jsonify({"success": True, "action": "delete_line", "line": slots.get("line_number", 1), "confidence": confidence})
-            _trace_context.last_voice_action = response.get_json()
+            storage['last_voice_action'] = response.get_json()
             return response
         if intent == "read_function":
             response = jsonify({"success": True, "action": "read_function", "function_name": slots.get("function_name"), "confidence": confidence})
-            _trace_context.last_voice_action = response.get_json()
+            storage['last_voice_action'] = response.get_json()
             return response
         if intent == "find_function":
             response = jsonify({"success": True, "action": "find_function", "function_name": slots.get("function_name"), "confidence": confidence})
-            _trace_context.last_voice_action = response.get_json()
+            storage['last_voice_action'] = response.get_json()
             return response
         if intent == "find_class":
             response = jsonify({"success": True, "action": "find_class", "class_name": slots.get("class_name"), "confidence": confidence})
-            _trace_context.last_voice_action = response.get_json()
+            storage['last_voice_action'] = response.get_json()
             return response
         if intent == "sonify_function":
             response = jsonify({"success": True, "action": "sonify_function", "function_name": slots.get("function_name"), "confidence": confidence})
-            _trace_context.last_voice_action = response.get_json()
+            storage['last_voice_action'] = response.get_json()
             return response
         if intent == "sonify_class":
             response = jsonify({"success": True, "action": "sonify_class", "class_name": slots.get("class_name"), "confidence": confidence})
-            _trace_context.last_voice_action = response.get_json()
+            storage['last_voice_action'] = response.get_json()
             return response
         if intent == "show_structure":
             response = jsonify({"success": True, "action": "show_structure", "confidence": confidence})
-            _trace_context.last_voice_action = response.get_json()
+            storage['last_voice_action'] = response.get_json()
             return response
         if intent == "run":
             response = jsonify({"success": True, "action": "run", "confidence": confidence})
-            _trace_context.last_voice_action = response.get_json()
+            storage['last_voice_action'] = response.get_json()
             return response
         if intent == "analyze":
             response = jsonify({"success": True, "action": "analyze", "confidence": confidence})
-            _trace_context.last_voice_action = response.get_json()
+            storage['last_voice_action'] = response.get_json()
             return response
         if intent == "fix":
             response = jsonify({"success": True, "action": "fix", "confidence": confidence})
-            _trace_context.last_voice_action = response.get_json()
+            storage['last_voice_action'] = response.get_json()
             return response
         if intent == "advise":
             response = jsonify({"success": True, "action": "advise", "confidence": confidence})
-            _trace_context.last_voice_action = response.get_json()
+            storage['last_voice_action'] = response.get_json()
             return response
         if intent == "summarize":
             response = jsonify({"success": True, "action": "summarize", "confidence": confidence})
-            _trace_context.last_voice_action = response.get_json()
+            storage['last_voice_action'] = response.get_json()
             return response
         if intent == "generate_code":
             response = jsonify({"success": True, "action": "generate_code", "prompt": slots.get("prompt", ""), "confidence": confidence})
-            _trace_context.last_voice_action = response.get_json()
+            storage['last_voice_action'] = response.get_json()
             return response
         if intent == "rename_snippet":
             response = jsonify({"success": True, "action": "rename_snippet", "id": slots.get("id"), "new_name": slots.get("new_name"), "confidence": confidence})
-            _trace_context.last_voice_action = response.get_json()
+            storage['last_voice_action'] = response.get_json()
             return response
         if intent == "clear_editor":
             response = jsonify({"success": True, "action": "clear_editor", "confidence": confidence})
-            _trace_context.last_voice_action = response.get_json()
+            storage['last_voice_action'] = response.get_json()
             return response
         if intent == "read_output":
             response = jsonify({"success": True, "action": "read_output", "confidence": confidence})
-            _trace_context.last_voice_action = response.get_json()
+            storage['last_voice_action'] = response.get_json()
             return response
         if intent == "next_step":
             response = jsonify({"success": True, "action": "next_step", "speech": _trace_playback("next"), "confidence": confidence})
-            _trace_context.last_voice_action = response.get_json()
+            storage['last_voice_action'] = response.get_json()
             return response
         if intent == "previous_step":
             response = jsonify({"success": True, "action": "previous_step", "speech": _trace_playback("prev"), "confidence": confidence})
-            _trace_context.last_voice_action = response.get_json()
+            storage['last_voice_action'] = response.get_json()
             return response
         if intent == "what_changed":
             response = jsonify({"success": True, "action": "what_changed", "speech": _trace_playback("current_change"), "confidence": confidence})
-            _trace_context.last_voice_action = response.get_json()
+            storage['last_voice_action'] = response.get_json()
             return response
 
     # Fallback: fuzzy matching on COMMANDS for voice confirmation
@@ -2072,200 +2129,6 @@ def voice():
     
     # No match found
     return jsonify({"success": True, "action": "unknown", "heard": text, "confidence": 0.0})
-
-    if intent == "generate_code":
-        return jsonify({"success": True, "action": "generate_code", "prompt": slots.get("prompt", ""), "confidence": confidence})
-    if intent == "rename_snippet":
-        return jsonify({"success": True, "action": "rename_snippet", "id": slots.get("id"), "new_name": slots.get("new_name"), "confidence": confidence})
-    if intent == "clear_editor":
-        return jsonify({"success": True, "action": "clear_editor", "confidence": confidence})
-    if intent == "read_output":
-        return jsonify({"success": True, "action": "read_output", "confidence": confidence})
-    if intent == "next_step":
-        return jsonify({"success": True, "action": "next_step", "speech": _trace_playback("next"), "confidence": confidence})
-    if intent == "previous_step":
-        return jsonify({"success": True, "action": "previous_step", "speech": _trace_playback("prev"), "confidence": confidence})
-    if intent == "what_changed":
-        return jsonify({"success": True, "action": "what_changed", "speech": _trace_playback("current_change"), "confidence": confidence})
-
-    return jsonify({"success": True, "action": "unknown", "heard": text, "confidence": confidence})
-
-    # navigation: read line X
-    m = re.search(r"read line (\d+)", lower)
-    if m:
-        line = int(m.group(1))
-        return jsonify({"success": True, "action": "read_line", "line": line, "confidence": 1.0})
-
-    # STRONG PATTERN MATCHES (confidence 0.9): Exact substring match
-    if "read current line" in lower or "current line" in lower:
-        return jsonify({"success": True, "action": "read_current_line", "confidence": 0.9})
-
-    if "next line" in lower:
-        return jsonify({"success": True, "action": "next_line", "confidence": 0.9})
-
-    if "previous line" in lower or "prev line" in lower:
-        return jsonify({"success": True, "action": "prev_line", "confidence": 0.9})
-
-    # basic editing: delete line X
-    m = re.search(r"delete line (\d+)", lower)
-    if m:
-        line = int(m.group(1))
-        return jsonify({"success": True, "action": "delete_line", "line": line, "confidence": 1.0})
-
-    # basic editing: clear editor
-    if "clear editor" in lower or "clear code" in lower or "clear file" in lower:
-        return jsonify({"success": True, "action": "clear_editor", "confidence": 0.9})
-
-    # snippets: save snippet named X
-    m = re.search(r"save snippet named (.+)", lower)
-    if m:
-        name = m.group(1).strip()
-        return jsonify({"success": True, "action": "save_snippet_named", "name": name, "confidence": 1.0})
-
-    # load snippet N
-    m = re.search(r"(load|open|get) snippet ([a-z0-9\-]+)", lower)
-    if m:
-        sid = m.group(2)
-        return jsonify({"success": True, "action": "load_snippet", "id": sid, "confidence": 1.0})
-
-    # delete snippet N
-    m = re.search(r"delete snippet ([a-z0-9\-]+)", lower)
-    if m:
-        sid = m.group(1)
-        return jsonify({"success": True, "action": "delete_snippet", "id": sid, "confidence": 1.0})
-
-    # rename snippet ID to NAME
-    m = re.search(r"rename snippet ([a-z0-9\-]+) to (.+)", lower)
-    if m:
-        sid = m.group(1)
-        new_name = m.group(2).strip()
-        return jsonify({
-            "success": True,
-            "action": "rename_snippet",
-            "id": sid,
-            "new_name": new_name,
-            "confidence": 1.0
-        })
-    # Enhanced line reading
-    m = re.search(r"(read line|enhanced read|line context) (\d+)", lower)
-    if m:
-        line = int(m.group(2))
-        return jsonify({"success": True, "action": "read_line_enhanced", "line": line, "confidence": 1.0})
-    
-    # Sonify block
-    if "sonify" in lower or "audio structure" in lower or "hear structure" in lower:
-        return jsonify({"success": True, "action": "sonify_block", "confidence": 0.85})
-    
-    # ---- summarize file ----
-    if "summarize" in lower or "summary of this file" in lower:
-        return jsonify({"success": True, "action": "summarize", "confidence": 0.9})
-    # Find variable usage
-    m = re.search(r"find variable (.+)", lower)
-    if m:
-        var_name = m.group(1).strip()
-        return jsonify({"success": True, "action": "find_variable", "variable": var_name, "confidence": 1.0})
-
-    # List variables
-    if "what variables" in lower or "list variables" in lower or "variables in scope" in lower:
-        return jsonify({"success": True, "action": "list_variables", "confidence": 0.9})
-
-    # Error checking
-    if "check for errors" in lower or "check syntax" in lower or "find errors" in lower:
-        return jsonify({"success": True, "action": "check_errors", "confidence": 0.95})
-
-    if "where is the error" in lower or "locate error" in lower or "jump to error" in lower:
-        return jsonify({"success": True, "action": "locate_error", "confidence": 0.9})
-
-    if "stop beacon" in lower or "stop error beacon" in lower:
-        return jsonify({"success": True, "action": "stop_beacon", "confidence": 0.9})
-
-    # Navigation history
-    if "go back" in lower or "navigate back" in lower:
-        return jsonify({"success": True, "action": "go_back", "confidence": 0.95})
-
-    if "go forward" in lower or "navigate forward" in lower:
-        return jsonify({"success": True, "action": "go_forward", "confidence": 0.95})
-
-    if "show history" in lower or "navigation history" in lower or "where have i been" in lower:
-        return jsonify({"success": True, "action": "show_history", "confidence": 0.9})
-
-    # Quick wins
-    if "help" in lower or "what can you do" in lower or "list commands" in lower:
-        return jsonify({"success": True, "action": "help", "confidence": 0.95})
-
-    if "file stats" in lower or "how many lines" in lower:
-        return jsonify({"success": True, "action": "file_stats", "confidence": 0.9})
-    
-    # explain last action
-    if "what just happened" in lower or "what did you do" in lower or "explain last action" in lower:
-        return jsonify({
-            "success": True,
-            "action": "explain_last_action",
-            "confidence": 0.9
-        })
-
-
-    if "go to top" in lower or "top of file" in lower:
-        return jsonify({"success": True, "action": "go_to_top", "confidence": 0.95})
-
-    if "go to bottom" in lower or "bottom of file" in lower or "end of file" in lower:
-        return jsonify({"success": True, "action": "go_to_bottom", "confidence": 0.95})
-
-    if "copy code" in lower or "copy to clipboard" in lower:
-        return jsonify({"success": True, "action": "copy_code", "confidence": 0.9})
-
-    if "paste code" in lower or "paste from clipboard" in lower:
-        return jsonify({"success": True, "action": "paste_code", "confidence": 0.9})
-
-    # natural language code generation
-    m = re.search(r"(generate|write|get|i want)\s+(?:python )?(?:code )?(?:for|to)\s+(.+)", lower)
-    if m:
-        prompt = m.group(2).strip()
-        return jsonify({"success": True, "action": "generate_code", "prompt": prompt, "confidence": 0.8})
-
-    # advise on code
-    if "advise on this code" in lower or "advice on this code" in lower \
-       or "how can i improve this code" in lower or "what features can i add" in lower:
-        return jsonify({"success": True, "action": "advise", "confidence": 0.85})
-
-    # explicit read output
-    if "read output" in lower or "speak output" in lower or "say the output" in lower:
-        return jsonify({"success": True, "action": "read_output", "confidence": 0.95})
-
-    # ✅ repeat last action
-    if "do that again" in lower or "repeat last action" in lower:
-        return jsonify({"success": True, "action": "repeat_last_action", "confidence": 0.9})
-
-    # ✅ repeat last spoken response
-    if "repeat that" in lower or "say that again" in lower or "repeat last message" in lower:
-        return jsonify({"success": True, "action": "repeat_last_speech", "confidence": 0.9})
-
-    # explicit fix
-    if "fix" in lower and "code" in lower:
-        return jsonify({"success": True, "action": "fix", "confidence": 0.9})
-
-    # fuzzy for core commands + confirmation
-    best, bscore, second, sscore = best_two_commands(lower)
-    if best is None or bscore < 40:
-        return jsonify({
-            "success": True,
-            "action": "unknown",
-            "heard": text,
-            "confidence": 0.0
-        })
-    # if ambiguous, ask frontend to confirm
-    if second and (bscore < 75 or (bscore - sscore) < 15):
-        options = [best, second]
-        return jsonify({
-            "success": True,
-            "action": "confirm",
-            "options": options,
-            "heard": text,
-            "confidence": bscore / 100.0
-        })
-
-    # confident
-    return jsonify({"success": True, "action": best, "confidence": bscore / 100.0})
 
 # ==========================
 # SANDBOXED FILE SYSTEM
@@ -2378,4 +2241,5 @@ def _event_to_speech(event, idx=None, total=None):
 
 if __name__ == "__main__":
     app.run(debug=False, host="127.0.0.1", port=5000)
+
 

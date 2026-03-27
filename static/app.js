@@ -13,6 +13,20 @@ let recognition = null;
 let _restartTimer = null;
 let _loadingSnippets = false;
 
+// Utility: Calculate indentation level, handling both spaces and tabs
+function getIndentLevel(line) {
+  let indent = 0;
+  for (let i = 0; i < line.length; i++) {
+    if (line[i] === ' ') {
+      indent += 0.25; // Each space = 0.25 (4 spaces = 1 level)
+    } else if (line[i] === '\t') {
+      indent += 1; // Each tab = 1 level (standard tabsize=4)
+    } else {
+      break;
+    }
+  }
+  return indent;
+}
 
 // ---------- APP STATE & MANAGERS ----------
 const AppState = {
@@ -90,7 +104,12 @@ const SpeechManager = (function(){
   }
 })();
 
-
+/**
+ * Sleep helper for async operations
+ */
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 // Sonification manager: cancelable jobs, respects reduced-motion preference
 const SonificationManager = (function(){
@@ -273,12 +292,12 @@ async function sonifyCurrentBlock() {
   // Find block boundaries
   let startLine = currentLine;
   let endLine = currentLine;
-  const currentIndent = (lines[currentLine - 1].length - lines[currentLine - 1].trimStart().length) / 4;
+  const currentIndent = getIndentLevel(lines[currentLine - 1]);
   
   // Scan backward for block start
   for (let i = currentLine - 2; i >= 0; i--) {
     const line = lines[i];
-    const indent = (line.length - line.trimStart().length) / 4;
+    const indent = getIndentLevel(line);
     if (indent < currentIndent && line.trim()) {
       startLine = i + 1;
       break;
@@ -288,7 +307,7 @@ async function sonifyCurrentBlock() {
   // Scan forward for block end
   for (let i = currentLine; i < lines.length; i++) {
     const line = lines[i];
-    const indent = (line.length - line.trimStart().length) / 4;
+    const indent = getIndentLevel(line);
     if (indent < currentIndent && line.trim()) {
       endLine = i + 1; // keep endLine as 1-based (inclusive/exclusive boundary)
       break;
@@ -308,7 +327,7 @@ async function sonifyCurrentBlock() {
   let delay = 0;
   for (let i = startLine - 1; i < endLine; i++) {
     const line = lines[i];
-    const indent = Math.floor((line.length - line.trimStart().length) / 4);
+    const indent = Math.floor(getIndentLevel(line));
 
     const t = setTimeout(() => {
       try { sonifyLine(line, indent); } catch(e){}
@@ -757,6 +776,12 @@ require(["vs/editor/editor.main"], function () {
     automaticLayout: true
   });
   
+  let _structureDebounceTimer = null;
+  editor.onDidChangeModelContent(() => {
+    clearTimeout(_structureDebounceTimer);
+    _structureDebounceTimer = setTimeout(updateStructurePanel, 600);
+  });
+
   // mark editor ready and flush queued functions
   window._editorReady = true;
   try{ window._resolveEditorReady(); } catch(e){}
@@ -765,10 +790,7 @@ require(["vs/editor/editor.main"], function () {
     try{ fn(); } catch(e){ console.warn('editor queued fn failed', e); }
   }
   
-  // Register Python autocomplete provider
   registerPythonAutocomplete();
-  
-  // Register shortcuts ONCE here
   registerEditorShortcuts();
   loadSnippets();
 });
@@ -1310,57 +1332,6 @@ async function renameSnippetById(id, newName){
 
 // ---------- COMMAND HANDLER (VOICE + TYPED) ----------
 async function handleConfirmedAction(action, payload){
-    // ✅ STORE LAST ACTION (EXCEPT WHEN REPEATING)
-  if(action !== "repeat_last_action"){
-    lastAction = action;
-    lastPayload = payload;
-  }
-
-  // ✅ REPEAT LAST ACTION
-  if(action === "repeat_last_action"){
-    if(lastAction){
-      speak("Repeating last action.");
-      await handleConfirmedAction(lastAction, lastPayload);
-    } else {
-      speak("No previous action to repeat.");
-    }
-    return;
-  }
-
-  // ✅ REPEAT LAST SPOKEN MESSAGE
-  if(action === "repeat_last_speech"){
-    repeatLastSpeech();
-    return;
-  }
-    // ✅ EXPLAIN LAST ACTION
-  if(action === "explain_last_action"){
-    if(!lastAction){
-      speak("No action has been performed yet.");
-      out("No action has been performed yet.");
-      return;
-    }
-
-    const usedAI = [
-      "analyze",
-      "fix",
-      "advise",
-      "summarize",
-      "generate_code"
-    ].includes(lastAction);
-
-    const explanation =
-      `Last action was ${lastAction.replace(/_/g, " ")}. ` +
-      (usedAI
-        ? "This action used artificial intelligence. "
-        : "This action was deterministic. ") +
-      "The result is shown in the output panel.";
-
-    speak(explanation);
-    out(explanation);
-    return;
-  }
-
-
   if(action === "run")             await runCode();
   else if(action === "analyze")    await analyzeCode();
   else if(action === "fix")        await fixCode();
@@ -1388,6 +1359,11 @@ async function handleConfirmedAction(action, payload){
   else if(action === "advise")         await adviseCode();
   else if(action === "read_line_enhanced") await readLineEnhanced(payload?.line || editor.getPosition().lineNumber);
   else if(action === "sonify_block") await sonifyCurrentBlock();
+  else if(action === "sonify_function") await sonifyFunction(payload?.function_name || "");
+  else if(action === "sonify_class")    await sonifyClass(payload?.class_name || "");
+  else if(action === "find_function")   { /* future: jump to function */ speak("Find function: " + (payload?.function_name || "")); }
+  else if(action === "find_class")      { speak("Find class: " + (payload?.class_name || "")); }
+  else if(action === "show_structure")  toggleStructurePanel();
   else if(action === "list_variables") await listVariables();
   else if(action === "find_variable") await findVariable(payload?.variable || "");
   else if(action === "check_errors") await checkSyntaxErrors();
@@ -1718,16 +1694,23 @@ window.addEventListener('DOMContentLoaded', () => {
       audioCtx.resume().catch(e => console.warn('AudioContext resume failed:', e));
     }
   };
+
   document.addEventListener('click', resumeAudioContext);
-  document.addEventListener('keydown', resumeAudioContext);
-  
-  // Voice control: Ctrl+Shift+M to toggle
   document.addEventListener('keydown', (e) => {
+    resumeAudioContext();
+
     if(e.ctrlKey && e.shiftKey && e.key === 'M'){
       e.preventDefault();
       toggleVoice();
     }
   });
+  const paletteInput = document.getElementById("commandPaletteInput");
+  if (paletteInput) {
+    paletteInput.addEventListener("input", (e) => {
+      commandPaletteSelectedIndex = 0;
+      renderCommandPalette(e.target.value);
+    });
+  }
 });
 
 // Centralized registration to avoid race conditions when editor is created
@@ -1764,24 +1747,8 @@ function registerEditorShortcuts(){
   console.log("✅ All accessibility features loaded (registered):");
 }
 
-function speakNextStep() {
-  if (!window.executionTrace || !window.executionTrace.length) {
-    speak("No execution trace available.");
-    return;
-  }
-
-  if (typeof window.traceIndex !== 'number') window.traceIndex = 0;
-
-  if (window.traceIndex >= window.executionTrace.length) {
-    speak("Execution finished.");
-    return;
-  }
-
-  const step = window.executionTrace[window.traceIndex++];
-
-  if (step.changes) {
-    speak(`Line ${step.line}. ${step.changes.join(". ")}`);
-  }
+async function speakNextStep() {
+  await handleCommandText("next step");
 }
 
 // ==========================================
@@ -1859,7 +1826,7 @@ async function updateStructurePanel() {
       html += '<div class="structure-group">';
       html += '<div class="structure-group-title">⚙️ Functions</div>';
       functions.forEach(fn => {
-        const params = fn.params.join(", ");
+        const params = fn.params.map(p => p.name).join(", ");
         html += `<div class="structure-item" onclick="gotoLine(${fn.line})" role="button" tabindex="0" aria-label="Go to function ${fn.name} at line ${fn.line}">
           <span class="structure-item-icon">⚙️</span>
           <span class="structure-item-label">${escapeHtml(fn.name)}(${escapeHtml(params)})</span>
@@ -1917,12 +1884,6 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
-// Update structure panel when editor changes
-if (typeof editor !== 'undefined' && editor) {
-  editor.onDidChangeModelContent(() => {
-    updateStructurePanel();
-  });
-}
 
 // ==========================================
 // CODE AUTOCOMPLETE
@@ -2034,117 +1995,6 @@ function registerPythonAutocomplete() {
     },
     triggerCharacters: []
   });
-}
-
-// ==========================================
-// EXECUTION TIMELINE PLAYBACK
-// ==========================================
-
-let executionPlayback = {
-  trace: [],
-  isPlaying: false,
-  currentStep: 0,
-  playSpeed: 1, // 1.0 = normal, 0.5 = slow, 2.0 = fast
-};
-
-/**
- * Start execution playback (replay the last execution)
- */
-async function replayExecution() {
-  if (!window.executionTrace || window.executionTrace.length === 0) {
-    speak("No execution to replay. Run code first.");
-    out("No execution trace available.");
-    return;
-  }
-  
-  executionPlayback.trace = window.executionTrace;
-  executionPlayback.currentStep = 0;
-  executionPlayback.isPlaying = true;
-  
-  speak("Starting execution playback.");
-  out("Execution playback started. " + executionPlayback.trace.length + " steps.");
-  
-  await playbackStep();
-}
-
-/**
- * Play next step in execution
- */
-async function playbackStep() {
-  if (!executionPlayback.isPlaying || executionPlayback.currentStep >= executionPlayback.trace.length) {
-    executionPlayback.isPlaying = false;
-    if (executionPlayback.currentStep >= executionPlayback.trace.length) {
-      speak("Execution playback complete.");
-    }
-    return;
-  }
-  
-  const step = executionPlayback.trace[executionPlayback.currentStep];
-  
-  // Build description of this step
-  let description = `Step ${executionPlayback.currentStep + 1}. Line ${step.line || "unknown"}.`;
-  if (step.changes && step.changes.length > 0) {
-    description += " " + step.changes[0];
-  }
-  if (step.output) {
-    description += ` Output: ${step.output}`;
-  }
-  
-  // Speak the step
-  await SpeechManager.enqueue(description);
-  
-  // Highlight the line in editor if possible
-  if (step.line && editor) {
-    editor.setPosition({ lineNumber: step.line, column: 1 });
-  }
-  
-  // Play a sonified tone for this line
-  try {
-    const lineContent = getCode().split("\n")[step.line - 1] || "";
-    sonifyLine(lineContent, 0);
-  } catch (e) {}
-  
-  // Move to next step
-  executionPlayback.currentStep++;
-  
-  // Schedule next step
-  const delay = 2000 / executionPlayback.playSpeed; // 2 seconds per step at normal speed
-  setTimeout(playbackStep, delay);
-}
-
-/**
- * Pause playback
- */
-function pausePlayback() {
-  executionPlayback.isPlaying = false;
-  speak("Playback paused.");
-}
-
-/**
- * Resume playback
- */
-async function resumePlayback() {
-  if (executionPlayback.currentStep >= executionPlayback.trace.length) {
-    speak("Execution playback complete.");
-    return;
-  }
-  
-  executionPlayback.isPlaying = true;
-  speak("Resuming playback.");
-  await playbackStep();
-}
-
-/**
- * Set playback speed (0.5x, 1x, 2x, etc)
- */
-function setPlaybackSpeed(speed) {
-  if (speed <= 0) {
-    speak("Invalid speed.");
-    return;
-  }
-  executionPlayback.playSpeed = speed;
-  const speedText = (speed).toFixed(1);
-  speak(`Playback speed set to ${speedText}x.`);
 }
 
 // ==========================================
@@ -2264,42 +2114,11 @@ async function sonifyRange(startLine, endLine, context = "block") {
     const finalFreq = baseFreq + freqVar;
     
     // Play short beep for this line
-    playTone(finalFreq, 50, 0.3);
+    SonificationManager.playTone(finalFreq, 50, 0.3);
     await sleep(100);
   }
   
   speak(`Finished sonifying ${context}.`);
-}
-
-/**
- * Sleep helper for async operations
- */
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-/**
- * Play a single tone
- */
-function playTone(frequency, duration, volume) {
-  if (!SonificationManager || !audioCtx) return;
-  
-  if (audioCtx.state === "suspended") {
-    audioCtx.resume();
-  }
-  
-  const osc = audioCtx.createOscillator();
-  const gain = audioCtx.createGain();
-  
-  osc.frequency.value = frequency;
-  osc.connect(gain);
-  gain.connect(audioCtx.destination);
-  
-  gain.gain.setValueAtTime(volume, audioCtx.currentTime);
-  gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration / 1000);
-  
-  osc.start(audioCtx.currentTime);
-  osc.stop(audioCtx.currentTime + duration / 1000);
 }
 
 // ==========================================
@@ -2334,11 +2153,11 @@ function trackFormattingChanges() {
     if (currentIndent > lastIndent) {
       // Rising tone for increased indentation
       const freq = 600 + (currentIndent * 50);
-      playTone(freq, 100, 0.2);
+      SonificationManager.playTone(freq, 100, 0.2);
     } else if (currentIndent < lastIndent) {
       // Falling tone for decreased indentation
       const freq = 600 - ((lastIndent - currentIndent) * 50);
-      playTone(freq, 100, 0.2);
+      SonificationManager.playTone(freq, 100, 0.2);
     }
   });
 }
@@ -2453,7 +2272,7 @@ function sonifyError(errorMessage, errorLine = null) {
   const config = ERROR_SONIFICATION_MAP[errorType] || ERROR_SONIFICATION_MAP["RuntimeError"];
   
   // Play error tone
-  playTone(config.freq, config.duration, 0.4);
+  SonificationManager.playTone(config.freq, config.duration, 0.4);
   
   // Speak error description
   const msg = `${config.label} on line ${errorLine || "unknown"}. ${errorMessage.substring(0, 50)}`;
@@ -2474,7 +2293,7 @@ async function sonifyCodeIssues() {
     const indent = line.search(/\S/);
     
     // Check indentation consistency
-    if (indent % 4 !== 0 && indent !== 0) {
+    if (indent % 4 !== 0 && indent % 2 !== 0 && indent !== 0) {
       issues.push({
         line: idx + 1,
         type: "Style",
@@ -2573,22 +2392,19 @@ async function getDebugSuggestions() {
  */
 function displayInlineSuggestions(suggestions) {
   if (!editor) return;
-  
-  // Get all decorations
-  const decorations = suggestions.map((sugg, idx) => ({
-    range: new monaco.Range(1, 1, 1, 1), // Attach to top of file
-    options: {
-      glyphMarginClassName: "debug-glyph",
-      glyphMarginHoverMessage: { value: sugg.text },
-      minimap: {
-        color: sugg.type === "warning" ? "#ff9800" : "#2196f3",
-        position: 2
+  if (window._suggestionDecorations) {
+    editor.deltaDecorations(window._suggestionDecorations, []);
+  }
+  const decorations = suggestions
+    .filter(s => s.line)
+    .map(s => ({
+      range: new monaco.Range(s.line, 1, s.line, 1),
+      options: {
+        glyphMarginClassName: "debug-glyph",
+        glyphMarginHoverMessage: { value: s.text },
       }
-    }
-  }));
-  
-  // Apply decorations (note: this is a simplified version)
-  // In a real implementation, you'd want to parse line numbers from suggestions
+    }));
+  window._suggestionDecorations = editor.deltaDecorations([], decorations);
 }
 
 
@@ -2611,9 +2427,8 @@ const COMMAND_PALETTE_COMMANDS = [
   { id: "show_structure", title: "Show Structure", desc: "Display code navigation map", icon: "🗺️", keys: "Ctrl+Shift+S", action: () => toggleStructurePanel() },
   { id: "sonify_block", title: "Sonify Block", desc: "Hear current code block", icon: "🔊", keys: "Alt+S", action: () => sonifyCurrentBlock() },
   
-  { id: "replay_execution", title: "Replay Execution", desc: "Play execution timeline with audio", icon: "⏯️", keys: "", action: () => replayExecution() },
-  { id: "pause_playback", title: "Pause Playback", desc: "Pause execution replay", icon: "⏸️", keys: "", action: () => pausePlayback() },
-  { id: "resume_playback", title: "Resume Playback", desc: "Resume execution replay", icon: "▶️", keys: "", action: () => resumePlayback() },
+  { id: "next_step",    title: "Next step",    desc: "Step forward in execution trace", icon: "⏭", keys: "Alt+N", action: () => speakNextStep() },
+  { id: "prev_step",    title: "Previous step", desc: "Step back in execution trace",   icon: "⏮", keys: "",      action: () => handleCommandText("previous step") },
   
   { id: "save_snippet", title: "Save Snippet", desc: "Save code as snippet", icon: "💾", keys: "Ctrl+S", action: () => saveSnippet() },
   { id: "list_variables", title: "List Variables", desc: "Show all variables in scope", icon: "📊", keys: "Ctrl+Alt+V", action: () => listVariables() },

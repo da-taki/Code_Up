@@ -185,8 +185,6 @@ class IntentParser:
         self.intent_map = self._build_intent_map()
     
     def _build_intent_map(self) -> Dict[str, List[Tuple[str, str]]]:
-        """Build a map of intents to their patterns."""
-    def _build_intent_map(self) -> Dict[str, List[Tuple[str, str]]]:
         """Build a map of intents to their patterns. Order matters: more specific intents first."""
         # Order matters! More specific patterns should be checked first.
         return {

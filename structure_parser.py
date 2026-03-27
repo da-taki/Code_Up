@@ -2,6 +2,10 @@ import ast
 
 
 class CodeAnalyzer:
+    # AST parsing bounds to prevent DoS attacks
+    MAX_AST_DEPTH = 50
+    MAX_AST_NODES = 10000
+    
     def analyze(self, code: str):
         """
         Parse code and return structural metadata.
@@ -9,6 +13,16 @@ class CodeAnalyzer:
         """
         try:
             tree = ast.parse(code)
+            
+            # Check AST bounds to prevent DoS
+            depth = self._get_ast_depth(tree)
+            node_count = self._count_ast_nodes(tree)
+            
+            if depth > self.MAX_AST_DEPTH:
+                return {"error": f"AST too deep (max {self.MAX_AST_DEPTH} levels)"}
+            if node_count > self.MAX_AST_NODES:
+                return {"error": f"AST too complex (max {self.MAX_AST_NODES} nodes)"}
+                
         except SyntaxError as e:
             return {"error": f"Syntax error: {e}"}
 
@@ -69,3 +83,24 @@ class CodeAnalyzer:
                 })
 
         return result
+    
+    def _get_ast_depth(self, node, current_depth=0):
+        """Calculate the maximum depth of an AST node."""
+        if current_depth > self.MAX_AST_DEPTH:
+            return current_depth
+        
+        max_depth = current_depth
+        for child in ast.iter_child_nodes(node):
+            child_depth = self._get_ast_depth(child, current_depth + 1)
+            max_depth = max(max_depth, child_depth)
+        
+        return max_depth
+    
+    def _count_ast_nodes(self, node):
+        """Count the total number of nodes in an AST."""
+        count = 1  # Count this node
+        for child in ast.iter_child_nodes(node):
+            count += self._count_ast_nodes(child)
+            if count > self.MAX_AST_NODES:
+                return count
+        return count

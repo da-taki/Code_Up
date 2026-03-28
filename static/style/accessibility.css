@@ -1,9 +1,8 @@
 /* =========================================================
    ACCESSIBILITY LAYER — COLOR BLIND + DYSLEXIA + MOTION
-   This file only overrides tokens & readability, not layout.
+   Overrides tokens and readability only, not layout.
 ========================================================= */
 
-/* ---------- BASE TOKENS (fallbacks) ---------- */
 :root {
   --bg: #020617;
   --fg: #e5e7eb;
@@ -15,89 +14,97 @@
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   --font-dyslexia: "Atkinson Hyperlegible", "OpenDyslexic", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 
-  --focus-ring: 0 0 0 2px #000, 0 0 0 4px #facc15;
+  --focus-outline-color: #facc15;
 }
 
 /* =========================================================
    COLOR VISION MODES
 ========================================================= */
 
-/* Protanopia (red-blind) */
 body.theme-protanopia {
-  --accent: #00bfff;      /* strong cyan */
-  --danger: #ffcc00;      /* yellow for warnings */
-  --success: #00ffcc;     /* teal-ish green */
+  --accent:  #00bfff;
+  --danger:  #ffcc00;
+  --success: #00ffcc;
 }
 
-/* Deuteranopia (green-blind) */
 body.theme-deuteranopia {
-  --accent: #3399ff;
-  --danger: #ff9966;      /* orange-ish, not pure red */
-  --success: #66ccff;     /* light blue instead of green */
+  --accent:  #3399ff;
+  --danger:  #ff9966;
+  --success: #66ccff;
 }
 
-/* Tritanopia (blue-blind) */
 body.theme-tritanopia {
-  --accent: #ff66cc;      /* pink instead of blue */
-  --danger: #ff3333;
-  --success: #ccff00;     /* yellow-lime */
+  --accent:  #ff66cc;
+  --danger:  #ff3333;
+  --success: #ccff00;
 }
 
-/* High contrast base */
 body.theme-high-contrast {
-  --bg: #000000;
-  --fg: #ffffff;
-  --accent: #00ffff;
-  --danger: #ff0000;
+  --bg:      #000000;
+  --fg:      #ffffff;
+  --accent:  #00ffff;
+  --danger:  #ff0000;
   --success: #00ff00;
+  --bg-main:  #000000;
+  --bg-panel: #000000;
+  --bg-soft:  #111111;
+  --text-main: #ffffff;
+  --text-dim:  #cccccc;
 }
 
-/* Apply tokens into core UI (no layout changes) */
-body.theme-protanopia .cu-body,
-body.theme-deuteranopia .cu-body,
-body.theme-tritanopia .cu-body,
-body.theme-high-contrast .cu-body {
-  color: var(--fg);
-  background-color: var(--bg);
+body.theme-high-contrast .cu-body,
+body.theme-high-contrast {
+  background-color: #000000;
+  color: #ffffff;
 }
 
-/* Panels & borders react to new tokens */
+body.theme-high-contrast .cu-panel {
+  background: #000000;
+  border: 2px solid #ffffff;
+  box-shadow: none;
+}
+
+body.theme-high-contrast .cu-output {
+  background: #000000;
+  border: 2px solid #ffffff;
+}
+
+body.theme-high-contrast .cu-header {
+  background: #000000;
+  border-bottom: 2px solid #ffffff;
+  box-shadow: none;
+}
+
 body.theme-protanopia .cu-panel,
 body.theme-deuteranopia .cu-panel,
-body.theme-tritanopia .cu-panel,
-body.theme-high-contrast .cu-panel {
-  border-color: color-mix(in srgb, var(--accent) 40%, #020617 60%);
+body.theme-tritanopia .cu-panel {
+  border-color: rgba(0, 191, 255, 0.4);
   box-shadow:
     0 20px 45px rgba(0,0,0,0.95),
-    0 0 0 1px color-mix(in srgb, var(--accent) 40%, #020617 60%);
+    0 0 0 1px rgba(0, 191, 255, 0.3);
 }
 
-/* Output + editor outlines */
 body.theme-protanopia .cu-output,
 body.theme-deuteranopia .cu-output,
-body.theme-tritanopia .cu-output,
-body.theme-high-contrast .cu-output {
-  border-color: color-mix(in srgb, var(--accent) 50%, #020617 50%);
+body.theme-tritanopia .cu-output {
+  border-color: rgba(0, 191, 255, 0.5);
 }
 
-/* Snippet hover accent adapts */
 body.theme-protanopia .snippet-item:hover,
 body.theme-deuteranopia .snippet-item:hover,
-body.theme-tritanopia .snippet-item:hover,
-body.theme-high-contrast .snippet-item:hover {
+body.theme-tritanopia .snippet-item:hover {
   border-color: var(--accent);
 }
 
-/* Buttons pick accent */
 body.theme-protanopia .cu-button:hover,
 body.theme-deuteranopia .cu-button:hover,
-body.theme-tritanopia .cu-button:hover,
-body.theme-high-contrast .cu-button:hover {
-  background: linear-gradient(135deg, var(--accent), var(--success));
+body.theme-tritanopia .cu-button:hover {
+  background: var(--accent);
+  color: #000;
 }
 
 /* =========================================================
-   DYSLEXIA / DEEP READING MODE
+   DYSLEXIA MODE
 ========================================================= */
 
 body.theme-dyslexia {
@@ -106,14 +113,12 @@ body.theme-dyslexia {
   font-family: var(--font-dyslexia);
 }
 
-/* Kill all-caps + extreme tracking in dyslexia mode */
 body.theme-dyslexia .cu-title {
   text-transform: none;
   letter-spacing: 0.04em;
   font-weight: 800;
 }
 
-/* Slightly larger, more spaced text in critical zones */
 body.theme-dyslexia .cu-subtitle,
 body.theme-dyslexia .cu-output,
 body.theme-dyslexia .cu-snippet-list,
@@ -122,14 +127,12 @@ body.theme-dyslexia #output {
   line-height: 1.7;
 }
 
-/* Editor text: more line height & slightly bigger */
 body.theme-dyslexia .cu-editor {
   font-family: var(--font-dyslexia);
   font-size: 17px;
   line-height: 1.6;
 }
 
-/* Reduce visual clutter in panel backgrounds */
 body.theme-dyslexia .cu-panel {
   background: #020617;
   box-shadow:
@@ -137,31 +140,30 @@ body.theme-dyslexia .cu-panel {
     0 0 0 1px rgba(30,41,59,0.9);
 }
 
-/* Snippets: clearer contrast, less neon clash */
 body.theme-dyslexia .snippet-item {
   background: #020817;
   border-color: #4b5563;
   box-shadow: none;
 }
+
 body.theme-dyslexia .snippet-item:hover {
   background: #0f172a;
   border-color: var(--accent);
 }
 
-/* Buttons: simplify gradients a bit */
 body.theme-dyslexia .cu-button {
   clip-path: none;
   border-radius: 10px;
   background: #020617;
   box-shadow: 0 0 0 1px #1f2933;
 }
+
 body.theme-dyslexia .cu-button:hover {
   background: #111827;
   transform: translateY(-1px);
   box-shadow: 0 0 0 1px var(--accent);
 }
 
-/* Dyslexia: show clear underline on links or interactive bits */
 body.theme-dyslexia button,
 body.theme-dyslexia .snippet-name {
   text-decoration-thickness: 0.12em;
@@ -197,23 +199,45 @@ body.theme-dyslexia.theme-high-contrast .cu-button:hover {
 
 /* =========================================================
    FOCUS / KEYBOARD NAVIGATION
+
+   Using outline (not box-shadow) so focus is visible in
+   Windows High Contrast / Forced Colors Mode, which strips
+   box-shadow entirely. Specificity raised above :where() so
+   other files cannot silently override this rule.
 ========================================================= */
 
-.cu-body :where(button, [role="button"], .snippet-item, .cu-output, .cu-editor-region, .cu-snippet-list):focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
+button:focus-visible,
+[role="button"]:focus-visible,
+.snippet-item:focus-visible,
+.cu-voice-input:focus-visible,
+.cu-editor-region:focus-visible,
+select:focus-visible,
+a:focus-visible {
+  outline: 3px solid var(--focus-outline-color);
+  outline-offset: 3px;
+  box-shadow: none;
 }
 
-/* In high contrast, focus ring thicker */
-body.theme-high-contrast .cu-body :where(button, [role="button"], .snippet-item, .cu-output, .cu-editor-region, .cu-snippet-list):focus-visible {
-  box-shadow:
-    0 0 0 2px #000,
-    0 0 0 4px #00ffff;
+body.theme-high-contrast button:focus-visible,
+body.theme-high-contrast [role="button"]:focus-visible,
+body.theme-high-contrast select:focus-visible,
+body.theme-high-contrast a:focus-visible {
+  outline: 4px solid #00ffff;
+  outline-offset: 3px;
+}
+
+@media (forced-colors: active) {
+  button:focus-visible,
+  [role="button"]:focus-visible,
+  select:focus-visible,
+  a:focus-visible {
+    outline: 3px solid ButtonText;
+    outline-offset: 3px;
+  }
 }
 
 /* =========================================================
-   REDUCED MOTION MODE
-   (keeps layout intact, just kills flashy animations)
+   REDUCED MOTION
 ========================================================= */
 
 body.theme-reduced-motion *,
@@ -225,12 +249,13 @@ body.theme-reduced-motion *::after {
   scroll-behavior: auto !important;
 }
 
-/* Explicitly soften some of your loud stuff */
 body.theme-reduced-motion .cu-title,
 body.theme-reduced-motion .cu-button,
-body.theme-reduced-motion #output.run-glow {
+body.theme-reduced-motion #output.run-glow,
+body.theme-reduced-motion .cu-button-voice {
   animation: none !important;
 }
+
 body.theme-reduced-motion .bp-glyph,
 body.theme-reduced-motion .bp-line {
   transition: none !important;
@@ -238,25 +263,28 @@ body.theme-reduced-motion .bp-line {
   opacity: 1 !important;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .cu-title {
+    animation: none !important;
+  }
+  .cu-button-voice {
+    animation: none !important;
+  }
+  #output.run-glow {
+    animation: none !important;
+  }
+}
 
 /* =========================================================
-   SMALL SCREENS ACCESSIBILITY TWEAKS
+   SMALL SCREEN TWEAKS
 ========================================================= */
 
 @media (max-width: 600px) {
-  body.theme-dyslexia .cu-title {
-    font-size: 1.4rem;
-  }
-
-  body.theme-dyslexia .cu-subtitle {
-    font-size: 0.9rem;
-  }
-
-  body.theme-dyslexia .cu-output {
-    font-size: 0.95rem;
-  }
+  body.theme-dyslexia .cu-title    { font-size: 1.4rem; }
+  body.theme-dyslexia .cu-subtitle { font-size: 0.9rem; }
+  body.theme-dyslexia .cu-output   { font-size: 0.95rem; }
 }
-/* 🚨 HARD SAFETY: NEVER ALLOW EDITOR TO BE DISABLED */
+
 .cu-editor,
 .cu-editor-region,
 #editor {

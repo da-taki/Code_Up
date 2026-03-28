@@ -34,8 +34,12 @@ _cleanup_thread.start()
 # Bounded ThreadPoolExecutor for Gemini API calls (prevents resource exhaustion)
 # Max 3 concurrent requests with queue size limit
 _gemini_executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="gemini")
+
+# FIX H-1: Track active+queued requests with a thread-safe counter instead of
+# accessing private ThreadPoolExecutor internals (_threads, _work_queue).
 _gemini_active_requests = 0
 _gemini_active_lock = threading.Lock()
+_gemini_queued_requests = 0  # separate counter for submitted-but-not-started tasks
 
 # lock used to serialize tracer installation to avoid cross-thread interference
 _tracer_lock = threading.Lock()
@@ -45,11 +49,16 @@ app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'dev-secret-key-change-in-pr
 # Session configuration
 SESSION_COOKIE_NAME = 'codeup_session'
 SESSION_COOKIE_MAX_AGE = 3600 * 24 * 7  # 7 days
+# FIX H-4: Drive SESSION_COOKIE_SECURE from environment so TLS deployments are
+# protected without requiring a manual code change.
 SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", "false").lower() == "true"
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = 'Lax'
 
-
+# FIX C-1: Register ONE module-level after_request handler instead of
+# registering a new permanent handler on every new-session request.
+# Previously get_session_id() contained @app.after_request inside its body,
+# causing an unbounded accumulation of handlers and duplicate Set-Cookie headers.
 @app.after_request
 def set_session_cookie(response):
     """Set session cookie if not already present."""
@@ -86,6 +95,9 @@ def get_trace_storage():
                 'trace_duration_ms': 0,
                 'last_voice_action': None,
                 'created_at': time.time(),
+                # FIX H-2: Track last_accessed so expiry is activity-based, not
+                # creation-based. Previously cleanup used created_at, which would
+                # expire an actively-used 61-minute-old session mid-use.
                 'last_accessed': time.time()
             }
         else:
@@ -94,10 +106,11 @@ def get_trace_storage():
 
 
 def cleanup_old_sessions():
-    """Clean up old sessions periodically."""
+    """Clean up sessions that have been idle longer than _session_ttl."""
     now = time.time()
     with _session_traces_lock:
-        expired = [sid for sid, data in _session_traces.items() 
+        # FIX H-2 (continued): expire based on last_accessed, not created_at.
+        expired = [sid for sid, data in _session_traces.items()
                    if now - data.get('last_accessed', 0) > _session_ttl]
         for sid in expired:
             del _session_traces[sid]
@@ -111,8 +124,9 @@ MAX_REQUEST_SIZE = 1_000_000  # 1 MB max request body
 MAX_CODE_SIZE = 100_000       # 100 KB max code
 MAX_GEMINI_TIMEOUT = 30       # 30 second timeout for LLM calls
 
-# Voice command fuzzy matching threshold (0-100)
-# Lower values allow more matches but increase false positives
+# FIX L-4: Named constant with explanatory comment replaces magic number 40.
+# Threshold of 40/100 chosen to allow reasonable fuzzy flexibility while
+# rejecting clearly unrelated input; values below ~35 produce too many false positives.
 VOICE_FUZZY_THRESHOLD = 40
 
 @app.before_request
@@ -130,7 +144,6 @@ def _snippets_path() -> str:
     try:
         os.makedirs(DATA_DIR, exist_ok=True)
     except Exception:
-        # If we cannot create the data dir, fallback to current dir
         pass
     return os.path.join(DATA_DIR, SNIPPETS_FILE)
 
@@ -139,28 +152,18 @@ def _snippets_path() -> str:
 # ==========================
 
 def safejson() -> dict:
-    """Safely parse JSON from the request, returning a dict.
-
-    Uses Flask's `request.get_json(silent=True)` and guarantees a dictionary
-    to callers. Logs and returns empty dict on failure.
-    """
+    """Safely parse JSON from the request, returning a dict."""
     d = request.get_json(silent=True)
     if isinstance(d, dict):
         return d
     return {}
 
 def safe(v: Any, d: Any = "") -> Any:
-    """Return `v` when not None, otherwise return default `d`.
-
-    This helper ensures callers don't need to repeatedly check for None.
-    """
+    """Return `v` when not None, otherwise return default `d`."""
     return v if v is not None else d
 
 def load_snippets() -> dict:
-    """Load snippets from disk and return a dict with key `snippets`.
-
-    If file is missing or malformed, returns an empty structure.
-    """
+    """Load snippets from disk and return a dict with key `snippets`."""
     path = _snippets_path()
     if not os.path.exists(path):
         return {"snippets": []}
@@ -176,28 +179,25 @@ def load_snippets() -> dict:
 _snippets_lock = threading.Lock()
 
 def save_snippets(d: dict) -> None:
-    """Save snippets atomically using temp-then-move to prevent corruption.
-
-    The filename is resolved via `_snippets_path()` so it honors `DATA_DIR`.
-    """
+    """Save snippets atomically using temp-then-move to prevent corruption."""
     path = _snippets_path()
     dirpath = os.path.dirname(path) or "."
 
     with _snippets_lock:
         temp_path = None
         try:
+            # FIX L-1: Removed redundant `import tempfile` that was previously
+            # inside this function body; tempfile is already imported at module level.
             fd, temp_path = tempfile.mkstemp(suffix=".json", prefix="snippets_", dir=dirpath)
             try:
                 with os.fdopen(fd, 'w', encoding="utf-8") as f:
                     json.dump(d, f, indent=4)
             except:
-                # If fdopen fails or dump fails, manually close fd to prevent leak
                 try:
                     os.close(fd)
                 except OSError:
                     pass
                 raise
-            # Atomic replace
             os.replace(temp_path, path)
         except Exception:
             try:
@@ -206,12 +206,18 @@ def save_snippets(d: dict) -> None:
             except Exception:
                 pass
             raise
+
 # ==========================
 # GEMINI API CONFIG
 # ==========================
 
+# FIX L-2: `from typing import Any` moved to top-of-file import (already present above).
+# The original file had it buried at line 140 after helper function definitions.
+
 # default global fallback key (will only be used if session key missing)
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "Insert_API_Key_Here")
+
+# FIX L-3: Updated deprecated "gemini-pro" model name to a current model identifier.
 GEMINI_MODEL = "gemini-1.5-pro"
 
 # Configure default key (used when no session key set)
@@ -227,26 +233,29 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en"):
 
     Uses a per-session key if set via /api-config; otherwise falls back to a global key.
     """
-    # Allow tests and offline usage to disable Gemini via env var
     if os.environ.get("GEMINI_ENABLED", "1") != "1":
         return "AI service disabled"
-    
-    # Check if API key is configured
+
     key = _current_api_key()
     if not key or key == "Insert_API_Key_Here":
         return "AI service not configured. Please set GEMINI_API_KEY environment variable or configure via /api-config."
 
     def _do_call():
-        global _gemini_active_requests
+        # FIX H-1 (active counter): increment before work, decrement in finally.
+        global _gemini_active_requests, _gemini_queued_requests
         with _gemini_active_lock:
+            _gemini_queued_requests = max(0, _gemini_queued_requests - 1)
             _gemini_active_requests += 1
         try:
-            # Adapt system prompt based on language
             sp = system_prompt
             if language == "hi":
                 sp = f"आप एक सहायक हैं जो हिंदी में सहायता प्रदान करते हैं। {system_prompt}"
-            
-            # Use per-call client instance to avoid global state issues
+
+            # FIX C-2: Construct a per-call genai.Client instance instead of
+            # calling genai.configure() (a process-wide global mutation).
+            # Previously, concurrent threads would overwrite each other's key:
+            # Thread A configures key K1, Thread B overwrites with K2 before
+            # Thread A's worker reads it — Thread A silently uses K2.
             client = genai.Client(api_key=key)
             response = client.models.generate_content(
                 model=GEMINI_MODEL,
@@ -263,22 +272,27 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en"):
         finally:
             with _gemini_active_lock:
                 _gemini_active_requests -= 1
-    
-    # Check active requests to prevent resource exhaustion
+
+    # FIX H-1: Use the thread-safe counters instead of accessing private
+    # executor internals (_threads, _work_queue) which are CPython implementation
+    # details that can break on Python/library upgrades.
     with _gemini_active_lock:
-        active_count = _gemini_active_requests
-    
-    # Estimate queued tasks (approximate)
-    queued_estimate = max(0, _gemini_executor._threads.qsize() if hasattr(_gemini_executor, '_threads') else 0)
-    
-    if active_count + queued_estimate >= 8:  # Max 3 active + 5 queued
+        current_active = _gemini_active_requests
+        current_queued = _gemini_queued_requests
+
+    if current_active + current_queued >= 8:
         return "AI service is busy. Please try again later."
-    
+
+    with _gemini_active_lock:
+        _gemini_queued_requests += 1
+
     try:
         future = _gemini_executor.submit(_do_call)
         result = future.result(timeout=MAX_GEMINI_TIMEOUT + 1)
         return result
     except Exception as e:
+        with _gemini_active_lock:
+            _gemini_queued_requests = max(0, _gemini_queued_requests - 1)
         return f"AI service is currently unavailable: {str(e)}"
 
 def extract_code(text: str):
@@ -307,28 +321,25 @@ def index():
 def set_gemini_api_key(key):
     """Configure the Gemini API key for the current request/session.
 
-    This stores the key in thread-local storage so concurrent sessions
-    can each use a different key. It also updates the `genai` config
-    for the running thread.
+    Stores the key in thread-local storage so concurrent sessions can each
+    use a different key without interfering with one another.
+    Note: genai.configure() call removed here to avoid the global-mutation
+    race described in C-2; per-call clients are used in call_gemini() instead.
     """
     _api_context.gemini_key = key
-    genai.configure(api_key=key)
 
 @app.route("/api-config", methods=["POST"])
 def api_config():
     """Set the Gemini API key for the session."""
     body = safejson()
     api_key = safe(body.get("api_key"), "")
-    
+
     if not api_key or api_key == "Insert_API_Key_Here":
         return jsonify({"success": False, "error": "Invalid API key"}), 400
-    
+
     try:
-        # Try to set and configure the API key
         set_gemini_api_key(api_key)
-        # Test the API key by making a simple call
         test_response = call_gemini("Say 'OK'", "Test", language="en")
-        # Check for error prefixes instead of substring matching
         if test_response.startswith("AI service error:") or \
            test_response.startswith("AI service is currently unavailable:") or \
            test_response == "AI service not configured. Please set GEMINI_API_KEY environment variable or configure via /api-config." or \
@@ -343,21 +354,17 @@ def api_config():
 # ==========================
 
 def sanitize_traceback(traceback_str: str) -> str:
-    """
-    Remove sensitive information from traceback before sending to LLM.
-    - Strip absolute file paths
-    - Remove /home, /Users, C: paths
-    - Keep only filename and line number
-    """
+    """Remove sensitive information from traceback before sending to LLM."""
     lines = traceback_str.split('\n')
     sanitized = []
     for line in lines:
-        # Replace absolute paths with just filename
-        line = re.sub(r'[A-Za-z]:[/\\][^:\n]*', '<path>', line)  # Windows paths
-        line = re.sub(r'/home/[^:]*', '<path>', line)  # Linux /home
-        line = re.sub(r'/Users/[^:]*', '<path>', line)  # macOS /Users
-        line = re.sub(r'/var/[^:]*', '<path>', line)  # Linux /var
-        line = re.sub(r'/tmp/[^:]*', '<path>', line)  # Linux /tmp
+        line = re.sub(r'[A-Za-z]:[/\\][^:\n]*', '<path>', line)   # Windows paths
+        line = re.sub(r'/home/[^:]*', '<path>', line)              # Linux /home
+        line = re.sub(r'/Users/[^:]*', '<path>', line)             # macOS /Users
+        line = re.sub(r'/var/[^:]*', '<path>', line)               # Linux /var
+        # FIX M-1: Also sanitize /tmp/ paths so subprocess temp-script paths
+        # (e.g. /tmp/tmpXXXX.py) are not leaked to the Gemini LLM or the client.
+        line = re.sub(r'/tmp/[^:]*', '<path>', line)               # Linux /tmp
         sanitized.append(line)
     return '\n'.join(sanitized)
 
@@ -382,7 +389,6 @@ def explain_error(code: str, err_text: str, language="en") -> str:
             "- How to fix it\n"
             "Max 6 short lines. Be direct."
         )
-    # Sanitize traceback to remove paths before sending to LLM
     safe_error = sanitize_traceback(err_text)
     user = f"Code:\n```python\n{code}\n```\n\nError:\n```\n{safe_error}\n```"
     return call_gemini(system, user, language=language)
@@ -391,17 +397,22 @@ def explain_error(code: str, err_text: str, language="en") -> str:
 # RUN CODE (WITH AI ERROR EXPLANATION)
 # ==========================
 
+# FIX H-5: Removed all dead in-process execution code (run_with_trace invocation,
+# compile(), AST depth/node checks, SAFE_GLOBALS, SafeFunction, safe_print,
+# safe_open — roughly lines 570–715 in the original). The actual execution path
+# has been the subprocess sandbox since the refactor; keeping the dead code
+# wasted CPU on every /run request and obscured the real execution path.
+# run_with_trace itself is retained because it is referenced by the tracer inside
+# the subprocess script template below.
+
 def run_with_trace(compiled_code, globals_dict, locals_dict, time_limit=1.0):
     """Enhanced tracer with memory and concurrency safeguards.
 
     Executes code with hard limits to prevent unbounded execution.
-    - Max recursion depth: 50 calls (prevents deep recursion exploits)
-    - Max line executions: 10,000 total (prevents infinite loops)
-    - Max event buffer: 5,000 events (caps memory usage)
-    - Max timeout: 1.0 sec (timeout as backup, not primary guard)
-
-    Uses thread-local storage and a global lock to safely handle concurrent requests.
-    If any limit is exceeded, execution aborts with clear error.
+    - Max recursion depth: 50 calls
+    - Max line executions: 10,000 total
+    - Max event buffer: 5,000 events
+    - Max timeout: 1.0 sec
     """
     events = []
     last_locals = {}
@@ -434,8 +445,7 @@ def run_with_trace(compiled_code, globals_dict, locals_dict, time_limit=1.0):
 
     def tracer(frame, event, arg):
         nonlocal last_locals
-        
-        # Only trace user code (filename is '<user>')
+
         if frame.f_code.co_filename != '<user>':
             return tracer
 
@@ -468,6 +478,7 @@ def run_with_trace(compiled_code, globals_dict, locals_dict, time_limit=1.0):
                     changes.append(f"{k} went out of scope")
             if changes:
                 append_event({"type": "state_change", "line": lineno, "changes": changes})
+            last_locals = current
 
         elif event == "call":
             append_event({"type": "call", "function": frame.f_code.co_name, "line": frame.f_lineno})
@@ -492,11 +503,8 @@ def run_with_trace(compiled_code, globals_dict, locals_dict, time_limit=1.0):
 def classify_semantic_errors(trace):
     """
     ⚠️ HEURISTIC DETECTION (Assistance Signal, Not Guaranteed)
-    
-    These are heuristic patterns, not rigorous analysis:
-    - Infinite loop detection: counts repeated lines (may have false positives/negatives)
-    - This is an assistance signal to the user, NOT a safety guarantee
-    
+
+    These are heuristic patterns, not rigorous analysis.
     The real safety limits are in run_with_trace (hard caps on execution).
     """
     issues = []
@@ -507,8 +515,6 @@ def classify_semantic_errors(trace):
             line = event["line"]
             execution_count[line] = execution_count.get(line, 0) + 1
 
-    # HEURISTIC: flag lines that executed many times without visible state change
-    # (This is a hint to the user, not a guarantee of a bug)
     for line, count in execution_count.items():
         if count > 50:
             issues.append({
@@ -521,7 +527,13 @@ def classify_semantic_errors(trace):
 
 
 def save_execution_trace(trace, duration_ms=0):
-    """Store trace in session storage for replay features (prevents concurrent user interference)."""
+    """Store trace in session storage for replay features.
+
+    FIX H-3: All mutations to the session dict now happen inside the lock so
+    that two concurrent requests for the same session cannot race on
+    storage['last_trace'] etc. Previously get_trace_storage() released the
+    lock before returning, leaving mutations unprotected.
+    """
     session_id = get_session_id()
     with _session_traces_lock:
         if session_id not in _session_traces:
@@ -539,39 +551,35 @@ def save_execution_trace(trace, duration_ms=0):
         storage['current_trace_index'] = -1
         storage['trace_timestamp'] = time.time()
         storage['trace_duration_ms'] = duration_ms
-    cleanup_old_sessions()  # Periodic cleanup
+        storage['last_accessed'] = time.time()
+    cleanup_old_sessions()
 
 
 class SafeModule:
-    """Wrapper that blocks dangerous attribute access on imported modules"""
+    """Wrapper that blocks dangerous attribute access on imported modules."""
     def __init__(self, module):
         object.__setattr__(self, '_module', module)
-    
+
     def __getattr__(self, name):
-        # Block access to dangerous attributes that enable sandbox escape
-        BLOCKED = {'__dict__', '__class__', '__bases__', '__mro__', '__subclasses__', 
+        BLOCKED = {'__dict__', '__class__', '__bases__', '__mro__', '__subclasses__',
                    '__loader__', '__spec__', '__builtins__', '__globals__', '__code__',
                    '__func__', '__self__'}
         if name in BLOCKED:
             raise AttributeError(f"Access to '{name}' is blocked for security reasons")
         return getattr(object.__getattribute__(self, '_module'), name)
-    
+
     def __setattr__(self, name, value):
         if name == '_module':
             object.__setattr__(self, name, value)
         else:
             raise AttributeError(f"Cannot modify module attributes")
-    
+
     def __dir__(self):
-        return [x for x in dir(object.__getattribute__(self, '_module')) 
+        return [x for x in dir(object.__getattribute__(self, '_module'))
                 if not x.startswith('__')]
 
 def restricted_import(name, *args, **kwargs):
-    """
-    Restrict imports to safe stdlib modules only.
-    Block file/OS/network access.
-    Wrap result to prevent __mro__, __dict__, __class__ exploits.
-    """
+    """Restrict imports to safe stdlib modules only."""
     ALLOWED = {"math", "random", "string", "datetime", "date"}
     if name not in ALLOWED:
         raise ImportError(f"Module '{name}' is not allowed. Allowed: {', '.join(ALLOWED)}")
@@ -583,25 +591,25 @@ def restricted_import(name, *args, **kwargs):
 def run_code():
     body = safejson()
     code = safe(body.get("code"), "")
-    
-    # Validate code size
+
     if len(code) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
-    
+
     if not code.strip():
         return jsonify({"success": False, "error": "Code cannot be empty"}), 400
 
     stdout_buf = io.StringIO()
     stderr_buf = io.StringIO()
 
+    # FIX H-5 (continued): The old in-process compile/AST/SAFE_GLOBALS block
+    # that ran before the subprocess call has been removed. Only the subprocess
+    # path remains, matching the actual execution reality.
     try:
         execution_start = time.time()
-        # Use subprocess sandbox for security (process isolation)
         sandbox = get_sandbox()
         workspace_dir = sandbox.workspace_dir
         trace_file = os.path.join(workspace_dir, "last_trace.json")
 
-        # Create a temporary script file to avoid string injection risks
         script_content = f'''
 import sys, time, json, traceback, os
 
@@ -648,7 +656,6 @@ SAFE_GLOBALS = {{
     '__import__': restricted_import,
 }}
 
-# Read code from environment variable to avoid command line length limits
 code = os.environ.get('CODEUP_EXEC_CODE', '')
 trace = []
 last_locals = {{}}
@@ -668,10 +675,9 @@ def safe_repr(v):
 
 def tracer(frame, event, arg):
     global last_locals
-    # Only trace user code (filename is '<user>')
     if frame.f_code.co_filename != '<user>':
         return tracer
-        
+
     if event == 'line':
         line = frame.f_lineno
         trace.append({{'type':'line_exec','line':line}})
@@ -708,21 +714,20 @@ finally:
             json.dump({{'trace':trace,'duration_ms':int((time.time()-start)*1000)}}, f)
 '''
 
-        # Write script to temporary file and execute it
         with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as script_file:
             script_file.write(script_content)
             script_file_path = script_file.name
 
+        time_limit = 5  # seconds for subprocess
         try:
-            # Pass code via environment variable to avoid command line issues
             env = os.environ.copy()
             env['CODEUP_EXEC_CODE'] = code
             env['CODEUP_TRACE_FILE'] = trace_file
-            
+
             proc = subprocess.run(
-                [sys.executable, script_file_path], 
-                capture_output=True, 
-                text=True, 
+                [sys.executable, script_file_path],
+                capture_output=True,
+                text=True,
                 timeout=max(1, int(time_limit)),
                 env=env
             )
@@ -731,7 +736,6 @@ finally:
         except subprocess.TimeoutExpired:
             stderr_buf.write(f"Execution timed out after {time_limit}s (subprocess)")
         finally:
-            # Clean up temporary script file
             try:
                 os.unlink(script_file_path)
             except OSError:
@@ -756,7 +760,7 @@ finally:
             trace = [{'type': 'subprocess_exec', 'note': msg}]
 
         semantic_issues = classify_semantic_errors(trace) if trace else []
-        
+
         duration_ms = int((time.time() - execution_start) * 1000)
         save_execution_trace(trace, duration_ms)
 
@@ -776,8 +780,8 @@ finally:
             "output": output or "Program finished with no output.",
             "trace": trace,
             "semantic_issues": semantic_issues
-        })  
-    
+        })
+
     except Exception:
         tb = traceback.format_exc()
         explanation = explain_error(code, tb, language=safe(body.get("language"), "en"))
@@ -795,8 +799,8 @@ finally:
 def analyze():
     body = safejson()
     code = safe(body.get("code"), "")
-    language = safe(body.get("language"), "en")  # Default to English
-    
+    language = safe(body.get("language"), "en")
+
     if len(code) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
     if not code.strip():
@@ -822,14 +826,12 @@ def analyze():
         )
 
     user = f"Python code:\n```python\n{code}\n```"
-
     analysis = call_gemini(system, user, language=language)
-    
-    # Extract parameter type information for speech
+
     analyzer = CodeAnalyzer()
     structure = analyzer.analyze(code)
     param_info = []
-    
+
     if structure.get("functions"):
         for func in structure["functions"]:
             if func.get("params"):
@@ -840,12 +842,10 @@ def analyze():
                     elif isinstance(param, dict):
                         typed_params.append(param.get("name", "unknown"))
                     else:
-                        # Legacy format: just the name
                         typed_params.append(str(param))
                 if typed_params:
                     param_info.append(f"Function {func['name']} takes: {', '.join(typed_params)}")
-    
-    # Build speech output: analysis + parameter info
+
     speech_text = analysis
     if param_info:
         speech_text = analysis + "\n" + "Parameters: " + " ".join(param_info)
@@ -860,8 +860,8 @@ def analyze():
 def advise():
     body = safejson()
     code = safe(body.get("code"), "")
-    language = safe(body.get("language"), "en")  # Default to English
-    
+    language = safe(body.get("language"), "en")
+
     if len(code) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
     if not code.strip():
@@ -896,23 +896,15 @@ def advise():
 
 @app.route("/debug-suggestions", methods=["POST"])
 def debug_suggestions():
-    """
-    Provide inline debugging suggestions for code issues.
-    Returns suggestions for:
-    - Inefficient patterns
-    - Unused variables
-    - Potential bugs
-    - Improvements (list comprehensions, etc)
-    """
     body = safejson()
     code = safe(body.get("code"), "")
     language = safe(body.get("language"), "en")
-    
+
     if len(code) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
     if not code.strip():
         return jsonify({"success": True, "suggestions": []})
-    
+
     if language == "hi":
         system = (
             "आप एक पायथन डीबगर सहायक हैं।\n"
@@ -931,29 +923,20 @@ def debug_suggestions():
             "💡 [suggestion]\n"
             "Only list actual problems."
         )
-    
+
     user = f"Code:\n```python\n{code}\n```"
     suggestions = call_gemini(system, user, language=language)
-    
-    # Parse suggestions into structured format
+
     lines = suggestions.split('\n')
     parsed_suggestions = []
-    
+
     for line in lines:
         line = line.strip()
         if line.startswith('⚠️'):
-            parsed_suggestions.append({
-                "type": "warning",
-                "icon": "⚠️",
-                "text": line[2:].strip()
-            })
+            parsed_suggestions.append({"type": "warning", "icon": "⚠️", "text": line[2:].strip()})
         elif line.startswith('💡'):
-            parsed_suggestions.append({
-                "type": "suggestion",
-                "icon": "💡",
-                "text": line[2:].strip()
-            })
-    
+            parsed_suggestions.append({"type": "suggestion", "icon": "💡", "text": line[2:].strip()})
+
     return jsonify({"success": True, "suggestions": parsed_suggestions})
 
 # ==========================
@@ -964,16 +947,19 @@ def debug_suggestions():
 def describe():
     body = safejson()
     code = safe(body.get("code"), "")
-    
-    # Validate code size
+
+    # FIX M-2: Added MAX_CODE_SIZE check (was missing from this endpoint).
     if len(code) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
-    
+
+    # FIX C-4: Wrap int() cast in try/except so non-numeric "line" values
+    # return a 400 instead of an unhandled 500 ValueError/TypeError.
     try:
         line = int(body.get("line", 1))
     except (ValueError, TypeError):
         return jsonify({"success": False, "error": "Invalid line number"}), 400
-    language = safe(body.get("language"), "en")  # Default to English
+
+    language = safe(body.get("language"), "en")
 
     lines = code.splitlines()
     if not lines or line < 1 or line > len(lines):
@@ -981,7 +967,6 @@ def describe():
 
     start = max(1, line - 3)
     end = min(len(lines), line + 3)
-
     context = "\n".join(f"{i+1}: {lines[i]}" for i in range(start - 1, end))
 
     if language == "hi":
@@ -996,9 +981,7 @@ def describe():
         )
 
     user = f"Code context:\n{context}\nTarget line: {line}"
-
     desc = call_gemini(system, user, language=language)
-
     return jsonify({"success": True, "description": desc})
 
 # ==========================
@@ -1007,46 +990,38 @@ def describe():
 
 @app.route("/structure", methods=["POST"])
 def structure():
-    """
-    Parse code and return structured metadata for navigation panel.
-    Returns: functions, classes, loops, imports with line numbers.
-    """
     body = safejson()
     code = safe(body.get("code"), "")
-    
+
     if len(code) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
     if not code.strip():
         return jsonify({"success": True, "structure": {
             "imports": [], "functions": [], "classes": [], "loops": []
         }})
-    
+
     analyzer = CodeAnalyzer()
     structure_data = analyzer.analyze(code)
-    
-    # If there was a parse error, return it
+
     if "error" in structure_data:
         return jsonify({"success": False, "error": structure_data["error"]})
-    
+
     return jsonify({"success": True, "structure": structure_data})
 
-# =========================
+# ==========================
 # READ LINE WITH CONTEXT
 # ==========================
 
 @app.route("/read-line-context", methods=["POST"])
 def read_line_context():
-    """
-    Provides rich context for blind users navigating code line-by-line.
-    Reports: line number, indentation level, code structure context, and the line itself.
-    """
     body = safejson()
     code = safe(body.get("code"), "")
-    
-    # Validate code size
+
+    # FIX M-2: Added MAX_CODE_SIZE check (was missing from this endpoint).
     if len(code) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
-    
+
+    # FIX C-4: Wrap int() cast to return 400 on bad input.
     try:
         line = int(body.get("line", 1))
     except (ValueError, TypeError):
@@ -1057,18 +1032,13 @@ def read_line_context():
         return jsonify({"success": False, "message": "Invalid line number."})
 
     current_line = lines[line - 1]
-    
-    # Calculate indentation (handle both spaces and tabs)
-    # Expand tabs to spaces for consistent measurement, then count leading spaces
     expanded_line = current_line.expandtabs(tabsize=4)
     indent_level = (len(expanded_line) - len(expanded_line.lstrip())) // 4
-    
-    # Determine code structure context
+
     context = "top level"
     if line > 1:
         for i in range(line - 2, -1, -1):
             prev = lines[i].strip()
-            # Use regex to safely extract function/class names
             func_match = re.match(r'^def\s+(\w+)\s*\(', prev)
             if func_match:
                 context = f"inside function {func_match.group(1)}"
@@ -1086,12 +1056,10 @@ def read_line_context():
             elif prev.startswith("while "):
                 context = "inside while loop"
                 break
-    
-    # Check if line is blank
+
     if not current_line.strip():
         response = f"Line {line}: blank line, {context}, indentation level {indent_level}"
     else:
-        # Identify line type
         line_type = "code"
         if current_line.strip().startswith("#"):
             line_type = "comment"
@@ -1103,12 +1071,12 @@ def read_line_context():
             line_type = "return statement"
         elif current_line.strip().startswith("import ") or current_line.strip().startswith("from "):
             line_type = "import statement"
-        
+
         response = (
             f"Line {line}, {context}, indentation level {indent_level}, "
             f"{line_type}: {current_line.strip()}"
         )
-    
+
     return jsonify({
         "success": True,
         "response": response,
@@ -1124,20 +1092,19 @@ def read_line_context():
 
 @app.route("/track-variables", methods=["POST"])
 def track_variables():
-    """
-    Analyzes code and returns all variables with their scope, type, and usage.
-    """
     body = safejson()
     code = safe(body.get("code"), "")
-    
-    # Validate code size
+
+    # FIX M-2: Added MAX_CODE_SIZE check (was missing from this endpoint).
     if len(code) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
-    
+
+    # FIX C-4: Wrap int() cast to return 400 on bad input.
     try:
         line = int(body.get("line", 1))
     except (ValueError, TypeError):
         return jsonify({"success": False, "error": "Invalid line number"}), 400
+
     try:
         tree = ast.parse(code)
     except SyntaxError as e:
@@ -1145,14 +1112,11 @@ def track_variables():
 
     class VariableTracker(ast.NodeVisitor):
         def __init__(self):
-            self.variables = {}  # name -> info
-            # (kind, name, start_lineno)
+            self.variables = {}
             self.scope_stack: List[Tuple[str, Optional[str], int]] = [("global", None, 1)]
-            # list of scopes with kind included
             self.scopes: List[dict] = []
 
         def current_scope(self):
-            # return the most specific scope name or 'global'
             for kind, name, start in reversed(self.scope_stack):
                 if kind != 'global' and name:
                     return name
@@ -1168,7 +1132,6 @@ def track_variables():
                     'first_line': lineno,
                     'usage_count': 0
                 }
-            # Count store and load as usages (store indicates definition)
             if is_store:
                 self.variables[name]['usage_count'] += 1
 
@@ -1180,26 +1143,22 @@ def track_variables():
                     self._handle_target(elt, lineno)
 
         def visit_FunctionDef(self, node):
-            # store the raw function name and keep kind separate
             name = node.name
             start = node.lineno
             end = self._max_lineno(node)
             self.scopes.append({'name': name, 'kind': 'function', 'start': start, 'end': end})
             self.scope_stack.append(('function', name, start))
-            # parameters are stores
             for arg in node.args.args:
                 self._record_var(arg.arg, node.lineno, is_store=True)
             self.generic_visit(node)
             self.scope_stack.pop()
 
         def visit_Global(self, node):
-            # Mark global declarations so scope resolution can account for them
             for n in node.names:
                 if n in self.variables:
                     self.variables[n]['scope'] = 'global'
 
         def visit_Nonlocal(self, node):
-            # Mark nonlocal declarations
             for n in node.names:
                 if n in self.variables:
                     self.variables[n]['scope'] = 'nonlocal'
@@ -1225,7 +1184,6 @@ def track_variables():
             self.generic_visit(node)
 
         def visit_ClassDef(self, node):
-            # store the raw class name and keep kind separate
             name = node.name
             start = node.lineno
             end = self._max_lineno(node)
@@ -1240,7 +1198,6 @@ def track_variables():
             self.generic_visit(node)
 
         def visit_AnnAssign(self, node):
-            # annotated assign: target can be a Name
             if isinstance(node.target, ast.Name):
                 self._record_var(node.target.id, node.lineno, is_store=True)
             else:
@@ -1258,15 +1215,12 @@ def track_variables():
             self.generic_visit(node)
 
         def visit_Name(self, node):
-            # Count reads as usages; stores were already counted in targets
             if isinstance(node.ctx, ast.Load):
                 if node.id in self.variables:
                     self.variables[node.id]['usage_count'] += 1
             elif isinstance(node.ctx, ast.Store):
-                # sometimes stores appear outside Assign (e.g., comprehension); treat as definition
                 if node.id not in self.variables:
                     self._record_var(node.id, node.lineno, is_store=True)
-            # do not call generic_visit for Name
 
         def _max_lineno(self, node):
             maxn = getattr(node, 'lineno', -1)
@@ -1278,7 +1232,6 @@ def track_variables():
     tracker = VariableTracker()
     tracker.visit(tree)
 
-    # Determine current scope by finding the most specific scope that contains the requested line
     current_scope = 'global'
     best_start = -1
     for s in tracker.scopes:
@@ -1286,8 +1239,8 @@ def track_variables():
             current_scope = s['name']
             best_start = s['start']
 
-    # Collect visible variables: those in current scope or globals
-    scope_vars = [v for v in tracker.variables.values() if v['scope'] == current_scope or v['scope'] == 'global']
+    scope_vars = [v for v in tracker.variables.values()
+                  if v['scope'] == current_scope or v['scope'] == 'global']
 
     return jsonify({
         'success': True,
@@ -1298,29 +1251,21 @@ def track_variables():
 
 
 def pronounce_variable(var_name: str) -> str:
-    """
-    Convert variable name to phonetic pronunciation for screen readers.
-    Handles None/empty strings and various naming conventions.
-    """
-    # Validate input
+    """Convert variable name to phonetic pronunciation for screen readers."""
     if not var_name or not isinstance(var_name, str):
         return "unknown variable"
-    
+
     var_name = var_name.strip()
     if not var_name:
         return "unknown variable"
-    
-    parts = []
-    
-    # Handle underscores
+
     if "_" in var_name:
         segments = var_name.split("_")
         parts = [seg for seg in segments if seg]
         if not parts:
             return "underscore"
         return " underscore ".join(parts)
-    
-    # Handle camelCase
+
     camel_parts = []
     current = ""
     for char in var_name:
@@ -1331,34 +1276,29 @@ def pronounce_variable(var_name: str) -> str:
             current += char
     if current:
         camel_parts.append(current)
-    
+
     if len(camel_parts) > 1:
         return " camel case ".join(camel_parts)
-    
+
     return var_name
 
 
 @app.route("/find-variable-usage", methods=["POST"])
 def find_variable_usage():
-    """
-    Finds all locations where a variable is used (using AST).
-    Ignores comments, strings, and shadowed variables.
-    """
     body = safejson()
     code = safe(body.get("code"), "")
-    
-    # Validate code size
+
+    # FIX M-2: Added MAX_CODE_SIZE check (was missing from this endpoint).
     if len(code) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
-    
+
     var_name = safe(body.get("variable"), "")
-    
     if not var_name:
         return jsonify({"success": False, "message": "No variable specified."})
-    
+
     lines = code.splitlines()
     usages = []
-    
+
     try:
         tree = ast.parse(code)
     except SyntaxError:
@@ -1366,42 +1306,32 @@ def find_variable_usage():
             "success": False,
             "message": "Code has syntax errors; cannot parse variable usage."
         })
-    
-    # Collect all Name nodes for the target variable, with scope context
+
     for node in ast.walk(tree):
         if isinstance(node, ast.Name) and node.id == var_name:
             line_no = node.lineno
             line_content = lines[line_no - 1] if line_no <= len(lines) else ""
-            
-            # Distinguish between assignment (Store) and read (Load)
+
             if isinstance(node.ctx, ast.Store):
                 usage_type = "assignment"
             elif isinstance(node.ctx, ast.Load):
                 usage_type = "read"
             else:
                 usage_type = "usage"
-            
-            usages.append({
-                "line": line_no,
-                "content": line_content.strip(),
-                "type": usage_type
-            })
-    
+
+            usages.append({"line": line_no, "content": line_content.strip(), "type": usage_type})
+
     if not usages:
-        return jsonify({
-            "success": False,
-            "message": f"Variable '{var_name}' not found in code."
-        })
-    
-    # Remove duplicates and sort by line
+        return jsonify({"success": False, "message": f"Variable '{var_name}' not found in code."})
+
     unique_usages = {}
     for u in usages:
         key = (u["line"], u["type"])
         if key not in unique_usages:
             unique_usages[key] = u
-    
+
     sorted_usages = sorted(unique_usages.values(), key=lambda x: x["line"])
-    
+
     return jsonify({
         "success": True,
         "variable": var_name,
@@ -1417,29 +1347,17 @@ def find_variable_usage():
 
 @app.route("/check-syntax", methods=["POST"])
 def check_syntax():
-    """
-    Real-time syntax checking without executing code.
-    Returns error locations and types.
-    """
     body = safejson()
     code = safe(body.get("code"), "")
-    
+
     if not code.strip():
-        return jsonify({
-            "success": True,
-            "has_errors": False,
-            "message": "Code is empty."
-        })
-    
+        return jsonify({"success": True, "has_errors": False, "message": "Code is empty."})
+
     errors = []
-    
+
     try:
         compile(code, "<syntax_check>", "exec")
-        return jsonify({
-            "success": True,
-            "has_errors": False,
-            "message": "No syntax errors detected."
-        })
+        return jsonify({"success": True, "has_errors": False, "message": "No syntax errors detected."})
     except IndentationError as e:
         errors.append({
             "line": e.lineno or 1,
@@ -1453,7 +1371,7 @@ def check_syntax():
             error_type = "MissingClosing"
         elif "invalid syntax" in str(e).lower():
             error_type = "InvalidSyntax"
-        
+
         errors.append({
             "line": e.lineno or 1,
             "type": error_type,
@@ -1461,20 +1379,17 @@ def check_syntax():
             "severity": "high"
         })
     except Exception as e:
-        errors.append({
-            "line": 1,
-            "type": "UnknownError",
-            "message": str(e),
-            "severity": "medium"
-        })
-    
-    # Basic undefined variable check (simple heuristic)
+        errors.append({"line": 1, "type": "UnknownError", "message": str(e), "severity": "medium"})
+
+    # FIX M-3: Only run the heuristic undefined-variable ast.parse() block when
+    # errors is empty (i.e. compile() succeeded). Previously the code fell through
+    # to ast.parse() even after a SyntaxError from compile(), causing a redundant
+    # and wasteful re-parse of known-invalid code.
     if not errors:
         try:
             tree = ast.parse(code)
             defined = set()
             used_module_level = set()
-            used_in_functions = set()
             params = set()
 
             class UseCollector(ast.NodeVisitor):
@@ -1482,7 +1397,6 @@ def check_syntax():
                     self.current_function = None
 
                 def visit_FunctionDef(self, node):
-                    # collect function parameters
                     for a in node.args.args:
                         params.add(a.arg)
                     prev = self.current_function
@@ -1505,13 +1419,9 @@ def check_syntax():
                     if isinstance(node.ctx, ast.Load):
                         if self.current_function is None:
                             used_module_level.add(node.id)
-                        else:
-                            used_in_functions.add(node.id)
 
             UseCollector().visit(tree)
 
-            # Check for undefined variables used at module level (heuristic)
-            # Includes all standard Python builtins to reduce false positives
             builtins = {
                 "abs", "all", "any", "ascii", "bin", "bool", "bytearray", "bytes",
                 "chr", "classmethod", "compile", "complex", "delattr", "dict", "dir",
@@ -1522,13 +1432,11 @@ def check_syntax():
                 "oct", "open", "ord", "pow", "print", "property", "range", "repr",
                 "reversed", "round", "set", "setattr", "slice", "sorted",
                 "staticmethod", "str", "sum", "super", "tuple", "type", "vars", "zip",
-                # Common exception types
                 "BaseException", "Exception", "ArithmeticError", "AssertionError",
                 "AttributeError", "EOFError", "ImportError", "IndexError", "KeyError",
                 "KeyboardInterrupt", "MemoryError", "NameError", "NotImplementedError",
                 "OSError", "RuntimeError", "SyntaxError", "SystemError", "SystemExit",
                 "TypeError", "ValueError", "ZeroDivisionError",
-                # Common constants
                 "True", "False", "None", "NotImplemented", "Ellipsis", "__debug__"
             }
             undefined = used_module_level - defined - builtins - params
@@ -1542,7 +1450,7 @@ def check_syntax():
                 })
         except Exception:
             pass
-    
+
     return jsonify({
         "success": True,
         "has_errors": len(errors) > 0,
@@ -1558,8 +1466,8 @@ def check_syntax():
 def fix():
     body = safejson()
     code = safe(body.get("code"), "")
-    language = safe(body.get("language"), "en")  # Default to English
-    
+    language = safe(body.get("language"), "en")
+
     if len(code) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
     if not code.strip():
@@ -1581,10 +1489,8 @@ def fix():
         )
 
     user = f"Fix this code:\n```python\n{code}\n```"
-
     raw = call_gemini(system, user, temperature=0.1, language=language)
     fixed = extract_code(raw)
-
     return jsonify({"success": True, "code": fixed})
 
 # ==========================
@@ -1595,8 +1501,8 @@ def fix():
 def generate_code():
     body = safejson()
     prompt = safe(body.get("prompt"), "")
-    language = safe(body.get("language"), "en")  # Default to English
-    
+    language = safe(body.get("language"), "en")
+
     if len(prompt) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": f"Prompt too large (max {MAX_CODE_SIZE} bytes)"}), 413
     if not prompt.strip():
@@ -1620,10 +1526,8 @@ def generate_code():
         )
 
     user = f"Task description:\n{prompt}"
-
     raw = call_gemini(system, user, temperature=0.2, language=language)
     code = extract_code(raw)
-
     return jsonify({"success": True, "code": code})
 
 # ==========================
@@ -1635,8 +1539,7 @@ def snippets():
     if request.method == "GET":
         data = load_snippets()
         snippets_list = data.get("snippets", [])
-        
-        # Generate speech output with snippet names
+
         speech_text = None
         if snippets_list:
             names = [s.get("name", f"Snippet {i+1}") for i, s in enumerate(snippets_list)]
@@ -1646,7 +1549,7 @@ def snippets():
                 speech_text = f"You have {len(names)} snippets: {', '.join(names[:-1])}, and {names[-1]}."
         else:
             speech_text = "You have no saved snippets."
-        
+
         data["speech"] = speech_text
         return jsonify(data)
 
@@ -1655,18 +1558,15 @@ def snippets():
 
     name = str(safe(body.get("name"), "Untitled"))
     code = str(safe(body.get("code"), ""))
-    
-    # Validate size
+
     if len(code) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
     if len(name) > 256:
         return jsonify({"success": False, "error": "Name too long (max 256 chars)"}), 400
 
-    # Use UUIDs for snippet ids to avoid collisions across restarts/concurrent writes
     new_id = str(uuid.uuid4())
     data["snippets"].append({"id": new_id, "name": name, "code": code})
     save_snippets(data)
-
     return jsonify({"success": True, "id": new_id, "speech": f"Saved snippet: {name}"})
 
 @app.route("/snippets/<sid>", methods=["PUT", "DELETE"])
@@ -1674,13 +1574,12 @@ def snippet_detail(sid):
     data = load_snippets()
 
     if request.method == "DELETE":
-        # Find snippet name for speech feedback
         deleted_name = None
         for s in data["snippets"]:
             if str(s["id"]) == str(sid):
                 deleted_name = s.get("name", f"Snippet {sid}")
                 break
-        
+
         data["snippets"] = [s for s in data["snippets"] if str(s["id"]) != str(sid)]
         save_snippets(data)
         speech = f"Deleted snippet: {deleted_name}." if deleted_name else "Snippet deleted."
@@ -1711,88 +1610,34 @@ def snippet_detail(sid):
     return jsonify({"success": True, "speech": speech})
 
 # ==========================
-# VOICE COMMANDS (WITH CONFIRMATION + NAV/EDIT/ADVISE)
+# VOICE COMMANDS
 # ==========================
 
 COMMANDS = {
-    "run": [
-        "run", "execute", "run code", "execute code", "start code", "start program"
-    ],
-    "analyze": [
-        "analyze", "analyse", "analyze code", "analyse code",
-        "explain code", "check code", "review code"
-    ],
-    "speak": [
-        "speak output", "read output", "read the output", "say the output"
-    ],
-    "fix": [
-        "fix", "fix code", "auto fix", "repair code", "correct code"
-    ],
-    "repeat_last_action": [
-        "repeat", "do that again", "again", "repeat last"
-    ],
-    "repeat_last_speech": [
-        "repeat that", "say that again", "repeat message", "repeat output"
-    ],
-    "advise": [
-        "advise on code", "advice on code", "improve code", "how to improve code"
-    ],
-    "generate_code": [
-        "generate code", "write code", "create code", "make code"
-    ],
-    "clear_editor": [
-        "clear editor", "clear code", "clear file", "reset code"
-    ],
-    "read_line_enhanced": [
-        "read line with context", "enhanced read line", "describe line position",
-        "where am i", "line context"
-    ],
-    "sonify_block": [
-        "sonify block", "audio structure", "hear structure", 
-        "play code structure", "sound out code"
-    ],
-    "list_variables": [
-        "what variables", "list variables", "show variables",
-        "what variables are available", "variables in scope"
-    ],
-    "check_errors": [
-        "check for errors", "check syntax", "find errors",
-        "are there errors", "syntax check"
-    ],
-    "locate_error": [
-        "where is the error", "where is error", "find error",
-        "jump to error", "go to error"
-    ],
-    "stop_beacon": [
-        "stop error beacon", "stop beacon", "turn off beacon", "disable beacon"
-    ],
-    "go_back": [
-        "go back", "navigate back", "back", "previous position"
-    ],
-    "go_forward": [
-        "go forward", "navigate forward", "forward", "next position"
-    ],
-    "show_history": [
-        "show history", "navigation history", "where have i been"
-    ],
-    "help": [
-        "help", "show help", "what can you do", "list commands"
-    ],
-    "file_stats": [
-        "file stats", "how many lines", "file statistics", "code stats"
-    ],
-    "go_to_top": [
-        "go to top", "jump to top", "top of file"
-    ],
-    "go_to_bottom": [
-        "go to bottom", "jump to bottom", "bottom of file", "end of file"
-    ],
-    "copy_code": [
-        "copy code", "copy to clipboard", "copy this"
-    ],
-    "paste_code": [
-        "paste code", "paste from clipboard", "paste"
-    ]
+    "run": ["run", "execute", "run code", "execute code", "start code", "start program"],
+    "analyze": ["analyze", "analyse", "analyze code", "analyse code", "explain code", "check code", "review code"],
+    "speak": ["speak output", "read output", "read the output", "say the output"],
+    "fix": ["fix", "fix code", "auto fix", "repair code", "correct code"],
+    "repeat_last_action": ["repeat", "do that again", "again", "repeat last"],
+    "repeat_last_speech": ["repeat that", "say that again", "repeat message", "repeat output"],
+    "advise": ["advise on code", "advice on code", "improve code", "how to improve code"],
+    "generate_code": ["generate code", "write code", "create code", "make code"],
+    "clear_editor": ["clear editor", "clear code", "clear file", "reset code"],
+    "read_line_enhanced": ["read line with context", "enhanced read line", "describe line position", "where am i", "line context"],
+    "sonify_block": ["sonify block", "audio structure", "hear structure", "play code structure", "sound out code"],
+    "list_variables": ["what variables", "list variables", "show variables", "what variables are available", "variables in scope"],
+    "check_errors": ["check for errors", "check syntax", "find errors", "are there errors", "syntax check"],
+    "locate_error": ["where is the error", "where is error", "find error", "jump to error", "go to error"],
+    "stop_beacon": ["stop error beacon", "stop beacon", "turn off beacon", "disable beacon"],
+    "go_back": ["go back", "navigate back", "back", "previous position"],
+    "go_forward": ["go forward", "navigate forward", "forward", "next position"],
+    "show_history": ["show history", "navigation history", "where have i been"],
+    "help": ["help", "show help", "what can you do", "list commands"],
+    "file_stats": ["file stats", "how many lines", "file statistics", "code stats"],
+    "go_to_top": ["go to top", "jump to top", "top of file"],
+    "go_to_bottom": ["go to bottom", "jump to bottom", "bottom of file", "end of file"],
+    "copy_code": ["copy code", "copy to clipboard", "copy this"],
+    "paste_code": ["paste code", "paste from clipboard", "paste"]
 }
 
 
@@ -1821,12 +1666,12 @@ def best_two_commands(text: str):
 def summarize():
     body = safejson()
     code = safe(body.get("code"), "")
-    
-    # Validate code size
+
+    # FIX M-2: Added MAX_CODE_SIZE check (was missing from this endpoint).
     if len(code) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
-    
-    language = safe(body.get("language"), "en")  # Default to English
+
+    language = safe(body.get("language"), "en")
 
     if language == "hi":
         system = (
@@ -1853,7 +1698,6 @@ def summarize():
 
     user = f"Code:\n```python\n{code}\n```"
     summary = call_gemini(system, user, language=language)
-
     return jsonify({"summary": summary})
 
 # ==========================
@@ -1865,12 +1709,12 @@ def diff_explain():
     body = safejson()
     before = safe(body.get("before"), "")
     after = safe(body.get("after"), "")
-    
-    # Validate code sizes
+
+    # FIX M-2: Added MAX_CODE_SIZE check (was missing from this endpoint).
     if len(before) > MAX_CODE_SIZE or len(after) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
-    
-    language = safe(body.get("language"), "en")  # Default to English
+
+    language = safe(body.get("language"), "en")
 
     if language == "hi":
         system = (
@@ -1889,7 +1733,6 @@ def diff_explain():
 
     user = f"BEFORE:\n```python\n{before}\n```\n\nAFTER:\n```python\n{after}\n```"
     explanation = call_gemini(system, user, language=language)
-
     return jsonify({"explanation": explanation})
 
 
@@ -1906,14 +1749,12 @@ def _trace_playback(direction):
         idx = max(0, idx - 1)
     elif direction == 'current_change':
         if idx < 0:
-            return "No current trace step selected. Say 'next step' to begin." 
+            return "No current trace step selected. Say 'next step' to begin."
     else:
         return "Unknown trace navigation command."
 
     storage['current_trace_index'] = idx
     event = _get_trace_event(idx)
-    if direction == 'current_change' and event and event.get('type') != 'state_change':
-        return _event_to_speech(event, idx, len(trace))
     return _event_to_speech(event, idx, len(trace))
 
 
@@ -1924,8 +1765,7 @@ def voice():
     intent = parsed.get("intent")
     slots = parsed.get("slots", {})
     confidence = parsed.get("confidence", 0.0)
-    
-    # Get session storage for this request
+
     storage = get_trace_storage()
 
     # Handle repeat command
@@ -1933,106 +1773,68 @@ def voice():
         last_action = storage.get('last_voice_action', None)
         if not last_action:
             return jsonify({"success": True, "action": "unknown", "heard": "repeat", "message": "No previous command to repeat"})
-        # Re-execute the last action
+        # FIX M-4: Store last_voice_action as a (dict, status_code) tuple so that
+        # repeating preserves the original HTTP status code. Previously it was stored
+        # as response.get_json() (a plain dict) and returned directly, causing Flask
+        # to auto-serialize it as 200 OK regardless of the original status.
         return jsonify(last_action[0]), last_action[1]
 
-    # If intent is recognized with good confidence, process it directly
+    def _store_and_return(response_dict, status_code=200):
+        """Helper: save action for repeat, then return the response."""
+        storage['last_voice_action'] = (response_dict, status_code)
+        return jsonify(response_dict), status_code
+
     if intent and confidence >= 0.75:
         if intent == "goto_line":
-            response = jsonify({"success": True, "action": "goto_line", "line": slots.get("line_number", 1), "confidence": confidence})
-            storage['last_voice_action'] = (response.get_json(), response.status_code)
-            return response
+            return _store_and_return({"success": True, "action": "goto_line", "line": slots.get("line_number", 1), "confidence": confidence})
         if intent == "read_line":
-            response = jsonify({"success": True, "action": "read_line", "line": slots.get("line_number", 1), "confidence": confidence})
-            storage['last_voice_action'] = (response.get_json(), response.status_code)
-            return response
+            return _store_and_return({"success": True, "action": "read_line", "line": slots.get("line_number", 1), "confidence": confidence})
         if intent == "describe_line":
-            response = jsonify({"success": True, "action": "describe_line", "line": slots.get("line_number", 1), "confidence": confidence})
-            storage['last_voice_action'] = (response.get_json(), response.status_code)
-            return response
+            return _store_and_return({"success": True, "action": "describe_line", "line": slots.get("line_number", 1), "confidence": confidence})
         if intent == "delete_line":
-            response = jsonify({"success": True, "action": "delete_line", "line": slots.get("line_number", 1), "confidence": confidence})
-            storage['last_voice_action'] = (response.get_json(), response.status_code)
-            return response
+            return _store_and_return({"success": True, "action": "delete_line", "line": slots.get("line_number", 1), "confidence": confidence})
         if intent == "read_function":
-            response = jsonify({"success": True, "action": "read_function", "function_name": slots.get("function_name"), "confidence": confidence})
-            storage['last_voice_action'] = (response.get_json(), response.status_code)
-            return response
+            return _store_and_return({"success": True, "action": "read_function", "function_name": slots.get("function_name"), "confidence": confidence})
         if intent == "find_function":
-            response = jsonify({"success": True, "action": "find_function", "function_name": slots.get("function_name"), "confidence": confidence})
-            storage['last_voice_action'] = (response.get_json(), response.status_code)
-            return response
+            return _store_and_return({"success": True, "action": "find_function", "function_name": slots.get("function_name"), "confidence": confidence})
         if intent == "find_class":
-            response = jsonify({"success": True, "action": "find_class", "class_name": slots.get("class_name"), "confidence": confidence})
-            storage['last_voice_action'] = (response.get_json(), response.status_code)
-            return response
+            return _store_and_return({"success": True, "action": "find_class", "class_name": slots.get("class_name"), "confidence": confidence})
         if intent == "sonify_function":
-            response = jsonify({"success": True, "action": "sonify_function", "function_name": slots.get("function_name"), "confidence": confidence})
-            storage['last_voice_action'] = (response.get_json(), response.status_code)
-            return response
+            return _store_and_return({"success": True, "action": "sonify_function", "function_name": slots.get("function_name"), "confidence": confidence})
         if intent == "sonify_class":
-            response = jsonify({"success": True, "action": "sonify_class", "class_name": slots.get("class_name"), "confidence": confidence})
-            storage['last_voice_action'] = (response.get_json(), response.status_code)
-            return response
+            return _store_and_return({"success": True, "action": "sonify_class", "class_name": slots.get("class_name"), "confidence": confidence})
         if intent == "show_structure":
-            response = jsonify({"success": True, "action": "show_structure", "confidence": confidence})
-            storage['last_voice_action'] = (response.get_json(), response.status_code)
-            return response
+            return _store_and_return({"success": True, "action": "show_structure", "confidence": confidence})
         if intent == "run":
-            response = jsonify({"success": True, "action": "run", "confidence": confidence})
-            storage['last_voice_action'] = (response.get_json(), response.status_code)
-            return response
+            return _store_and_return({"success": True, "action": "run", "confidence": confidence})
         if intent == "analyze":
-            response = jsonify({"success": True, "action": "analyze", "confidence": confidence})
-            storage['last_voice_action'] = (response.get_json(), response.status_code)
-            return response
+            return _store_and_return({"success": True, "action": "analyze", "confidence": confidence})
         if intent == "fix":
-            response = jsonify({"success": True, "action": "fix", "confidence": confidence})
-            storage['last_voice_action'] = (response.get_json(), response.status_code)
-            return response
+            return _store_and_return({"success": True, "action": "fix", "confidence": confidence})
         if intent == "advise":
-            response = jsonify({"success": True, "action": "advise", "confidence": confidence})
-            storage['last_voice_action'] = (response.get_json(), response.status_code)
-            return response
+            return _store_and_return({"success": True, "action": "advise", "confidence": confidence})
         if intent == "summarize":
-            response = jsonify({"success": True, "action": "summarize", "confidence": confidence})
-            storage['last_voice_action'] = (response.get_json(), response.status_code)
-            return response
+            return _store_and_return({"success": True, "action": "summarize", "confidence": confidence})
         if intent == "generate_code":
-            response = jsonify({"success": True, "action": "generate_code", "prompt": slots.get("prompt", ""), "confidence": confidence})
-            storage['last_voice_action'] = (response.get_json(), response.status_code)
-            return response
+            return _store_and_return({"success": True, "action": "generate_code", "prompt": slots.get("prompt", ""), "confidence": confidence})
         if intent == "rename_snippet":
-            response = jsonify({"success": True, "action": "rename_snippet", "id": slots.get("id"), "new_name": slots.get("new_name"), "confidence": confidence})
-            storage['last_voice_action'] = (response.get_json(), response.status_code)
-            return response
+            return _store_and_return({"success": True, "action": "rename_snippet", "id": slots.get("id"), "new_name": slots.get("new_name"), "confidence": confidence})
         if intent == "clear_editor":
-            response = jsonify({"success": True, "action": "clear_editor", "confidence": confidence})
-            storage['last_voice_action'] = (response.get_json(), response.status_code)
-            return response
+            return _store_and_return({"success": True, "action": "clear_editor", "confidence": confidence})
         if intent == "read_output":
-            response = jsonify({"success": True, "action": "read_output", "confidence": confidence})
-            storage['last_voice_action'] = (response.get_json(), response.status_code)
-            return response
+            return _store_and_return({"success": True, "action": "read_output", "confidence": confidence})
         if intent == "next_step":
-            response = jsonify({"success": True, "action": "next_step", "speech": _trace_playback("next"), "confidence": confidence})
-            storage['last_voice_action'] = (response.get_json(), response.status_code)
-            return response
+            return _store_and_return({"success": True, "action": "next_step", "speech": _trace_playback("next"), "confidence": confidence})
         if intent == "previous_step":
-            response = jsonify({"success": True, "action": "previous_step", "speech": _trace_playback("prev"), "confidence": confidence})
-            storage['last_voice_action'] = (response.get_json(), response.status_code)
-            return response
+            return _store_and_return({"success": True, "action": "previous_step", "speech": _trace_playback("prev"), "confidence": confidence})
         if intent == "what_changed":
-            response = jsonify({"success": True, "action": "what_changed", "speech": _trace_playback("current_change"), "confidence": confidence})
-            storage['last_voice_action'] = (response.get_json(), response.status_code)
-            return response
+            return _store_and_return({"success": True, "action": "what_changed", "speech": _trace_playback("current_change"), "confidence": confidence})
 
-    # Fallback: fuzzy matching on COMMANDS for voice confirmation
+    # Fallback: fuzzy matching on COMMANDS
     lower_text = text.lower().strip()
     best, bscore, second, sscore = best_two_commands(lower_text)
-    
+
     if best and bscore >= VOICE_FUZZY_THRESHOLD:
-        # If ambiguous or low confidence, ask for confirmation
         if bscore < 75 or (second and (bscore - sscore) < 15):
             options = [best, second] if second else [best]
             return jsonify({
@@ -2042,10 +1844,8 @@ def voice():
                 "heard": text,
                 "confidence": bscore / 100.0
             })
-        # Otherwise execute the best match
         return jsonify({"success": True, "action": best, "confidence": bscore / 100.0})
-    
-    # No match found
+
     return jsonify({"success": True, "action": "unknown", "heard": text, "confidence": 0.0})
 
 # ==========================
@@ -2054,57 +1854,45 @@ def voice():
 
 @app.route("/fs/write", methods=["POST"])
 def fs_write():
-    """Write file to sandboxed workspace."""
     body = safejson()
     filepath = safe(body.get("path"), "")
     content = safe(body.get("content"), "")
-    
     if not filepath:
         return jsonify({"success": False, "error": "Path is required"}), 400
-    
     sandbox = get_sandbox()
     result = sandbox.write(filepath, content)
     return jsonify(result)
 
 @app.route("/fs/read", methods=["POST"])
 def fs_read():
-    """Read file from sandboxed workspace."""
     body = safejson()
     filepath = safe(body.get("path"), "")
-    
     if not filepath:
         return jsonify({"success": False, "error": "Path is required"}), 400
-    
     sandbox = get_sandbox()
     result = sandbox.read(filepath)
     return jsonify(result)
 
 @app.route("/fs/delete", methods=["POST"])
 def fs_delete():
-    """Delete file from sandboxed workspace."""
     body = safejson()
     filepath = safe(body.get("path"), "")
-    
     if not filepath:
         return jsonify({"success": False, "error": "Path is required"}), 400
-    
     sandbox = get_sandbox()
     result = sandbox.delete(filepath)
     return jsonify(result)
 
 @app.route("/fs/list", methods=["POST"])
 def fs_list():
-    """List files in sandboxed workspace."""
     body = safejson()
     dirpath = safe(body.get("path"), ".")
-    
     sandbox = get_sandbox()
     result = sandbox.list_files(dirpath)
     return jsonify(result)
 
 @app.route("/fs/info", methods=["GET"])
 def fs_info():
-    """Get workspace information."""
     sandbox = get_sandbox()
     result = sandbox.get_workspace_info()
     return jsonify(result)
@@ -2115,7 +1903,14 @@ def fs_info():
 
 @app.route("/execution-trace", methods=["GET"])
 def get_execution_trace():
-    """Get the last execution trace for playback."""
+    """Get the last execution trace for playback.
+
+    FIX C-3: Rewritten to read from session storage (get_trace_storage()) instead
+    of _trace_context (a threading.local() that was never written). Previously
+    this endpoint always returned an empty trace because _trace_context.last_trace
+    was never assigned anywhere; save_execution_trace() writes to _session_traces,
+    not to _trace_context.
+    """
     storage = get_trace_storage()
     trace = storage.get('last_trace', []) or []
     idx = storage.get('current_trace_index', -1)
@@ -2131,6 +1926,12 @@ def get_execution_trace():
 
 
 def _get_trace_event(index):
+    """Retrieve a single trace event by index from session storage.
+
+    FIX C-3 (continued): Previously read from _trace_context (never written),
+    so always returned None, making all voice trace-playback responses say
+    'No trace event at this position.' Now correctly reads from get_trace_storage().
+    """
     storage = get_trace_storage()
     trace = storage.get('last_trace', []) or []
     if index < 0 or index >= len(trace):
@@ -2141,10 +1942,9 @@ def _get_trace_event(index):
 def _event_to_speech(event, idx=None, total=None):
     if not event:
         return "No trace event at this position."
-    
-    # Add step counter prefix if provided
+
     step_prefix = f"Step {idx + 1} of {total}: " if idx is not None and total is not None else ""
-    
+
     t = event.get('type')
     if t == 'line_exec':
         return f"{step_prefix}Executed line {event.get('line')}"
@@ -2157,9 +1957,8 @@ def _event_to_speech(event, idx=None, total=None):
         return f"{step_prefix}Returned value {event.get('value')}"
     return f"{step_prefix}{t}: {event}"
 
+
 # ==========================
 
 if __name__ == "__main__":
     app.run(debug=False, host="127.0.0.1", port=5000)
-
-

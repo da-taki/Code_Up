@@ -1,16 +1,16 @@
 /* =========================================================
-   ROOT VARIABLES (STRUCTURE ONLY)
+   ROOT VARIABLES
 ========================================================= */
 
 :root {
-  --bg-main: #0d1117;
+  --bg-main:  #0d1117;
   --bg-panel: #0b1220;
-  --bg-soft: #161b22;
+  --bg-soft:  #161b22;
 
   --text-main: #e6edf3;
-  --text-dim: #9da7b3;
+  --text-dim:  #9da7b3;
 
-  --border-soft: rgba(148, 163, 184, 0.25);
+  --border-soft:   rgba(148, 163, 184, 0.25);
   --border-strong: rgba(148, 163, 184, 0.45);
 
   --radius-lg: 16px;
@@ -75,6 +75,7 @@ html, body {
   font-size: 1.9rem;
   font-weight: 800;
   letter-spacing: 0.08em;
+  margin: 0;
 }
 
 .cu-status-pill {
@@ -88,6 +89,14 @@ html, body {
 .cu-subtitle {
   font-size: 0.8rem;
   color: var(--text-dim);
+  margin-bottom: 4px;
+}
+
+.cu-subtitle-info {
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  opacity: 0.8;
+  margin-bottom: 8px;
 }
 
 .cu-hotkey {
@@ -95,6 +104,13 @@ html, body {
   border-radius: 4px;
   background: var(--bg-panel);
   border: 1px solid var(--border-soft);
+}
+
+.cu-theme-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
 }
 
 /* =========================================================
@@ -110,7 +126,7 @@ html, body {
 }
 
 /* =========================================================
-   PANELS (GENERIC)
+   PANELS
 ========================================================= */
 
 .cu-panel {
@@ -213,7 +229,7 @@ html, body {
 }
 
 /* =========================================================
-   BUTTONS (BASE ONLY)
+   BUTTONS
 ========================================================= */
 
 .cu-button,
@@ -226,6 +242,7 @@ html, body {
   cursor: pointer;
   background: var(--bg-soft);
   color: var(--text-main);
+  font-family: var(--font-main);
 }
 
 .cu-button-secondary {
@@ -268,37 +285,36 @@ html, body {
 .cu-output {
   width: 100%;
   min-height: 90px;
+  max-height: 400px;
+  overflow-y: auto;
   border-radius: var(--radius-md);
   background: #020617;
   border: 1px solid var(--border-soft);
-  padding: 10px;
-  font-size: 0.85rem;
+  padding: 12px;
+  font-family: var(--font-main);
+  font-size: 0.9rem;
+  line-height: 1.6;
   white-space: pre-wrap;
+  word-wrap: break-word;
 }
 
 /* =========================================================
-   RESPONSIVE
+   AI BUBBLE
 ========================================================= */
-
-@media (max-width: 900px) {
-  .cu-main {
-    flex-direction: column;
-  }
-
-  .cu-snippets {
-    width: 100%;
-  }
-}
 
 .ai-bubble {
   margin-top: 8px;
-  padding: 8px 12px;
-  font-size: 0.8rem;
-  border-radius: 10px;
-  background: rgba(248,113,113,0.15);
-  border: 1px solid rgba(248,113,113,0.4);
-  box-shadow: 0 0 12px rgba(248,113,113,0.4);
+  padding: 10px 14px;
+  font-size: 0.85rem;
+  border-radius: var(--radius-md);
+  background: rgba(248, 113, 113, 0.15);
+  border: 1px solid rgba(248, 113, 113, 0.4);
+  box-shadow: 0 0 12px rgba(248, 113, 113, 0.3);
 }
+
+/* =========================================================
+   VOICE CONSOLE
+========================================================= */
 
 .cu-voice-console {
   margin-top: 10px;
@@ -311,10 +327,11 @@ html, body {
   flex: 1;
   padding: 6px 8px;
   border-radius: 8px;
-  border: 1px solid rgba(148,163,184,0.45);
+  border: 1px solid var(--border-strong);
   background: #020617;
-  color: #e5e7eb;
+  color: var(--text-main);
   font-size: 0.8rem;
+  font-family: var(--font-main);
 }
 
 /* =========================================================
@@ -350,7 +367,7 @@ html, body {
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -362,8 +379,8 @@ html, body {
   transform: translateX(4px);
 }
 
-.structure-item:focus {
-  outline: 2px solid #4FC8FA;
+.structure-item:focus-visible {
+  outline: 3px solid #facc15;
   outline-offset: 2px;
 }
 
@@ -398,4 +415,23 @@ html, body {
   text-transform: uppercase;
   padding: 6px 10px 4px;
   opacity: 0.7;
+}
+
+/* =========================================================
+   RESPONSIVE
+========================================================= */
+
+@media (max-width: 900px) {
+  .cu-main {
+    flex-direction: column;
+  }
+
+  .cu-snippets {
+    width: 100%;
+  }
+
+  .cu-structure {
+    width: 100%;
+    max-height: 300px;
+  }
 }

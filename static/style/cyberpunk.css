@@ -6,6 +6,8 @@ body.theme-dyslexia .cu-title,
 body.theme-high-contrast .cu-title {
   animation: none;
   background: none;
+  -webkit-background-clip: unset;
+  background-clip: unset;
   color: var(--fg);
 }
 
@@ -16,11 +18,11 @@ body.theme-high-contrast .cu-button {
 }
 
 :root {
-  --neon-red: #f85149;
+  --neon-red:    #f85149;
   --neon-yellow: #facc15;
-  --neon-blue: #58a6ff;
-  --neon-pink: #ff3ec9;
-  --neon-green: #3fb950;
+  --neon-blue:   #58a6ff;
+  --neon-pink:   #ff3ec9;
+  --neon-green:  #3fb950;
   --neon-purple: #8b5cf6;
 }
 
@@ -39,7 +41,7 @@ body.theme-high-contrast .cu-button {
 }
 
 /* =========================================================
-   GLOBAL CYBER GRAIN
+   GLOBAL GRAIN OVERLAY
 ========================================================= */
 
 .cu-body::after {
@@ -55,7 +57,7 @@ body.theme-high-contrast .cu-button {
 }
 
 /* =========================================================
-   HEADER CYBER UPGRADE
+   HEADER
 ========================================================= */
 
 .cu-header {
@@ -97,7 +99,7 @@ body.theme-high-contrast .cu-button {
 }
 
 /* =========================================================
-   PANELS: CYBER DEPTH
+   PANELS
 ========================================================= */
 
 .cu-panel {
@@ -113,7 +115,7 @@ body.theme-high-contrast .cu-button {
 }
 
 /* =========================================================
-   SNIPPETS — NEON CARDS
+   SNIPPETS
 ========================================================= */
 
 .snippet-item {
@@ -145,17 +147,14 @@ body.theme-high-contrast .cu-button {
 ========================================================= */
 
 .cu-editor-region {
-  background: radial-gradient(circle at top left,
-    #020617,
-    #020617 65%
-  );
+  background: radial-gradient(circle at top left, #020617, #020617 65%);
   box-shadow:
     inset 0 0 50px rgba(15,23,42,1),
     0 0 25px rgba(248,113,113,0.25);
 }
 
 /* =========================================================
-   OUTPUT RUN GLOW
+   OUTPUT GLOW
 ========================================================= */
 
 #output.run-glow {
@@ -163,49 +162,38 @@ body.theme-high-contrast .cu-button {
 }
 
 @keyframes cyberGlow {
-  0% {
-    box-shadow: 0 0 0px rgba(0,255,0,0.3);
-  }
-  50% {
-    box-shadow: 0 0 18px rgba(0,255,0,0.7);
-  }
-  100% {
-    box-shadow: 0 0 6px rgba(0,255,0,0.35);
-  }
+  0%   { box-shadow: 0 0 0px rgba(0,255,0,0.3); }
+  50%  { box-shadow: 0 0 18px rgba(0,255,0,0.7); }
+  100% { box-shadow: 0 0 6px rgba(0,255,0,0.35); }
 }
 
 /* =========================================================
-   BUTTONS — HEX + GLITCH
+   BUTTONS
+
+   clip-path removed from default state — it created a
+   mismatch between the visible hexagon shape and the full-
+   rectangle hit/focus area (WCAG 2.5.8 failure). The hover
+   state still transforms to a rounded pill for the effect.
 ========================================================= */
 
 .cu-button {
   position: relative;
-  clip-path: polygon(
-    7% 0%, 93% 0%,
-    100% 28%, 100% 72%,
-    93% 100%, 7% 100%,
-    0% 72%, 0% 28%
-  );
   background: #020617;
   box-shadow:
     inset 0 0 10px rgba(148,163,184,0.25),
     0 0 5px rgba(0,0,0,0.8);
   transition:
-    clip-path 0.16s ease,
+    border-radius 0.16s ease,
     transform 0.22s ease,
     box-shadow 0.22s ease,
     background 0.22s ease,
     color 0.18s ease;
 }
 
-.cu-button:hover {
-  clip-path: none;
+.cu-button:hover:not(:disabled) {
   border-radius: 999px;
   transform: translateY(-2px) scale(1.08);
-  background: linear-gradient(135deg,
-    var(--neon-red),
-    var(--neon-yellow)
-  );
+  background: linear-gradient(135deg, var(--neon-red), var(--neon-yellow));
   color: #020617;
   box-shadow:
     0 0 24px rgba(248,113,113,0.9),
@@ -213,41 +201,31 @@ body.theme-high-contrast .cu-button {
     inset 0 0 14px rgba(255,255,255,0.25);
 }
 
-.cu-button:active {
+.cu-button:active:not(:disabled) {
   animation: btnGlitch 0.18s steps(2, jump-none);
 }
 
 @keyframes btnGlitch {
-  0% {
-    transform: translate(0,0) scale(0.98);
-  }
-  20% {
-    transform: translate(-1px, -1px) skewX(-3deg);
-    text-shadow:
-      -2px 0 var(--neon-red),
-       2px 0 var(--neon-yellow);
-  }
-  40% {
-    transform: translate(1px, 0) skewX(2deg);
-  }
-  60% {
-    transform: translate(-1px, 1px) skewX(-4deg);
-  }
-  80% {
-    transform: translate(1px, -1px) skewX(3deg);
-  }
-  100% {
-    transform: translate(0,0) scale(1);
-  }
+  0%   { transform: translate(0,0) scale(0.98); }
+  20%  { transform: translate(-1px,-1px) skewX(-3deg); }
+  40%  { transform: translate(1px,0) skewX(2deg); }
+  60%  { transform: translate(-1px,1px) skewX(-4deg); }
+  80%  { transform: translate(1px,-1px) skewX(3deg); }
+  100% { transform: translate(0,0) scale(1); }
 }
 
 /* =========================================================
-   VOICE BUTTON — PULSE
+   VOICE BUTTON
+
+   voicePulse only plays when voice is actively listening
+   (.cu-button-voice--active). Idle state has a static glow.
 ========================================================= */
 
 .cu-button-voice {
-  box-shadow:
-    0 0 14px rgba(255, 0, 0, 0.45);
+  box-shadow: 0 0 8px rgba(255, 0, 0, 0.35);
+}
+
+.cu-button-voice.cu-button-voice--active {
   animation: voicePulse 2s infinite;
 }
 
@@ -258,7 +236,7 @@ body.theme-high-contrast .cu-button {
 }
 
 /* =========================================================
-   TOAST CYBER UPGRADE
+   TOAST
 ========================================================= */
 
 #toast {
@@ -267,12 +245,11 @@ body.theme-high-contrast .cu-button {
     rgba(15,23,42,0.98),
     rgba(127,29,29,0.98)
   );
-  box-shadow:
-    0 0 18px rgba(248,113,113,0.6);
+  box-shadow: 0 0 18px rgba(248,113,113,0.6);
 }
 
 /* =========================================================
-   MOBILE CYBER OPTIMIZATION
+   MOBILE
 ========================================================= */
 
 @media (max-width: 600px) {
@@ -285,9 +262,10 @@ body.theme-high-contrast .cu-button {
   }
 }
 
-/* ================================
-   BREAKPOINT VISUALS (DEBUG C)
-================================ */
+/* =========================================================
+   BREAKPOINT VISUALS
+========================================================= */
+
 .bp-line {
   background: rgba(255, 0, 0, 0.18) !important;
   position: relative;
@@ -303,5 +281,5 @@ body.theme-high-contrast .cu-button {
   border-radius: 50%;
   box-shadow:
     0 0 6px rgba(255, 0, 0, 0.9),
-    0 0   12px rgba(255, 0, 0, 0.6);
+    0 0 12px rgba(255, 0, 0, 0.6);
 }

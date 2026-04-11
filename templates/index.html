@@ -189,6 +189,15 @@
   <script>
     (function () {
       'use strict';
+
+      function safeStorage(fn) {
+        try { return fn(); } catch (e) { return null; }
+      }
+
+      if (typeof speak !== 'function') {
+        window.speak = function () {};
+      }
+
       // ── Onboarding ──────────────────────────────────────────────────────
       var TUTORIAL_DONE_KEY = 'codeup_tutorial_done';
       var LANG_KEY          = 'codeup_language';
@@ -283,9 +292,11 @@
           if (step0.code && typeof setCode === 'function') setCode(step0.code);
           setTimeout(function () {
             speak(step0.prompt);
-            // After ~45s give them the choice step
-            setTimeout(function () { showChoiceStep(lang, steps[1]); }, 45000);
           }, 8000);
+          // Choice step fires only after user actually runs code successfully
+          window._tutorialAwaitingRun = true;
+          window._tutorialLang = lang;
+          window._tutorialStep1 = steps[1];
         }, 400);
       }
 
@@ -346,14 +357,6 @@
         window.addEventListener('load', function () { setTimeout(runOnboarding, 600); });
       }
       // ── End Onboarding ───────────────────────────────────────────────────
-
-      function safeStorage(fn) {
-        try { return fn(); } catch (e) { return null; }
-      }
-
-      if (typeof speak !== 'function') {
-        window.speak = function () {};
-      }
 
       function applyColorVisionMode(mode) {
         document.body.classList.remove(
@@ -471,6 +474,7 @@
           }, 2000);
         }
       });
+
     }());
   </script>
 

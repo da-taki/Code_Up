@@ -625,6 +625,15 @@ async function runCode() {
       if (data.semantic_issues && data.semantic_issues.length) {
         data.semantic_issues.forEach(e => speak(`${e.category}. ${e.message}`));
       }
+      // Tutorial hook — show choice step after first successful run
+      if (window._tutorialAwaitingRun) {
+        window._tutorialAwaitingRun = false;
+        setTimeout(function () {
+          if (typeof showChoiceStep === 'function') {
+            showChoiceStep(window._tutorialLang, window._tutorialStep1);
+          }
+        }, 2000);
+      }
     } else {
       out('ERROR:\n' + (data.error || ''));
       cueError();

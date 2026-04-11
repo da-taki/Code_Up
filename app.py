@@ -1,3 +1,5 @@
+from dotenv import load_dotenv
+load_dotenv()
 from flask import Flask, render_template, request, jsonify, g
 import json, os, traceback, io, contextlib, re, ast, sys, time, threading, subprocess, tempfile, uuid
 from concurrent.futures import ThreadPoolExecutor

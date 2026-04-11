@@ -620,8 +620,8 @@ import sys, time, json, traceback, os
 
 ALLOWED_MODULES = {{'math','random','string','datetime','date'}}
 
-import math as _math, random as _random, string as _string
-_PRELOADED = {{'math': _math, 'random': _random, 'string': _string}}
+import math as _math, random as _random, string as _string, datetime as _datetime
+_PRELOADED = {{'math': _math, 'random': _random, 'string': _string, 'datetime': _datetime}}
 
 class SafeFunction:
     def __init__(self, func):
@@ -675,6 +675,11 @@ SAFE_GLOBALS = {{
     '__builtins__': {{'None': None, 'False': False, 'True': True}},
     '__import__': restricted_import,
     'input': _blocked_input,
+    # Inject allowed modules directly so their C extensions have full builtins access
+    'math': _math,
+    'random': _random,
+    'string': _string,
+    'datetime': _datetime,
 }}
 
 code = os.environ.get('CODEUP_EXEC_CODE', '')

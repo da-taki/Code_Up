@@ -248,16 +248,20 @@ def test_voice_ambiguous_triggers_confirm(client):
 
 def test_voice_repeat_replays_last_action(client):
     """Repeat must return the same action as the previous command."""
-    # Use 'execute code' — unambiguous, maps directly to run
-    run_res = client.post("/voice-command", json={"text": "execute code"})
-    assert run_res.get_json()["action"] == "run", (
-        f"Seed failed: {run_res.get_json()}"
-    )
+    seed = client.post("/voice-command", json={"text": "execute code"})
+    assert seed.get_json()["action"] == "run", f"Seed failed: {seed.get_json()}"
+
+    # Persist session cookie so repeat finds the stored last_voice_action
+    session_cookie = seed.headers.get("Set-Cookie", "")
+    for part in session_cookie.split(";"):
+        part = part.strip()
+        if part.startswith("codeup_session="):
+            client.set_cookie("codeup_session", part.split("=", 1)[1])
+            break
 
     repeat_res = client.post("/voice-command", json={"text": "repeat"})
     assert repeat_res.status_code == 200
     assert repeat_res.get_json()["action"] == "run"
-
 
 def test_voice_empty_text(client):
     """Empty voice input must not crash."""
@@ -303,10 +307,21 @@ def test_trace_step_counter_in_speech(client):
     assert run_data["success"] is True
     assert len(run_data.get("trace", [])) > 0, "Trace empty — cannot test step counter"
 
+    # Extract session cookie from run response and send it explicitly
+    session_cookie = run.headers.get("Set-Cookie", "")
+    cookie_val = None
+    for part in session_cookie.split(";"):
+        part = part.strip()
+        if part.startswith("codeup_session="):
+            cookie_val = part.split("=", 1)[1]
+            break
+
+    if cookie_val:
+        client.set_cookie("codeup_session", cookie_val)
+
     step = client.post("/voice-command", json={"text": "next step"})
     speech = step.get_json().get("speech", "")
     assert "Step" in speech, f"Expected step counter in speech, got: {speech!r}"
-
 
 @pytest.mark.timeout(15)
 def test_trace_what_changed(client):
@@ -617,21 +632,27 @@ def test_fs_info(client):
 
 def test_two_sessions_have_separate_traces():
     """Two clients with different session cookies get separate trace storage."""
-    # Run sequentially — Flask 3.x doesn't support nested test_client contexts
     with app.test_client() as c1:
         r1 = c1.post("/run", json={"code": "x = 100\nprint(x)"})
         assert r1.get_json()["success"] is True
+
+        # Forward session cookie so trace lookup uses same session
+        session_cookie = r1.headers.get("Set-Cookie", "")
+        for part in session_cookie.split(";"):
+            part = part.strip()
+            if part.startswith("codeup_session="):
+                c1.set_cookie("codeup_session", part.split("=", 1)[1])
+                break
+
         t1 = c1.get("/execution-trace").get_json()
+        assert isinstance(t1["trace"], list)
+        assert len(t1["trace"]) > 0, "Session A must have trace after run"
 
     with app.test_client() as c2:
-        # Fresh client — no prior run — trace must be empty
         t2 = c2.get("/execution-trace").get_json()
-
-    assert isinstance(t1["trace"], list)
-    assert len(t1["trace"]) > 0, "Session A must have trace after run"
-    assert isinstance(t2["trace"], list)
-    assert len(t2["trace"]) == 0, "Fresh session must have empty trace"
-    
+        assert isinstance(t2["trace"], list)
+        assert len(t2["trace"]) == 0, "Fresh session must have empty trace"
+        
 # ===========================================================================
 # 13. SEMANTIC ERROR CLASSIFICATION
 # ===========================================================================

@@ -64,9 +64,13 @@ SESSION_COOKIE_SAMESITE = None if os.environ.get("FLASK_TESTING", "false").lower
 # causing an unbounded accumulation of handlers and duplicate Set-Cookie headers.
 @app.after_request
 def set_session_cookie(response):
-    """Set session cookie if not already present."""
+    """Set session cookie if not already present.
+
+    Uses the same session_id that get_session_id() generated during this
+    request (stashed on flask.g) so storage and cookie always agree.
+    """
     if not request.cookies.get(SESSION_COOKIE_NAME):
-        session_id = str(uuid.uuid4())
+        session_id = getattr(g, 'session_id', None) or str(uuid.uuid4())
         response.set_cookie(
             SESSION_COOKIE_NAME,
             session_id,
@@ -79,10 +83,20 @@ def set_session_cookie(response):
 
 
 def get_session_id():
-    """Get or create a persistent session ID using cookies."""
+    """Get or create a persistent session ID using cookies.
+
+    Caches the generated ID on flask.g so set_session_cookie can reuse the
+    same value. Otherwise storage gets keyed under one UUID and the cookie
+    sent to the client is a different UUID.
+    """
     session_id = request.cookies.get(SESSION_COOKIE_NAME)
-    if not session_id:
-        session_id = str(uuid.uuid4())
+    if session_id:
+        return session_id
+    cached = getattr(g, 'session_id', None)
+    if cached:
+        return cached
+    session_id = str(uuid.uuid4())
+    g.session_id = session_id
     return session_id
 
 
@@ -681,6 +695,7 @@ SAFE_GLOBALS = {{
         'KeyError': KeyError, 'ZeroDivisionError': ZeroDivisionError,
         'OverflowError': OverflowError, 'MemoryError': MemoryError,
         'NotImplemented': NotImplemented,
+        '__import__': restricted_import,
     }},
     '__import__': restricted_import,
     'input': _blocked_input,

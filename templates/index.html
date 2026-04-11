@@ -436,6 +436,13 @@
       document.getElementById('voiceButton').addEventListener('click', function () {
         if (typeof toggleVoice === 'function') toggleVoice();
       });
+      document.getElementById('languageSelector').addEventListener('change', function () {
+        if (isListening) {
+          speak('Language changed. Restarting voice recognition.');
+          stopListening();
+          setTimeout(function () { startListening(); }, 800);
+        }
+      });
       document.getElementById('sendCommandBtn').addEventListener('click', function () {
         if (typeof submitCommand === 'function') submitCommand();
       });

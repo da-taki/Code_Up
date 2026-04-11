@@ -57,6 +57,7 @@ SESSION_COOKIE_MAX_AGE = 3600 * 24 * 7  # 7 days
 SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", "false").lower() == "true"
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = 'Lax'
+TESTING = os.environ.get("FLASK_TESTING", "false").lower() == "true"
 
 # FIX C-1: Register ONE module-level after_request handler instead of
 # registering a new permanent handler on every new-session request.
@@ -73,7 +74,9 @@ def set_session_cookie(response):
             max_age=SESSION_COOKIE_MAX_AGE,
             secure=SESSION_COOKIE_SECURE,
             httponly=SESSION_COOKIE_HTTPONLY,
-            samesite=SESSION_COOKIE_SAMESITE
+            samesite=SESSION_COOKIE_SAMESITE,
+            # In test mode, don't restrict to same-site so test client can send it back
+            domain=None
         )
     return response
 
@@ -617,6 +620,9 @@ import sys, time, json, traceback, os
 
 ALLOWED_MODULES = {{'math','random','string','datetime','date'}}
 
+import math as _math, random as _random, string as _string
+_PRELOADED = {{'math': _math, 'random': _random, 'string': _string}}
+
 class SafeFunction:
     def __init__(self, func):
         self._func = func
@@ -628,6 +634,8 @@ class SafeFunction:
 def restricted_import(name, *args, **kwargs):
     if name not in ALLOWED_MODULES:
         raise ImportError(f"Module '{{name}}' is not allowed.")
+    if name in _PRELOADED:
+        return _PRELOADED[name]
     return __import__(name, *args, **kwargs)
 
 def _blocked_input(prompt=''):

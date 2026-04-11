@@ -394,8 +394,12 @@ class IntentParser:
             # Semantic autocomplete
             "suggest_next":        self.SUGGEST_NEXT_PATTERNS,
             "choose_suggestion":   self.CHOOSE_SUGGESTION_PATTERNS,
+            "repeat":              self.REPEAT_PATTERNS,
             "clear_editor":   self.CLEAR_EDITOR_PATTERNS,
             "read_output":    self.READ_OUTPUT_PATTERNS,
+            # Repeat must come BEFORE choose_suggestion — both match single words
+            "repeat":              self.REPEAT_PATTERNS,
+            "help":                self.HELP_PATTERNS,
             # Structure and playback
             "show_structure": self.SHOW_STRUCTURE_PATTERNS,
             "sonify_block":   self.SONIFY_BLOCK_PATTERNS,
@@ -403,8 +407,6 @@ class IntentParser:
             "next_step":      self.NEXT_STEP_PATTERNS,
             "previous_step":  self.PREVIOUS_STEP_PATTERNS,
             "what_changed":   self.WHAT_CHANGED_PATTERNS,
-            "repeat":              self.REPEAT_PATTERNS,
-            "help":                self.HELP_PATTERNS,
             # Story mode
             "story_mode":          self.STORY_MODE_PATTERNS,
             # Breakpoint debugger

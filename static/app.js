@@ -381,11 +381,13 @@ async function checkSyntaxErrors() {
     if (data.success && !data.has_errors) {
       out('✓ No errors detected. Code looks good!');
       speak('No errors detected. Code looks good!');
+      srAnnounce('No errors detected');
       stopErrorBeacon();
     } else if (data.success && data.has_errors) {
       const errorList = data.errors.map(e => `Line ${e.line || 'unknown'}: ${e.type} - ${e.message}`).join('\n');
       out(`⚠ Found ${data.error_count} error(s):\n\n${errorList}`);
       speak(`Found ${data.error_count} errors.`);
+      srAnnounce('Found ' + data.error_count + ' error' + (data.error_count !== 1 ? 's' : ''));
       data.errors.forEach(e => speak(`${e.type} on line ${e.line || 'unknown'}.`));
       if (data.errors.length > 0 && data.errors[0].line > 0) {
         ErrorBeaconManager.start(data.errors[0].line, data.errors[0].severity);
@@ -606,6 +608,7 @@ async function runCode() {
   out('Running...');
   showAI('Running code...');
   speak('Running code.');
+  srAnnounce('Running code');
   try {
     const res  = await fetch('/run', {
       method:  'POST',
@@ -888,9 +891,25 @@ function deleteLine(line) {
 }
 
 // ---------- SNIPPETS ----------
+function srAnnounce(msg) {
+  const el = document.getElementById('srAnnouncer');
+  if (!el) return;
+  // Clear then set forces screen readers to re-announce even if text is same
+  el.textContent = '';
+  setTimeout(function () { el.textContent = msg; }, 50);
+}
+
 async function saveSnippet() {
-  const name = prompt('Snippet name:') || 'Untitled';
+  // Keep old function as fallback but redirect to accessible version
+  await saveSnippetAccessible();
+}
+
+async function saveSnippetAccessible() {
+  const input = document.getElementById('snippetNameInput');
+  const name  = (input && input.value.trim()) || 'Untitled';
   await saveSnippetWithName(name);
+  if (input) input.value = '';
+  srAnnounce('Snippet saved: ' + name);
 }
 
 async function saveSnippetWithName(name) {

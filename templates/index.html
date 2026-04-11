@@ -21,6 +21,8 @@
 <body class="cu-body theme-default">
 
   <canvas id="matrixCanvas" aria-hidden="true"></canvas>
+  <div id="srAnnouncer" role="status" aria-live="assertive" aria-atomic="true"
+       style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;"></div>
 
   <header class="cu-header">
     <div class="cu-header-top">
@@ -57,6 +59,21 @@
 
     <aside class="cu-panel cu-snippets" aria-label="Saved snippets">
       <div class="cu-panel-title" id="snippets-heading">SNIPPETS</div>
+      <div class="cu-snippet-save" style="display:flex;gap:6px;margin-bottom:10px;">
+        <input
+          id="snippetNameInput"
+          type="text"
+          placeholder="Snippet name..."
+          aria-label="Snippet name"
+          style="flex:1;padding:6px 8px;border-radius:6px;border:1px solid rgba(148,163,184,0.3);background:#020617;color:#e5e7eb;font-family:inherit;font-size:0.8rem;"
+        />
+        <button
+          id="snippetSaveBtn"
+          class="cu-button cu-button-secondary"
+          aria-label="Save snippet with this name"
+          style="padding:6px 10px;font-size:0.8rem;"
+        >💾</button>
+      </div>
       <div id="snippetList" class="cu-snippet-list" aria-labelledby="snippets-heading"></div>
     </aside>
 
@@ -274,12 +291,25 @@
 
       var newTopicSteps = {
         en: {
-          say: 'Coming up next: variables. A variable is a name that holds a value. For example: x equals 5. Then print x will show 5. We\'ll explore this next time. For now, the editor is yours — happy coding!',
-          code: '# Variables preview\nx = 5\nprint(x)\n',
+          say: 'Coming up next: variables. A variable is a name that holds a value. Think of it like a labelled box. You write: x equals 5. Then print x will show 5 in the output. Try running this example with Ctrl+Enter.',
+          code: '# Variables\nx = 5\nprint(x)\n\n# You can change the value\ny = 10\nprint(y)\n\n# And do maths\nprint(x + y)\n',
+          followUp: true,
         },
         hi: {
-          say: 'अगला topic: variables। एक variable एक नाम होता है जो एक value रखता है। उदाहरण: x equals 5। फिर print x, 5 दिखाएगा। इसे हम अगली बार explore करेंगे। अभी editor आपका है — coding का मज़ा लें!',
-          code: '# Variables preview\nx = 5\nprint(x)\n',
+          say: 'अगला topic: variables। एक variable एक labelled box की तरह होता है। आप लिखते हैं: x equals 5। फिर print x, output में 5 दिखाएगा। इस example को Ctrl+Enter से चलाकर देखें।',
+          code: '# Variables\nx = 5\nprint(x)\n\n# Value बदल सकते हैं\ny = 10\nprint(y)\n\n# और maths भी\nprint(x + y)\n',
+          followUp: true,
+        },
+      };
+
+      var variablesPracticeSteps = {
+        en: {
+          say: 'Great! You ran the variables example. Now try it yourself: create a variable called name and set it to your name in quotes, then print it. For example: name equals quote Alice quote, then print name.',
+          code: '# Your turn!\n# name = "your name here"\n# print(name)\n',
+        },
+        hi: {
+          say: 'शाबाश! आपने variables example चलाया। अब खुद try करें: name नाम का variable बनाएं और उसे quotes में अपना नाम दें, फिर print करें। जैसे: name equals quote Alice quote, फिर print name।',
+          code: '# आपकी बारी!\n# name = "आपका नाम यहाँ"\n# print(name)\n',
         },
       };
 
@@ -315,12 +345,22 @@
             var ns = newTopicSteps[lang] || newTopicSteps.en;
             speak(ns.say);
             if (typeof setCode === 'function') setCode(ns.code);
-            safeStorage(function () { localStorage.setItem(TUTORIAL_DONE_KEY, 'true'); });
+            // If variables topic has a follow-up, hook it onto the next run
+            if (ns.followUp) {
+              window._tutorialAwaitingRun = true;
+              window._tutorialLang = lang;
+              window._tutorialStep1 = {
+                say: (variablesPracticeSteps[lang] || variablesPracticeSteps.en).say,
+                code: (variablesPracticeSteps[lang] || variablesPracticeSteps.en).code,
+                choice: false,
+              };
+            } else {
+              safeStorage(function () { localStorage.setItem(TUTORIAL_DONE_KEY, 'true'); });
+            }
           }
         }
         document.addEventListener('keydown', onChoice);
 
-        // Voice command fallback
         var origHandleVoice = window.handleVoiceCommand;
         window.handleVoiceCommand = function (raw) {
           var t = raw.toLowerCase();
@@ -335,7 +375,17 @@
             var ns = newTopicSteps[lang] || newTopicSteps.en;
             speak(ns.say);
             if (typeof setCode === 'function') setCode(ns.code);
-            safeStorage(function () { localStorage.setItem(TUTORIAL_DONE_KEY, 'true'); });
+            if (ns.followUp) {
+              window._tutorialAwaitingRun = true;
+              window._tutorialLang = lang;
+              window._tutorialStep1 = {
+                say: (variablesPracticeSteps[lang] || variablesPracticeSteps.en).say,
+                code: (variablesPracticeSteps[lang] || variablesPracticeSteps.en).code,
+                choice: false,
+              };
+            } else {
+              safeStorage(function () { localStorage.setItem(TUTORIAL_DONE_KEY, 'true'); });
+            }
           } else {
             return origHandleVoice.apply(this, arguments);
           }
@@ -431,7 +481,18 @@
         if (typeof fixCode === 'function') fixCode();
       });
       document.getElementById('saveBtn').addEventListener('click', function () {
-        if (typeof saveSnippet === 'function') saveSnippet();
+        if (typeof saveSnippetAccessible === 'function') saveSnippetAccessible();
+      });
+
+      document.getElementById('snippetSaveBtn').addEventListener('click', function () {
+        if (typeof saveSnippetAccessible === 'function') saveSnippetAccessible();
+      });
+
+      document.getElementById('snippetNameInput').addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          if (typeof saveSnippetAccessible === 'function') saveSnippetAccessible();
+        }
       });
       document.getElementById('voiceButton').addEventListener('click', function () {
         if (typeof toggleVoice === 'function') toggleVoice();

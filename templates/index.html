@@ -219,6 +219,32 @@
       var TUTORIAL_DONE_KEY = 'codeup_tutorial_done';
       var LANG_KEY          = 'codeup_language';
 
+      // Single source of truth for tutorial state.
+      // Nothing outside this object should read/write tutorial progress.
+      var TutorialState = {
+        lang: 'en',
+        awaitingRun: false,
+        phase: null,        // 'print' | 'variables' | 'loops' | 'conditionals' | 'done'
+        reset: function () {
+          this.awaitingRun = false;
+          this.phase = null;
+        },
+        setAwaitingRun: function (phase) {
+          this.awaitingRun = true;
+          this.phase = phase;
+        },
+        onRunSuccess: function () {
+          if (!this.awaitingRun) return;
+          this.awaitingRun = false;
+          var phase = this.phase;
+          this.phase = null;
+          handleTutorialPhaseComplete(phase, this.lang);
+        },
+      };
+
+      // Expose only what app.js needs (runCode calls this after success)
+      window._tutorialOnRunSuccess = function () { TutorialState.onRunSuccess(); };
+
       function runOnboarding() {
         var modal = document.getElementById('onboardingModal');
         if (!modal) return;
@@ -340,20 +366,56 @@
       };
 
       function startTutorial(lang) {
+        TutorialState.lang = lang;
         var steps = tutorialSteps[lang] || tutorialSteps.en;
         var step0 = steps[0];
 
         setTimeout(function () {
           speak(step0.say);
           if (step0.code && typeof setCode === 'function') setCode(step0.code);
-          setTimeout(function () {
-            speak(step0.prompt);
-          }, 8000);
-          // Choice step fires only after user actually runs code successfully
-          window._tutorialAwaitingRun = true;
-          window._tutorialLang = lang;
-          window._tutorialStep1 = steps[1];
+          setTimeout(function () { speak(step0.prompt); }, 8000);
+          TutorialState.setAwaitingRun('print');
         }, 400);
+      }
+
+      function handleTutorialPhaseComplete(phase, lang) {
+        var L = lang || 'en';
+
+        if (phase === 'print') {
+          var step1 = (tutorialSteps[L] || tutorialSteps.en)[1];
+          showChoiceStep(L, step1);
+
+        } else if (phase === 'variables') {
+          speak('Great! You ran the variables example. Press N to learn about loops.');
+          var vp = window.variablesPracticeSteps && (window.variablesPracticeSteps[L] || window.variablesPracticeSteps.en);
+          if (vp && typeof setCode === 'function') setCode(vp.code);
+          function _loopKey(e) {
+            if (e.key !== 'n' && e.key !== 'N') return;
+            document.removeEventListener('keydown', _loopKey);
+            var lt = window.loopsTopic && (window.loopsTopic[L] || window.loopsTopic.en);
+            if (!lt) return;
+            speak(lt.say);
+            if (typeof setCode === 'function') setCode(lt.code);
+            TutorialState.setAwaitingRun('loops');
+          }
+          document.addEventListener('keydown', _loopKey);
+
+        } else if (phase === 'loops') {
+          speak('Great job! Press N whenever you want to learn about conditionals.');
+          function _condKey(e) {
+            if (e.key !== 'n' && e.key !== 'N') return;
+            document.removeEventListener('keydown', _condKey);
+            var ct = window.conditionalsTopic && (window.conditionalsTopic[L] || window.conditionalsTopic.en);
+            if (!ct) return;
+            speak(ct.say);
+            if (typeof setCode === 'function') setCode(ct.code);
+            safeStorage(function () { localStorage.setItem(TUTORIAL_DONE_KEY, 'true'); });
+          }
+          document.addEventListener('keydown', _condKey);
+
+        } else {
+          safeStorage(function () { localStorage.setItem(TUTORIAL_DONE_KEY, 'true'); });
+        }
       }
 
       function showChoiceStep(lang, step) {
@@ -373,14 +435,7 @@
             if (typeof setCode === 'function') setCode(ns.code);
             // If variables topic has a follow-up, hook it onto the next run
             if (ns.followUp) {
-              window._tutorialAwaitingRun = true;
-              window._tutorialLang = lang;
-              window._tutorialStep1 = {
-                say: (window.variablesPracticeSteps[lang] || window.variablesPracticeSteps.en).say,
-                code: (window.variablesPracticeSteps[lang] || window.variablesPracticeSteps.en).code,
-                choice: false,
-                nextTopic: true,
-              };
+              TutorialState.setAwaitingRun('variables');
             } else {
               safeStorage(function () { localStorage.setItem(TUTORIAL_DONE_KEY, 'true'); });
             }
@@ -403,13 +458,7 @@
             speak(ns.say);
             if (typeof setCode === 'function') setCode(ns.code);
             if (ns.followUp) {
-              window._tutorialAwaitingRun = true;
-              window._tutorialLang = lang;
-              window._tutorialStep1 = {
-                say: (variablesPracticeSteps[lang] || variablesPracticeSteps.en).say,
-                code: (variablesPracticeSteps[lang] || variablesPracticeSteps.en).code,
-                choice: false,
-              };
+              TutorialState.setAwaitingRun('variables');
             } else {
               safeStorage(function () { localStorage.setItem(TUTORIAL_DONE_KEY, 'true'); });
             }

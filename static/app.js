@@ -467,6 +467,11 @@ KEYBOARD SHORTCUTS:
 - Alt+H: Show this help
 - Alt+Left/Right: Navigate history
 - Alt+Home/End: Jump to top/bottom
+
+NEW VOICE COMMANDS:
+- "save snippet named [name]" — save with a specific name
+- "restart tutorial" — go back to the beginning
+- "start over" — same as restart tutorial
   `.trim();
   out(helpText);
   speak('Help menu displayed. Check the output panel for all commands.');
@@ -634,7 +639,21 @@ async function runCode() {
         var _step = window._tutorialStep1;
         var _lang = window._tutorialLang;
         setTimeout(function () {
-          if (_step && _step.nextTopic && window.loopsTopic) {
+          if (_step && _step.nextTopic && _step._topicKey === 'loops' && window.conditionalsTopic) {
+            // Coming from loops practice — offer conditionals
+            speak(_step.say);
+            function _condKey(e) {
+              if (e.key === 'n' || e.key === 'N') {
+                document.removeEventListener('keydown', _condKey);
+                var ct = window.conditionalsTopic[_lang] || window.conditionalsTopic.en;
+                speak(ct.say);
+                if (typeof setCode === 'function') setCode(ct.code);
+                try { localStorage.setItem('codeup_tutorial_done', 'true'); } catch(e) {}
+              }
+            }
+            document.addEventListener('keydown', _condKey);
+          } else if (_step && _step.nextTopic && window.loopsTopic) {
+            // Coming from variables practice — offer loops
             speak(_step.say);
             function _loopKey(e) {
               if (e.key === 'n' || e.key === 'N') {
@@ -642,7 +661,14 @@ async function runCode() {
                 var lt = window.loopsTopic[_lang] || window.loopsTopic.en;
                 speak(lt.say);
                 if (typeof setCode === 'function') setCode(lt.code);
-                try { localStorage.setItem('codeup_tutorial_done', 'true'); } catch(e) {}
+                // After loops runs, offer conditionals
+                window._tutorialAwaitingRun = true;
+                window._tutorialLang = _lang;
+                window._tutorialStep1 = {
+                  say: 'Great job running the loops example! Press N whenever you want to learn about conditionals — the if and else statements.',
+                  nextTopic: true,
+                  _topicKey: 'loops',
+                };
               }
             }
             document.addEventListener('keydown', _loopKey);

@@ -1649,7 +1649,12 @@ COMMANDS = {
     "go_to_bottom": ["go to bottom", "jump to bottom", "bottom of file", "end of file"],
     "copy_code": ["copy code", "copy to clipboard", "copy this"],
     "paste_code": ["paste code", "paste from clipboard", "paste"],
-    "restart_tutorial": ["restart tutorial", "reset tutorial", "start over", "redo tutorial", "tutorial again"]
+    "restart_tutorial": ["restart tutorial", "reset tutorial", "start over", "redo tutorial", "tutorial again"],
+    "story_mode":       ["tell the story", "narrate execution", "execution story", "what happened", "story mode", "कहानी बताओ"],
+    "mentor_mode":      ["learning mode", "mentor mode", "tutor mode", "teach me", "मुझे सिखाओ"],
+    "quiz_me":          ["quiz me", "test me", "challenge me", "quiz करो", "test करो"],
+    "bug_challenge":    ["bug challenge", "debug challenge", "give me a bug", "bug ढूंढो"],
+    "clear_breakpoints":["clear breakpoints", "remove breakpoints", "delete breakpoints"]
 }
 
 
@@ -1903,6 +1908,28 @@ def voice():
             return _store_and_return({"success": True, "action": "suggest_next", "confidence": confidence})
         if intent == "choose_suggestion":
             return _store_and_return({"success": True, "action": "choose_suggestion", "choice": slots.get("choice", 1), "confidence": confidence})
+        if intent == "story_mode":
+            return _store_and_return({"success": True, "action": "story_mode", "confidence": confidence})
+        if intent == "set_breakpoint":
+            return _store_and_return({"success": True, "action": "set_breakpoint", "line_number": slots.get("line_number", 1), "confidence": confidence})
+        if intent == "clear_breakpoints":
+            return _store_and_return({"success": True, "action": "clear_breakpoints", "confidence": confidence})
+        if intent == "watch_variable":
+            return _store_and_return({"success": True, "action": "watch_variable", "variable": slots.get("variable", ""), "confidence": confidence})
+        if intent == "debug_continue":
+            return _store_and_return({"success": True, "action": "debug_continue", "confidence": confidence})
+        if intent == "debug_step_in":
+            return _store_and_return({"success": True, "action": "debug_step_in", "confidence": confidence})
+        if intent == "debug_step_out":
+            return _store_and_return({"success": True, "action": "debug_step_out", "confidence": confidence})
+        if intent == "mentor_mode":
+            return _store_and_return({"success": True, "action": "mentor_mode", "confidence": confidence})
+        if intent == "quiz_me":
+            return _store_and_return({"success": True, "action": "quiz_me", "topic": slots.get("topic", "Python basics"), "confidence": confidence})
+        if intent == "explain_concept":
+            return _store_and_return({"success": True, "action": "explain_concept", "concept": slots.get("concept", "variables"), "confidence": confidence})
+        if intent == "bug_challenge":
+            return _store_and_return({"success": True, "action": "bug_challenge", "confidence": confidence})
         if intent == "clear_editor":
             return _store_and_return({"success": True, "action": "clear_editor", "confidence": confidence})
         if intent == "read_output":
@@ -2040,6 +2067,181 @@ def _event_to_speech(event, idx=None, total=None):
     if t == 'return':
         return f"{step_prefix}Returned value {event.get('value')}"
     return f"{step_prefix}{t}: {event}"
+
+
+# ==========================
+# EXECUTION STORY MODE
+# ==========================
+
+@app.route("/execution-story", methods=["POST"])
+def execution_story():
+    body = safejson()
+    code = safe(body.get("code"), "")
+    language = safe(body.get("language"), "en")
+
+    storage = get_trace_storage()
+    trace = storage.get('last_trace', []) or []
+
+    if not trace:
+        msg = "No execution trace available. Please run your code first."
+        if language == "hi":
+            msg = "कोई execution trace उपलब्ध नहीं है। पहले अपना code चलाएं।"
+        return jsonify({"success": False, "story": msg})
+
+    # Build a compact trace summary for the LLM
+    events_summary = []
+    for e in trace[:50]:  # cap at 50 events to stay within token limit
+        t = e.get('type')
+        if t == 'line_exec':
+            events_summary.append(f"line {e.get('line')} executed")
+        elif t == 'state_change':
+            changes = ', '.join(e.get('changes', []))
+            events_summary.append(f"line {e.get('line')}: {changes}")
+        elif t == 'call':
+            events_summary.append(f"function '{e.get('function')}' called at line {e.get('line')}")
+        elif t == 'return':
+            events_summary.append(f"returned {e.get('value')}")
+
+    trace_text = "\n".join(events_summary)
+
+    if language == "hi":
+        system = (
+            "आप एक Python execution narrator हैं जो blind learners के लिए काम करते हैं।\n"
+            "नीचे दिए गए code और execution trace को देखकर एक simple, conversational story बनाएं।\n"
+            "Dry technical output की जगह narrative language use करें। जैसे:\n"
+            "'Program शुरू हुआ। पहले x को 5 की value मिली। फिर loop शुरू हुआ...'\n"
+            "अधिकतम 8 छोटे वाक्य। Simple Hindi में।"
+        )
+    else:
+        system = (
+            "You are a Python execution narrator for blind learners.\n"
+            "Given the code and execution trace, narrate what happened as a clear story.\n"
+            "Use conversational language instead of dry technical output. For example:\n"
+            "'The program began. First, x was given the value 5. Then the loop started...'\n"
+            "Maximum 8 short sentences. Simple English."
+        )
+
+    user = f"Code:\n```python\n{code}\n```\n\nExecution trace:\n{trace_text}"
+    story = call_gemini(system, user, temperature=0.3, language=language)
+    return jsonify({"success": True, "story": story})
+
+
+# ==========================
+# MENTOR / LEARNING MODE
+# ==========================
+
+@app.route("/mentor/quiz", methods=["POST"])
+def mentor_quiz():
+    body = safejson()
+    topic = safe(body.get("topic"), "Python basics")
+    language = safe(body.get("language"), "en")
+
+    if language == "hi":
+        system = (
+            "आप एक blind Python learner के लिए quiz questions बनाते हैं।\n"
+            "दिए गए topic पर एक quiz question बनाएं जिसमें:\n"
+            "- एक clear question\n"
+            "- 3 options (A, B, C)\n"
+            "- सही answer\n"
+            "- एक line explanation\n"
+            "JSON format में respond करें:\n"
+            "{\"question\": \"...\", \"options\": [\"A: ...\", \"B: ...\", \"C: ...\"], \"answer\": \"A\", \"explanation\": \"...\"}\n"
+            "केवल JSON। कोई extra text नहीं।"
+        )
+    else:
+        system = (
+            "You create quiz questions for a blind Python learner.\n"
+            "Create one quiz question on the given topic with:\n"
+            "- A clear question\n"
+            "- 3 options (A, B, C)\n"
+            "- The correct answer letter\n"
+            "- A one-line explanation\n"
+            "Respond ONLY with JSON:\n"
+            "{\"question\": \"...\", \"options\": [\"A: ...\", \"B: ...\", \"C: ...\"], \"answer\": \"A\", \"explanation\": \"...\"}\n"
+            "JSON only. No extra text."
+        )
+
+    user = f"Topic: {topic}"
+    try:
+        raw = call_gemini(system, user, temperature=0.4, language=language)
+        clean = re.sub(r'```(?:json)?\s*|\s*```', '', raw).strip()
+        import json as _json
+        parsed = _json.loads(clean)
+        return jsonify({"success": True, "quiz": parsed})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+
+@app.route("/mentor/explain", methods=["POST"])
+def mentor_explain():
+    body = safejson()
+    concept = safe(body.get("concept"), "variables")
+    language = safe(body.get("language"), "en")
+
+    if language == "hi":
+        system = (
+            "आप एक blind beginner के लिए Python concepts explain करते हैं।\n"
+            "Concept को बिल्कुल simple तरीके से समझाएं जैसे पहली बार सुन रहे हों।\n"
+            "एक real-life analogy दें। फिर एक short code example।\n"
+            "अधिकतम 6 छोटी lines।"
+        )
+    else:
+        system = (
+            "You explain Python concepts to a blind beginner.\n"
+            "Explain the concept as simply as possible, as if hearing it for the first time.\n"
+            "Give a real-life analogy. Then a short code example.\n"
+            "Maximum 6 short lines."
+        )
+
+    user = f"Concept: {concept}"
+    explanation = call_gemini(system, user, temperature=0.2, language=language)
+    return jsonify({"success": True, "explanation": explanation})
+
+
+@app.route("/mentor/bug-challenge", methods=["POST"])
+def mentor_bug_challenge():
+    body = safejson()
+    language = safe(body.get("language"), "en")
+
+    if language == "hi":
+        system = (
+            "आप एक Python debugging challenge बनाते हैं।\n"
+            "एक short buggy Python program बनाएं (5-10 lines)।\n"
+            "JSON format में respond करें:\n"
+            "{\"code\": \"buggy code here\", \"hint\": \"एक line hint\", \"bug\": \"actual bug description\", \"fixed\": \"fixed code\"}\n"
+            "Bugs simple होने चाहिए: syntax error, wrong variable name, off-by-one, missing colon आदि।\n"
+            "केवल JSON।"
+        )
+    else:
+        system = (
+            "You create Python debugging challenges.\n"
+            "Create a short buggy Python program (5-10 lines).\n"
+            "Respond ONLY with JSON:\n"
+            "{\"code\": \"buggy code here\", \"hint\": \"one line hint\", \"bug\": \"actual bug description\", \"fixed\": \"fixed code\"}\n"
+            "Bugs should be simple: syntax error, wrong variable name, off-by-one, missing colon, etc.\n"
+            "JSON only."
+        )
+
+    user = "Generate a bug challenge"
+    try:
+        raw = call_gemini(system, user, temperature=0.5, language=language)
+        clean = re.sub(r'```(?:json)?\s*|\s*```', '', raw).strip()
+        import json as _json
+        parsed = _json.loads(clean)
+        return jsonify({"success": True, "challenge": parsed})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+
+# ==========================
+# VOICE INTENTS — story, breakpoint, mentor
+# ==========================
+
+# These are handled in the /voice-command route.
+# New intents added to the bottom of the intent dispatch block:
+# story_mode, set_breakpoint, clear_breakpoints, watch_variable,
+# debug_continue, debug_step_in, debug_step_out,
+# mentor_mode, quiz_me, explain_concept, bug_challenge
 
 
 # ==========================

@@ -470,8 +470,19 @@ KEYBOARD SHORTCUTS:
 
 NEW VOICE COMMANDS:
 - "save snippet named [name]" — save with a specific name
-- "restart tutorial" — go back to the beginning
-- "start over" — same as restart tutorial
+- "restart tutorial" / "start over" — restart onboarding
+- "insert function called [name]" — add a function
+- "insert a for loop" — add a loop
+- "replace line 5 with return x" — edit a line
+- "suggest next line" → "choose 1/2/3" — autocomplete
+- "tell the story" — narrate what your code did
+- "set breakpoint at line 10" — audio debugger
+- "watch variable x" — report x at breakpoints
+- "continue" — run to next breakpoint
+- "learning mode" — start mentor/quiz mode
+- "quiz me on loops" — get a quiz question
+- "explain variables" — concept explanation
+- "bug challenge" — find and fix a bug
   `.trim();
   out(helpText);
   speak('Help menu displayed. Check the output panel for all commands.');
@@ -1074,6 +1085,17 @@ async function handleConfirmedAction(action, payload) {
   else if (action === 'add_parameter')      addParameterVoice(payload && payload.param_name, payload && payload.function_name);
   else if (action === 'suggest_next')       await suggestNextLine();
   else if (action === 'choose_suggestion')  chooseSuggestion(payload && payload.choice);
+  else if (action === 'story_mode')         await tellExecutionStory();
+  else if (action === 'set_breakpoint')     setBreakpoint(payload && payload.line_number);
+  else if (action === 'clear_breakpoints')  clearBreakpoints();
+  else if (action === 'watch_variable')     watchVariable(payload && payload.variable);
+  else if (action === 'debug_continue')     debugContinue();
+  else if (action === 'debug_step_in')      speak('Step in is not yet supported in sandbox mode.');
+  else if (action === 'debug_step_out')     speak('Step out is not yet supported in sandbox mode.');
+  else if (action === 'mentor_mode')        startMentorMode();
+  else if (action === 'quiz_me')            await quizMe(payload && payload.topic);
+  else if (action === 'explain_concept')    await explainConcept(payload && payload.concept);
+  else if (action === 'bug_challenge')      await bugChallenge();
 }
 
 function tryResolveConfirmation(txt) {
@@ -1986,6 +2008,267 @@ function chooseSuggestion(choice) {
   _lastSuggestions = [];
   speak(`Inserted: ${chosen}`);
   srAnnounce('Suggestion inserted');
+}
+
+// ---------- EXECUTION STORY MODE ----------
+
+async function tellExecutionStory() {
+  showAI('Narrating your execution...');
+  speak('Narrating what happened when your code ran.');
+  try {
+    const res  = await fetch('/execution-story', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ code: getCode(), language: getLanguage() }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      out(data.story);
+      speak(data.story);
+      srAnnounce('Execution story ready');
+    } else {
+      out(data.story || 'No story available.');
+      speak(data.story || 'Run your code first, then ask for the story.');
+    }
+  } catch (e) {
+    console.error(e);
+    speak('Could not narrate execution. Please try again.');
+  } finally {
+    hideAI();
+  }
+}
+
+// ---------- AUDIO BREAKPOINT DEBUGGER ----------
+
+let _breakpoints = new Set();
+let _watchedVars = new Set();
+let _breakpointDecorations = [];
+
+function setBreakpoint(lineNum) {
+  if (!lineNum) { speak('Please specify a line number for the breakpoint.'); return; }
+  const model = getModel();
+  if (!model) { speak('Editor not ready.'); return; }
+  const maxLine = model.getLineCount();
+  if (lineNum < 1 || lineNum > maxLine) { speak(`Line ${lineNum} is out of range.`); return; }
+
+  _breakpoints.add(lineNum);
+
+  // Visual decoration — red dot in gutter
+  _breakpointDecorations = editor.deltaDecorations(_breakpointDecorations, [
+    ...Array.from(_breakpoints).map(l => ({
+      range: new monaco.Range(l, 1, l, 1),
+      options: {
+        isWholeLine: true,
+        className:   'bp-line',
+        glyphMarginClassName: 'bp-glyph',
+        glyphMarginHoverMessage: { value: `Breakpoint at line ${l}` },
+      }
+    }))
+  ]);
+
+  SonificationManager.playTone(600, 0.1, 0.1);
+  speak(`Breakpoint set at line ${lineNum}.`);
+  srAnnounce(`Breakpoint line ${lineNum}`);
+  out(`Breakpoints active: ${Array.from(_breakpoints).sort((a,b)=>a-b).join(', ')}`);
+}
+
+function clearBreakpoints() {
+  _breakpoints.clear();
+  _watchedVars.clear();
+  _breakpointDecorations = editor.deltaDecorations(_breakpointDecorations, []);
+  speak('All breakpoints cleared.');
+  srAnnounce('Breakpoints cleared');
+  out('All breakpoints removed.');
+}
+
+function watchVariable(varName) {
+  if (!varName) { speak('Please specify a variable name to watch.'); return; }
+  _watchedVars.add(varName);
+  speak(`Now watching variable ${varName}. I will report its value at each breakpoint.`);
+  srAnnounce(`Watching ${varName}`);
+  out(`Watched variables: ${Array.from(_watchedVars).join(', ')}`);
+}
+
+function debugContinue() {
+  // Walk the trace forward until we hit a breakpoint line
+  const storage = window._sessionStorage || {};
+  const trace   = window.executionTrace || [];
+  if (!trace.length) { speak('No trace available. Run your code first.'); return; }
+
+  let idx = window.traceIndex || 0;
+  let hitBreakpoint = false;
+
+  while (idx < trace.length) {
+    const event = trace[idx];
+    idx++;
+    if (event.type === 'line_exec' && _breakpoints.has(event.line)) {
+      hitBreakpoint = true;
+      window.traceIndex = idx;
+
+      // Report watched variables at this breakpoint
+      const stateEvents = trace.slice(0, idx).filter(e => e.type === 'state_change' && e.line === event.line);
+      let varReport = '';
+      if (_watchedVars.size > 0 && stateEvents.length > 0) {
+        const lastState = stateEvents[stateEvents.length - 1];
+        const relevant  = (lastState.changes || []).filter(c =>
+          Array.from(_watchedVars).some(v => c.startsWith(v))
+        );
+        if (relevant.length) varReport = ' ' + relevant.join(', ');
+      }
+
+      SonificationManager.playTone(800, 0.15, 0.12);
+      gotoLine(event.line, false);
+      speak(`Hit breakpoint at line ${event.line}.${varReport || ''}`);
+      srAnnounce(`Breakpoint hit line ${event.line}`);
+      return;
+    }
+  }
+
+  if (!hitBreakpoint) {
+    window.traceIndex = 0;
+    speak('No more breakpoints hit. Execution complete.');
+    srAnnounce('Execution complete');
+  }
+}
+
+// ---------- MENTOR / LEARNING MODE ----------
+
+let _mentorActive = false;
+let _currentQuiz  = null;
+
+function startMentorMode() {
+  _mentorActive = true;
+  const lang = getLanguage();
+  if (lang === 'hi') {
+    speak('Learning mode शुरू हुआ। आप कह सकते हैं: quiz करो, bug challenge दो, या कोई concept समझाओ जैसे variables समझाओ।');
+  } else {
+    speak('Learning mode started. You can say: quiz me, bug challenge, or explain a concept — for example, explain loops.');
+  }
+  srAnnounce('Learning mode active');
+  out('LEARNING MODE ACTIVE\n\nCommands:\n- "quiz me on loops"\n- "explain variables"\n- "bug challenge"\n- "explain conditionals"\n- "quiz me on functions"');
+}
+
+async function quizMe(topic) {
+  const t = topic || 'Python basics';
+  showAI(`Creating quiz on ${t}...`);
+  speak(`Creating a quiz question on ${t}.`);
+  try {
+    const res  = await fetch('/mentor/quiz', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ topic: t, language: getLanguage() }),
+    });
+    const data = await res.json();
+    if (!data.success) { speak('Could not generate quiz. Try again.'); hideAI(); return; }
+
+    const q = data.quiz;
+    _currentQuiz = q;
+
+    const display = `QUIZ: ${q.question}\n\n${q.options.join('\n')}\n\nSay "answer A", "answer B", or "answer C".`;
+    out(display);
+    srAnnounce('Quiz question ready');
+    speak(q.question);
+    q.options.forEach(o => speak(o));
+    speak('Say answer A, answer B, or answer C.');
+
+    // Listen for answer
+    const origVoice = window.handleVoiceCommand;
+    window.handleVoiceCommand = async function(raw) {
+      const t = raw.toLowerCase().trim();
+      const match = t.match(/(?:answer|option|choose)\s+([abc])|^([abc])$/);
+      if (match) {
+        window.handleVoiceCommand = origVoice;
+        const chosen = (match[1] || match[2]).toUpperCase();
+        _currentQuiz = null;
+        if (chosen === q.answer) {
+          SonificationManager.playTone(900, 0.1, 0.1);
+          speak(`Correct! ${q.explanation}`);
+          srAnnounce('Correct answer');
+          out(`✓ CORRECT!\n\n${q.explanation}`);
+        } else {
+          SonificationManager.playTone(200, 0.15, 0.08);
+          speak(`Not quite. The correct answer was ${q.answer}. ${q.explanation}`);
+          srAnnounce('Wrong answer');
+          out(`✗ The correct answer was ${q.answer}.\n\n${q.explanation}`);
+        }
+      } else {
+        return origVoice.apply(this, arguments);
+      }
+    };
+
+  } catch (e) {
+    console.error(e);
+    speak('Quiz failed. Please try again.');
+  } finally {
+    hideAI();
+  }
+}
+
+async function explainConcept(concept) {
+  const c = concept || 'variables';
+  showAI(`Explaining ${c}...`);
+  speak(`Explaining ${c}.`);
+  try {
+    const res  = await fetch('/mentor/explain', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ concept: c, language: getLanguage() }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      out(data.explanation);
+      speak(data.explanation);
+      srAnnounce(`${c} explained`);
+    } else {
+      speak('Could not explain that concept. Try again.');
+    }
+  } catch (e) {
+    console.error(e);
+    speak('Explanation failed. Please try again.');
+  } finally {
+    hideAI();
+  }
+}
+
+async function bugChallenge() {
+  showAI('Generating bug challenge...');
+  speak('Generating a bug fixing challenge. Get ready.');
+  try {
+    const res  = await fetch('/mentor/bug-challenge', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ language: getLanguage() }),
+    });
+    const data = await res.json();
+    if (!data.success) { speak('Could not generate challenge. Try again.'); hideAI(); return; }
+
+    const ch = data.challenge;
+    setCode(ch.code);
+    out(`BUG CHALLENGE\n\nFind and fix the bug in the editor.\nHint: ${ch.hint}\n\nSay "show answer" when ready to reveal.`);
+    srAnnounce('Bug challenge loaded');
+    speak(`Bug challenge loaded into editor. ${ch.hint}. Say show answer when you are ready.`);
+
+    // Listen for "show answer"
+    const origVoice = window.handleVoiceCommand;
+    window.handleVoiceCommand = async function(raw) {
+      const t = raw.toLowerCase().trim();
+      if (t.includes('show answer') || t.includes('give up') || t.includes('reveal') || t.includes('answer दिखाओ')) {
+        window.handleVoiceCommand = origVoice;
+        out(`THE BUG:\n${ch.bug}\n\nFIXED CODE:\n${ch.fixed}`);
+        speak(`The bug was: ${ch.bug}`);
+        setTimeout(() => setCode(ch.fixed), 2000);
+        srAnnounce('Answer revealed');
+      } else {
+        return origVoice.apply(this, arguments);
+      }
+    };
+
+  } catch (e) {
+    console.error(e);
+    speak('Challenge failed. Please try again.');
+  } finally {
+    hideAI();
+  }
 }
 
 function restartTutorial() {

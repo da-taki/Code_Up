@@ -165,6 +165,11 @@ class IntentParser:
         r"rename\s+snippet\s+([a-z0-9\-]+)\s+to\s+(.+)",
     ]
 
+    SAVE_SNIPPET_NAMED_PATTERNS = [
+        r"save\s+(?:snippet|code)\s+(?:as\s+|named?\s+)(.+)",
+        r"save\s+(?:this\s+)?(?:as\s+|named?\s+)(.+)",
+    ]
+
     NEXT_STEP_PATTERNS = [
         r"^(?:next|forward)\s+step$",
         r"^step\s+(?:forward|next)$",
@@ -227,7 +232,8 @@ class IntentParser:
             "advise":         self.ADVISE_PATTERNS,
             "summarize":      self.SUMMARIZE_PATTERNS,
             "generate_code":  self.GENERATE_CODE_PATTERNS,
-            "rename_snippet": self.RENAME_SNIPPET_PATTERNS,
+            "rename_snippet":      self.RENAME_SNIPPET_PATTERNS,
+            "save_snippet_named":  self.SAVE_SNIPPET_NAMED_PATTERNS,
             "clear_editor":   self.CLEAR_EDITOR_PATTERNS,
             "read_output":    self.READ_OUTPUT_PATTERNS,
             # Structure and playback
@@ -304,6 +310,8 @@ class IntentParser:
                 if intent == "generate_code":
                     if "prompt" in slots and not slots["prompt"]:
                         del slots["prompt"]
+                if intent == "save_snippet_named" and "name" not in slots:
+                    continue
 
                 return {
                     "intent": intent,
@@ -349,6 +357,10 @@ class IntentParser:
             if match.groups() and len(match.groups()) >= 2:
                 slots["id"] = match.group(1).strip()
                 slots["new_name"] = match.group(2).strip()
+
+        elif intent == "save_snippet_named":
+            if match.groups() and match.group(1):
+                slots["name"] = match.group(1).strip()
 
         return slots
 

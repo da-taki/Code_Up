@@ -1093,7 +1093,7 @@ function startListening() {
   recognition = new SR();
   recognition.continuous      = true;
   recognition.interimResults  = false;
-  recognition.lang            = 'en-US';
+  recognition.lang            = getLanguage() === 'hi' ? 'hi-IN' : 'en-US';
   recognition._restartAttempts = 0;
   recognition._maxRestarts     = 5;
   recognition._backoffBase     = 300;

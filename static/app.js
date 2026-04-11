@@ -644,49 +644,9 @@ async function runCode() {
       if (data.semantic_issues && data.semantic_issues.length) {
         data.semantic_issues.forEach(e => speak(`${e.category}. ${e.message}`));
       }
-      // Tutorial hook — show choice step after first successful run
-      if (window._tutorialAwaitingRun) {
-        window._tutorialAwaitingRun = false;
-        var _step = window._tutorialStep1;
-        var _lang = window._tutorialLang;
-        setTimeout(function () {
-          if (_step && _step.nextTopic && _step._topicKey === 'loops' && window.conditionalsTopic) {
-            // Coming from loops practice — offer conditionals
-            speak(_step.say);
-            function _condKey(e) {
-              if (e.key === 'n' || e.key === 'N') {
-                document.removeEventListener('keydown', _condKey);
-                var ct = window.conditionalsTopic[_lang] || window.conditionalsTopic.en;
-                speak(ct.say);
-                if (typeof setCode === 'function') setCode(ct.code);
-                try { localStorage.setItem('codeup_tutorial_done', 'true'); } catch(e) {}
-              }
-            }
-            document.addEventListener('keydown', _condKey);
-          } else if (_step && _step.nextTopic && window.loopsTopic) {
-            // Coming from variables practice — offer loops
-            speak(_step.say);
-            function _loopKey(e) {
-              if (e.key === 'n' || e.key === 'N') {
-                document.removeEventListener('keydown', _loopKey);
-                var lt = window.loopsTopic[_lang] || window.loopsTopic.en;
-                speak(lt.say);
-                if (typeof setCode === 'function') setCode(lt.code);
-                // After loops runs, offer conditionals
-                window._tutorialAwaitingRun = true;
-                window._tutorialLang = _lang;
-                window._tutorialStep1 = {
-                  say: 'Great job running the loops example! Press N whenever you want to learn about conditionals — the if and else statements.',
-                  nextTopic: true,
-                  _topicKey: 'loops',
-                };
-              }
-            }
-            document.addEventListener('keydown', _loopKey);
-          } else if (typeof showChoiceStep === 'function' && _step) {
-            showChoiceStep(_lang, _step);
-          }
-        }, 2000);
+      // Tutorial hook — delegate to the state machine
+      if (typeof window._tutorialOnRunSuccess === 'function') {
+        setTimeout(window._tutorialOnRunSuccess, 2000);
       }
     } else {
       out('ERROR:\n' + (data.error || ''));

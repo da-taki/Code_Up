@@ -1,10 +1,17 @@
 'use strict';
 
 (function () {
-  // Guard: if the canvas isn't in the DOM yet (e.g. script moved to <head>), bail cleanly
   const canvas = document.getElementById('matrixCanvas');
   if (!canvas) return;
-  const ctx = canvas.getContext('2d');
+
+  // Guard: browser may not support canvas 2D (e.g. some assistive tech browsers)
+  let ctx;
+  try {
+    ctx = canvas.getContext('2d');
+  } catch (e) {
+    return;
+  }
+  if (!ctx) return;
 
   let width, height, dots = [];
   const DOT_SPACING = 40;

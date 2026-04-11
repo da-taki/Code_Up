@@ -317,12 +317,25 @@
 
       window.loopsTopic = {
         en: {
-          say: 'Topic 3: loops. A for loop repeats code a set number of times. For example: for i in range 5, colon, new line, indented print i — this prints the numbers 0 to 4. The range function gives you a sequence of numbers. Press Ctrl+Enter to run this example.',
+          say: 'Topic 3: loops. A for loop repeats code a set number of times. For example: for i in range 5, colon, new line, indented print i — this prints the numbers 0 to 4. The range function gives you a sequence of numbers. Press Ctrl+Enter to run this example. When you are ready for the next topic press N.',
           code: '# Loops\nfor i in range(5):\n    print(i)\n\n# Loop over a list\nfruits = ["apple", "banana", "mango"]\nfor fruit in fruits:\n    print(fruit)\n',
+          followUp: true,
         },
         hi: {
-          say: 'Topic 3: loops। एक for loop कोड को कई बार repeat करता है। उदाहरण: for i in range 5, colon, नई line, indented print i — यह 0 से 4 तक numbers print करता है। range function आपको numbers की एक sequence देता है। इस example को Ctrl+Enter से चलाएं।',
+          say: 'Topic 3: loops। एक for loop कोड को कई बार repeat करता है। उदाहरण: for i in range 5, colon, नई line, indented print i — यह 0 से 4 तक numbers print करता है। range function आपको numbers की एक sequence देता है। इस example को Ctrl+Enter से चलाएं। अगले topic के लिए N दबाएं।',
           code: '# Loops\nfor i in range(5):\n    print(i)\n\n# List पर loop\nfruits = ["apple", "banana", "mango"]\nfor fruit in fruits:\n    print(fruit)\n',
+          followUp: true,
+        },
+      };
+
+      window.conditionalsTopic = {
+        en: {
+          say: 'Topic 4: conditionals. An if statement runs code only when a condition is true. For example: if x is greater than 5, colon, new line, indented print, quote x is big, close quote. The else block runs when the condition is false. Press Ctrl+Enter to run this example.',
+          code: '# Conditionals\nx = 10\n\nif x > 5:\n    print("x is big")\nelse:\n    print("x is small")\n\n# You can also use elif\nif x == 10:\n    print("x is exactly ten")\nelif x > 10:\n    print("x is more than ten")\nelse:\n    print("x is less than ten")\n',
+        },
+        hi: {
+          say: 'Topic 4: conditionals। एक if statement कोड तभी चलाता है जब condition सच हो। उदाहरण: if x greater than 5, colon, नई line, indented print, quote x is big, close quote। else block तब चलता है जब condition गलत हो। इस example को Ctrl+Enter से चलाएं।',
+          code: '# Conditionals\nx = 10\n\nif x > 5:\n    print("x बड़ा है")\nelse:\n    print("x छोटा है")\n\n# elif भी use कर सकते हैं\nif x == 10:\n    print("x exactly दस है")\nelif x > 10:\n    print("x दस से ज़्यादा है")\nelse:\n    print("x दस से कम है")\n',
         },
       };
 

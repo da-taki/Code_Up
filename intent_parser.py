@@ -391,15 +391,14 @@ class IntentParser:
             "insert_loop":         self.INSERT_LOOP_PATTERNS,
             "insert_if":           self.INSERT_IF_PATTERNS,
             "append_line":         self.APPEND_LINE_PATTERNS,
+            # repeat MUST come before choose_suggestion — ^(\w+)$ matches "repeat" too
+            "repeat":              self.REPEAT_PATTERNS,
+            "help":                self.HELP_PATTERNS,
             # Semantic autocomplete
             "suggest_next":        self.SUGGEST_NEXT_PATTERNS,
             "choose_suggestion":   self.CHOOSE_SUGGESTION_PATTERNS,
-            "repeat":              self.REPEAT_PATTERNS,
             "clear_editor":   self.CLEAR_EDITOR_PATTERNS,
             "read_output":    self.READ_OUTPUT_PATTERNS,
-            # Repeat must come BEFORE choose_suggestion — both match single words
-            "repeat":              self.REPEAT_PATTERNS,
-            "help":                self.HELP_PATTERNS,
             # Structure and playback
             "show_structure": self.SHOW_STRUCTURE_PATTERNS,
             "sonify_block":   self.SONIFY_BLOCK_PATTERNS,

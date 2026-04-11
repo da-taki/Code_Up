@@ -637,8 +637,13 @@ async function runCode() {
     } else {
       out('ERROR:\n' + (data.error || ''));
       cueError();
-      speak(data.explanation ? 'There was an error.' : 'There was an error.');
-      if (data.explanation) speak(data.explanation);
+      speak('There was an error.');
+      if (data.explanation) {
+        speak('Analyzing the error, please wait.');
+        setTimeout(function () { speak(data.explanation); }, 500);
+      } else {
+        speak('No explanation available. Check the output panel for details.');
+      }
     }
   } catch (e) {
     out('System error.'); console.error(e); cueError(); speak('System error.');

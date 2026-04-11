@@ -3,7 +3,8 @@ import json, os, traceback, io, contextlib, re, ast, sys, time, threading, subpr
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Tuple, Optional, Any
 from rapidfuzz import fuzz
-import google.generativeai as genai
+from google import genai
+from google.genai import types as genai_types
 from structure_parser import CodeAnalyzer
 from intent_parser import parse_intent
 from sandboxed_fs import get_sandbox
@@ -218,11 +219,7 @@ def save_snippets(d: dict) -> None:
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "Insert_API_Key_Here")
 
 # FIX L-3: Updated deprecated "gemini-pro" model name to a current model identifier.
-GEMINI_MODEL = "gemini-1.5-pro"
-
-# Configure default key (used when no session key set)
-if GEMINI_API_KEY != "Insert_API_Key_Here":
-    genai.configure(api_key=GEMINI_API_KEY)
+GEMINI_MODEL = "gemini-2.0-flash"
 
 # helper to retrieve current API key (session overrides global)
 def _current_api_key():
@@ -260,11 +257,11 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en"):
             response = client.models.generate_content(
                 model=GEMINI_MODEL,
                 contents=user_prompt,
-                config=genai.GenerateContentConfig(
+                config=genai_types.GenerateContentConfig(
                     system_instruction=sp,
                     temperature=temperature,
-                    max_output_tokens=1024
-                )
+                    max_output_tokens=1024,
+                ),
             )
             return response.text.strip() if response.text else "No response generated"
         except Exception as e:

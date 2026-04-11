@@ -167,6 +167,21 @@
     </div>
   </div>
 
+  <!-- Onboarding modal -->
+  <div id="onboardingModal" role="dialog" aria-modal="true" aria-labelledby="onboardingTitle"
+       style="position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:20000;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(6px);">
+    <div style="background:#0b1220;border:1px solid rgba(248,113,113,0.4);border-radius:16px;padding:32px;max-width:480px;width:90%;box-shadow:0 0 40px rgba(248,113,113,0.2);">
+      <h2 id="onboardingTitle" style="font-size:1.4rem;margin-bottom:12px;color:#facc15;">Welcome to CodeUp</h2>
+      <p id="onboardingMsg" style="color:#e5e7eb;line-height:1.7;margin-bottom:24px;">
+        CodeUp is a voice-driven Python IDE built for blind and visually impaired users.
+        Before we start — which language would you prefer?
+      </p>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;">
+        <button id="obEnglish" class="cu-button cu-button-primary" style="flex:1;">English</button>
+        <button id="obHindi"   class="cu-button" style="flex:1;">हिंदी (Hindi)</button>
+      </div>
+    </div>
+  </div>
   <script src="/static/bg.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs/loader.min.js"></script>
   <script src="/static/app.js"></script>
@@ -174,6 +189,163 @@
   <script>
     (function () {
       'use strict';
+      // ── Onboarding ──────────────────────────────────────────────────────
+      var TUTORIAL_DONE_KEY = 'codeup_tutorial_done';
+      var LANG_KEY          = 'codeup_language';
+
+      function runOnboarding() {
+        var modal = document.getElementById('onboardingModal');
+        if (!modal) return;
+
+        // Announce via TTS immediately (screen reader users may not see the modal)
+        setTimeout(function () {
+          if (typeof speak === 'function') {
+            speak('Welcome to CodeUp. This is a voice-driven Python IDE for blind and visually impaired users. Please choose your preferred language. Press 1 for English or 2 for Hindi.');
+          }
+        }, 800);
+
+        function pickLang(lang) {
+          safeStorage(function () { localStorage.setItem(LANG_KEY, lang); });
+          var sel = document.getElementById('languageSelector');
+          if (sel) sel.value = lang;
+          modal.style.display = 'none';
+          startTutorial(lang);
+        }
+
+        document.getElementById('obEnglish').addEventListener('click', function () { pickLang('en'); });
+        document.getElementById('obHindi').addEventListener('click',   function () { pickLang('hi'); });
+
+        // Keyboard shortcut: 1 = English, 2 = Hindi while modal is open
+        function onboardingKey(e) {
+          if (e.key === '1') { document.removeEventListener('keydown', onboardingKey); pickLang('en'); }
+          if (e.key === '2') { document.removeEventListener('keydown', onboardingKey); pickLang('hi'); }
+        }
+        document.addEventListener('keydown', onboardingKey);
+      }
+
+      var tutorialSteps = {
+        en: [
+          {
+            say: 'Great! Let\'s learn your first Python concept: print. The print function sends text to the output panel. For example, print, open bracket, quote Hello, close quote, close bracket — will display the word Hello.',
+            code: 'print("Hello")',
+            prompt: 'I\'ve put a print example in the editor. Press Ctrl+Enter to run it and hear the output.',
+          },
+          {
+            say: 'Perfect! You just ran your first Python program. Now — would you like to practice print more, or move on to a new topic? Say "practice" or "new topic", or press P for practice and N for new topic.',
+            code: null,
+            prompt: null,
+            choice: true,
+          },
+        ],
+        hi: [
+          {
+            say: 'बढ़िया! चलिए Python का पहला concept सीखते हैं: print। print function आउटपुट पैनल में टेक्स्ट भेजता है। उदाहरण के लिए, print, open bracket, quote नमस्ते, close quote, close bracket — यह नमस्ते दिखाएगा।',
+            code: 'print("नमस्ते")',
+            prompt: 'मैंने editor में एक print का उदाहरण डाला है। इसे चलाने के लिए Ctrl+Enter दबाएं।',
+          },
+          {
+            say: 'शाबाश! आपने अपना पहला Python program चलाया। अब — क्या आप print का और अभ्यास करना चाहते हैं, या नया topic सीखना चाहते हैं? "अभ्यास" या "नया topic" कहें, या P दबाएं अभ्यास के लिए और N नए topic के लिए।',
+            code: null,
+            prompt: null,
+            choice: true,
+          },
+        ],
+      };
+
+      var practiceSteps = {
+        en: {
+          say: 'Let\'s practice! Try typing: print, open bracket, quote, your name, close quote, close bracket — then press Ctrl+Enter. You can also try printing a number, like print 42.',
+          code: '# Try it yourself!\n# Type: print("your name")\n# Or:   print(42)\n',
+        },
+        hi: {
+          say: 'चलिए अभ्यास करते हैं! टाइप करें: print, open bracket, quote, अपना नाम, close quote, close bracket — फिर Ctrl+Enter दबाएं। आप एक नंबर भी print कर सकते हैं, जैसे print 42।',
+          code: '# खुद try करें!\n# टाइप करें: print("आपका नाम")\n# या:       print(42)\n',
+        },
+      };
+
+      var newTopicSteps = {
+        en: {
+          say: 'Coming up next: variables. A variable is a name that holds a value. For example: x equals 5. Then print x will show 5. We\'ll explore this next time. For now, the editor is yours — happy coding!',
+          code: '# Variables preview\nx = 5\nprint(x)\n',
+        },
+        hi: {
+          say: 'अगला topic: variables। एक variable एक नाम होता है जो एक value रखता है। उदाहरण: x equals 5। फिर print x, 5 दिखाएगा। इसे हम अगली बार explore करेंगे। अभी editor आपका है — coding का मज़ा लें!',
+          code: '# Variables preview\nx = 5\nprint(x)\n',
+        },
+      };
+
+      function startTutorial(lang) {
+        var steps = tutorialSteps[lang] || tutorialSteps.en;
+        var step0 = steps[0];
+
+        setTimeout(function () {
+          speak(step0.say);
+          if (step0.code && typeof setCode === 'function') setCode(step0.code);
+          setTimeout(function () {
+            speak(step0.prompt);
+            // After ~45s give them the choice step
+            setTimeout(function () { showChoiceStep(lang, steps[1]); }, 45000);
+          }, 8000);
+        }, 400);
+      }
+
+      function showChoiceStep(lang, step) {
+        speak(step.say);
+
+        function onChoice(e) {
+          if (e.key === 'p' || e.key === 'P') {
+            document.removeEventListener('keydown', onChoice);
+            var ps = practiceSteps[lang] || practiceSteps.en;
+            speak(ps.say);
+            if (typeof setCode === 'function') setCode(ps.code);
+            safeStorage(function () { localStorage.setItem(TUTORIAL_DONE_KEY, 'true'); });
+          } else if (e.key === 'n' || e.key === 'N') {
+            document.removeEventListener('keydown', onChoice);
+            var ns = newTopicSteps[lang] || newTopicSteps.en;
+            speak(ns.say);
+            if (typeof setCode === 'function') setCode(ns.code);
+            safeStorage(function () { localStorage.setItem(TUTORIAL_DONE_KEY, 'true'); });
+          }
+        }
+        document.addEventListener('keydown', onChoice);
+
+        // Voice command fallback
+        var origHandleVoice = window.handleVoiceCommand;
+        window.handleVoiceCommand = function (raw) {
+          var t = raw.toLowerCase();
+          if (t.includes('practice') || t.includes('अभ्यास')) {
+            window.handleVoiceCommand = origHandleVoice;
+            var ps = practiceSteps[lang] || practiceSteps.en;
+            speak(ps.say);
+            if (typeof setCode === 'function') setCode(ps.code);
+            safeStorage(function () { localStorage.setItem(TUTORIAL_DONE_KEY, 'true'); });
+          } else if (t.includes('new topic') || t.includes('नया')) {
+            window.handleVoiceCommand = origHandleVoice;
+            var ns = newTopicSteps[lang] || newTopicSteps.en;
+            speak(ns.say);
+            if (typeof setCode === 'function') setCode(ns.code);
+            safeStorage(function () { localStorage.setItem(TUTORIAL_DONE_KEY, 'true'); });
+          } else {
+            return origHandleVoice.apply(this, arguments);
+          }
+        };
+      }
+
+      // Check if tutorial already done
+      var tutorialDone = safeStorage(function () { return localStorage.getItem(TUTORIAL_DONE_KEY); });
+      var savedLang    = safeStorage(function () { return localStorage.getItem(LANG_KEY); });
+
+      if (tutorialDone && savedLang) {
+        // Returning user — hide modal, restore language
+        var modal = document.getElementById('onboardingModal');
+        if (modal) modal.style.display = 'none';
+        var sel = document.getElementById('languageSelector');
+        if (sel) sel.value = savedLang;
+      } else {
+        // New user — run onboarding after DOM + Monaco settle
+        window.addEventListener('load', function () { setTimeout(runOnboarding, 600); });
+      }
+      // ── End Onboarding ───────────────────────────────────────────────────
 
       function safeStorage(fn) {
         try { return fn(); } catch (e) { return null; }

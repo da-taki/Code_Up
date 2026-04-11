@@ -152,6 +152,49 @@ def validate_request_size():
     if request.content_length and request.content_length > MAX_REQUEST_SIZE:
         return jsonify({"success": False, "error": "Request too large (max 1MB)"}), 413
 
+
+@app.before_request
+def enforce_same_origin():
+    """Block cross-origin POST/PUT/DELETE requests.
+
+    Without this, a malicious page the user visits can fetch() against
+    localhost:5000 and execute arbitrary Python in their sandbox. We
+    require Origin or Referer to match Host on any state-changing method.
+    Test client requests have no Origin/Referer and are allowed through.
+    """
+    if request.method not in ("POST", "PUT", "DELETE", "PATCH"):
+        return None
+
+    origin = request.headers.get("Origin")
+    referer = request.headers.get("Referer")
+    host = request.headers.get("Host", "")
+
+    # No Origin and no Referer = test client or curl, allow it
+    if not origin and not referer:
+        return None
+
+    # Check Origin first (more reliable)
+    if origin:
+        # Origin is scheme://host[:port], strip scheme to compare with Host
+        origin_host = origin.split("://", 1)[-1]
+        if origin_host == host:
+            return None
+        return jsonify({"success": False, "error": "Cross-origin request blocked"}), 403
+
+    # Fall back to Referer
+    if referer:
+        # Referer is a full URL, extract host
+        try:
+            from urllib.parse import urlparse
+            referer_host = urlparse(referer).netloc
+            if referer_host == host:
+                return None
+        except Exception:
+            pass
+        return jsonify({"success": False, "error": "Cross-origin request blocked"}), 403
+
+    return None
+    
 SNIPPETS_FILE = os.environ.get("SNIPPETS_FILE", "snippets.json")
 DATA_DIR = os.environ.get("DATA_DIR", ".")
 

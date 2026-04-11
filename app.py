@@ -56,8 +56,7 @@ SESSION_COOKIE_MAX_AGE = 3600 * 24 * 7  # 7 days
 # protected without requiring a manual code change.
 SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", "false").lower() == "true"
 SESSION_COOKIE_HTTPONLY = True
-SESSION_COOKIE_SAMESITE = 'Lax'
-TESTING = os.environ.get("FLASK_TESTING", "false").lower() == "true"
+SESSION_COOKIE_SAMESITE = None if os.environ.get("FLASK_TESTING", "false").lower() == "true" else 'Lax'
 
 # FIX C-1: Register ONE module-level after_request handler instead of
 # registering a new permanent handler on every new-session request.
@@ -75,8 +74,6 @@ def set_session_cookie(response):
             secure=SESSION_COOKIE_SECURE,
             httponly=SESSION_COOKIE_HTTPONLY,
             samesite=SESSION_COOKIE_SAMESITE,
-            # In test mode, don't restrict to same-site so test client can send it back
-            domain=None
         )
     return response
 
@@ -672,7 +669,19 @@ SAFE_GLOBALS = {{
     'filter': SafeFunction(filter),
     'pow': SafeFunction(pow),
     'repr': SafeFunction(repr),
-    '__builtins__': {{'None': None, 'False': False, 'True': True}},
+    '__builtins__': {{
+        'None': None, 'False': False, 'True': True,
+        'isinstance': isinstance, 'type': type,
+        'hasattr': hasattr, 'getattr': getattr,
+        'AttributeError': AttributeError, 'TypeError': TypeError,
+        'ValueError': ValueError, 'Exception': Exception,
+        'BaseException': BaseException, 'StopIteration': StopIteration,
+        'RuntimeError': RuntimeError, 'ImportError': ImportError,
+        'NameError': NameError, 'IndexError': IndexError,
+        'KeyError': KeyError, 'ZeroDivisionError': ZeroDivisionError,
+        'OverflowError': OverflowError, 'MemoryError': MemoryError,
+        'NotImplemented': NotImplemented,
+    }},
     '__import__': restricted_import,
     'input': _blocked_input,
     # Inject allowed modules directly so their C extensions have full builtins access

@@ -302,14 +302,27 @@
         },
       };
 
-      var variablesPracticeSteps = {
+      window.variablesPracticeSteps = {
         en: {
-          say: 'Great! You ran the variables example. Now try it yourself: create a variable called name and set it to your name in quotes, then print it. For example: name equals quote Alice quote, then print name.',
+          say: 'Great! You ran the variables example. Now try it yourself: create a variable called name and set it to your name in quotes, then print it. For example: name equals quote Alice quote, then print name. When you are done, press N to learn about loops.',
           code: '# Your turn!\n# name = "your name here"\n# print(name)\n',
+          nextTopic: true,
         },
         hi: {
-          say: 'शाबाश! आपने variables example चलाया। अब खुद try करें: name नाम का variable बनाएं और उसे quotes में अपना नाम दें, फिर print करें। जैसे: name equals quote Alice quote, फिर print name।',
+          say: 'शाबाश! आपने variables example चलाया। अब खुद try करें: name नाम का variable बनाएं और उसे quotes में अपना नाम दें, फिर print करें। जैसे: name equals quote Alice quote, फिर print name। जब हो जाए तो loops सीखने के लिए N दबाएं।',
           code: '# आपकी बारी!\n# name = "आपका नाम यहाँ"\n# print(name)\n',
+          nextTopic: true,
+        },
+      };
+
+      window.loopsTopic = {
+        en: {
+          say: 'Topic 3: loops. A for loop repeats code a set number of times. For example: for i in range 5, colon, new line, indented print i — this prints the numbers 0 to 4. The range function gives you a sequence of numbers. Press Ctrl+Enter to run this example.',
+          code: '# Loops\nfor i in range(5):\n    print(i)\n\n# Loop over a list\nfruits = ["apple", "banana", "mango"]\nfor fruit in fruits:\n    print(fruit)\n',
+        },
+        hi: {
+          say: 'Topic 3: loops। एक for loop कोड को कई बार repeat करता है। उदाहरण: for i in range 5, colon, नई line, indented print i — यह 0 से 4 तक numbers print करता है। range function आपको numbers की एक sequence देता है। इस example को Ctrl+Enter से चलाएं।',
+          code: '# Loops\nfor i in range(5):\n    print(i)\n\n# List पर loop\nfruits = ["apple", "banana", "mango"]\nfor fruit in fruits:\n    print(fruit)\n',
         },
       };
 
@@ -350,9 +363,10 @@
               window._tutorialAwaitingRun = true;
               window._tutorialLang = lang;
               window._tutorialStep1 = {
-                say: (variablesPracticeSteps[lang] || variablesPracticeSteps.en).say,
-                code: (variablesPracticeSteps[lang] || variablesPracticeSteps.en).code,
+                say: (window.variablesPracticeSteps[lang] || window.variablesPracticeSteps.en).say,
+                code: (window.variablesPracticeSteps[lang] || window.variablesPracticeSteps.en).code,
                 choice: false,
+                nextTopic: true,
               };
             } else {
               safeStorage(function () { localStorage.setItem(TUTORIAL_DONE_KEY, 'true'); });

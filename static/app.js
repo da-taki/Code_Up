@@ -644,9 +644,49 @@ async function runCode() {
       if (data.semantic_issues && data.semantic_issues.length) {
         data.semantic_issues.forEach(e => speak(`${e.category}. ${e.message}`));
       }
-      // Tutorial hook — delegate to the state machine
-      if (typeof window._tutorialOnRunSuccess === 'function') {
-        setTimeout(window._tutorialOnRunSuccess, 2000);
+      // Tutorial hook — show choice step after first successful run
+      if (window._tutorialAwaitingRun) {
+        window._tutorialAwaitingRun = false;
+        var _step = window._tutorialStep1;
+        var _lang = window._tutorialLang;
+        setTimeout(function () {
+          if (_step && _step.nextTopic && _step._topicKey === 'loops' && window.conditionalsTopic) {
+            // Coming from loops practice — offer conditionals
+            speak(_step.say);
+            function _condKey(e) {
+              if (e.key === 'n' || e.key === 'N') {
+                document.removeEventListener('keydown', _condKey);
+                var ct = window.conditionalsTopic[_lang] || window.conditionalsTopic.en;
+                speak(ct.say);
+                if (typeof setCode === 'function') setCode(ct.code);
+                try { localStorage.setItem('codeup_tutorial_done', 'true'); } catch(e) {}
+              }
+            }
+            document.addEventListener('keydown', _condKey);
+          } else if (_step && _step.nextTopic && window.loopsTopic) {
+            // Coming from variables practice — offer loops
+            speak(_step.say);
+            function _loopKey(e) {
+              if (e.key === 'n' || e.key === 'N') {
+                document.removeEventListener('keydown', _loopKey);
+                var lt = window.loopsTopic[_lang] || window.loopsTopic.en;
+                speak(lt.say);
+                if (typeof setCode === 'function') setCode(lt.code);
+                // After loops runs, offer conditionals
+                window._tutorialAwaitingRun = true;
+                window._tutorialLang = _lang;
+                window._tutorialStep1 = {
+                  say: 'Great job running the loops example! Press N whenever you want to learn about conditionals — the if and else statements.',
+                  nextTopic: true,
+                  _topicKey: 'loops',
+                };
+              }
+            }
+            document.addEventListener('keydown', _loopKey);
+          } else if (typeof showChoiceStep === 'function' && _step) {
+            showChoiceStep(_lang, _step);
+          }
+        }, 2000);
       }
     } else {
       out('ERROR:\n' + (data.error || ''));
@@ -1235,6 +1275,43 @@ function stopListening() {
 
 // ---------- VOICE COMMAND HANDLER ----------
 async function handleVoiceCommand(rawText) {
+  // Quiz answer intercept
+  if (window._pendingQuizAnswer) {
+    const t = rawText.toLowerCase().trim();
+    const match = t.match(/(?:answer|option|choose)\s+([abc])|^([abc])$/);
+    if (match) {
+      const q = window._pendingQuizAnswer;
+      window._pendingQuizAnswer = null;
+      const chosen = (match[1] || match[2]).toUpperCase();
+      if (chosen === q.answer) {
+        SonificationManager.playTone(900, 0.1, 0.1);
+        speak(`Correct! ${q.explanation}`);
+        srAnnounce('Correct answer');
+        out(`✓ CORRECT!\n\n${q.explanation}`);
+      } else {
+        SonificationManager.playTone(200, 0.15, 0.08);
+        speak(`Not quite. The correct answer was ${q.answer}. ${q.explanation}`);
+        srAnnounce('Wrong answer');
+        out(`✗ The correct answer was ${q.answer}.\n\n${q.explanation}`);
+      }
+      return;
+    }
+  }
+
+  // Bug challenge reveal intercept
+  if (window._pendingBugChallenge) {
+    const t = rawText.toLowerCase().trim();
+    if (t.includes('show answer') || t.includes('give up') || t.includes('reveal') || t.includes('answer दिखाओ')) {
+      const ch = window._pendingBugChallenge;
+      window._pendingBugChallenge = null;
+      out(`THE BUG:\n${ch.bug}\n\nFIXED CODE:\n${ch.fixed}`);
+      speak(`The bug was: ${ch.bug}`);
+      setTimeout(() => setCode(ch.fixed), 2000);
+      srAnnounce('Answer revealed');
+      return;
+    }
+  }
+
   if (pendingConfirm) {
     const handled = tryResolveConfirmation(rawText);
     if (handled) return;
@@ -2131,29 +2208,10 @@ async function quizMe(topic) {
     q.options.forEach(o => speak(o));
     speak('Say answer A, answer B, or answer C.');
 
-    // Listen for answer
-    const origVoice = window.handleVoiceCommand;
-    window.handleVoiceCommand = async function(raw) {
-      const t = raw.toLowerCase().trim();
-      const match = t.match(/(?:answer|option|choose)\s+([abc])|^([abc])$/);
-      if (match) {
-        window.handleVoiceCommand = origVoice;
-        const chosen = (match[1] || match[2]).toUpperCase();
-        _currentQuiz = null;
-        if (chosen === q.answer) {
-          SonificationManager.playTone(900, 0.1, 0.1);
-          speak(`Correct! ${q.explanation}`);
-          srAnnounce('Correct answer');
-          out(`✓ CORRECT!\n\n${q.explanation}`);
-        } else {
-          SonificationManager.playTone(200, 0.15, 0.08);
-          speak(`Not quite. The correct answer was ${q.answer}. ${q.explanation}`);
-          srAnnounce('Wrong answer');
-          out(`✗ The correct answer was ${q.answer}.\n\n${q.explanation}`);
-        }
-      } else {
-        return origVoice.apply(this, arguments);
-      }
+    // Store expected answer — handleVoiceCommand checks this cleanly
+    window._pendingQuizAnswer = {
+      answer: q.answer,
+      explanation: q.explanation,
     };
 
   } catch (e) {
@@ -2208,19 +2266,10 @@ async function bugChallenge() {
     srAnnounce('Bug challenge loaded');
     speak(`Bug challenge loaded into editor. ${ch.hint}. Say show answer when you are ready.`);
 
-    // Listen for "show answer"
-    const origVoice = window.handleVoiceCommand;
-    window.handleVoiceCommand = async function(raw) {
-      const t = raw.toLowerCase().trim();
-      if (t.includes('show answer') || t.includes('give up') || t.includes('reveal') || t.includes('answer दिखाओ')) {
-        window.handleVoiceCommand = origVoice;
-        out(`THE BUG:\n${ch.bug}\n\nFIXED CODE:\n${ch.fixed}`);
-        speak(`The bug was: ${ch.bug}`);
-        setTimeout(() => setCode(ch.fixed), 2000);
-        srAnnounce('Answer revealed');
-      } else {
-        return origVoice.apply(this, arguments);
-      }
+    // Store pending bug challenge — handleVoiceCommand checks this cleanly
+    window._pendingBugChallenge = {
+      bug: ch.bug,
+      fixed: ch.fixed,
     };
 
   } catch (e) {

@@ -238,6 +238,18 @@ Tests are fully isolated — snippet storage is redirected to a temp directory a
 | "sonify block" | Hear current block as audio tones |
 | "save snippet named my program" | Save current code with a specific name |
 | "restart tutorial" / "start over" | Reset and restart the onboarding tutorial |
+| "tell the story" / "narrate execution" | Hear a narrative of what your code did |
+| "set breakpoint at line 10" | Set an audio breakpoint |
+| "watch variable x" | Report variable x at each breakpoint |
+| "continue" | Run to the next breakpoint |
+| "clear breakpoints" | Remove all breakpoints |
+| "learning mode" / "teach me" | Start mentor/quiz mode |
+| "quiz me on loops" | Get a quiz question on a topic |
+| "explain variables" | Hear a simple concept explanation |
+| "bug challenge" | Load a buggy program to find and fix |
+| "insert function called greet" | Voice code editing — add a function |
+| "suggest next line" | Get 3 AI suggestions for the next line |
+| "choose 2" | Insert suggestion number 2 |
 | "help" | List all available commands |
 
 ---
@@ -303,6 +315,12 @@ Some analyses — semantic warnings, infinite loop detection — are heuristic-b
 - ✅ Command palette with full keyboard navigation
 - ✅ Accessible snippet management (no window.prompt)
 - ✅ Hindi voice recognition (hi-IN) with auto-restart on language change
+- ✅ Execution story mode — narrative narration of code execution
+- ✅ Audio breakpoint debugger with variable watching
+- ✅ Mentor/learning mode — quiz, concept explanation, bug challenges
+- ✅ Intent-aware voice code editing (insert function/class/loop/if, replace line, add parameter)
+- ✅ Semantic autocomplete via voice (suggest next line → choose option)
+- ✅ Full English and Hindi support across all features
 
 **Next:**
 - Deployment and HTTPS

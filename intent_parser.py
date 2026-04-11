@@ -274,6 +274,84 @@ class IntentParser:
     ]
 
     # -----------------------------------------------------------------------
+    # Execution story mode
+    # -----------------------------------------------------------------------
+
+    STORY_MODE_PATTERNS = [
+        r"^(?:tell|narrate|explain|describe)\s+(?:the\s+)?(?:execution\s+)?story$",
+        r"^(?:story|narrate)\s+(?:this\s+)?(?:execution|run|code)$",
+        r"^what\s+(?:happened|did\s+the\s+code\s+do)\s+(?:when\s+it\s+ran)?$",
+        r"^execution\s+story$",
+        r"^(?:कहानी|narrate\s+करो|explain\s+करो)\s*(?:execution)?$",
+    ]
+
+    # -----------------------------------------------------------------------
+    # Audio breakpoint debugger
+    # -----------------------------------------------------------------------
+
+    SET_BREAKPOINT_PATTERNS = [
+        r"set\s+(?:a\s+)?breakpoint\s+(?:at\s+)?(?:line\s+)?([\w\s]+?)(?:\s*$|\s+(?:please|now))",
+        r"(?:pause|stop)\s+(?:at\s+)?(?:line\s+)?([\w\s]+?)(?:\s*$|\s+(?:please|now))",
+        r"break\s+(?:at\s+)?(?:line\s+)?([\w\s]+?)(?:\s*$|\s+(?:please|now))",
+    ]
+
+    CLEAR_BREAKPOINT_PATTERNS = [
+        r"^(?:clear|remove|delete)\s+(?:all\s+)?breakpoints?$",
+        r"^(?:breakpoints?\s+)?(?:clear|remove|delete)\s+(?:all\s+)?breakpoints?$",
+    ]
+
+    WATCH_VARIABLE_PATTERNS = [
+        r"watch\s+(?:variable\s+)?(\w+)",
+        r"monitor\s+(?:variable\s+)?(\w+)",
+        r"keep\s+(?:an\s+)?eye\s+on\s+(?:variable\s+)?(\w+)",
+    ]
+
+    DEBUG_CONTINUE_PATTERNS = [
+        r"^continue(?:\s+(?:debugging|execution))?$",
+        r"^(?:resume|proceed)(?:\s+(?:debugging|execution))?$",
+        r"^जारी\s+रखो$",
+    ]
+
+    DEBUG_STEP_IN_PATTERNS = [
+        r"^step\s+in(?:to)?$",
+        r"^(?:go\s+)?inside\s+(?:the\s+)?function$",
+    ]
+
+    DEBUG_STEP_OUT_PATTERNS = [
+        r"^step\s+out(?:\s+of)?(?:\s+(?:the\s+)?function)?$",
+        r"^(?:exit|leave)\s+(?:the\s+)?function$",
+    ]
+
+    # -----------------------------------------------------------------------
+    # Learning / mentor mode
+    # -----------------------------------------------------------------------
+
+    MENTOR_MODE_PATTERNS = [
+        r"^(?:start\s+)?(?:learning|mentor|tutor)\s+mode$",
+        r"^(?:teach|tutor)\s+me$",
+        r"^(?:मुझे\s+सिखाओ|learning\s+mode\s+शुरू\s+करो)$",
+    ]
+
+    QUIZ_ME_PATTERNS = [
+        r"^quiz\s+me(?:\s+on\s+(.+))?$",
+        r"^(?:test|challenge)\s+me(?:\s+on\s+(.+))?$",
+        r"^give\s+me\s+(?:a\s+)?(?:quiz|challenge|test)(?:\s+on\s+(.+))?$",
+        r"^(?:मुझे\s+quiz\s+करो|test\s+करो)(?:\s+(.+))?$",
+    ]
+
+    EXPLAIN_CONCEPT_PATTERNS = [
+        r"explain\s+(.+?)\s+(?:like\s+i['\u2019]?m\s+new|for\s+(?:a\s+)?beginner|simply|in\s+simple\s+(?:terms|words))",
+        r"what\s+(?:is|are)\s+(.+?)\s+in\s+simple\s+(?:terms|words)",
+        r"(?:मुझे\s+)?(.+?)\s+(?:समझाओ|explain\s+करो)\s*(?:simply|simply\s+में)?",
+    ]
+
+    BUG_CHALLENGE_PATTERNS = [
+        r"^(?:give\s+me\s+)?(?:a\s+)?bug\s+(?:fixing\s+)?challenge$",
+        r"^(?:debug\s+)?challenge(?:\s+me)?$",
+        r"^(?:एक\s+)?bug\s+(?:challenge|ढूंढो)$",
+    ]
+
+    # -----------------------------------------------------------------------
     # Intent map — order defines precedence (most specific first)
     # -----------------------------------------------------------------------
 
@@ -325,8 +403,22 @@ class IntentParser:
             "next_step":      self.NEXT_STEP_PATTERNS,
             "previous_step":  self.PREVIOUS_STEP_PATTERNS,
             "what_changed":   self.WHAT_CHANGED_PATTERNS,
-            "repeat":         self.REPEAT_PATTERNS,
-            "help":           self.HELP_PATTERNS,
+            "repeat":              self.REPEAT_PATTERNS,
+            "help":                self.HELP_PATTERNS,
+            # Story mode
+            "story_mode":          self.STORY_MODE_PATTERNS,
+            # Breakpoint debugger
+            "set_breakpoint":      self.SET_BREAKPOINT_PATTERNS,
+            "clear_breakpoints":   self.CLEAR_BREAKPOINT_PATTERNS,
+            "watch_variable":      self.WATCH_VARIABLE_PATTERNS,
+            "debug_continue":      self.DEBUG_CONTINUE_PATTERNS,
+            "debug_step_in":       self.DEBUG_STEP_IN_PATTERNS,
+            "debug_step_out":      self.DEBUG_STEP_OUT_PATTERNS,
+            # Mentor mode
+            "mentor_mode":         self.MENTOR_MODE_PATTERNS,
+            "quiz_me":             self.QUIZ_ME_PATTERNS,
+            "explain_concept":     self.EXPLAIN_CONCEPT_PATTERNS,
+            "bug_challenge":       self.BUG_CHALLENGE_PATTERNS,
         }
 
     # -----------------------------------------------------------------------
@@ -403,6 +495,10 @@ class IntentParser:
                 if intent == "insert_function" and "function_name" not in slots:
                     continue
                 if intent == "insert_class" and "class_name" not in slots:
+                    continue
+                if intent == "set_breakpoint" and "line_number" not in slots:
+                    continue
+                if intent == "explain_concept" and "concept" not in slots:
                     continue
 
                 return {
@@ -502,6 +598,25 @@ class IntentParser:
                 raw = match.group(1).strip()
                 num = self._word_to_number(raw)
                 slots["choice"] = num if num is not None else raw
+
+        elif intent == "set_breakpoint":
+            if match.groups() and match.group(1):
+                raw = match.group(1).strip()
+                num = self._word_to_number(raw)
+                if num is not None:
+                    slots["line_number"] = num
+
+        elif intent == "watch_variable":
+            if match.groups() and match.group(1):
+                slots["variable"] = match.group(1).strip()
+
+        elif intent == "quiz_me":
+            if match.groups() and match.group(1):
+                slots["topic"] = match.group(1).strip()
+
+        elif intent == "explain_concept":
+            if match.groups() and match.group(1):
+                slots["concept"] = match.group(1).strip()
 
         return slots
 

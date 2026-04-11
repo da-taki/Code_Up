@@ -256,13 +256,14 @@ Tests are fully isolated — snippet storage is redirected to a temp directory a
 
 ## Language Support
 
-CodeUp supports **English** and **Hindi (हिंदी)** throughout:
+CodeUp supports **English** and **Hindi (हिंदी)**:
 
-- Onboarding modal and tutorial narration in both languages
-- All AI responses — analysis, fixes, explanations — in the selected language
-- Voice recognition uses `en-US` or `hi-IN` automatically
-- Switching language mid-session restarts voice recognition with the correct locale
-
+- Onboarding modal and 4-topic tutorial in both languages
+- All AI responses — analysis, fixes, explanations, story mode, mentor mode — in the selected language
+- Voice recognition uses `en-US` or `hi-IN` automatically and restarts on language change
+- Core voice commands work in Hindi: navigation (`लाइन बीस पर जाओ`, `लाइन पांच पढ़ो`), execution (`चलाओ`, `रन करो`), analysis (`कोड समझाओ`, `विश्लेषण करो`), fixing (`ठीक करो`, `सही करो`), summarization (`सारांश दो`), help (`मदद`, `सहायता`), clearing (`एडिटर साफ करो`), and stepping through traces (`अगला कदम`, `पिछला कदम`)
+- Hindi number words 0–50 are recognized in line-navigation commands (`एक`, `दो`... `बीस`... `पचास`)
+- Less common commands (breakpoints, mentor sub-commands, structure navigation) currently accept English only — Hindi coverage will expand based on user feedback
 ---
 
 ## Accessibility Features
@@ -320,8 +321,7 @@ Some analyses — semantic warnings, infinite loop detection — are heuristic-b
 - ✅ Mentor/learning mode — quiz, concept explanation, bug challenges
 - ✅ Intent-aware voice code editing (insert function/class/loop/if, replace line, add parameter)
 - ✅ Semantic autocomplete via voice (suggest next line → choose option)
-- ✅ Full English and Hindi support across all features
-
+- ✅ Bilingual English and Hindi support: AI responses, tutorial content, voice recognition (`hi-IN`), and ~15 core voice commands (run, navigate, analyze, fix, summarize, help, etc.) in both languages. Hindi number words 0–50 supported in line-navigation commands.
 **Next:**
 - Deployment and HTTPS
 - User testing with blind users

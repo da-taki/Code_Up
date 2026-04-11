@@ -194,7 +194,7 @@ def enforce_same_origin():
         return jsonify({"success": False, "error": "Cross-origin request blocked"}), 403
 
     return None
-    
+
 SNIPPETS_FILE = os.environ.get("SNIPPETS_FILE", "snippets.json")
 DATA_DIR = os.environ.get("DATA_DIR", ".")
 
@@ -1707,16 +1707,42 @@ def snippet_detail(sid):
 # ==========================
 
 COMMANDS = {
-    "run": ["run", "execute", "run code", "execute code", "start code", "start program"],
-    "analyze": ["analyze", "analyse", "analyze code", "analyse code", "explain code", "check code", "review code"],
-    "speak": ["speak output", "read output", "read the output", "say the output"],
-    "fix": ["fix", "fix code", "auto fix", "repair code", "correct code"],
-    "repeat_last_action": ["repeat", "do that again", "again", "repeat last"],
-    "repeat_last_speech": ["repeat that", "say that again", "repeat message", "repeat output"],
-    "advise": ["advise on code", "advice on code", "improve code", "how to improve code"],
-    "generate_code": ["generate code", "write code", "create code", "make code"],
-    "clear_editor": ["clear editor", "clear code", "clear file", "reset code"],
-    "read_line_enhanced": ["read line with context", "enhanced read line", "describe line position", "where am i", "line context"],
+    "run": [
+        "run", "execute", "run code", "execute code", "start code", "start program",
+        "चलाओ", "कोड चलाओ", "रन करो", "रन",
+    ],
+    "analyze": [
+        "analyze", "analyse", "analyze code", "analyse code", "explain code", "check code", "review code",
+        "विश्लेषण करो", "कोड का विश्लेषण", "कोड समझाओ", "कोड जांचो",
+    ],
+    "speak": [
+        "speak output", "read output", "read the output", "say the output",
+        "आउटपुट पढ़ो", "आउटपुट बोलो", "output बताओ",
+    ],
+    "fix": [
+        "fix", "fix code", "auto fix", "repair code", "correct code",
+        "ठीक करो", "कोड ठीक करो", "गलती ठीक करो", "सही करो",
+    ],
+    "repeat_last_action": [
+        "repeat", "do that again", "again", "repeat last",
+        "दोहराओ", "फिर से करो", "वापस",
+    ],
+    "repeat_last_speech": [
+        "repeat that", "say that again", "repeat message", "repeat output",
+        "फिर से बोलो", "वही दोहराओ",
+    ],
+    "advise": [
+        "advise on code", "advice on code", "improve code", "how to improve code",
+        "सुझाव दो", "कोड सुधारो", "improve करो",
+    ],
+    "generate_code": [
+        "generate code", "write code", "create code", "make code",
+        "कोड बनाओ", "कोड लिखो", "code बनाओ",
+    ],
+    "clear_editor": [
+        "clear editor", "clear code", "clear file", "reset code",
+        "एडिटर साफ करो", "कोड हटाओ", "कोड मिटाओ",
+    ],    "read_line_enhanced": ["read line with context", "enhanced read line", "describe line position", "where am i", "line context"],
     "sonify_block": ["sonify block", "audio structure", "hear structure", "play code structure", "sound out code"],
     "list_variables": ["what variables", "list variables", "show variables", "what variables are available", "variables in scope"],
     "check_errors": ["check for errors", "check syntax", "find errors", "are there errors", "syntax check"],

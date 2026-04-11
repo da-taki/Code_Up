@@ -1,219 +1,117 @@
 """
-Sandboxed Virtual File System for CodeUp
+AST-based code structure extractor for CodeUp.
 
-Provides safe file operations within a confined workspace directory.
-All file operations are restricted to the workspace folder created at init time.
+Provides CodeAnalyzer, which walks a Python source string and returns a
+summary of imports, functions (with typed parameter info), classes, and
+loops — used by the structure panel and the /analyze endpoint.
 """
 
-import os
-import json
-import shutil          
-import tempfile
-import threading
-from pathlib import Path
-from typing import Optional, Dict, List
-
-_WORKSPACE_INFO_MAX_FILES = 5000
+import ast
+from typing import Any, Dict, List, Optional
 
 
-class SandboxedFileSystem:
-    """Manages file operations within a sandboxed workspace."""
+class CodeAnalyzer:
+    """Extract structural information from Python source using the AST."""
 
-    # Maximum file content size enforced on write.
-    MAX_FILE_SIZE = 5_000_000  # bytes
+    def analyze(self, code: str) -> Dict[str, Any]:
+        """
+        Parse *code* and return a structure dict with keys:
+            imports   – list of import strings
+            functions – list of {name, line, params: [{name, type?}]}
+            classes   – list of {name, line, methods: [str]}
+            loops     – list of {type, line}
 
-    def __init__(self, workspace_dir: Optional[str] = None) -> None:
- 
-        if workspace_dir is None:
-            self.workspace_dir = tempfile.mkdtemp(prefix="codeup_workspace_")
-        else:
-            self.workspace_dir = workspace_dir
-            os.makedirs(self.workspace_dir, exist_ok=True)
+        Returns {"error": <message>} on SyntaxError.
+        """
+        try:
+            tree = ast.parse(code)
+        except SyntaxError as e:
+            return {"error": f"Syntax error: {e}"}
 
-        # Ensure the stored path is absolute and canonical
-        self.workspace_dir = os.path.abspath(self.workspace_dir)
+        return {
+            "imports":   self._collect_imports(tree),
+            "functions": self._collect_functions(tree),
+            "classes":   self._collect_classes(tree),
+            "loops":     self._collect_loops(tree),
+        }
 
     # ------------------------------------------------------------------
-    # Path helpers
+    # Private collectors
     # ------------------------------------------------------------------
 
-    def _validate_path(self, filepath: str) -> str:
+    def _collect_imports(self, tree: ast.AST) -> List[str]:
+        imports: List[str] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    imports.append(alias.asname or alias.name)
+            elif isinstance(node, ast.ImportFrom):
+                module = node.module or ""
+                for alias in node.names:
+                    imports.append(f"{module}.{alias.name}")
+        return imports
 
-        abs_path = os.path.abspath(os.path.join(self.workspace_dir, filepath))
-        try:
-            Path(abs_path).relative_to(Path(self.workspace_dir))
-        except ValueError:
-            raise ValueError(f"Path '{filepath}' is outside workspace")
-        return abs_path
+    def _collect_functions(self, tree: ast.AST) -> List[Dict[str, Any]]:
+        functions: List[Dict[str, Any]] = []
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                params = self._extract_params(node.args)
+                functions.append({
+                    "name":   node.name,
+                    "line":   node.lineno,
+                    "params": params,
+                })
+        return functions
+
+    def _collect_classes(self, tree: ast.AST) -> List[Dict[str, Any]]:
+        classes: List[Dict[str, Any]] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef):
+                methods = [
+                    n.name
+                    for n in ast.walk(node)
+                    if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                ]
+                classes.append({
+                    "name":    node.name,
+                    "line":    node.lineno,
+                    "methods": methods,
+                })
+        return classes
+
+    def _collect_loops(self, tree: ast.AST) -> List[Dict[str, Any]]:
+        loops: List[Dict[str, Any]] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.For):
+                loops.append({"type": "for",   "line": node.lineno})
+            elif isinstance(node, ast.While):
+                loops.append({"type": "while", "line": node.lineno})
+        return loops
 
     # ------------------------------------------------------------------
-    # File operations
+    # Parameter helpers
     # ------------------------------------------------------------------
 
-    def write(self, filepath: str, content: str, encoding: str = "utf-8") -> Dict:
+    def _extract_params(self, args: ast.arguments) -> List[Dict[str, Optional[str]]]:
+        params: List[Dict[str, Optional[str]]] = []
+        for arg in args.args:
+            params.append({
+                "name": arg.arg,
+                "type": self._annotation_str(arg.annotation),
+            })
+        return params
 
+    @staticmethod
+    def _annotation_str(annotation: Optional[ast.expr]) -> Optional[str]:
+        if annotation is None:
+            return None
+        if isinstance(annotation, ast.Name):
+            return annotation.id
+        if isinstance(annotation, ast.Attribute):
+            return f"{annotation.value.id}.{annotation.attr}"  # type: ignore[attr-defined]
+        if isinstance(annotation, ast.Constant):
+            return str(annotation.value)
         try:
-            raw: bytes = content.encode(encoding)
-            if len(raw) > self.MAX_FILE_SIZE:
-                raise ValueError(
-                    f"File exceeds maximum size of {self.MAX_FILE_SIZE} bytes"
-                )
-
-            abs_path = self._validate_path(filepath)
-            os.makedirs(os.path.dirname(abs_path), exist_ok=True)
-
-            # Write pre-encoded bytes directly — no second encode pass
-            with open(abs_path, "wb") as f:
-                f.write(raw)
-
-            return {
-                "success": True,
-                "path": filepath,
-                "size": len(raw),
-            }
-        except Exception as e:
-            return {
-                "success": False,
-                "path": filepath,
-                "error": str(e),
-            }
-
-    def read(self, filepath: str, encoding: str = "utf-8") -> Dict:
-
-        try:
-            abs_path = self._validate_path(filepath)
-
-            if not os.path.exists(abs_path):
-                return {"success": False, "path": filepath, "error": "File not found"}
-
-            if not os.path.isfile(abs_path):
-                return {"success": False, "path": filepath, "error": "Path is not a file"}
-
-            with open(abs_path, "r", encoding=encoding) as f:
-                content = f.read()
-
-            return {
-                "success": True,
-                "path": filepath,
-                "content": content,
-                "size": len(content),
-            }
-        except Exception as e:
-            return {"success": False, "path": filepath, "error": str(e)}
-
-    def delete(self, filepath: str) -> Dict:
-
-        try:
-            abs_path = self._validate_path(filepath)
-
-            if not os.path.exists(abs_path):
-                return {"success": False, "path": filepath, "error": "File not found"}
-
-            if not os.path.isfile(abs_path):
-                return {"success": False, "path": filepath, "error": "Path is not a file"}
-
-            os.remove(abs_path)
-            return {"success": True, "path": filepath}
-        except Exception as e:
-            return {"success": False, "path": filepath, "error": str(e)}
-
-    def list_files(self, dirpath: str = ".") -> Dict:
-        try:
-            abs_path = self._validate_path(dirpath)
-
-            if not os.path.exists(abs_path):
-                return {"success": False, "error": "Directory not found", "files": [], "dirs": []}
-
-            if not os.path.isdir(abs_path):
-                return {"success": False, "error": "Path is not a directory", "files": [], "dirs": []}
-
-            files: List[Dict] = []
-            dirs: List[str] = []
-
-            for entry in os.listdir(abs_path):
-                entry_path = os.path.join(abs_path, entry)
-                if os.path.isfile(entry_path):
-                    files.append({"name": entry, "size": os.path.getsize(entry_path)})
-                elif os.path.isdir(entry_path):
-                    dirs.append(entry)
-
-            return {
-                "success": True,
-                "files": sorted(files, key=lambda x: x["name"]),
-                "dirs": sorted(dirs),
-            }
-        except Exception as e:
-            return {"success": False, "error": str(e), "files": [], "dirs": []}
-
-    def get_workspace_info(self) -> Dict:
-
-        try:
-            total_files = 0
-            total_size = 0
-            truncated = False
-
-            for root, dirs, files in os.walk(self.workspace_dir):
-                for file in files:
-                    total_files += 1
-                    if total_files > _WORKSPACE_INFO_MAX_FILES:
-                        truncated = True
-                        break
-                    total_size += os.path.getsize(os.path.join(root, file))
-                if truncated:
-                    break
-
-            result: Dict = {
-                "success": True,
-                "workspace": self.workspace_dir,
-                "total_files": total_files,
-                "total_size": total_size,
-                "available": True,
-            }
-            if truncated:
-                result["truncated"] = True
-                result["truncated_at"] = _WORKSPACE_INFO_MAX_FILES
-            return result
-        except Exception as e:
-            return {"success": False, "error": str(e)}
-
-    def cleanup(self) -> Dict:
-        try:
-            if os.path.exists(self.workspace_dir):
-                shutil.rmtree(self.workspace_dir)
-            return {"success": True}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
-
-
-# ---------------------------------------------------------------------------
-# Thread-safe lazy singleton
-# ---------------------------------------------------------------------------
-
-_sandbox: Optional[SandboxedFileSystem] = None
-_sandbox_lock = threading.Lock()
-
-
-import atexit
-
-@atexit.register
-def _cleanup_sandbox_on_exit() -> None:
-    """Best-effort cleanup of the global sandbox on interpreter shutdown."""
-    global _sandbox
-    if _sandbox is not None:
-        try:
-            _sandbox.cleanup()
+            return ast.unparse(annotation)
         except Exception:
-            pass
-
-
-def get_sandbox() -> SandboxedFileSystem:
-    """Get or create the global SandboxedFileSystem instance (thread-safe)."""
-    global _sandbox
-    # Fast path — already initialised
-    if _sandbox is None:
-        with _sandbox_lock:
-            # Re-check inside the lock: another thread may have created it
-            # between the outer None check and acquiring the lock.
-            if _sandbox is None:
-                _sandbox = SandboxedFileSystem()
-    return _sandbox
+            return None

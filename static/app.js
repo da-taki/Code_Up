@@ -1238,20 +1238,27 @@ window.addEventListener('DOMContentLoaded', () => {
       commandPaletteSelectedIndex = 0;
       renderCommandPalette(e.target.value);
     });
+    // Escape must be caught on the INPUT itself so Monaco never sees it
+    paletteInput.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeCommandPalette(); }
+      else if (e.key === 'ArrowDown') { e.preventDefault(); commandPaletteSelectedIndex++; renderCommandPalette(paletteInput.value); }
+      else if (e.key === 'ArrowUp')   { e.preventDefault(); commandPaletteSelectedIndex--; renderCommandPalette(paletteInput.value); }
+      else if (e.key === 'Enter')     { e.preventDefault(); executeCommandPaletteItem(commandPaletteSelectedIndex); }
+    });
   }
 
-  // Command palette keyboard navigation — inside DOMContentLoaded so element is guaranteed present
+  // Ctrl+Shift+P opens the palette — document-level is fine for this one
   document.addEventListener('keydown', e => {
-    if (e.ctrlKey && e.shiftKey && e.key === 'P') { e.preventDefault(); openCommandPalette(); return; }
-
-    const overlay = document.getElementById('commandPaletteOverlay');
-    if (!overlay || overlay.hasAttribute('hidden')) return;
-
-    if (e.key === 'Escape')     { e.preventDefault(); closeCommandPalette(); }
-    else if (e.key === 'ArrowDown') { e.preventDefault(); commandPaletteSelectedIndex++; renderCommandPalette(document.getElementById('commandPaletteInput').value); }
-    else if (e.key === 'ArrowUp')   { e.preventDefault(); commandPaletteSelectedIndex--; renderCommandPalette(document.getElementById('commandPaletteInput').value); }
-    else if (e.key === 'Enter')     { e.preventDefault(); executeCommandPaletteItem(commandPaletteSelectedIndex); }
+    if (e.ctrlKey && e.shiftKey && e.key === 'P') { e.preventDefault(); openCommandPalette(); }
   });
+
+  // Click outside the container closes the palette
+  const paletteOverlay = document.getElementById('commandPaletteOverlay');
+  if (paletteOverlay) {
+    paletteOverlay.addEventListener('click', e => {
+      if (e.target === paletteOverlay) closeCommandPalette();
+    });
+  }
 });
 
 function registerEditorShortcuts() {
@@ -1628,14 +1635,19 @@ function openCommandPalette() {
   const overlay = document.getElementById('commandPaletteOverlay');
   const input   = document.getElementById('commandPaletteInput');
   showEl(overlay);
-  setTimeout(() => input && input.focus(), 0);
   commandPaletteSelectedIndex = 0;
   renderCommandPalette('');
+  // Focus after a tick so Monaco doesn't reclaim focus immediately
+  requestAnimationFrame(() => { if (input) { input.focus(); speak('Command palette open. Type to search, arrow keys to navigate, Enter to select, Escape to close.'); } });
 }
 
 function closeCommandPalette() {
   hideEl(document.getElementById('commandPaletteOverlay'));
+  // Return focus to editor so keyboard users aren't stranded
+  if (editor) editor.focus();
+  speak('Command palette closed.');
 }
+
 
 function renderCommandPalette(filterText) {
   const resultsContainer = document.getElementById('commandPaletteResults');

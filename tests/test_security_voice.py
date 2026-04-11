@@ -688,3 +688,88 @@ def test_intent_parser_no_false_goto_line():
     """Generic sentences mentioning 'line' must not trigger goto_line."""
     result = parse_intent("this is a single line program")
     assert result["intent"] != "goto_line"
+
+# ===========================================================================
+# 15. HINDI INTENT PARSING
+# ===========================================================================
+
+@pytest.mark.parametrize("hindi_text, expected_intent, slot_check", [
+    # Numbers
+    ("लाइन बीस पर जाओ",        "goto_line",    lambda s: s.get("line_number") == 20),
+    ("लाइन पंद्रह पर जाओ",      "goto_line",    lambda s: s.get("line_number") == 15),
+    ("लाइन पांच पढ़ो",          "read_line",    lambda s: s.get("line_number") == 5),
+    ("line 10 पर जाओ",          "goto_line",    lambda s: s.get("line_number") == 10),
+
+    # Execution
+    ("चलाओ",                    "run",          lambda s: True),
+    ("कोड चलाओ",                "run",          lambda s: True),
+    ("रन करो",                  "run",          lambda s: True),
+
+    # Analysis
+    ("कोड का विश्लेषण करो",     "analyze",      lambda s: True),
+    ("कोड समझाओ",               "analyze",      lambda s: True),
+
+    # Fix
+    ("कोड ठीक करो",             "fix",          lambda s: True),
+    ("गलती ठीक करो",            "fix",          lambda s: True),
+    ("सही करो",                 "fix",          lambda s: True),
+
+    # Summarize
+    ("सारांश दो",               "summarize",    lambda s: True),
+    ("कोड का सारांश",           "summarize",    lambda s: True),
+
+    # Suggest next
+    ("अगली लाइन सुझाओ",         "suggest_next", lambda s: True),
+    ("क्या लिखूं",              "suggest_next", lambda s: True),
+
+    # Steps
+    ("अगला कदम",                "next_step",    lambda s: True),
+    ("पिछला कदम",               "previous_step",lambda s: True),
+    ("आगे बढ़ो",                "next_step",    lambda s: True),
+    ("पीछे जाओ",                "previous_step",lambda s: True),
+
+    # Help
+    ("मदद",                     "help",         lambda s: True),
+    ("सहायता",                  "help",         lambda s: True),
+    ("क्या कर सकते हो",         "help",         lambda s: True),
+
+    # Clear
+    ("एडिटर साफ करो",           "clear_editor", lambda s: True),
+    ("कोड हटाओ",                "clear_editor", lambda s: True),
+])
+def test_hindi_intent_parsing(hindi_text, expected_intent, slot_check):
+    """Hindi voice commands must parse to the correct intent."""
+    result = parse_intent(hindi_text)
+    assert result["intent"] == expected_intent, (
+        f"Hindi input {hindi_text!r}: expected {expected_intent!r}, got {result['intent']!r}"
+    )
+    assert slot_check(result["slots"]), (
+        f"Slot check failed for {hindi_text!r}: {result['slots']}"
+    )
+
+
+def test_hindi_number_parser_direct():
+    """Hindi number words must convert to integers correctly."""
+    from intent_parser import get_parser
+    parser = get_parser()
+    assert parser._word_to_number("बीस") == 20
+    assert parser._word_to_number("पंद्रह") == 15
+    assert parser._word_to_number("पचास") == 50
+    assert parser._word_to_number("एक") == 1
+
+
+def test_hindi_voice_command_via_http(client):
+    """End-to-end: Hindi voice command through the /voice-command endpoint."""
+    res = client.post("/voice-command", json={"text": "लाइन बीस पर जाओ"})
+    assert res.status_code == 200
+    data = res.get_json()
+    assert data["action"] == "goto_line"
+    assert data["line"] == 20
+
+
+def test_hindi_run_via_http(client):
+    """End-to-end: Hindi run command."""
+    res = client.post("/voice-command", json={"text": "कोड चलाओ"})
+    assert res.status_code == 200
+    data = res.get_json()
+    assert data["action"] == "run"

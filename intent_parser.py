@@ -33,8 +33,28 @@ _TENS: Dict[str, int] = {
     "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50,
     "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90,
 }
-WORD_TO_NUMBER: Dict[str, int] = {**_ONES, **_TENS, "hundred": 100, "thousand": 1000}
 
+# Hindi numbers 0-50. Hindi doesn't decompose into tens+ones the way English
+# does ("twenty five" → 20+5), each number is its own word, so we list them
+# directly. We cap at 50 because line numbers above that are rare in voice
+# commands and the vocabulary gets unwieldy fast.
+_HINDI_NUMBERS: Dict[str, int] = {
+    "शून्य": 0, "एक": 1, "दो": 2, "तीन": 3, "चार": 4, "पांच": 5, "पाँच": 5,
+    "छह": 6, "छः": 6, "सात": 7, "आठ": 8, "नौ": 9, "दस": 10,
+    "ग्यारह": 11, "बारह": 12, "तेरह": 13, "चौदह": 14, "पंद्रह": 15, "पन्द्रह": 15,
+    "सोलह": 16, "सत्रह": 17, "अठारह": 18, "उन्नीस": 19, "बीस": 20,
+    "इक्कीस": 21, "बाईस": 22, "तेईस": 23, "चौबीस": 24, "पच्चीस": 25,
+    "छब्बीस": 26, "सत्ताईस": 27, "अट्ठाईस": 28, "उनतीस": 29, "तीस": 30,
+    "इकतीस": 31, "बत्तीस": 32, "तैंतीस": 33, "चौंतीस": 34, "पैंतीस": 35,
+    "छत्तीस": 36, "सैंतीस": 37, "अड़तीस": 38, "उनतालीस": 39, "चालीस": 40,
+    "इकतालीस": 41, "बयालीस": 42, "तैंतालीस": 43, "चौवालीस": 44, "पैंतालीस": 45,
+    "छियालीस": 46, "सैंतालीस": 47, "अड़तालीस": 48, "उनचास": 49, "पचास": 50,
+}
+
+WORD_TO_NUMBER: Dict[str, int] = {
+    **_ONES, **_TENS, **_HINDI_NUMBERS,
+    "hundred": 100, "thousand": 1000,
+}
 
 class IntentParser:
     """Parse voice commands into structured intents and slots."""
@@ -46,11 +66,15 @@ class IntentParser:
     GOTO_LINE_PATTERNS = [
         r"(?:go|jump|navigate|move)\s+to\s+line\s+([\w\s]+?)(?:\s*$|\s+(?:please|now))",
         r"(?:go|jump|navigate|move)\s+to\s+line\s+(\w+)",
+        # Hindi: "लाइन पंद्रह पर जाओ" / "line 15 पर जाओ"
+        r"(?:लाइन|line)\s+(\S+)\s+(?:पर\s+)?(?:जाओ|जाइए|चलो)",
     ]
 
     READ_LINE_PATTERNS = [
         r"read\s+(?:the\s+)?line\s+([\w\s]+?)(?:\s*$|\s+(?:please|now))",
         r"read\s+(?:the\s+)?line\s+(\w+)",
+        # Hindi: "लाइन पांच पढ़ो"
+        r"(?:लाइन|line)\s+(\S+)\s+(?:को\s+)?(?:पढ़ो|पढ़िए|बोलो|सुनाओ)",
     ]
 
     READ_FUNCTION_PATTERNS = [
@@ -73,12 +97,18 @@ class IntentParser:
         r"^run\s*(?:code|program|it)?$",
         r"^execute\s*(?:code|program|it)?$",
         r"^start\s*(?:code|program|it)?$",
+        # Hindi: "चलाओ" / "कोड चलाओ" / "रन करो"
+        r"^(?:कोड\s+)?(?:चलाओ|चलाइए|चलाना)$",
+        r"^रन\s*(?:करो|कीजिए)?$",
     ]
 
     ANALYZE_PATTERNS = [
         r"^analyze\s*(?:(?:the\s+)?code)?$",
         r"^analyse\s*(?:(?:the\s+)?code)?$",
         r"^(?:check|review|explain)\s+(?:the\s+)?code$",
+        # Hindi: "कोड का विश्लेषण करो" / "कोड समझाओ"
+        r"^(?:कोड\s+)?(?:का\s+)?विश्लेषण\s*(?:करो|कीजिए)?$",
+        r"^कोड\s+(?:को\s+)?(?:समझाओ|समझाइए|जांचो)$",
     ]
 
     FIX_PATTERNS = [
@@ -86,6 +116,9 @@ class IntentParser:
         r"^auto\s*fix$",
         r"^repair\s+(?:my\s+)?code$",
         r"^correct\s+(?:my\s+)?code$",
+        # Hindi: "कोड ठीक करो" / "गलती ठीक करो"
+        r"^(?:कोड|गलती)\s+(?:को\s+)?ठीक\s*(?:करो|कीजिए)?$",
+        r"^सही\s+करो$",
     ]
 
     ADVISE_PATTERNS = [
@@ -143,6 +176,9 @@ class IntentParser:
 
     CLEAR_EDITOR_PATTERNS = [
         r"^(?:clear|reset)\s+(?:editor|code|file|the\s+editor)$",
+        # Hindi: "एडिटर साफ करो" / "कोड हटाओ"
+        r"^(?:एडिटर|editor|कोड|code)\s+(?:को\s+)?(?:साफ|खाली|reset)\s*(?:करो|कीजिए)?$",
+        r"^(?:कोड|code)\s+(?:को\s+)?(?:हटाओ|मिटाओ)$",
     ]
 
     DELETE_LINE_PATTERNS = [
@@ -153,12 +189,16 @@ class IntentParser:
     SUMMARIZE_PATTERNS = [
         r"^summarize(?:\s+(?:this\s+)?(?:file|code))?$",
         r"^summary\s+of\s+(?:this\s+)?(?:file|code)$",
+        # Hindi: "कोड का सारांश दो" / "सारांश बताओ"
+        r"^(?:कोड\s+(?:का\s+)?)?सारांश\s*(?:दो|बताओ|दीजिए)?$",
     ]
 
     GENERATE_CODE_PATTERNS = [
         r"(?:generate|write|create|make)\s+(?:python\s+)?code\s+for\s+(.+)",
         r"i\s+want\s+(?:python\s+)?code\s+(?:for|to)\s+(.+)",
         r"(?:generate|write|create|make)\s+(?:python\s+)?code$",
+        # Hindi: "fibonacci के लिए कोड बनाओ" / "code बनाओ for X"
+        r"(.+?)\s+(?:के\s+लिए|का)\s+(?:कोड|code)\s+(?:बनाओ|लिखो|बनाइए)",
     ]
 
     RENAME_SNIPPET_PATTERNS = [
@@ -168,6 +208,8 @@ class IntentParser:
     SAVE_SNIPPET_NAMED_PATTERNS = [
         r"save\s+(?:snippet|code)\s+(?:as\s+|named?\s+)(.+)",
         r"save\s+(?:this\s+)?(?:as\s+|named?\s+)(.+)",
+        # Hindi: "snippet नाम से सेव करो X"
+        r"(?:snippet|कोड)\s+(?:को\s+)?(.+?)\s+(?:नाम\s+से\s+)?(?:सेव|save)\s*(?:करो|कीजिए)?",
     ]
 
     # -----------------------------------------------------------------------
@@ -178,6 +220,9 @@ class IntentParser:
         r"insert\s+(?:a\s+)?function\s+(?:called\s+|named\s+)?(\w+)",
         r"add\s+(?:a\s+)?function\s+(?:called\s+|named\s+)?(\w+)",
         r"create\s+(?:a\s+)?function\s+(?:called\s+|named\s+)?(\w+)",
+        # Hindi: "function जोड़ो जिसका नाम greet है"
+        r"function\s+(\w+)\s+(?:जोड़ो|बनाओ|डालो)",
+        r"(?:एक\s+)?function\s+(?:जोड़ो|बनाओ|डालो)\s+(?:नाम\s+)?(\w+)",
     ]
 
     INSERT_CLASS_PATTERNS = [
@@ -232,6 +277,9 @@ class IntentParser:
         r"^next\s+suggestion$",
         r"^complete\s+(?:this\s+)?line$",
         r"^what\s+should\s+i\s+(?:write|type)\s+next$",
+        # Hindi: "अगली लाइन सुझाओ" / "क्या लिखूं"
+        r"^अगली\s+(?:लाइन|line)\s+(?:सुझाओ|बताओ|suggest\s*करो)$",
+        r"^(?:आगे\s+)?क्या\s+लिखूं$",
     ]
 
     CHOOSE_SUGGESTION_PATTERNS = [
@@ -243,11 +291,17 @@ class IntentParser:
     NEXT_STEP_PATTERNS = [
         r"^(?:next|forward)\s+step$",
         r"^step\s+(?:forward|next)$",
+        # Hindi: "अगला कदम" / "आगे बढ़ो"
+        r"^अगला\s+(?:कदम|step)$",
+        r"^आगे\s+(?:बढ़ो|जाओ)$",
     ]
 
     PREVIOUS_STEP_PATTERNS = [
         r"^(?:previous|back|prev)\s+step$",
         r"^step\s+(?:back|backward|previous)$",
+        # Hindi: "पिछला कदम" / "पीछे जाओ"
+        r"^पिछला\s+(?:कदम|step)$",
+        r"^पीछे\s+(?:जाओ|बढ़ो)$",
     ]
 
     WHAT_CHANGED_PATTERNS = [
@@ -271,6 +325,10 @@ class IntentParser:
         r"^show\s+help$",
         r"^what\s+can\s+(?:i\s+)?(?:do|say)$",
         r"^list\s+commands$",
+        # Hindi: "मदद" / "सहायता" / "क्या कर सकते हो"
+        r"^(?:मदद|सहायता|help)\s*(?:चाहिए|करो|दो)?$",
+        r"^क्या\s+कर\s+सकते\s+हो$",
+        r"^कमांड\s+(?:की\s+)?सूची$",
     ]
 
     # -----------------------------------------------------------------------

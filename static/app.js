@@ -1037,6 +1037,7 @@ async function handleConfirmedAction(action, payload) {
   else if (action === 'go_to_bottom')    goToBottom();
   else if (action === 'copy_code')       copyCode();
   else if (action === 'paste_code')      pasteCode();
+  else if (action === 'restart_tutorial') restartTutorial();
 }
 
 function tryResolveConfirmation(txt) {
@@ -1753,7 +1754,68 @@ function toggleStructurePanel() {
   }
 }
 
+function restartTutorial() {
+  try {
+    localStorage.removeItem('codeup_tutorial_done');
+    localStorage.removeItem('codeup_language');
+  } catch(e) {}
+  window._tutorialAwaitingRun = false;
+  speak('Tutorial reset. Reloading now.');
+  setTimeout(function () { window.location.reload(); }, 1500);
+}
+
 function showInputDialog(promptText, callback) {
-  const value = window.prompt(promptText);
-  if (value !== null && value !== '') callback(parseInt(value, 10) || 1);
+  // window.prompt is inaccessible to screen readers — use an inline modal instead
+  const existing = document.getElementById('_cuInputDialog');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = '_cuInputDialog';
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.setAttribute('aria-label', promptText);
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:30000;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);';
+
+  overlay.innerHTML = `
+    <div style="background:#0b1220;border:1px solid rgba(79,200,250,0.4);border-radius:12px;padding:24px;min-width:280px;max-width:400px;width:90%;">
+      <label id="_cuDialogLabel" style="display:block;color:#e5e7eb;margin-bottom:12px;font-family:inherit;font-size:0.9rem;">${promptText}</label>
+      <input id="_cuDialogInput" type="text" aria-labelledby="_cuDialogLabel"
+             style="width:100%;padding:8px 10px;border-radius:6px;border:1px solid rgba(79,200,250,0.4);background:#020617;color:#e5e7eb;font-family:inherit;font-size:1rem;margin-bottom:12px;"
+      />
+      <div style="display:flex;gap:8px;justify-content:flex-end;">
+        <button id="_cuDialogCancel" style="padding:8px 16px;border-radius:6px;border:1px solid rgba(148,163,184,0.3);background:#020617;color:#e5e7eb;cursor:pointer;font-family:inherit;">Cancel</button>
+        <button id="_cuDialogOk"     style="padding:8px 16px;border-radius:6px;border:none;background:linear-gradient(135deg,#00d9ff,#0099cc);color:#000;font-weight:600;cursor:pointer;font-family:inherit;">Go</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+  const input  = document.getElementById('_cuDialogInput');
+  const ok     = document.getElementById('_cuDialogOk');
+  const cancel = document.getElementById('_cuDialogCancel');
+
+  function confirm() {
+    const val = input.value.trim();
+    overlay.remove();
+    if (editor) editor.focus();
+    if (val) callback(parseInt(val, 10) || 1);
+  }
+  function dismiss() {
+    overlay.remove();
+    if (editor) editor.focus();
+    speak('Cancelled.');
+  }
+
+  ok.addEventListener('click', confirm);
+  cancel.addEventListener('click', dismiss);
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter')  { e.preventDefault(); confirm(); }
+    if (e.key === 'Escape') { e.preventDefault(); dismiss(); }
+  });
+  overlay.addEventListener('click', e => { if (e.target === overlay) dismiss(); });
+
+  requestAnimationFrame(() => {
+    input.focus();
+    speak(promptText + '. Type a number and press Enter, or press Escape to cancel.');
+  });
 }

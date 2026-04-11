@@ -1648,7 +1648,8 @@ COMMANDS = {
     "go_to_top": ["go to top", "jump to top", "top of file"],
     "go_to_bottom": ["go to bottom", "jump to bottom", "bottom of file", "end of file"],
     "copy_code": ["copy code", "copy to clipboard", "copy this"],
-    "paste_code": ["paste code", "paste from clipboard", "paste"]
+    "paste_code": ["paste code", "paste from clipboard", "paste"],
+    "restart_tutorial": ["restart tutorial", "reset tutorial", "start over", "redo tutorial", "tutorial again"]
 }
 
 
@@ -1830,6 +1831,8 @@ def voice():
             return _store_and_return({"success": True, "action": "generate_code", "prompt": slots.get("prompt", ""), "confidence": confidence})
         if intent == "rename_snippet":
             return _store_and_return({"success": True, "action": "rename_snippet", "id": slots.get("id"), "new_name": slots.get("new_name"), "confidence": confidence})
+        if intent == "save_snippet_named":
+            return _store_and_return({"success": True, "action": "save_snippet_named", "name": slots.get("name", "Untitled"), "confidence": confidence})
         if intent == "clear_editor":
             return _store_and_return({"success": True, "action": "clear_editor", "confidence": confidence})
         if intent == "read_output":

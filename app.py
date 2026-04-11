@@ -1747,6 +1747,56 @@ def diff_explain():
     explanation = call_gemini(system, user, language=language)
     return jsonify({"explanation": explanation})
 
+# ==========================
+# SUGGEST NEXT LINE
+# ==========================
+
+@app.route("/suggest-next", methods=["POST"])
+def suggest_next():
+    body = safejson()
+    code = safe(body.get("code"), "")
+    line = body.get("line", 1)
+    language = safe(body.get("language"), "en")
+
+    if len(code) > MAX_CODE_SIZE:
+        return jsonify({"success": False, "error": "Code too large"}), 413
+    if not code.strip():
+        return jsonify({"success": False, "suggestions": [], "error": "Code is empty"})
+
+    lines = code.splitlines()
+    current_line = lines[min(int(line) - 1, len(lines) - 1)] if lines else ""
+    context_start = max(0, int(line) - 5)
+    context = "\n".join(f"{i+1}: {l}" for i, l in enumerate(lines[context_start:int(line)]))
+
+    if language == "hi":
+        system = (
+            "आप एक Python code completion assistant हैं।\n"
+            "दिए गए code context को देखकर अगली 3 possible lines suggest करें।\n"
+            "JSON format में respond करें:\n"
+            "{\"suggestions\": [\"line1\", \"line2\", \"line3\"]}\n"
+            "केवल valid Python lines। कोई explanation नहीं। केवल JSON।"
+        )
+    else:
+        system = (
+            "You are a Python code completion assistant.\n"
+            "Given the code context, suggest the 3 most likely next lines.\n"
+            "Respond ONLY with JSON in this exact format:\n"
+            "{\"suggestions\": [\"line1\", \"line2\", \"line3\"]}\n"
+            "Only valid Python lines. No explanation. JSON only."
+        )
+
+    user = f"Code context (cursor after line {line}):\n{context}\nCurrent line: {current_line}"
+
+    try:
+        raw = call_gemini(system, user, temperature=0.2, language=language)
+        import json as _json
+        # Strip markdown fences if present
+        clean = re.sub(r'```(?:json)?\s*|\s*```', '', raw).strip()
+        parsed = _json.loads(clean)
+        suggestions = parsed.get("suggestions", [])[:3]
+        return jsonify({"success": True, "suggestions": suggestions})
+    except Exception as e:
+        return jsonify({"success": False, "suggestions": [], "error": str(e)})
 
 def _trace_playback(direction):
     storage = get_trace_storage()
@@ -1833,6 +1883,26 @@ def voice():
             return _store_and_return({"success": True, "action": "rename_snippet", "id": slots.get("id"), "new_name": slots.get("new_name"), "confidence": confidence})
         if intent == "save_snippet_named":
             return _store_and_return({"success": True, "action": "save_snippet_named", "name": slots.get("name", "Untitled"), "confidence": confidence})
+        if intent == "insert_function":
+            return _store_and_return({"success": True, "action": "insert_function", "function_name": slots.get("function_name", "my_function"), "confidence": confidence})
+        if intent == "insert_class":
+            return _store_and_return({"success": True, "action": "insert_class", "class_name": slots.get("class_name", "MyClass"), "confidence": confidence})
+        if intent == "insert_loop":
+            return _store_and_return({"success": True, "action": "insert_loop", "loop_var": slots.get("loop_var", "i"), "iterable": slots.get("iterable", "range(10)"), "confidence": confidence})
+        if intent == "insert_if":
+            return _store_and_return({"success": True, "action": "insert_if", "condition": slots.get("condition", "True"), "confidence": confidence})
+        if intent == "append_line":
+            return _store_and_return({"success": True, "action": "append_line", "text": slots.get("text", ""), "confidence": confidence})
+        if intent == "replace_line":
+            return _store_and_return({"success": True, "action": "replace_line", "line_number": slots.get("line_number", 1), "text": slots.get("text", ""), "confidence": confidence})
+        if intent == "insert_line":
+            return _store_and_return({"success": True, "action": "insert_line", "line_number": slots.get("line_number", 1), "text": slots.get("text", ""), "confidence": confidence})
+        if intent == "add_parameter":
+            return _store_and_return({"success": True, "action": "add_parameter", "param_name": slots.get("param_name", "param"), "function_name": slots.get("function_name"), "confidence": confidence})
+        if intent == "suggest_next":
+            return _store_and_return({"success": True, "action": "suggest_next", "confidence": confidence})
+        if intent == "choose_suggestion":
+            return _store_and_return({"success": True, "action": "choose_suggestion", "choice": slots.get("choice", 1), "confidence": confidence})
         if intent == "clear_editor":
             return _store_and_return({"success": True, "action": "clear_editor", "confidence": confidence})
         if intent == "read_output":

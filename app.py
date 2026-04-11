@@ -384,6 +384,9 @@ def explain_error(code: str, err_text: str, language="en") -> str:
             "- On which line (if visible)\n"
             "- What it means in simple terms\n"
             "- How to fix it\n"
+            "If the error mentions input() is not supported, explain that the sandbox "
+            "does not support keyboard input, and show how to replace input() with a "
+            "hardcoded value for testing.\n"
             "Max 6 short lines. Be direct."
         )
     safe_error = sanitize_traceback(err_text)
@@ -625,6 +628,16 @@ def restricted_import(name, *args, **kwargs):
         raise ImportError(f"Module '{{name}}' is not allowed.")
     return __import__(name, *args, **kwargs)
 
+def _blocked_input(prompt=''):
+    if prompt:
+        print(prompt)
+    raise RuntimeError(
+        "input() is not supported in CodeUp's sandbox. "
+        "To use a value, assign it directly instead: "
+        "for example, replace  name = input('Your name?')  with  name = 'Alice'  "
+        "and change 'Alice' to whatever you want to test with."
+    )
+
 SAFE_GLOBALS = {{
     'print': SafeFunction(print),
     'range': SafeFunction(range),
@@ -651,6 +664,7 @@ SAFE_GLOBALS = {{
     'repr': SafeFunction(repr),
     '__builtins__': {{'None': None, 'False': False, 'True': True}},
     '__import__': restricted_import,
+    'input': _blocked_input,
 }}
 
 code = os.environ.get('CODEUP_EXEC_CODE', '')

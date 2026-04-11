@@ -1062,8 +1062,18 @@ async function handleConfirmedAction(action, payload) {
   else if (action === 'go_to_top')       goToTop();
   else if (action === 'go_to_bottom')    goToBottom();
   else if (action === 'copy_code')       copyCode();
-  else if (action === 'paste_code')      pasteCode();
-  else if (action === 'restart_tutorial') restartTutorial();
+  else if (action === 'paste_code')         pasteCode();
+  else if (action === 'restart_tutorial')   restartTutorial();
+  else if (action === 'insert_function')    insertFunctionVoice(payload && payload.function_name);
+  else if (action === 'insert_class')       insertClassVoice(payload && payload.class_name);
+  else if (action === 'insert_loop')        insertLoopVoice(payload && payload.loop_var, payload && payload.iterable);
+  else if (action === 'insert_if')          insertIfVoice(payload && payload.condition);
+  else if (action === 'append_line')        appendLineVoice(payload && payload.text);
+  else if (action === 'replace_line')       replaceLineVoice(payload && payload.line_number, payload && payload.text);
+  else if (action === 'insert_line')        insertLineVoice(payload && payload.line_number, payload && payload.text);
+  else if (action === 'add_parameter')      addParameterVoice(payload && payload.param_name, payload && payload.function_name);
+  else if (action === 'suggest_next')       await suggestNextLine();
+  else if (action === 'choose_suggestion')  chooseSuggestion(payload && payload.choice);
 }
 
 function tryResolveConfirmation(txt) {
@@ -1778,6 +1788,204 @@ function toggleStructurePanel() {
     hideEl(panel);
     speak('Structure panel hidden.');
   }
+}
+
+// ---------- VOICE CODE EDITING ----------
+
+function insertAtCursor(text) {
+  const model = getModel();
+  if (!model) { speak('Editor not ready.'); return; }
+  const pos = editor.getPosition() || { lineNumber: model.getLineCount(), column: 1 };
+  const line = pos.lineNumber;
+  const col  = model.getLineMaxColumn(line);
+  model.pushEditOperations([], [{
+    range: new monaco.Range(line, col, line, col),
+    text:  '\n' + text,
+  }], () => null);
+  const newLine = line + text.split('\n').length;
+  editor.setPosition({ lineNumber: newLine, column: 1 });
+  editor.revealLineInCenter(newLine);
+}
+
+function insertFunctionVoice(functionName) {
+  const name = functionName || 'my_function';
+  const code = `def ${name}():\n    pass`;
+  insertAtCursor(code);
+  speak(`Inserted function ${name}. Cursor is on the pass line. Add your code there.`);
+  srAnnounce(`Function ${name} inserted`);
+}
+
+function insertClassVoice(className) {
+  const name = className || 'MyClass';
+  const code = `class ${name}:\n    def __init__(self):\n        pass`;
+  insertAtCursor(code);
+  speak(`Inserted class ${name} with an init method.`);
+  srAnnounce(`Class ${name} inserted`);
+}
+
+function insertLoopVoice(loopVar, iterable) {
+  const v = loopVar  || 'i';
+  const it = iterable || 'range(10)';
+  const code = `for ${v} in ${it}:\n    pass`;
+  insertAtCursor(code);
+  speak(`Inserted for loop. Variable ${v} in ${it}. Replace pass with your loop body.`);
+  srAnnounce('For loop inserted');
+}
+
+function insertIfVoice(condition) {
+  const cond = condition || 'True';
+  const code = `if ${cond}:\n    pass`;
+  insertAtCursor(code);
+  speak(`Inserted if statement checking ${cond}. Replace pass with your code.`);
+  srAnnounce('If statement inserted');
+}
+
+function appendLineVoice(text) {
+  if (!text) { speak('No text to append.'); return; }
+  insertAtCursor(text);
+  speak(`Appended: ${text}`);
+  srAnnounce('Line appended');
+}
+
+function replaceLineVoice(lineNum, text) {
+  const model = getModel();
+  if (!model) { speak('Editor not ready.'); return; }
+  const maxLine = model.getLineCount();
+  if (lineNum < 1 || lineNum > maxLine) { speak(`Line ${lineNum} is out of range.`); return; }
+  const col = model.getLineMaxColumn(lineNum);
+  model.pushEditOperations([], [{
+    range: new monaco.Range(lineNum, 1, lineNum, col),
+    text:  text,
+  }], () => null);
+  editor.setPosition({ lineNumber: lineNum, column: 1 });
+  speak(`Replaced line ${lineNum} with: ${text}`);
+  srAnnounce(`Line ${lineNum} replaced`);
+}
+
+function insertLineVoice(lineNum, text) {
+  const model = getModel();
+  if (!model) { speak('Editor not ready.'); return; }
+  const maxLine = model.getLineCount();
+  if (lineNum < 1 || lineNum > maxLine + 1) { speak(`Line ${lineNum} is out of range.`); return; }
+  model.pushEditOperations([], [{
+    range: new monaco.Range(lineNum, 1, lineNum, 1),
+    text:  text + '\n',
+  }], () => null);
+  editor.setPosition({ lineNumber: lineNum, column: 1 });
+  speak(`Inserted at line ${lineNum}: ${text}`);
+  srAnnounce(`Line inserted at ${lineNum}`);
+}
+
+function addParameterVoice(paramName, functionName) {
+  const model = getModel();
+  if (!model) { speak('Editor not ready.'); return; }
+  const code  = getCode();
+  const lines = code.split('\n');
+
+  // Find the target function
+  let targetLine = -1;
+  const pattern = functionName
+    ? new RegExp(`^\\s*def\\s+${escapeRegex(functionName)}\\s*\\(`)
+    : /^\s*def\s+\w+\s*\(/;
+
+  for (let i = 0; i < lines.length; i++) {
+    if (pattern.test(lines[i])) { targetLine = i + 1; break; }
+  }
+
+  if (targetLine === -1) {
+    speak(functionName ? `Function ${functionName} not found.` : 'No function found to add parameter to.');
+    return;
+  }
+
+  const lineContent = model.getLineContent(targetLine);
+  const parenClose  = lineContent.lastIndexOf(')');
+  if (parenClose === -1) { speak('Could not find function signature.'); return; }
+
+  const parenOpen = lineContent.indexOf('(');
+  const existing  = lineContent.slice(parenOpen + 1, parenClose).trim();
+  const newParams = existing ? `${existing}, ${paramName}` : paramName;
+  const newLine   = lineContent.slice(0, parenOpen + 1) + newParams + lineContent.slice(parenClose);
+
+  model.pushEditOperations([], [{
+    range: new monaco.Range(targetLine, 1, targetLine, model.getLineMaxColumn(targetLine)),
+    text:  newLine,
+  }], () => null);
+
+  const fname = functionName || 'the function';
+  speak(`Added parameter ${paramName} to ${fname}.`);
+  srAnnounce(`Parameter ${paramName} added`);
+}
+
+// ---------- SEMANTIC AUTOCOMPLETE ----------
+
+let _lastSuggestions = [];
+let _suggestionsLang = 'en';
+
+async function suggestNextLine() {
+  const model = getModel();
+  if (!model) { speak('Editor not ready.'); return; }
+  const pos  = editor.getPosition() || { lineNumber: model.getLineCount() };
+  showAI('Thinking of next lines...');
+  speak('Analyzing context. Suggesting next lines.');
+
+  try {
+    const res  = await fetch('/suggest-next', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ code: getCode(), line: pos.lineNumber, language: getLanguage() }),
+    });
+    const data = await res.json();
+
+    if (!data.success || !data.suggestions || data.suggestions.length === 0) {
+      speak('Could not generate suggestions. Try writing a bit more code first.');
+      hideAI(); return;
+    }
+
+    _lastSuggestions = data.suggestions;
+    _suggestionsLang = getLanguage();
+
+    const numbered = data.suggestions.map((s, i) => `${i + 1}: ${s}`).join('\n');
+    out(`Suggested next lines:\n${numbered}\n\nSay "choose 1", "choose 2", or "choose 3" to insert.`);
+    srAnnounce(`${data.suggestions.length} suggestions ready`);
+
+    speak(`Here are ${data.suggestions.length} suggestions.`);
+    data.suggestions.forEach((s, i) => speak(`Option ${i + 1}: ${s}`));
+    speak('Say choose 1, choose 2, or choose 3 to insert your choice.');
+
+  } catch (e) {
+    console.error(e);
+    speak('Suggestion failed. Please try again.');
+  } finally {
+    hideAI();
+  }
+}
+
+function chooseSuggestion(choice) {
+  if (!_lastSuggestions || _lastSuggestions.length === 0) {
+    speak('No suggestions available. Say suggest next line first.');
+    return;
+  }
+
+  let idx;
+  if (typeof choice === 'number') {
+    idx = choice - 1;
+  } else {
+    const words = { 'one': 0, 'two': 1, 'three': 2, 'first': 0, 'second': 1, 'third': 2 };
+    idx = words[String(choice).toLowerCase()] !== undefined
+      ? words[String(choice).toLowerCase()]
+      : parseInt(choice, 10) - 1;
+  }
+
+  if (isNaN(idx) || idx < 0 || idx >= _lastSuggestions.length) {
+    speak(`Invalid choice. Please say choose 1, 2, or 3.`);
+    return;
+  }
+
+  const chosen = _lastSuggestions[idx];
+  insertAtCursor(chosen);
+  _lastSuggestions = [];
+  speak(`Inserted: ${chosen}`);
+  srAnnounce('Suggestion inserted');
 }
 
 function restartTutorial() {

@@ -170,6 +170,76 @@ class IntentParser:
         r"save\s+(?:this\s+)?(?:as\s+|named?\s+)(.+)",
     ]
 
+    # -----------------------------------------------------------------------
+    # Voice code editing patterns
+    # -----------------------------------------------------------------------
+
+    INSERT_FUNCTION_PATTERNS = [
+        r"insert\s+(?:a\s+)?function\s+(?:called\s+|named\s+)?(\w+)",
+        r"add\s+(?:a\s+)?function\s+(?:called\s+|named\s+)?(\w+)",
+        r"create\s+(?:a\s+)?function\s+(?:called\s+|named\s+)?(\w+)",
+    ]
+
+    INSERT_CLASS_PATTERNS = [
+        r"insert\s+(?:a\s+)?class\s+(?:called\s+|named\s+)?(\w+)",
+        r"add\s+(?:a\s+)?class\s+(?:called\s+|named\s+)?(\w+)",
+        r"create\s+(?:a\s+)?class\s+(?:called\s+|named\s+)?(\w+)",
+    ]
+
+    INSERT_LINE_PATTERNS = [
+        r"insert\s+(?:line\s+)?[\"']?(.+?)[\"']?\s+(?:at|on)\s+line\s+([\w\s]+?)(?:\s*$|\s+(?:please|now))",
+        r"add\s+(?:line\s+)?[\"']?(.+?)[\"']?\s+(?:at|on)\s+line\s+([\w\s]+?)(?:\s*$|\s+(?:please|now))",
+        r"insert\s+[\"'](.+?)[\"']\s+after\s+line\s+([\w\s]+?)(?:\s*$)",
+    ]
+
+    REPLACE_LINE_PATTERNS = [
+        r"replace\s+line\s+([\w\s]+?)\s+with\s+[\"']?(.+?)[\"']?$",
+        r"change\s+line\s+([\w\s]+?)\s+to\s+[\"']?(.+?)[\"']?$",
+        r"set\s+line\s+([\w\s]+?)\s+to\s+[\"']?(.+?)[\"']?$",
+    ]
+
+    ADD_PARAMETER_PATTERNS = [
+        r"add\s+(?:a\s+)?parameter\s+(?:called\s+|named\s+)?(\w+)(?:\s+to\s+(?:function\s+)?(\w+))?",
+        r"add\s+(?:a\s+)?param\s+(?:called\s+|named\s+)?(\w+)(?:\s+to\s+(?:function\s+)?(\w+))?",
+    ]
+
+    INSERT_LOOP_PATTERNS = [
+        r"insert\s+(?:a\s+)?(?:for\s+)?loop\s+(?:over\s+|for\s+)?(\w+)(?:\s+in\s+(\w+))?",
+        r"add\s+(?:a\s+)?(?:for\s+)?loop\s+(?:over\s+|for\s+)?(\w+)(?:\s+in\s+(\w+))?",
+        r"insert\s+(?:a\s+)?for\s+loop",
+        r"add\s+(?:a\s+)?for\s+loop",
+    ]
+
+    INSERT_IF_PATTERNS = [
+        r"insert\s+(?:an?\s+)?if\s+(?:statement\s+)?(?:for\s+|checking\s+)?(.+)",
+        r"add\s+(?:an?\s+)?if\s+(?:statement\s+)?(?:for\s+|checking\s+)?(.+)",
+    ]
+
+    APPEND_LINE_PATTERNS = [
+        r"append\s+[\"']?(.+?)[\"']?$",
+        r"add\s+(?:a\s+)?(?:new\s+)?line\s+[\"']?(.+?)[\"']?$",
+        r"write\s+[\"']?(.+?)[\"']?$",
+        r"type\s+[\"']?(.+?)[\"']?$",
+    ]
+
+    # -----------------------------------------------------------------------
+    # Semantic autocomplete patterns
+    # -----------------------------------------------------------------------
+
+    SUGGEST_NEXT_PATTERNS = [
+        r"^suggest\s+(?:next\s+)?line$",
+        r"^what\s+(?:comes|goes)\s+next$",
+        r"^next\s+suggestion$",
+        r"^complete\s+(?:this\s+)?line$",
+        r"^what\s+should\s+i\s+(?:write|type)\s+next$",
+    ]
+
+    CHOOSE_SUGGESTION_PATTERNS = [
+        r"^choose\s+(?:option\s+)?(\w+)$",
+        r"^(?:select|pick|use)\s+(?:option\s+)?(\w+)$",
+        r"^(?:option\s+)?(\w+)$",
+    ]
+
     NEXT_STEP_PATTERNS = [
         r"^(?:next|forward)\s+step$",
         r"^step\s+(?:forward|next)$",
@@ -234,6 +304,18 @@ class IntentParser:
             "generate_code":  self.GENERATE_CODE_PATTERNS,
             "rename_snippet":      self.RENAME_SNIPPET_PATTERNS,
             "save_snippet_named":  self.SAVE_SNIPPET_NAMED_PATTERNS,
+            # Voice code editing
+            "insert_function":     self.INSERT_FUNCTION_PATTERNS,
+            "insert_class":        self.INSERT_CLASS_PATTERNS,
+            "insert_line":         self.INSERT_LINE_PATTERNS,
+            "replace_line":        self.REPLACE_LINE_PATTERNS,
+            "add_parameter":       self.ADD_PARAMETER_PATTERNS,
+            "insert_loop":         self.INSERT_LOOP_PATTERNS,
+            "insert_if":           self.INSERT_IF_PATTERNS,
+            "append_line":         self.APPEND_LINE_PATTERNS,
+            # Semantic autocomplete
+            "suggest_next":        self.SUGGEST_NEXT_PATTERNS,
+            "choose_suggestion":   self.CHOOSE_SUGGESTION_PATTERNS,
             "clear_editor":   self.CLEAR_EDITOR_PATTERNS,
             "read_output":    self.READ_OUTPUT_PATTERNS,
             # Structure and playback
@@ -312,6 +394,16 @@ class IntentParser:
                         del slots["prompt"]
                 if intent == "save_snippet_named" and "name" not in slots:
                     continue
+                if intent == "replace_line" and ("line_number" not in slots or "text" not in slots):
+                    continue
+                if intent == "insert_line" and ("line_number" not in slots or "text" not in slots):
+                    continue
+                if intent == "append_line" and "text" not in slots:
+                    continue
+                if intent == "insert_function" and "function_name" not in slots:
+                    continue
+                if intent == "insert_class" and "class_name" not in slots:
+                    continue
 
                 return {
                     "intent": intent,
@@ -361,6 +453,55 @@ class IntentParser:
         elif intent == "save_snippet_named":
             if match.groups() and match.group(1):
                 slots["name"] = match.group(1).strip()
+
+        elif intent == "insert_function":
+            if match.groups() and match.group(1):
+                slots["function_name"] = match.group(1).strip()
+
+        elif intent == "insert_class":
+            if match.groups() and match.group(1):
+                slots["class_name"] = match.group(1).strip()
+
+        elif intent == "insert_loop":
+            if match.groups():
+                slots["loop_var"]    = match.group(1).strip() if match.group(1) else "i"
+                slots["iterable"]    = match.group(2).strip() if len(match.groups()) >= 2 and match.group(2) else "range(10)"
+
+        elif intent == "insert_if":
+            if match.groups() and match.group(1):
+                slots["condition"] = match.group(1).strip()
+
+        elif intent == "append_line":
+            if match.groups() and match.group(1):
+                slots["text"] = match.group(1).strip()
+
+        elif intent == "replace_line":
+            if match.groups() and len(match.groups()) >= 2:
+                raw = match.group(1).strip()
+                num = self._word_to_number(raw)
+                if num is not None:
+                    slots["line_number"] = num
+                if match.group(2):
+                    slots["text"] = match.group(2).strip()
+
+        elif intent == "insert_line":
+            if match.groups() and len(match.groups()) >= 2:
+                slots["text"] = match.group(1).strip()
+                raw = match.group(2).strip()
+                num = self._word_to_number(raw)
+                if num is not None:
+                    slots["line_number"] = num
+
+        elif intent == "add_parameter":
+            if match.groups() and match.group(1):
+                slots["param_name"]    = match.group(1).strip()
+                slots["function_name"] = match.group(2).strip() if len(match.groups()) >= 2 and match.group(2) else None
+
+        elif intent == "choose_suggestion":
+            if match.groups() and match.group(1):
+                raw = match.group(1).strip()
+                num = self._word_to_number(raw)
+                slots["choice"] = num if num is not None else raw
 
         return slots
 

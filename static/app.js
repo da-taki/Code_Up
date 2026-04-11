@@ -631,9 +631,23 @@ async function runCode() {
       // Tutorial hook — show choice step after first successful run
       if (window._tutorialAwaitingRun) {
         window._tutorialAwaitingRun = false;
+        var _step = window._tutorialStep1;
+        var _lang = window._tutorialLang;
         setTimeout(function () {
-          if (typeof showChoiceStep === 'function') {
-            showChoiceStep(window._tutorialLang, window._tutorialStep1);
+          if (_step && _step.nextTopic && window.loopsTopic) {
+            speak(_step.say);
+            function _loopKey(e) {
+              if (e.key === 'n' || e.key === 'N') {
+                document.removeEventListener('keydown', _loopKey);
+                var lt = window.loopsTopic[_lang] || window.loopsTopic.en;
+                speak(lt.say);
+                if (typeof setCode === 'function') setCode(lt.code);
+                try { localStorage.setItem('codeup_tutorial_done', 'true'); } catch(e) {}
+              }
+            }
+            document.addEventListener('keydown', _loopKey);
+          } else if (typeof showChoiceStep === 'function' && _step) {
+            showChoiceStep(_lang, _step);
           }
         }, 2000);
       }
@@ -904,9 +918,9 @@ async function saveSnippet() {
   await saveSnippetAccessible();
 }
 
-async function saveSnippetAccessible() {
+async function saveSnippetAccessible(voiceName) {
   const input = document.getElementById('snippetNameInput');
-  const name  = (input && input.value.trim()) || 'Untitled';
+  const name  = voiceName || (input && input.value.trim()) || 'Untitled';
   await saveSnippetWithName(name);
   if (input) input.value = '';
   srAnnounce('Snippet saved: ' + name);
@@ -989,7 +1003,7 @@ async function handleConfirmedAction(action, payload) {
     out(text); speak(text);
   }
   else if (action === 'generate_code') await generateCode(payload && payload.prompt ? payload.prompt : '');
-  else if (action === 'save_snippet_named') await saveSnippetWithName(payload && payload.name ? payload.name : 'Untitled');
+  else if (action === 'save_snippet_named') await saveSnippetAccessible(payload && payload.name ? payload.name : 'Untitled');
   else if (action === 'load_snippet')    await loadSnippetById(payload && payload.id);
   else if (action === 'delete_snippet')  await deleteSnippetById(payload && payload.id);
   else if (action === 'rename_snippet')  await renameSnippetById(payload && payload.id, payload && payload.new_name ? payload.new_name : 'Renamed');

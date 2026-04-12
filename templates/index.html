@@ -340,10 +340,14 @@
           document.getElementById('tutorialStepLabel').textContent = s.label;
           document.getElementById('tutorialText').textContent = s.text;
 
-          if (s.code && typeof setCode === 'function') {
-            setCode(s.code);
-          } else if (!s.code && this.step === 0 && typeof setCode === 'function') {
-            setCode('');
+          if (typeof setCode === 'function') {
+            if (s.code) {
+              if (window._editorReady) { setCode(s.code); }
+              else { window._editorReadyQueue.push(function () { setCode(s.code); }); }
+            } else if (this.step === 0) {
+              if (window._editorReady) { setCode(''); }
+              else { window._editorReadyQueue.push(function () { setCode(''); }); }
+            }
           }
 
           var nextBtn = document.getElementById('tutorialNextBtn');
@@ -409,8 +413,8 @@
         window.addEventListener('load', function () { setTimeout(runOnboarding, 600); });
       }
 
-      // ── Wire tutorial buttons ────────────────────────────────────────────
       window.addEventListener('DOMContentLoaded', function () {
+        // Tutorial buttons
         var tutorialBtn = document.getElementById('tutorialBtn');
         if (tutorialBtn) tutorialBtn.addEventListener('click', function () { Tutorial.open(); });
 
@@ -420,7 +424,6 @@
         var nextBtn = document.getElementById('tutorialNextBtn');
         if (nextBtn) nextBtn.addEventListener('click', function () { Tutorial.next(); });
 
-        // Enter key advances tutorial when active
         document.addEventListener('keydown', function (e) {
           if (e.key === 'Enter' && Tutorial.active) {
             var id = document.activeElement.id;
@@ -430,6 +433,16 @@
             Tutorial.next();
           }
         });
+
+        // Accessibility preferences
+        loadAccessibilityPreferences();
+        var announced = safeStorage(function () { return localStorage.getItem('accessibilityAnnouncementMade'); });
+        if (!announced) {
+          setTimeout(function () {
+            speak('Accessibility features available. Press Alt+A to cycle color modes, Alt+D for dyslexia mode, Alt+M for reduced motion.');
+            safeStorage(function () { localStorage.setItem('accessibilityAnnouncementMade', 'true'); });
+          }, 2000);
+        }
       });
 
       // ── Accessibility preferences ────────────────────────────────────────
@@ -518,16 +531,6 @@
         if (e.altKey && e.key === 'm') { e.preventDefault(); document.getElementById('motionToggle').click(); }
       });
 
-      window.addEventListener('DOMContentLoaded', function () {
-        loadAccessibilityPreferences();
-        var announced = safeStorage(function () { return localStorage.getItem('accessibilityAnnouncementMade'); });
-        if (!announced) {
-          setTimeout(function () {
-            speak('Accessibility features available. Press Alt+A to cycle color modes, Alt+D for dyslexia mode, Alt+M for reduced motion.');
-            safeStorage(function () { localStorage.setItem('accessibilityAnnouncementMade', 'true'); });
-          }, 2000);
-        }
-      });
 
     }());
   </script>

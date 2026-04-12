@@ -66,7 +66,7 @@ const SpeechManager = (function () {
       currentUtterance = new SpeechSynthesisUtterance(item.text);
       currentUtterance.rate  = item.rate  || 1;
       currentUtterance.pitch = item.pitch || 1;
-
+      currentUtterance.lang  = (typeof getLanguage === 'function' && getLanguage() === 'hi') ? 'hi-IN' : 'en-US';
       let finished = false;
       const cleanup = () => {
         if (finished) return;
@@ -1044,6 +1044,9 @@ async function handleConfirmedAction(action, payload) {
   else if (action === 'copy_code')       copyCode();
   else if (action === 'paste_code')         pasteCode();
   else if (action === 'restart_tutorial')   restartTutorial();
+  else if (action === 'start_tutorial')     { if (window.TutorialController) window.TutorialController.open(); }
+  else if (action === 'skip_tutorial')      { if (window.TutorialController) window.TutorialController.close(); }
+  else if (action === 'tutorial_next')      { if (window.TutorialController && window.TutorialController.active) window.TutorialController.next(); }
   else if (action === 'insert_function')    insertFunctionVoice(payload && payload.function_name);
   else if (action === 'insert_class')       insertClassVoice(payload && payload.class_name);
   else if (action === 'insert_loop')        insertLoopVoice(payload && payload.loop_var, payload && payload.iterable);
@@ -2254,13 +2257,10 @@ async function bugChallenge() {
 }
 
 function restartTutorial() {
-  try {
-    localStorage.removeItem('codeup_tutorial_done');
-    localStorage.removeItem('codeup_language');
-  } catch(e) {}
-  window._tutorialAwaitingRun = false;
-  speak('Tutorial reset. Reloading now.');
-  setTimeout(function () { window.location.reload(); }, 1500);
+  if (window.TutorialController) {
+    window.TutorialController.open();
+    speak('Tutorial restarted from the beginning.');
+  }
 }
 
 function showInputDialog(promptText, callback) {

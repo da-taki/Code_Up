@@ -52,6 +52,9 @@
       <button id="motionToggle" class="theme-toggle" aria-pressed="false" aria-label="Toggle reduced motion">
         Reduce Motion
       </button>
+      <button id="tutorialBtn" class="cu-button cu-button-secondary" aria-label="Start interactive tutorial" style="font-size:0.8rem;padding:6px 12px;">
+        📖 Tutorial
+      </button>
     </div>
   </header>
 
@@ -199,6 +202,26 @@
       </div>
     </div>
   </div>
+  <div id="tutorialOverlay" hidden
+       role="complementary" aria-label="Interactive tutorial"
+       style="position:fixed;bottom:20px;right:20px;width:340px;max-width:92vw;
+              background:#0b1220;border:1px solid rgba(248,113,113,0.5);
+              border-radius:14px;padding:20px;z-index:9000;
+              box-shadow:0 0 30px rgba(248,113,113,0.2);">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+      <span id="tutorialStepLabel" style="font-size:0.75rem;color:#64748b;font-family:var(--font-main);">Step 1 of 6</span>
+      <button id="tutorialSkipBtn" aria-label="Skip tutorial"
+              style="background:none;border:none;color:#64748b;cursor:pointer;font-size:0.8rem;font-family:var(--font-main);">
+        ✕ Skip
+      </button>
+    </div>
+    <p id="tutorialText" style="color:#e5e7eb;font-size:0.88rem;line-height:1.65;font-family:var(--font-main);margin-bottom:14px;min-height:80px;"></p>
+    <div style="display:flex;gap:8px;">
+      <button id="tutorialNextBtn" class="cu-button cu-button-primary" style="flex:1;font-size:0.82rem;padding:8px 12px;">
+        Next →
+      </button>
+    </div>
+  </div>
   <script src="/static/bg.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs/loader.min.js"></script>
   <script src="/static/app.js"></script>
@@ -211,63 +234,157 @@
         try { return fn(); } catch (e) { return null; }
       }
 
-      if (typeof speak !== 'function') {
-        window.speak = function () {};
-      }
+      if (typeof speak !== 'function') { window.speak = function () {}; }
 
-      // ── Onboarding ──────────────────────────────────────────────────────
-      var TUTORIAL_DONE_KEY = 'codeup_tutorial_done';
-      var LANG_KEY          = 'codeup_language';
+      // ── Tutorial state machine ───────────────────────────────────────────
+      var LANG_KEY = 'codeup_language';
 
-      // Single source of truth for tutorial state.
-      // Nothing outside this object should read/write tutorial progress.
-      var TutorialState = {
-        lang: 'en',
-        awaitingRun: false,
-        phase: null,        // 'print' | 'variables' | 'loops' | 'conditionals' | 'done'
-        reset: function () {
-          this.awaitingRun = false;
-          this.phase = null;
+      var TUTORIAL_STEPS = {
+        en: [
+          {
+            label: 'Step 1 of 6',
+            text: 'Welcome to CodeUp! This tutorial walks you through Python basics. Each step loads an example into the editor. Press Enter or say "next" to advance. Say "skip tutorial" at any time to exit.',
+            code: null,
+          },
+          {
+            label: 'Step 2 of 6',
+            text: 'print() sends output to the panel below the editor. Run this example with Ctrl+Enter and watch the output appear.',
+            code: 'print("Hello, CodeUp!")\nprint(42)\nprint(3.14)',
+          },
+          {
+            label: 'Step 3 of 6',
+            text: 'Variables are named boxes that hold values. You can store anything and use the name later. Run this to see all three values printed.',
+            code: 'name = "Alice"\nage = 17\nheight = 5.6\n\nprint(name)\nprint(age)\nprint(height)',
+          },
+          {
+            label: 'Step 4 of 6',
+            text: 'A for loop repeats code a set number of times. range(5) gives you 0, 1, 2, 3, 4. Run this and watch the loop count up.',
+            code: 'for i in range(5):\n    print(i)\n\nfruits = ["apple", "banana", "mango"]\nfor fruit in fruits:\n    print(fruit)',
+          },
+          {
+            label: 'Step 5 of 6',
+            text: 'if / elif / else runs different code depending on a condition. Only one branch executes. Change x to a different number and run again.',
+            code: 'x = 10\n\nif x > 10:\n    print("x is greater than ten")\nelif x == 10:\n    print("x is exactly ten")\nelse:\n    print("x is less than ten")',
+          },
+          {
+            label: 'Step 6 of 6',
+            text: 'Tutorial complete! The editor is yours. Say "help" to hear all voice commands, or just start writing code.',
+            code: null,
+          },
+        ],
+        hi: [
+          {
+            label: 'चरण 1 / 6',
+            text: 'CodeUp में आपका स्वागत है! यह tutorial Python की बेसिक्स सिखाएगा। हर step editor में example लोड करेगा। आगे बढ़ने के लिए Enter दबाएं या "next" कहें। कभी भी "skip tutorial" कहकर बाहर निकल सकते हैं।',
+            code: null,
+          },
+          {
+            label: 'चरण 2 / 6',
+            text: 'print() output panel में कुछ भी दिखाता है। इस example को Ctrl+Enter से run करें।',
+            code: 'print("नमस्ते, CodeUp!")\nprint(42)\nprint(3.14)',
+          },
+          {
+            label: 'चरण 3 / 6',
+            text: 'Variables ऐसे boxes हैं जो values रखते हैं। नाम देकर बाद में use करें। Run करके देखें।',
+            code: 'naam = "Alice"\numar = 17\n\nprint(naam)\nprint(umar)',
+          },
+          {
+            label: 'चरण 4 / 6',
+            text: 'for loop code को कई बार repeat करता है। range(5) आपको 0 से 4 तक numbers देता है। Run करें।',
+            code: 'for i in range(5):\n    print(i)\n\nfal = ["apple", "banana", "mango"]\nfor f in fal:\n    print(f)',
+          },
+          {
+            label: 'चरण 5 / 6',
+            text: 'if / elif / else condition के हिसाब से अलग code चलाता है। x की value बदलकर दोबारा run करें।',
+            code: 'x = 10\n\nif x > 10:\n    print("x दस से बड़ा है")\nelif x == 10:\n    print("x exactly दस है")\nelse:\n    print("x दस से छोटा है")',
+          },
+          {
+            label: 'चरण 6 / 6',
+            text: 'Tutorial पूरा हुआ! Editor आपका है। सभी voice commands के लिए "help" कहें।',
+            code: null,
+          },
+        ],
+      };
+
+      var Tutorial = {
+        active: false,
+        step: 0,
+
+        steps: function () {
+          var lang = (document.getElementById('languageSelector') || {}).value || 'en';
+          return TUTORIAL_STEPS[lang] || TUTORIAL_STEPS.en;
         },
-        setAwaitingRun: function (phase) {
-          this.awaitingRun = true;
-          this.phase = phase;
+
+        open: function () {
+          this.active = true;
+          this.step = 0;
+          var overlay = document.getElementById('tutorialOverlay');
+          if (overlay) overlay.removeAttribute('hidden');
+          this.render();
         },
-        onRunSuccess: function () {
-          if (!this.awaitingRun) return;
-          this.awaitingRun = false;
-          var phase = this.phase;
-          this.phase = null;
-          handleTutorialPhaseComplete(phase, this.lang);
+
+        close: function () {
+          this.active = false;
+          var overlay = document.getElementById('tutorialOverlay');
+          if (overlay) overlay.setAttribute('hidden', '');
+          speak('Tutorial closed. Say "start tutorial" any time to reopen it.');
+        },
+
+        render: function () {
+          var steps = this.steps();
+          var s = steps[this.step];
+          if (!s) return;
+
+          document.getElementById('tutorialStepLabel').textContent = s.label;
+          document.getElementById('tutorialText').textContent = s.text;
+
+          if (s.code && typeof setCode === 'function') setCode(s.code);
+
+          var nextBtn = document.getElementById('tutorialNextBtn');
+          if (nextBtn) {
+            nextBtn.textContent = this.step === steps.length - 1 ? 'Finish ✓' : 'Next →';
+          }
+
+          speak(s.text);
+        },
+
+        next: function () {
+          var steps = this.steps();
+          if (this.step >= steps.length - 1) {
+            this.close();
+            return;
+          }
+          this.step++;
+          this.render();
         },
       };
 
-      // Expose only what app.js needs (runCode calls this after success)
-      window._tutorialOnRunSuccess = function () { TutorialState.onRunSuccess(); };
+      // Expose for voice commands in app.js
+      window.TutorialController = Tutorial;
+      window._tutorialOnRunSuccess = function () {};
 
+      // ── Onboarding: language pick only ──────────────────────────────────
       function runOnboarding() {
         var modal = document.getElementById('onboardingModal');
         if (!modal) return;
 
-        // Announce via TTS immediately (screen reader users may not see the modal)
         setTimeout(function () {
-          if (typeof speak === 'function') {
-            speak('Welcome to CodeUp. This is a voice-driven Python IDE for blind and visually impaired users. Please choose your preferred language. Press 1 for English or 2 for Hindi.');
-          }
+          speak('Welcome to CodeUp. Choose your language. Press 1 for English or 2 for Hindi.');
         }, 800);
 
         function pickLang(lang) {
           safeStorage(function () { localStorage.setItem(LANG_KEY, lang); });
           var sel = document.getElementById('languageSelector');
-          if (sel) sel.value = lang;
+          if (sel) { sel.value = lang; sel.dispatchEvent(new Event('change')); }
           modal.style.display = 'none';
-          startTutorial(lang);
+          speak(lang === 'hi'
+            ? 'हिंदी चुना गया। Tutorial के लिए Tutorial बटन दबाएं, या सीधे code लिखना शुरू करें।'
+            : 'English selected. Press the Tutorial button to begin, or start coding right away.');
         }
 
         document.getElementById('obEnglish').addEventListener('click', function () { pickLang('en'); });
-        document.getElementById('obHindi').addEventListener('click',   function () { pickLang('hi'); });
+        document.getElementById('obHindi').addEventListener('click', function () { pickLang('hi'); });
 
-        // Keyboard shortcut: 1 = English, 2 = Hindi while modal is open
         function onboardingKey(e) {
           if (e.key === '1') { document.removeEventListener('keydown', onboardingKey); pickLang('en'); }
           if (e.key === '2') { document.removeEventListener('keydown', onboardingKey); pickLang('hi'); }
@@ -275,251 +392,58 @@
         document.addEventListener('keydown', onboardingKey);
       }
 
-      var tutorialSteps = {
-        en: [
-          {
-            say: 'Great! Let\'s learn your first Python concept: print. The print function sends text to the output panel. For example, print, open bracket, quote Hello, close quote, close bracket — will display the word Hello.',
-            code: 'print("Hello")',
-            prompt: 'I\'ve put a print example in the editor. Press Ctrl+Enter to run it and hear the output.',
-          },
-          {
-            say: 'Perfect! You just ran your first Python program. Now — would you like to practice print more, or move on to a new topic? Say "practice" or "new topic", or press P for practice and N for new topic.',
-            code: null,
-            prompt: null,
-            choice: true,
-          },
-        ],
-        hi: [
-          {
-            say: 'बढ़िया! चलिए Python का पहला concept सीखते हैं: print। print function आउटपुट पैनल में टेक्स्ट भेजता है। उदाहरण के लिए, print, open bracket, quote नमस्ते, close quote, close bracket — यह नमस्ते दिखाएगा।',
-            code: 'print("नमस्ते")',
-            prompt: 'मैंने editor में एक print का उदाहरण डाला है। इसे चलाने के लिए Ctrl+Enter दबाएं।',
-          },
-          {
-            say: 'शाबाश! आपने अपना पहला Python program चलाया। अब — क्या आप print का और अभ्यास करना चाहते हैं, या नया topic सीखना चाहते हैं? "अभ्यास" या "नया topic" कहें, या P दबाएं अभ्यास के लिए और N नए topic के लिए।',
-            code: null,
-            prompt: null,
-            choice: true,
-          },
-        ],
-      };
-
-      var practiceSteps = {
-        en: {
-          say: 'Let\'s practice! Try typing: print, open bracket, quote, your name, close quote, close bracket — then press Ctrl+Enter. You can also try printing a number, like print 42.',
-          code: '# Try it yourself!\n# Type: print("your name")\n# Or:   print(42)\n',
-        },
-        hi: {
-          say: 'चलिए अभ्यास करते हैं! टाइप करें: print, open bracket, quote, अपना नाम, close quote, close bracket — फिर Ctrl+Enter दबाएं। आप एक नंबर भी print कर सकते हैं, जैसे print 42।',
-          code: '# खुद try करें!\n# टाइप करें: print("आपका नाम")\n# या:       print(42)\n',
-        },
-      };
-
-      var newTopicSteps = {
-        en: {
-          say: 'Coming up next: variables. A variable is a name that holds a value. Think of it like a labelled box. You write: x equals 5. Then print x will show 5 in the output. Try running this example with Ctrl+Enter.',
-          code: '# Variables\nx = 5\nprint(x)\n\n# You can change the value\ny = 10\nprint(y)\n\n# And do maths\nprint(x + y)\n',
-          followUp: true,
-        },
-        hi: {
-          say: 'अगला topic: variables। एक variable एक labelled box की तरह होता है। आप लिखते हैं: x equals 5। फिर print x, output में 5 दिखाएगा। इस example को Ctrl+Enter से चलाकर देखें।',
-          code: '# Variables\nx = 5\nprint(x)\n\n# Value बदल सकते हैं\ny = 10\nprint(y)\n\n# और maths भी\nprint(x + y)\n',
-          followUp: true,
-        },
-      };
-
-      window.variablesPracticeSteps = {
-        en: {
-          say: 'Great! You ran the variables example. Now try it yourself: create a variable called name and set it to your name in quotes, then print it. For example: name equals quote Alice quote, then print name. When you are done, press N to learn about loops.',
-          code: '# Your turn!\n# name = "your name here"\n# print(name)\n',
-          nextTopic: true,
-        },
-        hi: {
-          say: 'शाबाश! आपने variables example चलाया। अब खुद try करें: name नाम का variable बनाएं और उसे quotes में अपना नाम दें, फिर print करें। जैसे: name equals quote Alice quote, फिर print name। जब हो जाए तो loops सीखने के लिए N दबाएं।',
-          code: '# आपकी बारी!\n# name = "आपका नाम यहाँ"\n# print(name)\n',
-          nextTopic: true,
-        },
-      };
-
-      window.loopsTopic = {
-        en: {
-          say: 'Topic 3: loops. A for loop repeats code a set number of times. For example: for i in range 5, colon, new line, indented print i — this prints the numbers 0 to 4. The range function gives you a sequence of numbers. Press Ctrl+Enter to run this example. When you are ready for the next topic press N.',
-          code: '# Loops\nfor i in range(5):\n    print(i)\n\n# Loop over a list\nfruits = ["apple", "banana", "mango"]\nfor fruit in fruits:\n    print(fruit)\n',
-          followUp: true,
-        },
-        hi: {
-          say: 'Topic 3: loops। एक for loop कोड को कई बार repeat करता है। उदाहरण: for i in range 5, colon, नई line, indented print i — यह 0 से 4 तक numbers print करता है। range function आपको numbers की एक sequence देता है। इस example को Ctrl+Enter से चलाएं। अगले topic के लिए N दबाएं।',
-          code: '# Loops\nfor i in range(5):\n    print(i)\n\n# List पर loop\nfruits = ["apple", "banana", "mango"]\nfor fruit in fruits:\n    print(fruit)\n',
-          followUp: true,
-        },
-      };
-
-      window.conditionalsTopic = {
-        en: {
-          say: 'Topic 4: conditionals. An if statement runs code only when a condition is true. For example: if x is greater than 5, colon, new line, indented print, quote x is big, close quote. The else block runs when the condition is false. Press Ctrl+Enter to run this example.',
-          code: '# Conditionals\nx = 10\n\nif x > 5:\n    print("x is big")\nelse:\n    print("x is small")\n\n# You can also use elif\nif x == 10:\n    print("x is exactly ten")\nelif x > 10:\n    print("x is more than ten")\nelse:\n    print("x is less than ten")\n',
-        },
-        hi: {
-          say: 'Topic 4: conditionals। एक if statement कोड तभी चलाता है जब condition सच हो। उदाहरण: if x greater than 5, colon, नई line, indented print, quote x is big, close quote। else block तब चलता है जब condition गलत हो। इस example को Ctrl+Enter से चलाएं।',
-          code: '# Conditionals\nx = 10\n\nif x > 5:\n    print("x बड़ा है")\nelse:\n    print("x छोटा है")\n\n# elif भी use कर सकते हैं\nif x == 10:\n    print("x exactly दस है")\nelif x > 10:\n    print("x दस से ज़्यादा है")\nelse:\n    print("x दस से कम है")\n',
-        },
-      };
-
-      function startTutorial(lang) {
-        TutorialState.lang = lang;
-        var steps = tutorialSteps[lang] || tutorialSteps.en;
-        var step0 = steps[0];
-
-        setTimeout(function () {
-          speak(step0.say);
-          if (step0.code && typeof setCode === 'function') setCode(step0.code);
-          setTimeout(function () { speak(step0.prompt); }, 8000);
-          TutorialState.setAwaitingRun('print');
-        }, 400);
-      }
-
-      function handleTutorialPhaseComplete(phase, lang) {
-        var L = lang || 'en';
-
-        if (phase === 'print') {
-          var step1 = (tutorialSteps[L] || tutorialSteps.en)[1];
-          showChoiceStep(L, step1);
-
-        } else if (phase === 'variables') {
-          speak('Great! You ran the variables example. Press N to learn about loops.');
-          var vp = window.variablesPracticeSteps && (window.variablesPracticeSteps[L] || window.variablesPracticeSteps.en);
-          if (vp && typeof setCode === 'function') setCode(vp.code);
-          function _loopKey(e) {
-            if (e.key !== 'n' && e.key !== 'N') return;
-            document.removeEventListener('keydown', _loopKey);
-            var lt = window.loopsTopic && (window.loopsTopic[L] || window.loopsTopic.en);
-            if (!lt) return;
-            speak(lt.say);
-            if (typeof setCode === 'function') setCode(lt.code);
-            TutorialState.setAwaitingRun('loops');
-          }
-          document.addEventListener('keydown', _loopKey);
-
-        } else if (phase === 'loops') {
-          speak('Great job! Press N whenever you want to learn about conditionals.');
-          function _condKey(e) {
-            if (e.key !== 'n' && e.key !== 'N') return;
-            document.removeEventListener('keydown', _condKey);
-            var ct = window.conditionalsTopic && (window.conditionalsTopic[L] || window.conditionalsTopic.en);
-            if (!ct) return;
-            speak(ct.say);
-            if (typeof setCode === 'function') setCode(ct.code);
-            safeStorage(function () { localStorage.setItem(TUTORIAL_DONE_KEY, 'true'); });
-          }
-          document.addEventListener('keydown', _condKey);
-
-        } else {
-          safeStorage(function () { localStorage.setItem(TUTORIAL_DONE_KEY, 'true'); });
-        }
-      }
-
-      function showChoiceStep(lang, step) {
-        speak(step.say);
-
-        function onChoice(e) {
-          if (e.key === 'p' || e.key === 'P') {
-            document.removeEventListener('keydown', onChoice);
-            var ps = practiceSteps[lang] || practiceSteps.en;
-            speak(ps.say);
-            if (typeof setCode === 'function') setCode(ps.code);
-            safeStorage(function () { localStorage.setItem(TUTORIAL_DONE_KEY, 'true'); });
-          } else if (e.key === 'n' || e.key === 'N') {
-            document.removeEventListener('keydown', onChoice);
-            var ns = newTopicSteps[lang] || newTopicSteps.en;
-            speak(ns.say);
-            if (typeof setCode === 'function') setCode(ns.code);
-            // If variables topic has a follow-up, hook it onto the next run
-            if (ns.followUp) {
-              TutorialState.setAwaitingRun('variables');
-            } else {
-              safeStorage(function () { localStorage.setItem(TUTORIAL_DONE_KEY, 'true'); });
-            }
-          }
-        }
-        document.addEventListener('keydown', onChoice);
-
-        var origHandleVoice = window.handleVoiceCommand;
-        var _choiceResolved = false;
-
-        function _restoreVoice() {
-          if (!_choiceResolved) {
-            _choiceResolved = true;
-            window.handleVoiceCommand = origHandleVoice;
-          }
-        }
-
-        window.handleVoiceCommand = function (raw) {
-          var t = raw.toLowerCase();
-          if (t.includes('practice') || t.includes('अभ्यास')) {
-            _restoreVoice();
-            var ps = practiceSteps[lang] || practiceSteps.en;
-            speak(ps.say);
-            if (typeof setCode === 'function') setCode(ps.code);
-            safeStorage(function () { localStorage.setItem(TUTORIAL_DONE_KEY, 'true'); });
-          } else if (t.includes('new topic') || t.includes('नया')) {
-            _restoreVoice();
-            var ns = newTopicSteps[lang] || newTopicSteps.en;
-            speak(ns.say);
-            if (typeof setCode === 'function') setCode(ns.code);
-            if (ns.followUp) {
-              TutorialState.setAwaitingRun('variables');
-            } else {
-              safeStorage(function () { localStorage.setItem(TUTORIAL_DONE_KEY, 'true'); });
-            }
-          } else {
-            // Pass through unrecognized commands but do NOT remove the wrapper —
-            // user might say the right thing on the next attempt.
-            // Auto-expire the wrapper after 120 seconds so it can't get stuck forever.
-            return origHandleVoice.apply(this, arguments);
-          }
-        };
-
-        // Safety net: always restore after 2 minutes no matter what
-        setTimeout(_restoreVoice, 120000);
-      }
-
-      // Check if tutorial already done
-      var tutorialDone = safeStorage(function () { return localStorage.getItem(TUTORIAL_DONE_KEY); });
-      var savedLang    = safeStorage(function () { return localStorage.getItem(LANG_KEY); });
-
-      if (tutorialDone && savedLang) {
-        // Returning user — hide modal, restore language
+      // ── Boot ────────────────────────────────────────────────────────────
+      var savedLang = safeStorage(function () { return localStorage.getItem(LANG_KEY); });
+      if (savedLang) {
         var modal = document.getElementById('onboardingModal');
         if (modal) modal.style.display = 'none';
         var sel = document.getElementById('languageSelector');
         if (sel) sel.value = savedLang;
       } else {
-        // New user — run onboarding after DOM + Monaco settle
         window.addEventListener('load', function () { setTimeout(runOnboarding, 600); });
       }
-      // ── End Onboarding ───────────────────────────────────────────────────
 
+      // ── Wire tutorial buttons ────────────────────────────────────────────
+      window.addEventListener('DOMContentLoaded', function () {
+        var tutorialBtn = document.getElementById('tutorialBtn');
+        if (tutorialBtn) tutorialBtn.addEventListener('click', function () { Tutorial.open(); });
+
+        var skipBtn = document.getElementById('tutorialSkipBtn');
+        if (skipBtn) skipBtn.addEventListener('click', function () { Tutorial.close(); });
+
+        var nextBtn = document.getElementById('tutorialNextBtn');
+        if (nextBtn) nextBtn.addEventListener('click', function () { Tutorial.next(); });
+
+        // Enter key advances tutorial when active
+        document.addEventListener('keydown', function (e) {
+          if (e.key === 'Enter' && Tutorial.active && document.activeElement.id !== 'voiceText' && document.activeElement.id !== 'snippetNameInput') {
+            Tutorial.next();
+          }
+        });
+      });
+
+      // ── Accessibility preferences ────────────────────────────────────────
       function applyColorVisionMode(mode) {
         document.body.classList.remove(
-          'theme-protanopia', 'theme-deuteranopia',
-          'theme-tritanopia', 'theme-high-contrast', 'theme-default'
+          'theme-protanopia','theme-deuteranopia',
+          'theme-tritanopia','theme-high-contrast','theme-default'
         );
         document.body.classList.add(mode !== 'default' ? 'theme-' + mode : 'theme-default');
         safeStorage(function () { localStorage.setItem('colorVisionMode', mode); });
         var modeNames = {
-          'default':      'Default colors',
-          'protanopia':   'Protanopia mode for red-blind users',
-          'deuteranopia': 'Deuteranopia mode for green-blind users',
-          'tritanopia':   'Tritanopia mode for blue-blind users',
-          'high-contrast':'High contrast mode'
+          'default':       'Default colors',
+          'protanopia':    'Protanopia mode for red-blind users',
+          'deuteranopia':  'Deuteranopia mode for green-blind users',
+          'tritanopia':    'Tritanopia mode for blue-blind users',
+          'high-contrast': 'High contrast mode'
         };
         speak((modeNames[mode] || mode) + ' activated.');
       }
 
       function loadAccessibilityPreferences() {
-        var colorMode    = safeStorage(function () { return localStorage.getItem('colorVisionMode'); }) || 'default';
-        var dyslexiaMode = safeStorage(function () { return localStorage.getItem('dyslexiaMode'); }) === 'true';
-        var reducedMotion= safeStorage(function () { return localStorage.getItem('reducedMotion'); }) === 'true';
+        var colorMode     = safeStorage(function () { return localStorage.getItem('colorVisionMode'); }) || 'default';
+        var dyslexiaMode  = safeStorage(function () { return localStorage.getItem('dyslexiaMode'); }) === 'true';
+        var reducedMotion = safeStorage(function () { return localStorage.getItem('reducedMotion'); }) === 'true';
 
         var sel = document.getElementById('colorVisionMode');
         if (sel) sel.value = colorMode;
@@ -534,7 +458,7 @@
 
         var motionBtn = document.getElementById('motionToggle');
         var sysPrefReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-        var shouldReduce   = reducedMotion || (sysPrefReduced && !safeStorage(function () { return localStorage.getItem('reducedMotion'); }));
+        var shouldReduce = reducedMotion || (sysPrefReduced && !safeStorage(function () { return localStorage.getItem('reducedMotion'); }));
         if (shouldReduce && motionBtn) {
           document.body.classList.add('theme-reduced-motion');
           motionBtn.classList.add('active');
@@ -542,10 +466,7 @@
         }
       }
 
-      document.getElementById('colorVisionMode').addEventListener('change', function (e) {
-        applyColorVisionMode(e.target.value);
-      });
-
+      document.getElementById('colorVisionMode').addEventListener('change', function (e) { applyColorVisionMode(e.target.value); });
       document.getElementById('dyslexiaToggle').addEventListener('click', function () {
         var isActive = document.body.classList.toggle('theme-dyslexia');
         this.classList.toggle('active', isActive);
@@ -553,7 +474,6 @@
         safeStorage(function () { localStorage.setItem('dyslexiaMode', isActive); });
         speak(isActive ? 'Dyslexia-friendly mode activated.' : 'Dyslexia-friendly mode deactivated.');
       });
-
       document.getElementById('motionToggle').addEventListener('click', function () {
         var isActive = document.body.classList.toggle('theme-reduced-motion');
         this.classList.toggle('active', isActive);
@@ -562,69 +482,34 @@
         speak(isActive ? 'Reduced motion mode activated.' : 'Reduced motion mode deactivated.');
       });
 
-      document.getElementById('runBtn').addEventListener('click', function () {
-        if (typeof runCode === 'function') runCode();
-      });
-      document.getElementById('analyzeBtn').addEventListener('click', function () {
-        if (typeof analyzeCode === 'function') analyzeCode();
-      });
-      document.getElementById('fixBtn').addEventListener('click', function () {
-        if (typeof fixCode === 'function') fixCode();
-      });
-      document.getElementById('saveBtn').addEventListener('click', function () {
-        if (typeof saveSnippetAccessible === 'function') saveSnippetAccessible();
-      });
-
-      document.getElementById('snippetSaveBtn').addEventListener('click', function () {
-        if (typeof saveSnippetAccessible === 'function') saveSnippetAccessible();
-      });
-
+      document.getElementById('runBtn').addEventListener('click', function () { if (typeof runCode === 'function') runCode(); });
+      document.getElementById('analyzeBtn').addEventListener('click', function () { if (typeof analyzeCode === 'function') analyzeCode(); });
+      document.getElementById('fixBtn').addEventListener('click', function () { if (typeof fixCode === 'function') fixCode(); });
+      document.getElementById('saveBtn').addEventListener('click', function () { if (typeof saveSnippetAccessible === 'function') saveSnippetAccessible(); });
+      document.getElementById('snippetSaveBtn').addEventListener('click', function () { if (typeof saveSnippetAccessible === 'function') saveSnippetAccessible(); });
       document.getElementById('snippetNameInput').addEventListener('keydown', function (e) {
-        if (e.key === 'Enter') {
-          e.preventDefault();
-          if (typeof saveSnippetAccessible === 'function') saveSnippetAccessible();
-        }
+        if (e.key === 'Enter') { e.preventDefault(); if (typeof saveSnippetAccessible === 'function') saveSnippetAccessible(); }
       });
-      document.getElementById('voiceButton').addEventListener('click', function () {
-        if (typeof toggleVoice === 'function') toggleVoice();
-      });
+      document.getElementById('voiceButton').addEventListener('click', function () { if (typeof toggleVoice === 'function') toggleVoice(); });
       document.getElementById('languageSelector').addEventListener('change', function () {
-        if (isListening) {
+        if (typeof isListening !== 'undefined' && isListening) {
           speak('Language changed. Restarting voice recognition.');
           stopListening();
           setTimeout(function () { startListening(); }, 800);
         }
       });
-      document.getElementById('sendCommandBtn').addEventListener('click', function () {
-        if (typeof submitCommand === 'function') submitCommand();
-      });
-      document.getElementById('submitApiKeyBtn').addEventListener('click', function () {
-        if (typeof submitApiKey === 'function') submitApiKey();
-      });
-      document.getElementById('closeApiKeyModalBtn').addEventListener('click', function () {
-        if (typeof closeApiKeyModal === 'function') closeApiKeyModal();
-      });
+      document.getElementById('sendCommandBtn').addEventListener('click', function () { if (typeof submitCommand === 'function') submitCommand(); });
+      document.getElementById('submitApiKeyBtn').addEventListener('click', function () { if (typeof submitApiKey === 'function') submitApiKey(); });
+      document.getElementById('closeApiKeyModalBtn').addEventListener('click', function () { if (typeof closeApiKeyModal === 'function') closeApiKeyModal(); });
 
       document.addEventListener('keydown', function (e) {
-        if (e.altKey && e.key === 'a') {
-          e.preventDefault();
-          var selector = document.getElementById('colorVisionMode');
-          selector.selectedIndex = (selector.selectedIndex + 1) % selector.options.length;
-          applyColorVisionMode(selector.value);
-        }
-        if (e.altKey && e.key === 'd') {
-          e.preventDefault();
-          document.getElementById('dyslexiaToggle').click();
-        }
-        if (e.altKey && e.key === 'm') {
-          e.preventDefault();
-          document.getElementById('motionToggle').click();
-        }
+        if (e.altKey && e.key === 'a') { e.preventDefault(); var s = document.getElementById('colorVisionMode'); s.selectedIndex = (s.selectedIndex + 1) % s.options.length; applyColorVisionMode(s.value); }
+        if (e.altKey && e.key === 'd') { e.preventDefault(); document.getElementById('dyslexiaToggle').click(); }
+        if (e.altKey && e.key === 'm') { e.preventDefault(); document.getElementById('motionToggle').click(); }
       });
 
       window.addEventListener('DOMContentLoaded', function () {
         loadAccessibilityPreferences();
-
         var announced = safeStorage(function () { return localStorage.getItem('accessibilityAnnouncementMade'); });
         if (!announced) {
           setTimeout(function () {

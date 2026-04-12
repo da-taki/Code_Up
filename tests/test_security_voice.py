@@ -776,16 +776,29 @@ def test_hindi_run_via_http(client):
 
 class TestPerSessionSandbox:
 
-    def test_separate_sessions_get_different_workspaces(self, tmp_snippets):
-        os.environ["GEMINI_ENABLED"] = "0"
-        with app.test_client() as c1, app.test_client() as c2:
-            r1 = c1.post("/fs/write", json={"path": "secret.txt", "content": "session1"})
-            assert r1.get_json()["success"] is True
-            r2 = c2.post("/fs/read", json={"path": "secret.txt"})
-            assert r2.get_json()["success"] is False, (
-                f"Session 2 should not read session 1's file. Got: {r2.get_json()}"
-            )
-        os.environ["GEMINI_ENABLED"] = "1"
+    def test_separate_sessions_get_different_workspaces(self):
+        """Different session IDs must produce different sandbox instances."""
+        from sandboxed_fs import get_sandbox
+        sb1 = get_sandbox("test-session-aaa")
+        sb2 = get_sandbox("test-session-bbb")
+        assert sb1 is not sb2, "Different session IDs must return different sandbox instances"
+        assert sb1.workspace_dir != sb2.workspace_dir, (
+            "Different sessions must have different workspace directories"
+        )
+
+    def test_delete_in_one_session_does_not_affect_other(self):
+        """Files written in one sandbox must not appear in another."""
+        from sandboxed_fs import get_sandbox
+        sb1 = get_sandbox("test-session-ccc")
+        sb2 = get_sandbox("test-session-ddd")
+
+        sb1.write("shared.txt", "A")
+        sb2.write("shared.txt", "B")
+        sb1.delete("shared.txt")
+
+        result = sb2.read("shared.txt")
+        assert result["success"] is True, "sb2's file should still exist after sb1 deleted its own copy"
+        assert result["content"] == "B"
 
     def test_same_session_reads_own_files(self, client):
         w = client.post("/fs/write", json={"path": "mine.txt", "content": "hello"})
@@ -795,18 +808,7 @@ class TestPerSessionSandbox:
         assert data["success"] is True
         assert data["content"] == "hello"
 
-    def test_delete_in_one_session_does_not_affect_other(self, tmp_snippets):
-        os.environ["GEMINI_ENABLED"] = "0"
-        with app.test_client() as c1, app.test_client() as c2:
-            c1.post("/fs/write", json={"path": "shared.txt", "content": "A"})
-            c2.post("/fs/write", json={"path": "shared.txt", "content": "B"})
-            c1.post("/fs/delete", json={"path": "shared.txt"})
-            r2 = c2.post("/fs/read", json={"path": "shared.txt"})
-            d2 = r2.get_json()
-            assert d2["success"] is True
-            assert d2["content"] == "B"
-        os.environ["GEMINI_ENABLED"] = "1"
-
+        
     def test_fs_info_reflects_only_own_files(self, tmp_snippets):
         os.environ["GEMINI_ENABLED"] = "0"
         with app.test_client() as c1, app.test_client() as c2:

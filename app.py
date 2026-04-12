@@ -141,6 +141,26 @@ MAX_REQUEST_SIZE = 1_000_000  # 1 MB max request body
 MAX_CODE_SIZE = 100_000       # 100 KB max code
 MAX_GEMINI_TIMEOUT = 30       # 30 second timeout for LLM calls
 
+# Per-session rate limiting for /run
+# Allows at most RUN_RATE_LIMIT executions per RUN_RATE_WINDOW seconds per session.
+RUN_RATE_LIMIT  = 10   # max runs
+RUN_RATE_WINDOW = 60   # per this many seconds
+_run_timestamps: dict = {}   # session_id -> list[float]
+_run_rate_lock = threading.Lock()
+
+def _check_run_rate_limit(session_id: str) -> bool:
+    """Return True if the session is within the rate limit, False if throttled."""
+    now = time.time()
+    with _run_rate_lock:
+        timestamps = _run_timestamps.get(session_id, [])
+        # Drop entries outside the window
+        timestamps = [t for t in timestamps if now - t < RUN_RATE_WINDOW]
+        if len(timestamps) >= RUN_RATE_LIMIT:
+            _run_timestamps[session_id] = timestamps
+            return False
+        timestamps.append(now)
+        _run_timestamps[session_id] = timestamps
+        return True
 # FIX L-4: Named constant with explanatory comment replaces magic number 40.
 # Threshold of 40/100 chosen to allow reasonable fuzzy flexibility while
 # rejecting clearly unrelated input; values below ~35 produce too many false positives.
@@ -651,6 +671,13 @@ def run_code():
     body = safejson()
     code = safe(body.get("code"), "")
 
+    # Rate limit check — must happen before any expensive work
+    if not _check_run_rate_limit(get_session_id()):
+        return jsonify({
+            "success": False,
+            "error": f"Rate limit exceeded. Max {RUN_RATE_LIMIT} runs per {RUN_RATE_WINDOW} seconds."
+        }), 429
+
     if len(code) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
 
@@ -665,7 +692,7 @@ def run_code():
     # path remains, matching the actual execution reality.
     try:
         execution_start = time.time()
-        sandbox = get_sandbox()
+        sandbox = get_sandbox(get_session_id())
         workspace_dir = sandbox.workspace_dir
         trace_file = os.path.join(workspace_dir, "last_trace.json")
 
@@ -749,7 +776,12 @@ SAFE_GLOBALS = {{
     'datetime': _datetime,
 }}
 
-code = os.environ.get('CODEUP_EXEC_CODE', '')
+_code_file = os.environ.get('CODEUP_CODE_FILE', '')
+if _code_file and os.path.exists(_code_file):
+    with open(_code_file, encoding='utf-8') as _f:
+        code = _f.read()
+else:
+    code = ''
 trace = []
 last_locals = {{}}
 start = time.time()
@@ -807,6 +839,13 @@ finally:
             json.dump({{'trace':trace,'duration_ms':int((time.time()-start)*1000)}}, f)
 '''
 
+        # Write user code to a separate temp file instead of an env var.
+        # This avoids /proc leakage and env-var size limits.
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False,
+                                          encoding='utf-8', dir=workspace_dir) as code_file:
+            code_file.write(code)
+            code_file_path = code_file.name
+
         with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as script_file:
             script_file.write(script_content)
             script_file_path = script_file.name
@@ -814,8 +853,11 @@ finally:
         time_limit = 5  # seconds for subprocess
         try:
             env = os.environ.copy()
-            env['CODEUP_EXEC_CODE'] = code
+            # Pass paths only — never the raw code — via env vars
+            env['CODEUP_CODE_FILE'] = code_file_path
             env['CODEUP_TRACE_FILE'] = trace_file
+            # Remove old key in case it lingers from a previous version
+            env.pop('CODEUP_EXEC_CODE', None)
 
             proc = subprocess.run(
                 [sys.executable, script_file_path],
@@ -829,10 +871,11 @@ finally:
         except subprocess.TimeoutExpired:
             stderr_buf.write(f"Execution timed out after {time_limit}s (subprocess)")
         finally:
-            try:
-                os.unlink(script_file_path)
-            except OSError:
-                pass
+            for _tmp in (script_file_path, code_file_path):
+                try:
+                    os.unlink(_tmp)
+                except OSError:
+                    pass
 
         trace = []
         trace_error = None
@@ -2078,7 +2121,7 @@ def fs_write():
     content = safe(body.get("content"), "")
     if not filepath:
         return jsonify({"success": False, "error": "Path is required"}), 400
-    sandbox = get_sandbox()
+    sandbox = get_sandbox(get_session_id())
     result = sandbox.write(filepath, content)
     return jsonify(result)
 
@@ -2088,7 +2131,7 @@ def fs_read():
     filepath = safe(body.get("path"), "")
     if not filepath:
         return jsonify({"success": False, "error": "Path is required"}), 400
-    sandbox = get_sandbox()
+    sandbox = get_sandbox(get_session_id())
     result = sandbox.read(filepath)
     return jsonify(result)
 
@@ -2098,7 +2141,7 @@ def fs_delete():
     filepath = safe(body.get("path"), "")
     if not filepath:
         return jsonify({"success": False, "error": "Path is required"}), 400
-    sandbox = get_sandbox()
+    sandbox = get_sandbox(get_session_id())
     result = sandbox.delete(filepath)
     return jsonify(result)
 
@@ -2106,13 +2149,13 @@ def fs_delete():
 def fs_list():
     body = safejson()
     dirpath = safe(body.get("path"), ".")
-    sandbox = get_sandbox()
+    sandbox = get_sandbox(get_session_id())
     result = sandbox.list_files(dirpath)
     return jsonify(result)
 
 @app.route("/fs/info", methods=["GET"])
 def fs_info():
-    sandbox = get_sandbox()
+    sandbox = get_sandbox(get_session_id())
     result = sandbox.get_workspace_info()
     return jsonify(result)
 

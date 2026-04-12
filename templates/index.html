@@ -444,16 +444,25 @@
         document.addEventListener('keydown', onChoice);
 
         var origHandleVoice = window.handleVoiceCommand;
+        var _choiceResolved = false;
+
+        function _restoreVoice() {
+          if (!_choiceResolved) {
+            _choiceResolved = true;
+            window.handleVoiceCommand = origHandleVoice;
+          }
+        }
+
         window.handleVoiceCommand = function (raw) {
           var t = raw.toLowerCase();
           if (t.includes('practice') || t.includes('अभ्यास')) {
-            window.handleVoiceCommand = origHandleVoice;
+            _restoreVoice();
             var ps = practiceSteps[lang] || practiceSteps.en;
             speak(ps.say);
             if (typeof setCode === 'function') setCode(ps.code);
             safeStorage(function () { localStorage.setItem(TUTORIAL_DONE_KEY, 'true'); });
           } else if (t.includes('new topic') || t.includes('नया')) {
-            window.handleVoiceCommand = origHandleVoice;
+            _restoreVoice();
             var ns = newTopicSteps[lang] || newTopicSteps.en;
             speak(ns.say);
             if (typeof setCode === 'function') setCode(ns.code);
@@ -463,9 +472,15 @@
               safeStorage(function () { localStorage.setItem(TUTORIAL_DONE_KEY, 'true'); });
             }
           } else {
+            // Pass through unrecognized commands but do NOT remove the wrapper —
+            // user might say the right thing on the next attempt.
+            // Auto-expire the wrapper after 120 seconds so it can't get stuck forever.
             return origHandleVoice.apply(this, arguments);
           }
         };
+
+        // Safety net: always restore after 2 minutes no matter what
+        setTimeout(_restoreVoice, 120000);
       }
 
       // Check if tutorial already done

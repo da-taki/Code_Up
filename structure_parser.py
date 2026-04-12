@@ -2,8 +2,8 @@
 AST-based code structure extractor for CodeUp.
 
 Provides CodeAnalyzer, which walks a Python source string and returns a
-summary of imports, functions (with typed parameter info), classes, and
-loops — used by the structure panel and the /analyze endpoint.
+summary of imports, functions (with typed parameter info, async flag,
+and parent class), classes, and loops.
 """
 
 import ast
@@ -17,7 +17,7 @@ class CodeAnalyzer:
         """
         Parse *code* and return a structure dict with keys:
             imports   – list of import strings
-            functions – list of {name, line, params: [{name, type?}]}
+            functions – list of {name, line, params, is_async, parent_class}
             classes   – list of {name, line, methods: [str]}
             loops     – list of {type, line}
 
@@ -52,16 +52,47 @@ class CodeAnalyzer:
         return imports
 
     def _collect_functions(self, tree: ast.AST) -> List[Dict[str, Any]]:
+        """
+        Collect functions with parent class info so the UI can show
+        'MyClass.my_method' instead of a flat list.
+        """
         functions: List[Dict[str, Any]] = []
+
+        # Walk top-level nodes so we can track which class we're inside
         for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef):
+                # Methods inside this class
+                for item in ast.walk(node):
+                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) \
+                            and item is not node:
+                        # Only direct children (one level deep)
+                        if item in ast.walk(node) and self._is_direct_child(node, item):
+                            functions.append({
+                                "name":         item.name,
+                                "line":         item.lineno,
+                                "params":       self._extract_params(item.args),
+                                "is_async":     isinstance(item, ast.AsyncFunctionDef),
+                                "parent_class": node.name,
+                            })
+
+        # Top-level functions (not inside any class)
+        for node in ast.iter_child_nodes(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                params = self._extract_params(node.args)
                 functions.append({
-                    "name":   node.name,
-                    "line":   node.lineno,
-                    "params": params,
+                    "name":         node.name,
+                    "line":         node.lineno,
+                    "params":       self._extract_params(node.args),
+                    "is_async":     isinstance(node, ast.AsyncFunctionDef),
+                    "parent_class": None,
                 })
+
+        # Sort by line number for a natural reading order
+        functions.sort(key=lambda f: f["line"])
         return functions
+
+    def _is_direct_child(self, parent: ast.AST, candidate: ast.AST) -> bool:
+        """Return True if candidate is a direct child node of parent."""
+        return candidate in ast.iter_child_nodes(parent)
 
     def _collect_classes(self, tree: ast.AST) -> List[Dict[str, Any]]:
         classes: List[Dict[str, Any]] = []
@@ -69,7 +100,7 @@ class CodeAnalyzer:
             if isinstance(node, ast.ClassDef):
                 methods = [
                     n.name
-                    for n in ast.walk(node)
+                    for n in ast.iter_child_nodes(node)
                     if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
                 ]
                 classes.append({

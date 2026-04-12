@@ -273,24 +273,31 @@ class SandboxedFileSystem:
         return {"success": True}
 
 
-# Module-level instance
-_sandbox = None
+# Per-session sandbox storage (thread-safe dict keyed by session id)
+import threading as _threading
+_sandboxes: dict = {}
+_sandboxes_lock = _threading.Lock()
 
-# ensure temp workspaces are cleaned up on exit
 import atexit
 
 @atexit.register
-def _cleanup_sandbox_on_exit():
-    global _sandbox
-    if _sandbox is not None:
-        try:
-            _sandbox.cleanup()
-        except Exception:
-            pass
+def _cleanup_all_sandboxes_on_exit():
+    with _sandboxes_lock:
+        for sb in list(_sandboxes.values()):
+            try:
+                sb.cleanup()
+            except Exception:
+                pass
+        _sandboxes.clear()
 
-def get_sandbox() -> SandboxedFileSystem:
-    """Get or create the global sandbox instance."""
-    global _sandbox
-    if _sandbox is None:
-        _sandbox = SandboxedFileSystem()
-    return _sandbox
+def get_sandbox(session_id: str = "default") -> "SandboxedFileSystem":
+    """
+    Get or create a sandbox for a specific session.
+    Each session gets its own isolated temp directory.
+    Pass session_id from Flask's get_session_id() so users
+    never share each other's workspace.
+    """
+    with _sandboxes_lock:
+        if session_id not in _sandboxes:
+            _sandboxes[session_id] = SandboxedFileSystem()
+        return _sandboxes[session_id]

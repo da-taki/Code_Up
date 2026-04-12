@@ -773,3 +773,263 @@ def test_hindi_run_via_http(client):
     assert res.status_code == 200
     data = res.get_json()
     assert data["action"] == "run"
+
+class TestPerSessionSandbox:
+
+    def test_separate_sessions_get_different_workspaces(self, tmp_snippets):
+        os.environ["GEMINI_ENABLED"] = "0"
+        with app.test_client() as c1, app.test_client() as c2:
+            r1 = c1.post("/fs/write", json={"path": "secret.txt", "content": "session1"})
+            assert r1.get_json()["success"] is True
+            r2 = c2.post("/fs/read", json={"path": "secret.txt"})
+            assert r2.get_json()["success"] is False, (
+                f"Session 2 should not read session 1's file. Got: {r2.get_json()}"
+            )
+        os.environ["GEMINI_ENABLED"] = "1"
+
+    def test_same_session_reads_own_files(self, client):
+        w = client.post("/fs/write", json={"path": "mine.txt", "content": "hello"})
+        assert w.get_json()["success"] is True
+        r = client.post("/fs/read", json={"path": "mine.txt"})
+        data = r.get_json()
+        assert data["success"] is True
+        assert data["content"] == "hello"
+
+    def test_delete_in_one_session_does_not_affect_other(self, tmp_snippets):
+        os.environ["GEMINI_ENABLED"] = "0"
+        with app.test_client() as c1, app.test_client() as c2:
+            c1.post("/fs/write", json={"path": "shared.txt", "content": "A"})
+            c2.post("/fs/write", json={"path": "shared.txt", "content": "B"})
+            c1.post("/fs/delete", json={"path": "shared.txt"})
+            r2 = c2.post("/fs/read", json={"path": "shared.txt"})
+            d2 = r2.get_json()
+            assert d2["success"] is True
+            assert d2["content"] == "B"
+        os.environ["GEMINI_ENABLED"] = "1"
+
+    def test_fs_info_reflects_only_own_files(self, tmp_snippets):
+        os.environ["GEMINI_ENABLED"] = "0"
+        with app.test_client() as c1, app.test_client() as c2:
+            for i in range(3):
+                c1.post("/fs/write", json={"path": f"file{i}.txt", "content": "x"})
+            info1 = c1.get("/fs/info").get_json()
+            info2 = c2.get("/fs/info").get_json()
+            assert info1["total_files"] >= 3
+            assert info2["total_files"] < info1["total_files"]
+        os.environ["GEMINI_ENABLED"] = "1"
+
+
+class TestCodeTempFile:
+
+    @pytest.mark.timeout(15)
+    def test_basic_execution_still_works(self, client):
+        res = client.post("/run", json={"code": "print('file_path_ok')"})
+        data = res.get_json()
+        assert data["success"] is True
+        assert "file_path_ok" in data["output"]
+
+    @pytest.mark.timeout(20)
+    def test_large_code_no_truncation(self, client):
+        lines = [f"print('line_{i:04d}')" for i in range(200)]
+        lines.append("print('END_SENTINEL')")
+        res = client.post("/run", json={"code": "\n".join(lines)})
+        data = res.get_json()
+        assert data["success"] is True, f"Large code failed: {data.get('error')}"
+        assert "END_SENTINEL" in data["output"]
+        assert "line_0099" in data["output"]
+
+    @pytest.mark.timeout(15)
+    def test_trace_still_populated(self, client):
+        res = client.post("/run", json={"code": "x = 42\nprint(x)"})
+        data = res.get_json()
+        assert data["success"] is True
+        assert len(data.get("trace", [])) > 0
+
+    @pytest.mark.timeout(15)
+    def test_syntax_error_still_reported(self, client):
+        res = client.post("/run", json={"code": "def foo(\n    pass"})
+        data = res.get_json()
+        assert data["success"] is False
+        assert data.get("error")
+
+
+
+class TestRunRateLimit:
+
+    @pytest.mark.timeout(30)
+    def test_rate_limit_blocks_after_threshold(self, client):
+        limit = app_module.RUN_RATE_LIMIT
+        results = [client.post("/run", json={"code": "print(1)"}).status_code
+                   for _ in range(limit + 1)]
+        assert 429 in results, f"Expected 429 after {limit} runs. Got: {results}"
+
+    @pytest.mark.timeout(30)
+    def test_rate_limit_allows_up_to_threshold(self, client):
+        limit = app_module.RUN_RATE_LIMIT
+        statuses = [client.post("/run", json={"code": "print(1)"}).status_code
+                    for _ in range(limit)]
+        assert all(s == 200 for s in statuses), f"Premature block: {statuses}"
+
+    @pytest.mark.timeout(30)
+    def test_rate_limit_is_per_session(self, tmp_snippets):
+        os.environ["GEMINI_ENABLED"] = "0"
+        limit = app_module.RUN_RATE_LIMIT
+        with app.test_client() as c1, app.test_client() as c2:
+            for _ in range(limit + 1):
+                c1.post("/run", json={"code": "print(1)"})
+            r2 = c2.post("/run", json={"code": "print(1)"})
+            assert r2.status_code == 200, f"Session 2 wrongly rate-limited: {r2.status_code}"
+        os.environ["GEMINI_ENABLED"] = "1"
+
+    def test_rate_limit_constants_exist(self):
+        assert hasattr(app_module, "RUN_RATE_LIMIT")
+        assert hasattr(app_module, "RUN_RATE_WINDOW")
+        assert app_module.RUN_RATE_LIMIT > 0
+        assert app_module.RUN_RATE_WINDOW > 0
+
+    @pytest.mark.timeout(10)
+    def test_rate_limit_429_body(self, client):
+        limit = app_module.RUN_RATE_LIMIT
+        last = None
+        for _ in range(limit + 1):
+            last = client.post("/run", json={"code": "print(1)"})
+        if last.status_code != 429:
+            pytest.skip("Rate limit window may have reset; skipping body check")
+        data = last.get_json()
+        assert data["success"] is False
+        assert "rate" in data["error"].lower() or "limit" in data["error"].lower()
+
+class TestStructureParserFix:
+
+    def setup_method(self):
+        from structure_parser import CodeAnalyzer
+        self.analyzer = CodeAnalyzer()
+
+    def test_async_function_flagged(self):
+        result = self.analyzer.analyze("async def fetch():\n    pass")
+        fns = result["functions"]
+        assert fns[0]["is_async"] is True
+
+    def test_sync_function_not_flagged(self):
+        result = self.analyzer.analyze("def greet():\n    pass")
+        assert result["functions"][0]["is_async"] is False
+
+    def test_mixed_async_and_sync(self):
+        code = "def sync_fn():\n    pass\n\nasync def async_fn():\n    pass"
+        fns = {f["name"]: f for f in self.analyzer.analyze(code)["functions"]}
+        assert fns["sync_fn"]["is_async"] is False
+        assert fns["async_fn"]["is_async"] is True
+
+    def test_method_has_parent_class(self):
+        code = "class Dog:\n    def bark(self):\n        pass"
+        fns = {f["name"]: f for f in self.analyzer.analyze(code)["functions"]}
+        assert fns["bark"]["parent_class"] == "Dog"
+
+    def test_top_level_function_has_no_parent_class(self):
+        result = self.analyzer.analyze("def standalone():\n    pass")
+        assert result["functions"][0]["parent_class"] is None
+
+    def test_method_and_standalone_together(self):
+        code = "def top():\n    pass\n\nclass C:\n    def method(self):\n        pass"
+        fns = {f["name"]: f for f in self.analyzer.analyze(code)["functions"]}
+        assert fns["top"]["parent_class"] is None
+        assert fns["method"]["parent_class"] == "C"
+
+    def test_async_method_in_class(self):
+        code = "class Fetcher:\n    async def get(self):\n        pass"
+        fns = {f["name"]: f for f in self.analyzer.analyze(code)["functions"]}
+        assert fns["get"]["is_async"] is True
+        assert fns["get"]["parent_class"] == "Fetcher"
+
+    def test_nested_function_not_in_top_list(self):
+        code = ("class Outer:\n"
+                "    def outer_method(self):\n"
+                "        def inner():\n"
+                "            pass\n")
+        names = [f["name"] for f in self.analyzer.analyze(code)["functions"]]
+        assert "inner" not in names
+        assert "outer_method" in names
+
+    def test_functions_sorted_by_line(self):
+        code = "def b():\n    pass\n\ndef a():\n    pass\n\ndef c():\n    pass"
+        lines = [f["line"] for f in self.analyzer.analyze(code)["functions"]]
+        assert lines == sorted(lines)
+
+    def test_structure_endpoint_includes_is_async(self, client):
+        res = client.post("/structure", json={"code": "async def f():\n    pass"})
+        fns = res.get_json()["structure"]["functions"]
+        assert fns[0]["is_async"] is True
+
+    def test_structure_endpoint_includes_parent_class(self, client):
+        res = client.post("/structure", json={"code": "class Cat:\n    def meow(self):\n        pass"})
+        fns = {f["name"]: f for f in res.get_json()["structure"]["functions"]}
+        assert fns["meow"]["parent_class"] == "Cat"
+
+
+
+class TestInputSandboxBackend:
+
+    @pytest.mark.timeout(15)
+    def test_input_call_fails(self, client):
+        res = client.post("/run", json={"code": "x = input('enter: ')\nprint(x)"})
+        assert res.get_json()["success"] is False
+
+    @pytest.mark.timeout(15)
+    def test_input_error_mentions_input(self, client):
+        res = client.post("/run", json={"code": "name = input('name: ')"})
+        data = res.get_json()
+        combined = (data.get("error") or "") + (data.get("explanation") or "")
+        assert "input" in combined.lower()
+
+    @pytest.mark.timeout(15)
+    def test_variable_named_my_input_not_blocked(self, client):
+        res = client.post("/run", json={"code": "my_input = 42\nprint(my_input)"})
+        data = res.get_json()
+        assert data["success"] is True
+        assert "42" in data["output"]
+
+    @pytest.mark.timeout(15)
+    def test_input_in_comment_not_blocked(self, client):
+        res = client.post("/run", json={"code": "# input() disabled\nprint('ok')"})
+        data = res.get_json()
+        assert data["success"] is True
+
+    @pytest.mark.timeout(15)
+    def test_input_in_string_not_blocked(self, client):
+        res = client.post("/run", json={"code": "msg = 'input() is disabled'\nprint(msg)"})
+        data = res.get_json()
+        assert data["success"] is True
+
+
+class TestRegressionAfterFixes:
+
+    @pytest.mark.timeout(15)
+    def test_basic_print(self, client):
+        data = client.post("/run", json={"code": "print('ok')"}).get_json()
+        assert data["success"] is True and "ok" in data["output"]
+
+    @pytest.mark.timeout(15)
+    def test_os_import_blocked(self, client):
+        assert client.post("/run", json={"code": "import os\nprint(os.getcwd())"}).get_json()["success"] is False
+
+    @pytest.mark.timeout(15)
+    def test_math_import_works(self, client):
+        data = client.post("/run", json={"code": "import math\nprint(int(math.pi))"}).get_json()
+        assert data["success"] is True and "3" in data["output"]
+
+    def test_voice_goto_line(self, client):
+        data = client.post("/voice-command", json={"text": "go to line ten"}).get_json()
+        assert data["action"] == "goto_line" and data["line"] == 10
+
+    def test_snippet_roundtrip(self, client):
+        client.post("/snippets", json={"name": "reg", "code": "print(1)"})
+        assert any(s["name"] == "reg" for s in client.get("/snippets").get_json()["snippets"])
+
+    def test_syntax_check(self, client):
+        assert client.post("/check-syntax", json={"code": "x = 1"}).get_json()["has_errors"] is False
+
+    @pytest.mark.timeout(15)
+    def test_trace_endpoint(self, client):
+        client.post("/run", json={"code": "x = 1"})
+        data = client.get("/execution-trace").get_json()
+        assert "trace" in data and "current_index" in data

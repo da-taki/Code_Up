@@ -619,9 +619,18 @@ function ensureNotExecuting(actionFn, description) {
 // ---------- RUN ----------
 async function runCode() {
   SpeechManager.cancelAll();
+
+  // Heads-up if the code uses input() — the sandbox will block it mid-run
+  // but it's friendlier to warn the user before they wait for execution.
+  const codeToCheck = getCode();
+  if (/\binput\s*\(/.test(codeToCheck)) {
+    speak('Heads up: your code uses input(), which is not supported in the sandbox. Replace input() with a hardcoded value before running. For example, replace name equals input quote your name quote with name equals quote Alice quote. Continuing anyway.');
+    out('⚠ Warning: input() is not supported. Replace it with a hardcoded value.\nExample: name = "Alice"  instead of  name = input("Your name?")\n\nRunning anyway...');
+  }
+
   AppState.isExecuting = true;
   cueSuccess();
-  out('Running...');
+  if (!/\binput\s*\(/.test(codeToCheck)) out('Running...');
   showAI('Running code...');
   speak('Running code.');
   srAnnounce('Running code');
@@ -1448,9 +1457,13 @@ async function updateStructurePanel() {
       html += '<div class="structure-group"><div class="structure-group-title">⚙️ Functions</div>';
       functions.forEach(fn => {
         const params = fn.params.map(p => p.name).join(', ');
-        html += `<div class="structure-item" role="button" tabindex="0" data-line="${fn.line}" aria-label="Go to function ${escapeHtml(fn.name)} at line ${fn.line}">
-          <span class="structure-item-icon">⚙️</span>
-          <span class="structure-item-label">${escapeHtml(fn.name)}(${escapeHtml(params)})</span>
+        const asyncBadge = fn.is_async ? '<span style="color:#facc15;font-size:0.7rem;margin-right:4px;">async</span>' : '';
+        const parentLabel = fn.parent_class ? `<span style="color:#64748b;font-size:0.75rem;">${escapeHtml(fn.parent_class)}.</span>` : '';
+        const icon = fn.is_async ? '⚡' : '⚙️';
+        const ariaLabel = `Go to ${fn.is_async ? 'async ' : ''}function ${fn.parent_class ? fn.parent_class + '.' : ''}${fn.name} at line ${fn.line}`;
+        html += `<div class="structure-item" role="button" tabindex="0" data-line="${fn.line}" aria-label="${escapeHtml(ariaLabel)}">
+          <span class="structure-item-icon">${icon}</span>
+          <span class="structure-item-label">${asyncBadge}${parentLabel}${escapeHtml(fn.name)}(${escapeHtml(params)})</span>
           <span class="structure-item-line">L${fn.line}</span>
         </div>`;
       });

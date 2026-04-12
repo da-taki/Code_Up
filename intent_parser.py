@@ -409,6 +409,23 @@ class IntentParser:
         r"^(?:एक\s+)?bug\s+(?:challenge|ढूंढो)$",
     ]
 
+    START_TUTORIAL_PATTERNS = [
+        r"^(?:start|open|begin|launch)\s+tutorial$",
+        r"^tutorial$",
+        r"^tutorial\s+(?:शुरू\s+करो|खोलो)$",
+    ]
+
+    SKIP_TUTORIAL_PATTERNS = [
+        r"^skip\s+tutorial$",
+        r"^(?:close|exit|stop)\s+tutorial$",
+        r"^tutorial\s+(?:बंद\s+करो|छोड़ो)$",
+    ]
+
+    TUTORIAL_NEXT_PATTERNS = [
+        r"^next$",
+        r"^(?:next\s+step|आगे|next\s+करो)$",
+    ]
+
     # -----------------------------------------------------------------------
     # Intent map — order defines precedence (most specific first)
     # -----------------------------------------------------------------------
@@ -478,6 +495,9 @@ class IntentParser:
             "quiz_me":             self.QUIZ_ME_PATTERNS,
             "explain_concept":     self.EXPLAIN_CONCEPT_PATTERNS,
             "bug_challenge":       self.BUG_CHALLENGE_PATTERNS,
+            "start_tutorial":      self.START_TUTORIAL_PATTERNS,
+            "skip_tutorial":       self.SKIP_TUTORIAL_PATTERNS,
+            "tutorial_next":       self.TUTORIAL_NEXT_PATTERNS,
         }
 
     # -----------------------------------------------------------------------

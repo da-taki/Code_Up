@@ -422,8 +422,8 @@ class IntentParser:
     ]
 
     TUTORIAL_NEXT_PATTERNS = [
-        r"^next$",
-        r"^(?:next\s+step|आगे|next\s+करो)$",
+        r"^tutorial\s+next$",
+        r"^(?:आगे\s+बढ़ो|next\s+करो)$",
     ]
 
     # -----------------------------------------------------------------------

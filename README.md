@@ -1,193 +1,104 @@
-# CodeUp — Blind-first, Voice-driven Python IDE
+# CodeUp — A Blind-First Python IDE
 
-CodeUp is a blind-first, voice-driven Python IDE designed to make programming accessible without relying on visual interfaces.
+CodeUp is a Python IDE designed for blind and visually impaired learners. Unlike traditional IDEs that retrofit accessibility on top of visual workflows, CodeUp treats non-visual interaction as the default. Every core feature — navigation, execution, debugging, code understanding — works through audio, keyboard, and natural language commands.
 
-Unlike traditional IDEs that retrofit accessibility on top of visual workflows, CodeUp treats non-visual interaction as the default. All core interactions — navigation, execution, debugging, and understanding program structure — are designed to work through audio, keyboard, and natural language commands.
-
----
-
-## What is CodeUp?
-
-CodeUp enables visually impaired users to write, understand, and debug Python code using:
-
-- Voice commands in **English and Hindi**
-- Audio feedback and code sonification
-- Step-by-step execution tracing with spoken playback
-- Static and semantic analysis
-- A guided onboarding tutorial covering 4 progressive Python topics
-
-AI assistance is optional, strictly separated from deterministic tooling, and never required to use the system.
+The project is independently developed and intended for use in schools and accessibility programs.
 
 ---
 
-## Core Features
+## What it does
 
-### 🔹 Onboarding & Guided Tutorial
+- **Voice commands** in English and Hindi for navigation, execution, and editing
+- **Audio code structure** through sonification — pitch maps to indentation, distinct tones for functions, classes, loops, conditionals
+- **Step-by-step execution traces** with spoken playback and a "story mode" narrative
+- **Sandboxed Python execution** with subprocess isolation, restricted imports, time and memory caps
+- **Optional AI assistance** (Gemini) for error explanation, code generation, summarization, and a mentor mode with quizzes and bug challenges
+- **Audio breakpoint debugger** with variable watching
+- **Six-step interactive tutorial** in both English and Hindi covering print, variables, loops, and conditionals
 
-First-time users are greeted with a language selection modal (English or Hindi). Press **1** for English or **2** for Hindi — no mouse needed.
-
-The tutorial covers four progressive topics, each chaining automatically after a successful run:
-
-| Topic | Concept | What you learn |
-|---|---|---|
-| 1 | `print` | Output text to the panel |
-| 2 | Variables | Named values, assignment, reuse |
-| 3 | Loops | `for` loops, `range()`, iterating lists |
-| 4 | Conditionals | `if`, `elif`, `else` — branching logic |
-
-Returning users skip onboarding automatically. Say **"restart tutorial"** or **"start over"** at any time to go back to the beginning.
-
-### 🔹 Code Execution with Trace
-
-- Executes Python code inside a restricted subprocess sandbox
-- Tracks line execution, variable initialization and mutation, function calls and returns
-- Detects semantic risk patterns such as infinite loops using heuristics
-- `input()` is blocked with a clear spoken explanation and a suggestion to use hardcoded values instead
-
-### 🔹 Voice-Driven Navigation
-
-Users can navigate code using natural language:
-
-- Jump to specific lines — spoken numbers supported ("go to line twenty five")
-- Read current, next, or previous lines with full context
-- Navigate history (back and forward)
-- Jump directly to errors
-- Save snippets by name ("save snippet named hello world")
-- Restart the tutorial ("restart tutorial")
-
-Ambiguous commands always require spoken confirmation. There is no silent automation.
-
-### 🔹 Audio Code Structure (Sonification)
-
-Code structure is conveyed using sound:
-
-- Indentation depth maps to pitch
-- Functions, classes, loops, and conditionals each have a distinct tone
-- Block sonification plays the entire current block as an audio sequence
-
-This enables understanding program structure without visual inspection.
-
-### 🔹 Variable Intelligence (AST-based)
-
-Uses Python's AST to:
-
-- List variables in the current scope with phonetic pronunciation
-- Track first definition, usage count, read vs. assignment
-- Find all usages of a variable reliably
-
-### 🔹 Error Beacon System
-
-- Detects syntax and heuristic runtime errors
-- Automatically jumps to the error line and activates a repeating audio beacon
-- Beacon severity adapts based on error type
-- AI explains the error in plain language immediately after announcing "Analyzing the error, please wait"
-
-### 🔹 Command Palette
-
-Press **Ctrl+Shift+P** to open a fully keyboard-navigable command palette. Arrow keys move between commands, Enter executes, Escape closes and returns focus to the editor. Screen readers are notified on open and close via `aria-live`.
-
-### 🔹 Accessible Snippet Management
-
-- Name and save code snippets using an inline text field — no inaccessible `window.prompt()`
-- Load snippets by clicking or pressing Enter/Space
-- Save by voice: "save snippet named my first program"
-
-### 🔹 AI Assistance (Optional)
-
-When a Gemini API key is configured:
-
-- Explains errors in simple language (English or Hindi)
-- Describes what a specific line does
-- Summarises files
-- Suggests improvements
-- Generates starter code from natural language descriptions
-
-AI output is explicitly separated from deterministic features and can be fully disabled by setting `GEMINI_ENABLED=0`. Every core feature works without an API key.
+AI assistance is strictly optional. Every core feature works without an API key or network connection.
 
 ---
 
-## Architecture Overview
+## Accessibility
 
-### Backend (Flask — `app.py`)
-
-- Handles execution, analysis, and voice intent parsing
-- Uses `ast` for static analysis, `sys.settrace` for execution tracing, restricted builtins for sandboxing
-- Thread-safe session storage for per-user trace state
-- Per-call `genai.Client` instances — no shared global API key state between threads
-- Uses `google-genai` SDK (current) — fully migrated from deprecated `google-generativeai`
-
-### Frontend (Monaco Editor + JavaScript)
-
-- Accessible editor interface with full keyboard shortcut coverage
-- Speech synthesis and recognition (`SpeechSynthesisUtterance`, `SpeechRecognition`)
-- Voice recognition language switches automatically between `en-US` and `hi-IN` based on selected language
-- Audio feedback (Web Audio API) for navigation and code structure
-- `aria-live` region for NVDA/JAWS screen reader announcements
-- Command palette (Ctrl+Shift+P) with full keyboard navigation
-
-### Supporting Modules
-
-| File | Purpose |
-|---|---|
-| `intent_parser.py` | Natural language → structured intent + slots |
-| `structure_parser.py` | AST-based code structure extraction |
-| `sandboxed_fs.py` | Restricted workspace file system |
+- Screen reader support via `aria-live` announcer (NVDA, JAWS, VoiceOver)
+- Color vision modes (Protanopia, Deuteranopia, Tritanopia)
+- High Contrast mode
+- Night Mode for low-light environments and users who prefer dark themes
+- Dyslexia-friendly mode with Atkinson Hyperlegible font and increased line spacing
+- Reduced motion support, both via in-app toggle and the OS-level `prefers-reduced-motion` setting
+- Full keyboard navigation — every feature reachable without a mouse
+- Press `Escape` at any time to stop speech mid-sentence
+- No `window.prompt()` — all dialogs use accessible inline modals with focus management
 
 ---
 
 ## Quickstart
 
-### 1. Clone and set up a virtual environment
+Requirements: Python 3.8 or newer. The application bundles its own copies of Monaco Editor and the JetBrains Mono / Atkinson Hyperlegible fonts, so it runs offline once installed.
 
-**Windows (PowerShell):**
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-```
+Clone and set up a virtualenv:
 
-**macOS / Linux:**
-```bash
-python -m venv .venv
-source .venv/bin/activate
-```
+    git clone https://github.com/da-taki/Code_Up.git
+    cd Code_Up
+    python -m venv .venv
 
-### 2. Install dependencies
+Activate the virtualenv (Windows PowerShell):
 
-```bash
-pip install -r requirements.txt
-```
+    .\.venv\Scripts\Activate.ps1
 
-### 3. Configure environment
+Activate the virtualenv (macOS / Linux):
 
-```bash
-cp .env.example .env
-```
+    source .venv/bin/activate
+
+Install dependencies:
+
+    pip install -r requirements.txt
+
+Configure environment:
+
+    cp .env.example .env
 
 Edit `.env` and set at minimum:
 
-```
-FLASK_SECRET_KEY=<a random secret>
-GEMINI_API_KEY=<your key from https://ai.google.dev/>
-```
+    FLASK_SECRET_KEY=<a random secret>
+    GEMINI_API_KEY=<your key from https://ai.google.dev/>
 
-AI features work without a key set — they return a clear spoken message rather than crashing. To disable them entirely set `GEMINI_ENABLED=0`.
+If you don't set a Gemini key, AI features return a clear spoken message rather than crashing. To disable AI entirely, set `GEMINI_ENABLED=0`.
 
-### 4. Run the application
+Run the application:
 
-```bash
-python app.py
-```
+    python app.py
 
-Open `http://127.0.0.1:5000` in your browser.
+Open `http://127.0.0.1:5000` in Chrome or Edge. (Firefox does not support the Web Speech API for voice input — keyboard and the typed command box still work in any browser.)
 
-### 5. Run tests
+Run tests:
 
-```bash
-pip install -r requirements-dev.txt
-python -m pytest -q
-```
+    pip install -r requirements-dev.txt
+    python -m pytest -q
 
-Tests are fully isolated — snippet storage is redirected to a temp directory and no real AI calls are made.
+Tests are fully isolated — snippet storage redirects to a temp directory and no real AI calls are made.
+
+---
+
+## Architecture
+
+### Backend (`app.py`)
+
+Flask application handling code execution, AST-based analysis, voice intent parsing, and AI proxying. Each `/run` request spawns a fresh subprocess confined to a per-session workspace directory, with restricted built-ins and (on POSIX systems) `RLIMIT_AS` and `RLIMIT_CPU` enforced via `preexec_fn`. Per-session state — execution traces, snippets, sandboxes — is keyed by signed session cookies.
+
+### Frontend
+
+Monaco Editor (vendored locally — no CDN dependency), JavaScript using the Web Speech API for voice recognition and `SpeechSynthesisUtterance` for output, Web Audio API for sonification. Speech recognition language switches automatically between `en-US` and `hi-IN` based on the selected interface language.
+
+### Supporting modules
+
+| File | Purpose |
+|---|---|
+| `intent_parser.py` | Natural language to structured intent and slots, with Hindi number support |
+| `structure_parser.py` | AST-based code structure extraction (functions, classes, loops, async detection, parent class tracking) |
+| `sandboxed_fs.py` | Per-session restricted workspace file system |
 
 ---
 
@@ -197,10 +108,9 @@ Tests are fully isolated — snippet storage is redirected to a temp directory a
 |---|---|---|---|
 | `FLASK_SECRET_KEY` | Yes | `dev-secret-key-change-in-production` | Signs session cookies |
 | `GEMINI_API_KEY` | No | — | Enables AI features |
-| `SESSION_COOKIE_SECURE` | No | `false` | Set `true` behind HTTPS |
 | `GEMINI_ENABLED` | No | `1` | Set `0` to disable all AI calls |
-| `SNIPPETS_FILE` | No | `snippets.json` | Snippet storage filename |
-| `DATA_DIR` | No | `.` | Directory for snippet storage |
+| `SESSION_COOKIE_SECURE` | No | `false` | Set `true` behind HTTPS |
+| `DATA_DIR` | No | `.` | Directory for per-session snippet files |
 
 ---
 
@@ -209,20 +119,26 @@ Tests are fully isolated — snippet storage is redirected to a temp directory a
 | Shortcut | Action |
 |---|---|
 | `Ctrl+Enter` | Run code |
+| `Escape` | Stop speech immediately |
 | `Alt+S` | Sonify current block |
 | `Alt+L` | Read current line with context |
 | `Alt+V` | List variables in scope |
 | `Alt+E` | Check for syntax errors |
 | `Alt+H` | Show help / command list |
 | `Alt+N` | Next execution trace step |
-| `Alt+←` / `Alt+→` | Navigate history |
+| `Alt+Left` / `Alt+Right` | Navigate history |
 | `Alt+Home` / `Alt+End` | Jump to top / bottom |
 | `Ctrl+Shift+P` | Open command palette |
 | `Ctrl+Shift+M` | Toggle voice control |
+| `Alt+A` | Cycle color vision modes |
+| `Alt+D` | Toggle dyslexia mode |
+| `Alt+M` | Toggle reduced motion |
 
 ---
 
 ## Voice Commands
+
+A partial list. Many natural variations work — the intent parser is grammar-based, not exact-match.
 
 | Say | Action |
 |---|---|
@@ -233,96 +149,60 @@ Tests are fully isolated — snippet storage is redirected to a temp directory a
 | "next step" / "previous step" | Step through execution trace |
 | "find variable x" | Jump to all usages of variable x |
 | "summarize this file" | AI file summary |
-| "generate code for a fibonacci sequence" | AI code generation |
-| "check for errors" | Syntax check + audio beacon |
+| "generate code for fibonacci sequence" | AI code generation |
+| "check for errors" | Syntax check plus audio beacon |
 | "sonify block" | Hear current block as audio tones |
-| "save snippet named my program" | Save current code with a specific name |
-| "restart tutorial" / "start over" | Reset and restart the onboarding tutorial |
-| "tell the story" / "narrate execution" | Hear a narrative of what your code did |
-| "set breakpoint at line 10" | Set an audio breakpoint |
-| "watch variable x" | Report variable x at each breakpoint |
-| "continue" | Run to the next breakpoint |
-| "clear breakpoints" | Remove all breakpoints |
-| "learning mode" / "teach me" | Start mentor/quiz mode |
-| "quiz me on loops" | Get a quiz question on a topic |
-| "explain variables" | Hear a simple concept explanation |
-| "bug challenge" | Load a buggy program to find and fix |
-| "insert function called greet" | Voice code editing — add a function |
-| "suggest next line" | Get 3 AI suggestions for the next line |
-| "choose 2" | Insert suggestion number 2 |
-| "help" | List all available commands |
+| "save snippet named hello world" | Save current code |
+| "tell the story" | Narrate what your code did |
+| "set breakpoint at line 10" | Audio debugger |
+| "watch variable x" | Report x at each breakpoint |
+| "continue" | Run to next breakpoint |
+| "learning mode" | Start mentor / quiz mode |
+| "quiz me on loops" | Get a quiz question |
+| "explain variables" | Concept explanation |
+| "bug challenge" | Find and fix a bug |
+| "insert function called greet" | Voice code editing |
+| "suggest next line" then "choose 2" | AI autocomplete |
+| "help" | List all commands |
+
+Hindi equivalents work for around 15 core commands including `चलाओ` (run), `कोड समझाओ` (analyze), `कोड ठीक करो` (fix), `लाइन बीस पर जाओ` (go to line 20), `मदद` (help). Hindi number words 0–50 are recognized in line-navigation commands.
 
 ---
 
-## Language Support
+## Sandbox
 
-CodeUp supports **English** and **Hindi (हिंदी)**:
+User code runs in a separate Python subprocess with:
 
-- Onboarding modal and 4-topic tutorial in both languages
-- All AI responses — analysis, fixes, explanations, story mode, mentor mode — in the selected language
-- Voice recognition uses `en-US` or `hi-IN` automatically and restarts on language change
-- Core voice commands work in Hindi: navigation (`लाइन बीस पर जाओ`, `लाइन पांच पढ़ो`), execution (`चलाओ`, `रन करो`), analysis (`कोड समझाओ`, `विश्लेषण करो`), fixing (`ठीक करो`, `सही करो`), summarization (`सारांश दो`), help (`मदद`, `सहायता`), clearing (`एडिटर साफ करो`), and stepping through traces (`अगला कदम`, `पिछला कदम`)
-- Hindi number words 0–50 are recognized in line-navigation commands (`एक`, `दो`... `बीस`... `पचास`)
-- Less common commands (breakpoints, mentor sub-commands, structure navigation) currently accept English only — Hindi coverage will expand based on user feedback
----
+- Restricted imports — only `math`, `random`, `string`, `datetime` allowed
+- Restricted built-ins — `eval`, `exec`, `compile`, `open`, `__import__`, and direct module attribute access blocked
+- 5-second wall-clock timeout
+- 5,000-event trace cap to prevent runaway memory growth
+- POSIX-only: 512 MB address space cap and 30-second CPU time cap via `setrlimit`
+- Working directory confined to a per-session temp workspace
+- `input()` blocked with a clear explanation suggesting hardcoded values
 
-## Accessibility Features
-
-- **Screen reader support** — `aria-live` announcer region for NVDA and JAWS
-- **Color vision modes** — Protanopia, Deuteranopia, Tritanopia, High Contrast
-- **Dyslexia-friendly mode** — switches to Atkinson Hyperlegible font, increased line spacing
-- **Reduced motion** — respects both the in-app toggle and the OS-level `prefers-reduced-motion` setting
-- **Keyboard-only navigation** — every feature reachable without a mouse
-- **Focus indicators** — visible in all themes including Windows High Contrast / Forced Colors Mode
-- **No `window.prompt()`** — all dialogs use accessible inline modals with proper focus management
-
----
-
-## Design Principles
-
-- **Accessibility first** — non-visual interaction is the default, not an afterthought
-- **Voice ambiguity must be confirmed** — no silent automation on ambiguous commands
-- **Fail loudly and explain clearly** — errors produce audio feedback and plain-language AI explanations
-- **Heuristic does not mean guaranteed correctness** — semantic warnings are guidance, not formal verification
-- **AI is optional** — every core feature works without a network connection or API key
-- **No inaccessible browser APIs** — `window.prompt()` and similar are replaced with accessible alternatives
-
----
-
-## Intended Audience
-
-- Blind or visually impaired Python learners
-- Educators teaching Python accessibly
-- Accessibility researchers
-- Anyone exploring non-visual programming interfaces
-
----
-
-## Disclaimer
-
-Some analyses — semantic warnings, infinite loop detection — are heuristic-based and intended for guidance, not formal verification.
+Per-session rate limit: 10 runs per 60 seconds.
 
 ---
 
 ## Status
 
-**v0.6.0** — Core features complete and locally tested.
+v0.7.0 — School-deployment ready. Calm, professional aesthetic. Locally tested with the full test suite (162 passing tests).
 
-- ✅ 4-topic guided tutorial (print, variables, loops, conditionals) in English and Hindi
-- ✅ Fully accessible voice-driven IDE with sonification
-- ✅ Screen reader support (NVDA/JAWS via aria-live)
-- ✅ Subprocess sandbox with restricted builtins
-- ✅ AI error explanation, code generation, analysis, fix, summarize
-- ✅ Command palette with full keyboard navigation
-- ✅ Accessible snippet management (no window.prompt)
-- ✅ Hindi voice recognition (hi-IN) with auto-restart on language change
-- ✅ Execution story mode — narrative narration of code execution
-- ✅ Audio breakpoint debugger with variable watching
-- ✅ Mentor/learning mode — quiz, concept explanation, bug challenges
-- ✅ Intent-aware voice code editing (insert function/class/loop/if, replace line, add parameter)
-- ✅ Semantic autocomplete via voice (suggest next line → choose option)
-- ✅ Bilingual English and Hindi support: AI responses, tutorial content, voice recognition (`hi-IN`), and ~15 core voice commands (run, navigate, analyze, fix, summarize, help, etc.) in both languages. Hindi number words 0–50 supported in line-navigation commands.
-**Next:**
-- Deployment and HTTPS
-- User testing with blind users
-- Research-level write-up
+Next:
+
+- User testing with blind students
+- Deployment behind HTTPS for non-localhost use
+- Research write-up
+
+---
+
+## License
+
+MIT — see `LICENSE`.
+
+---
+
+## Author
+
+Independent project by Taknoor Singh ([@da-taki](https://github.com/da-taki)).

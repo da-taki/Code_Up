@@ -1035,3 +1035,27 @@ class TestRegressionAfterFixes:
         client.post("/run", json={"code": "x = 1"})
         data = client.get("/execution-trace").get_json()
         assert "trace" in data and "current_index" in data
+
+class TestSnippetSessionIsolation:
+    def test_snippets_are_per_session(self, tmp_snippets):
+        """Two sessions must not see each other's snippets."""
+        os.environ["GEMINI_ENABLED"] = "0"
+        try:
+            c1 = app.test_client()
+            c2 = app.test_client()
+
+            c1.post("/snippets", json={"name": "alice_only", "code": "print('alice')"})
+            c2.post("/snippets", json={"name": "bob_only",   "code": "print('bob')"})
+
+            alice_list = c1.get("/snippets").get_json()["snippets"]
+            bob_list   = c2.get("/snippets").get_json()["snippets"]
+
+            alice_names = [s["name"] for s in alice_list]
+            bob_names   = [s["name"] for s in bob_list]
+
+            assert "alice_only" in alice_names
+            assert "alice_only" not in bob_names
+            assert "bob_only" in bob_names
+            assert "bob_only" not in alice_names
+        finally:
+            os.environ["GEMINI_ENABLED"] = "1"

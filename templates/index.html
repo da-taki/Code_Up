@@ -6,16 +6,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="Blind-first, offline Python IDE with AI assistance.">
 
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;600;800&family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style/fonts.css">
 
   <link rel="stylesheet" href="/static/style/core.css">
   <link rel="stylesheet" href="/static/style/cyberpunk.css">
   <link rel="stylesheet" href="/static/style/accessibility.css">
   <link rel="stylesheet" href="/static/style/ui-improvements.css">
 
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs/editor/editor.main.min.css">
+  <link rel="stylesheet" href="/static/vendor/monaco/min/vs/editor/editor.main.css">
 </head>
 
 <body class="cu-body theme-default">
@@ -223,7 +221,8 @@
     </div>
   </div>
   <script src="/static/bg.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs/loader.min.js"></script>
+  <script src="/static/tts-detect.js"></script>
+  <script src="/static/vendor/monaco/min/vs/loader.js"></script>
   <script src="/static/app.js"></script>
 
   <script>
@@ -387,6 +386,9 @@
           var sel = document.getElementById('languageSelector');
           if (sel) { sel.value = lang; sel.dispatchEvent(new Event('change')); }
           modal.style.display = 'none';
+          if (typeof window.warnIfHindiUnavailable === 'function') {
+            window.warnIfHindiUnavailable(lang);
+          }
           speak(lang === 'hi'
             ? 'हिंदी चुना गया। Tutorial के लिए Tutorial बटन दबाएं, या सीधे code लिखना शुरू करें।'
             : 'English selected. Press the Tutorial button to begin, or start coding right away.');
@@ -514,7 +516,10 @@
         if (e.key === 'Enter') { e.preventDefault(); if (typeof saveSnippetAccessible === 'function') saveSnippetAccessible(); }
       });
       document.getElementById('voiceButton').addEventListener('click', function () { if (typeof toggleVoice === 'function') toggleVoice(); });
-      document.getElementById('languageSelector').addEventListener('change', function () {
+      document.getElementById('languageSelector').addEventListener('change', function (e) {
+        if (typeof window.warnIfHindiUnavailable === 'function') {
+          window.warnIfHindiUnavailable(e.target.value);
+        }
         if (typeof isListening !== 'undefined' && isListening) {
           speak('Language changed. Restarting voice recognition.');
           stopListening();

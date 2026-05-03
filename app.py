@@ -218,14 +218,28 @@ def enforce_same_origin():
 SNIPPETS_FILE = os.environ.get("SNIPPETS_FILE", "snippets.json")
 DATA_DIR = os.environ.get("DATA_DIR", ".")
 
+def _snippets_path(session_id: str = None) -> str:
+    """Return the absolute path to the snippets file for a given session.
 
-def _snippets_path() -> str:
-    """Return the absolute path to the snippets file, ensuring the data directory exists."""
+    Each session gets its own snippets file so students sharing a lab
+    machine don't see each other's saved code. The session_id is
+    sanitized to a UUID-safe filename.
+    """
     try:
         os.makedirs(DATA_DIR, exist_ok=True)
     except Exception:
         pass
-    return os.path.join(DATA_DIR, SNIPPETS_FILE)
+
+    if session_id is None:
+        session_id = get_session_id()
+
+    # Sanitize: only allow hex chars and dashes (UUID format)
+    safe_id = re.sub(r'[^a-fA-F0-9\-]', '', session_id)[:64]
+    if not safe_id:
+        safe_id = "default"
+
+    filename = f"snippets_{safe_id}.json"
+    return os.path.join(DATA_DIR, filename)
 
 # ==========================
 # BASIC HELPERS
@@ -859,12 +873,32 @@ finally:
             # Remove old key in case it lingers from a previous version
             env.pop('CODEUP_EXEC_CODE', None)
 
+            # Resource limits applied via preexec_fn on POSIX systems.
+            # Windows lacks resource.setrlimit so we fall back to no limit there;
+            # the subprocess timeout still bounds CPU time.
+            preexec = None
+            if sys.platform != "win32":
+                def _set_subprocess_limits():
+                    try:
+                        import resource
+                        # 512 MB address space cap — kills the subprocess if it
+                        # tries to allocate more, instead of crashing the server.
+                        resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024, 512 * 1024 * 1024))
+                        # 30 second CPU time cap as belt-and-suspenders alongside
+                        # the wall-clock timeout below.
+                        resource.setrlimit(resource.RLIMIT_CPU, (30, 30))
+                    except Exception:
+                        pass
+                preexec = _set_subprocess_limits
+
             proc = subprocess.run(
                 [sys.executable, script_file_path],
                 capture_output=True,
                 text=True,
                 timeout=max(1, int(time_limit)),
-                env=env
+                env=env,
+                cwd=workspace_dir,           # confine subprocess to its sandbox
+                preexec_fn=preexec,           # POSIX-only, ignored on Windows
             )
             stdout_buf.write(proc.stdout)
             stderr_buf.write(proc.stderr)

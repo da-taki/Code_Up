@@ -11,9 +11,9 @@ from structure_parser import CodeAnalyzer
 from intent_parser import parse_intent
 from sandboxed_fs import get_sandbox
 
-# Thread-local storage helpers
-_trace_context = threading.local()  # used by run_with_trace
-_api_context = threading.local()   # stores per-request Gemini API key
+# Thread-local storage for per-request Gemini API key.
+# (_trace_context was removed along with run_with_trace — session storage handles traces.)
+_api_context = threading.local()
 
 # Session-based trace storage (prevents concurrent user interference)
 # Keys: session_id (UUID), Values: {last_trace, current_trace_index, trace_timestamp, trace_duration_ms, last_voice_action}
@@ -490,115 +490,16 @@ def explain_error(code: str, err_text: str, language="en") -> str:
 # RUN CODE (WITH AI ERROR EXPLANATION)
 # ==========================
 
-# FIX H-5: Removed all dead in-process execution code (run_with_trace invocation,
-# compile(), AST depth/node checks, SAFE_GLOBALS, SafeFunction, safe_print,
-# safe_open — roughly lines 570–715 in the original). The actual execution path
-# has been the subprocess sandbox since the refactor; keeping the dead code
-# wasted CPU on every /run request and obscured the real execution path.
-# run_with_trace itself is retained because it is referenced by the tracer inside
-# the subprocess script template below.
-
-def run_with_trace(compiled_code, globals_dict, locals_dict, time_limit=1.0):
-    """Enhanced tracer with memory and concurrency safeguards.
-
-    Executes code with hard limits to prevent unbounded execution.
-    - Max recursion depth: 50 calls
-    - Max line executions: 10,000 total
-    - Max event buffer: 5,000 events
-    - Max timeout: 1.0 sec
-    """
-    events = []
-    last_locals = {}
-    start_time = time.time()
-
-    MAX_CALL_DEPTH = 50
-    MAX_LINE_EXECS = 10000
-    MAX_EVENTS = 5000
-
-    def safe_repr(obj):
-        try:
-            r = repr(obj)
-        except Exception:
-            try:
-                r = str(obj)
-            except Exception:
-                r = f"<{type(obj).__name__}?>"
-        if len(r) > 200:
-            return r[:197] + "..."
-        return r
-
-    call_depth = [0]
-    line_count = [0]
-
-    def append_event(ev):
-        if len(events) < MAX_EVENTS:
-            events.append(ev)
-        elif len(events) == MAX_EVENTS:
-            events.append({"type": "overflow", "note": "event limit reached; additional events dropped"})
-
-    def tracer(frame, event, arg):
-        nonlocal last_locals
-
-        if frame.f_code.co_filename != '<user>':
-            return tracer
-
-        if event == "call":
-            call_depth[0] += 1
-            if call_depth[0] > MAX_CALL_DEPTH:
-                raise RuntimeError("Recursion depth exceeded (%d)." % MAX_CALL_DEPTH)
-        elif event == "return":
-            call_depth[0] = max(0, call_depth[0] - 1)
-
-        if time.time() - start_time > time_limit:
-            raise TimeoutError(f"Execution timed out after {time_limit}s")
-
-        if event == "line":
-            line_count[0] += 1
-            if line_count[0] > MAX_LINE_EXECS:
-                raise RuntimeError("Execution exceeded line limit; possible infinite loop.")
-            lineno = frame.f_lineno
-            append_event({"type": "line_exec", "line": lineno})
-
-            current = frame.f_locals.copy()
-            changes = []
-            for k, v in current.items():
-                if k not in last_locals:
-                    changes.append(f"{k} initialized to {safe_repr(v)}")
-                elif last_locals[k] != v:
-                    changes.append(f"{k} changed from {safe_repr(last_locals[k])} to {safe_repr(v)}")
-            for k in last_locals:
-                if k not in current:
-                    changes.append(f"{k} went out of scope")
-            if changes:
-                append_event({"type": "state_change", "line": lineno, "changes": changes})
-            last_locals = current
-
-        elif event == "call":
-            append_event({"type": "call", "function": frame.f_code.co_name, "line": frame.f_lineno})
-        elif event == "return":
-            append_event({"type": "return", "value": safe_repr(arg)})
-
-        return tracer
-
-    old_tracer = sys.gettrace()
-    if old_tracer is not None and old_tracer is not tracer:
-        raise RuntimeError("Another tracer active on this thread; aborting.")
-
-    with _tracer_lock:
-        sys.settrace(tracer)
-        try:
-            exec(compiled_code, globals_dict, locals_dict)
-        finally:
-            sys.settrace(old_tracer)
-
-    return events
+# Note: in-process execution (run_with_trace, SAFE_GLOBALS, SafeModule, etc.)
+# was removed. All user code runs in the subprocess sandbox below.
 
 def classify_semantic_errors(trace):
     """
     ⚠️ HEURISTIC DETECTION (Assistance Signal, Not Guaranteed)
 
-    These are heuristic patterns, not rigorous analysis.
-    The real safety limits are in run_with_trace (hard caps on execution).
+    These are heuristic patterns, not rigorous analysis. The real safety
+    limits are the subprocess timeout, the MAX_TRACE_EVENTS cap, and the
+    POSIX RLIMIT_AS / RLIMIT_CPU caps applied via preexec_fn.
     """
     issues = []
     execution_count = {}
@@ -608,12 +509,16 @@ def classify_semantic_errors(trace):
             line = event["line"]
             execution_count[line] = execution_count.get(line, 0) + 1
 
+    # Threshold of 1000 chosen well above typical learner loops (50–200 iterations
+    # for fibonacci, sorting demos, etc.) but well below the 5000 hard cap, so
+    # genuine runaways still trip the heuristic without false-positiving on
+    # ordinary classroom code.
     for line, count in execution_count.items():
-        if count > 50:
+        if count > 1000:
             issues.append({
                 "category": "Possible Infinite Loop (Heuristic)",
                 "line": line,
-                "message": "This line executed 50+ times. You may have an infinite loop, but this is a heuristic hint, not a guarantee."
+                "message": f"This line executed {count} times. You may have an infinite loop, but this is a heuristic hint, not a guarantee."
             })
 
     return issues
@@ -647,37 +552,6 @@ def save_execution_trace(trace, duration_ms=0):
         storage['last_accessed'] = time.time()
     cleanup_old_sessions()
 
-
-class SafeModule:
-    """Wrapper that blocks dangerous attribute access on imported modules."""
-    def __init__(self, module):
-        object.__setattr__(self, '_module', module)
-
-    def __getattr__(self, name):
-        BLOCKED = {'__dict__', '__class__', '__bases__', '__mro__', '__subclasses__',
-                   '__loader__', '__spec__', '__builtins__', '__globals__', '__code__',
-                   '__func__', '__self__'}
-        if name in BLOCKED:
-            raise AttributeError(f"Access to '{name}' is blocked for security reasons")
-        return getattr(object.__getattribute__(self, '_module'), name)
-
-    def __setattr__(self, name, value):
-        if name == '_module':
-            object.__setattr__(self, name, value)
-        else:
-            raise AttributeError(f"Cannot modify module attributes")
-
-    def __dir__(self):
-        return [x for x in dir(object.__getattribute__(self, '_module'))
-                if not x.startswith('__')]
-
-def restricted_import(name, *args, **kwargs):
-    """Restrict imports to safe stdlib modules only."""
-    ALLOWED = {"math", "random", "string", "datetime", "date"}
-    if name not in ALLOWED:
-        raise ImportError(f"Module '{name}' is not allowed. Allowed: {', '.join(ALLOWED)}")
-    module = __import__(name, *args, **kwargs)
-    return SafeModule(module)
 
 
 @app.route("/run", methods=["POST"])
@@ -799,6 +673,8 @@ else:
 trace = []
 last_locals = {{}}
 start = time.time()
+MAX_TRACE_EVENTS = 5000
+_overflow_logged = [False]
 
 def safe_repr(v):
     try:
@@ -815,6 +691,12 @@ def safe_repr(v):
 def tracer(frame, event, arg):
     global last_locals
     if frame.f_code.co_filename != '<user>':
+        return tracer
+
+    if len(trace) >= MAX_TRACE_EVENTS:
+        if not _overflow_logged[0]:
+            trace.append({{'type':'overflow','note':'event limit reached; further events dropped'}})
+            _overflow_logged[0] = True
         return tracer
 
     if event == 'line':

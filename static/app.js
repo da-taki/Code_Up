@@ -560,7 +560,7 @@ require(['vs/editor/editor.main'], function () {
   editor = monaco.editor.create(document.getElementById('editor'), {
     value:            'print("Hello CodeUp!")',
     language:         'python',
-    theme:            'vs-dark',
+    theme:            document.body.classList.contains('theme-night') ? 'vs-dark' : 'vs',
     fontSize:         16,
     minimap:          { enabled: false },
     automaticLayout:  true,
@@ -2300,14 +2300,14 @@ function showInputDialog(promptText, callback) {
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:30000;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);';
 
   overlay.innerHTML = `
-    <div style="background:#0b1220;border:1px solid rgba(79,200,250,0.4);border-radius:12px;padding:24px;min-width:280px;max-width:400px;width:90%;">
-      <label id="_cuDialogLabel" style="display:block;color:#e5e7eb;margin-bottom:12px;font-family:inherit;font-size:0.9rem;">${promptText}</label>
+    <div style="background:var(--bg-panel);border:1px solid var(--border-strong);border-radius:12px;padding:24px;min-width:280px;max-width:400px;width:90%;color:var(--text-main);">
+      <label id="_cuDialogLabel" style="display:block;color:var(--text-main);margin-bottom:12px;font-family:inherit;font-size:0.9rem;">${promptText}</label>
       <input id="_cuDialogInput" type="text" aria-labelledby="_cuDialogLabel"
-             style="width:100%;padding:8px 10px;border-radius:6px;border:1px solid rgba(79,200,250,0.4);background:#020617;color:#e5e7eb;font-family:inherit;font-size:1rem;margin-bottom:12px;"
+             style="width:100%;padding:8px 12px;border-radius:6px;border:1px solid var(--border-soft);background:var(--bg-soft);color:var(--text-main);font-family:inherit;font-size:1rem;margin-bottom:12px;"
       />
       <div style="display:flex;gap:8px;justify-content:flex-end;">
-        <button id="_cuDialogCancel" style="padding:8px 16px;border-radius:6px;border:1px solid rgba(148,163,184,0.3);background:#020617;color:#e5e7eb;cursor:pointer;font-family:inherit;">Cancel</button>
-        <button id="_cuDialogOk"     style="padding:8px 16px;border-radius:6px;border:none;background:linear-gradient(135deg,#00d9ff,#0099cc);color:#000;font-weight:600;cursor:pointer;font-family:inherit;">Go</button>
+        <button id="_cuDialogCancel" style="padding:8px 16px;border-radius:6px;border:1px solid var(--border-soft);background:var(--bg-soft);color:var(--text-main);cursor:pointer;font-family:inherit;">Cancel</button>
+        <button id="_cuDialogOk"     style="padding:8px 16px;border-radius:6px;border:none;background:var(--accent);color:#fff;font-weight:600;cursor:pointer;font-family:inherit;">Go</button>
       </div>
     </div>
   `;

@@ -1,27 +1,68 @@
 /* =========================================================
-   ROOT VARIABLES
+   ROOT VARIABLES — LIGHT (default)
+   Calm off-white palette, single muted teal accent.
+   Night mode and high-contrast are layered on top.
 ========================================================= */
 
 :root {
-  --bg-main:  #0d1117;
-  --bg-panel: #0b1220;
-  --bg-soft:  #161b22;
+  /* Backgrounds */
+  --bg-main:  #f8f7f4;
+  --bg-panel: #ffffff;
+  --bg-soft:  #f0eee8;
 
-  --text-main: #e6edf3;
-  --text-dim:  #9da7b3;
+  /* Text */
+  --text-main: #1f2937;
+  --text-dim:  #6b7280;
 
-  --border-soft:   rgba(148, 163, 184, 0.25);
-  --border-strong: rgba(148, 163, 184, 0.45);
+  /* Borders */
+  --border-soft:   rgba(31, 41, 55, 0.10);
+  --border-strong: rgba(31, 41, 55, 0.22);
 
-  --radius-lg: 16px;
-  --radius-md: 12px;
-  --radius-sm: 8px;
+  /* Single accent — muted teal */
+  --accent:        #0f766e;
+  --accent-hover:  #115e59;
+  --accent-soft:   rgba(15, 118, 110, 0.10);
+
+  /* Status colors — also muted */
+  --success: #16a34a;
+  --danger:  #b91c1c;
+  --warning: #b45309;
+
+  /* Geometry */
+  --radius-lg: 12px;
+  --radius-md: 8px;
+  --radius-sm: 6px;
 
   --gap-lg: 20px;
   --gap-md: 14px;
   --gap-sm: 8px;
 
-  --font-main: "JetBrains Mono", monospace;
+  --font-main: "Atkinson Hyperlegible", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* =========================================================
+   NIGHT MODE — dark slate, kept calm
+========================================================= */
+
+body.theme-night {
+  --bg-main:  #0f172a;
+  --bg-panel: #1e293b;
+  --bg-soft:  #334155;
+
+  --text-main: #e2e8f0;
+  --text-dim:  #94a3b8;
+
+  --border-soft:   rgba(226, 232, 240, 0.10);
+  --border-strong: rgba(226, 232, 240, 0.22);
+
+  --accent:        #2dd4bf;
+  --accent-hover:  #5eead4;
+  --accent-soft:   rgba(45, 212, 191, 0.12);
+
+  --success: #4ade80;
+  --danger:  #f87171;
+  --warning: #fbbf24;
 }
 
 /* =========================================================
@@ -59,8 +100,8 @@ html, body {
 ========================================================= */
 
 .cu-header {
-  padding: 18px 5% 14px;
-  background: var(--bg-soft);
+  padding: 20px 5% 16px;
+  background: var(--bg-panel);
   border-bottom: 1px solid var(--border-soft);
 }
 
@@ -68,42 +109,49 @@ html, body {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 6px;
+  margin-bottom: 8px;
 }
 
 .cu-title {
-  font-size: 1.9rem;
-  font-weight: 800;
-  letter-spacing: 0.08em;
+  font-size: 1.6rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
   margin: 0;
+  color: var(--text-main);
+  font-family: var(--font-main);
 }
 
 .cu-status-pill {
-  padding: 4px 10px;
+  padding: 4px 12px;
   border-radius: 999px;
   font-size: 0.7rem;
-  border: 1px solid var(--border-strong);
-  background: var(--bg-panel);
+  font-weight: 500;
+  border: 1px solid var(--border-soft);
+  background: var(--bg-soft);
+  color: var(--text-dim);
+  letter-spacing: 0.04em;
 }
 
 .cu-subtitle {
-  font-size: 0.8rem;
+  font-size: 0.85rem;
   color: var(--text-dim);
   margin-bottom: 4px;
 }
 
 .cu-subtitle-info {
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   color: var(--text-dim);
-  opacity: 0.8;
-  margin-bottom: 8px;
+  opacity: 0.85;
+  margin-bottom: 10px;
 }
 
 .cu-hotkey {
   padding: 2px 6px;
   border-radius: 4px;
-  background: var(--bg-panel);
+  background: var(--bg-soft);
   border: 1px solid var(--border-soft);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
 }
 
 .cu-theme-controls {
@@ -133,7 +181,7 @@ html, body {
   background: var(--bg-panel);
   border-radius: var(--radius-lg);
   border: 1px solid var(--border-soft);
-  padding: 12px;
+  padding: 14px;
 }
 
 /* =========================================================
@@ -148,9 +196,12 @@ html, body {
 }
 
 .cu-panel-title {
-  font-size: 1rem;
+  font-size: 0.85rem;
   font-weight: 600;
-  margin-bottom: 10px;
+  letter-spacing: 0.05em;
+  margin-bottom: 12px;
+  color: var(--text-dim);
+  text-transform: uppercase;
 }
 
 .cu-snippet-list {
@@ -165,33 +216,26 @@ html, body {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 6px 8px;
+  padding: 8px 10px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-soft);
+  background: var(--bg-soft);
   cursor: pointer;
+  font-size: 0.85rem;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.snippet-item:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
 }
 
 .snippet-name {
-  font-size: 0.8rem;
-  max-width: 120px;
+  font-size: 0.85rem;
+  max-width: 140px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.snippet-actions {
-  display: flex;
-  gap: 4px;
-}
-
-.mini-btn {
-  padding: 2px 6px;
-  border-radius: 5px;
-  background: var(--bg-soft);
-  border: 1px solid var(--border-soft);
-  font-size: 0.7rem;
-  color: var(--text-main);
-  cursor: pointer;
 }
 
 /* =========================================================
@@ -208,6 +252,7 @@ html, body {
 
 .cu-editor-region {
   flex: 1;
+  min-height: 400px;
   border-radius: var(--radius-md);
   overflow: hidden;
   border: 1px solid var(--border-soft);
@@ -226,32 +271,75 @@ html, body {
   display: flex;
   flex-wrap: wrap;
   gap: var(--gap-sm);
+  align-items: center;
 }
 
 /* =========================================================
-   BUTTONS
+   BUTTONS — calm, restrained, no morphing
 ========================================================= */
 
 .cu-button,
 .cu-button-secondary,
-.cu-button-voice {
-  padding: 10px 18px;
+.cu-button-voice,
+.theme-toggle,
+.theme-selector {
+  padding: 9px 16px;
   font-size: 0.85rem;
+  font-weight: 500;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-soft);
   cursor: pointer;
   background: var(--bg-soft);
   color: var(--text-main);
   font-family: var(--font-main);
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
-.cu-button-secondary {
-  background: #1f2933;
+.cu-button:hover:not(:disabled),
+.cu-button-secondary:hover:not(:disabled),
+.theme-toggle:hover:not(:disabled),
+.theme-selector:hover:not(:disabled) {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
+.cu-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Primary action — Run button */
+.cu-button-primary {
+  background: var(--accent);
+  color: #ffffff;
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.cu-button-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  color: #ffffff;
+}
+
+/* Voice button — distinct so it's findable */
 .cu-button-voice {
-  background: #5b0000;
-  color: white;
+  background: var(--bg-soft);
+  color: var(--text-main);
+  border: 1px solid var(--border-strong);
+}
+
+.cu-button-voice.cu-button-voice--active {
+  background: var(--accent);
+  color: #ffffff;
+  border-color: var(--accent);
+}
+
+.theme-toggle.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 /* =========================================================
@@ -259,18 +347,7 @@ html, body {
 ========================================================= */
 
 .cu-language-selector {
-  padding: 10px 14px;
-  font-size: 0.85rem;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border-soft);
-  background: var(--bg-soft);
-  color: var(--text-main);
-  cursor: pointer;
-  font-family: var(--font-main);
-}
-
-.cu-language-selector:hover {
-  border-color: var(--border-strong);
+  padding: 9px 14px;
 }
 
 /* =========================================================
@@ -278,8 +355,8 @@ html, body {
 ========================================================= */
 
 .cu-output-wrapper {
-  margin: 10px 5% 12px;
-  padding: 10px;
+  margin: 10px 5% 14px;
+  padding: 14px;
 }
 
 .cu-output {
@@ -288,28 +365,29 @@ html, body {
   max-height: 400px;
   overflow-y: auto;
   border-radius: var(--radius-md);
-  background: #020617;
+  background: var(--bg-soft);
   border: 1px solid var(--border-soft);
-  padding: 12px;
-  font-family: var(--font-main);
+  padding: 14px;
+  font-family: var(--font-mono);
   font-size: 0.9rem;
   line-height: 1.6;
   white-space: pre-wrap;
   word-wrap: break-word;
+  color: var(--text-main);
 }
 
 /* =========================================================
-   AI BUBBLE
+   AI BUBBLE — quiet status indicator, not alarming
 ========================================================= */
 
 .ai-bubble {
-  margin-top: 8px;
+  margin-top: 10px;
   padding: 10px 14px;
   font-size: 0.85rem;
   border-radius: var(--radius-md);
-  background: rgba(248, 113, 113, 0.15);
-  border: 1px solid rgba(248, 113, 113, 0.4);
-  box-shadow: 0 0 12px rgba(248, 113, 113, 0.3);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  color: var(--accent);
 }
 
 /* =========================================================
@@ -317,21 +395,27 @@ html, body {
 ========================================================= */
 
 .cu-voice-console {
-  margin-top: 10px;
+  margin-top: 12px;
   display: flex;
-  gap: 8px;
+  gap: 10px;
   align-items: center;
 }
 
 .cu-voice-input {
   flex: 1;
-  padding: 6px 8px;
-  border-radius: 8px;
-  border: 1px solid var(--border-strong);
-  background: #020617;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-soft);
+  background: var(--bg-soft);
   color: var(--text-main);
-  font-size: 0.8rem;
-  font-family: var(--font-main);
+  font-size: 0.9rem;
+  font-family: var(--font-mono);
+}
+
+.cu-voice-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--bg-panel);
 }
 
 /* =========================================================
@@ -352,7 +436,7 @@ html, body {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
 }
 
 .structure-info {
@@ -367,27 +451,21 @@ html, body {
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+  transition: background 0.15s ease, border-color 0.15s ease;
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
 .structure-item:hover {
-  background: rgba(79, 200, 250, 0.1);
-  border-color: rgba(79, 200, 250, 0.3);
-  transform: translateX(4px);
-}
-
-.structure-item:focus-visible {
-  outline: 3px solid #facc15;
-  outline-offset: 2px;
+  background: var(--accent-soft);
+  border-color: var(--accent);
 }
 
 .structure-item-icon {
   font-weight: bold;
   min-width: 20px;
-  color: #4FC8FA;
+  color: var(--accent);
 }
 
 .structure-item-label {
@@ -402,19 +480,37 @@ html, body {
   font-size: 0.8rem;
   min-width: 40px;
   text-align: right;
+  font-family: var(--font-mono);
 }
 
 .structure-group {
-  margin-top: 12px;
+  margin-top: 10px;
 }
 
 .structure-group-title {
   color: var(--text-dim);
-  font-size: 0.8rem;
+  font-size: 0.75rem;
   font-weight: 600;
   text-transform: uppercase;
   padding: 6px 10px 4px;
-  opacity: 0.7;
+  letter-spacing: 0.05em;
+}
+
+/* =========================================================
+   BREAKPOINT VISUALS — restrained
+========================================================= */
+
+.bp-line {
+  background: rgba(185, 28, 28, 0.10) !important;
+}
+
+.bp-glyph {
+  width: 10px;
+  height: 10px;
+  margin-left: 6px;
+  margin-top: 4px;
+  background: var(--danger);
+  border-radius: 50%;
 }
 
 /* =========================================================

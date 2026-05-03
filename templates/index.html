@@ -9,7 +9,6 @@
   <link rel="stylesheet" href="/static/style/fonts.css">
 
   <link rel="stylesheet" href="/static/style/core.css">
-  <link rel="stylesheet" href="/static/style/cyberpunk.css">
   <link rel="stylesheet" href="/static/style/accessibility.css">
   <link rel="stylesheet" href="/static/style/ui-improvements.css">
 
@@ -18,7 +17,6 @@
 
 <body class="cu-body theme-default">
 
-  <canvas id="matrixCanvas" aria-hidden="true"></canvas>
   <div id="srAnnouncer" role="status" aria-live="assertive" aria-atomic="true"
        style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;"></div>
 
@@ -28,8 +26,8 @@
       <div class="cu-status-pill" aria-label="AI model: Gemini Pro">GEMINI • PRO</div>
     </div>
     <div class="cu-subtitle">
-      Blind-first, cyberpunk Python IDE with offline AI.
-      <span class="cu-hotkey">CTRL + ENTER</span> to run.
+      A blind-first Python IDE for accessible learning.
+      Press <span class="cu-hotkey">Ctrl+Enter</span> to run.
     </div>
     <div class="cu-subtitle-info">
       <small>Fully keyboard accessible · Real-time execution · No external dependencies needed</small>
@@ -50,6 +48,10 @@
       <button id="motionToggle" class="theme-toggle" aria-pressed="false" aria-label="Toggle reduced motion">
         Reduce Motion
       </button>
+
+      <button id="nightToggle" class="theme-toggle" aria-pressed="false" aria-label="Toggle night mode">
+        Night Mode
+      </button>
       <button id="tutorialBtn" class="cu-button cu-button-secondary" aria-label="Start interactive tutorial" style="font-size:0.8rem;padding:6px 12px;">
         📖 Tutorial
       </button>
@@ -66,7 +68,7 @@
           type="text"
           placeholder="Snippet name..."
           aria-label="Snippet name"
-          style="flex:1;padding:6px 8px;border-radius:6px;border:1px solid rgba(148,163,184,0.3);background:#020617;color:#e5e7eb;font-family:inherit;font-size:0.8rem;"
+          style="flex:1;padding:7px 10px;border-radius:var(--radius-sm);border:1px solid var(--border-soft);background:var(--bg-soft);color:var(--text-main);font-family:inherit;font-size:0.85rem;"
         />
         <button
           id="snippetSaveBtn"
@@ -186,11 +188,12 @@
   </div>
 
   <!-- Onboarding modal -->
+  <!-- Onboarding modal -->
   <div id="onboardingModal" role="dialog" aria-modal="true" aria-labelledby="onboardingTitle"
-       style="position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:20000;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(6px);">
-    <div style="background:#0b1220;border:1px solid rgba(248,113,113,0.4);border-radius:16px;padding:32px;max-width:480px;width:90%;box-shadow:0 0 40px rgba(248,113,113,0.2);">
-      <h2 id="onboardingTitle" style="font-size:1.4rem;margin-bottom:12px;color:#facc15;">Welcome to CodeUp</h2>
-      <p id="onboardingMsg" style="color:#e5e7eb;line-height:1.7;margin-bottom:24px;">
+       style="position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:20000;display:flex;align-items:center;justify-content:center;">
+    <div style="background:var(--bg-panel);border:1px solid var(--border-strong);border-radius:12px;padding:32px;max-width:480px;width:90%;box-shadow:0 10px 40px rgba(0,0,0,0.15);color:var(--text-main);">
+      <h2 id="onboardingTitle" style="font-size:1.4rem;margin-bottom:12px;color:var(--text-main);font-family:var(--font-main);">Welcome to CodeUp</h2>
+      <p id="onboardingMsg" style="color:var(--text-main);line-height:1.7;margin-bottom:24px;">
         CodeUp is a voice-driven Python IDE built for blind and visually impaired users.
         Before we start — which language would you prefer?
       </p>
@@ -203,24 +206,23 @@
   <div id="tutorialOverlay" hidden
        role="complementary" aria-label="Interactive tutorial"
        style="position:fixed;bottom:20px;right:20px;width:340px;max-width:92vw;
-              background:#0b1220;border:1px solid rgba(248,113,113,0.5);
-              border-radius:14px;padding:20px;z-index:9000;
-              box-shadow:0 0 30px rgba(248,113,113,0.2);">
+              background:var(--bg-panel);border:1px solid var(--border-strong);
+              border-radius:var(--radius-md);padding:20px;z-index:9000;
+              box-shadow:0 10px 30px rgba(0,0,0,0.15);color:var(--text-main);">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-      <span id="tutorialStepLabel" style="font-size:0.75rem;color:#64748b;font-family:var(--font-main);">Step 1 of 6</span>
+      <span id="tutorialStepLabel" style="font-size:0.75rem;color:var(--text-dim);">Step 1 of 6</span>
       <button id="tutorialSkipBtn" aria-label="Skip tutorial"
-              style="background:none;border:none;color:#64748b;cursor:pointer;font-size:0.8rem;font-family:var(--font-main);">
+              style="background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:0.85rem;font-family:var(--font-main);">
         ✕ Skip
       </button>
     </div>
-    <p id="tutorialText" style="color:#e5e7eb;font-size:0.88rem;line-height:1.65;font-family:var(--font-main);margin-bottom:14px;min-height:80px;"></p>
+    <p id="tutorialText" style="color:var(--text-main);font-size:0.9rem;line-height:1.65;margin-bottom:14px;min-height:80px;"></p>
     <div style="display:flex;gap:8px;">
-      <button id="tutorialNextBtn" class="cu-button cu-button-primary" style="flex:1;font-size:0.82rem;padding:8px 12px;">
+      <button id="tutorialNextBtn" class="cu-button cu-button-primary" style="flex:1;font-size:0.85rem;padding:9px 12px;">
         Next →
       </button>
     </div>
   </div>
-  <script src="/static/bg.js"></script>
   <script src="/static/tts-detect.js"></script>
   <script src="/static/vendor/monaco/min/vs/loader.js"></script>
   <script src="/static/app.js"></script>
@@ -469,6 +471,7 @@
         var colorMode     = safeStorage(function () { return localStorage.getItem('colorVisionMode'); }) || 'default';
         var dyslexiaMode  = safeStorage(function () { return localStorage.getItem('dyslexiaMode'); }) === 'true';
         var reducedMotion = safeStorage(function () { return localStorage.getItem('reducedMotion'); }) === 'true';
+        var nightMode     = safeStorage(function () { return localStorage.getItem('nightMode'); }) === 'true';
 
         var sel = document.getElementById('colorVisionMode');
         if (sel) sel.value = colorMode;
@@ -489,6 +492,16 @@
           motionBtn.classList.add('active');
           motionBtn.setAttribute('aria-pressed', 'true');
         }
+
+        // Night mode — also auto-enable if OS prefers dark and user hasn't set a preference
+        var nightBtn = document.getElementById('nightToggle');
+        var sysPrefDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        var shouldNight = nightMode || (sysPrefDark && !safeStorage(function () { return localStorage.getItem('nightMode'); }));
+        if (shouldNight && nightBtn) {
+          document.body.classList.add('theme-night');
+          nightBtn.classList.add('active');
+          nightBtn.setAttribute('aria-pressed', 'true');
+        }
       }
 
       document.getElementById('colorVisionMode').addEventListener('change', function (e) { applyColorVisionMode(e.target.value); });
@@ -505,6 +518,19 @@
         this.setAttribute('aria-pressed', String(isActive));
         safeStorage(function () { localStorage.setItem('reducedMotion', isActive); });
         speak(isActive ? 'Reduced motion mode activated.' : 'Reduced motion mode deactivated.');
+      });
+      document.getElementById('nightToggle').addEventListener('click', function () {
+        var isActive = document.body.classList.toggle('theme-night');
+        this.classList.toggle('active', isActive);
+        this.setAttribute('aria-pressed', String(isActive));
+        safeStorage(function () { localStorage.setItem('nightMode', isActive); });
+        // Re-theme Monaco editor too
+        try {
+          if (typeof monaco !== 'undefined' && monaco.editor) {
+            monaco.editor.setTheme(isActive ? 'vs-dark' : 'vs');
+          }
+        } catch (e) {}
+        speak(isActive ? 'Night mode activated.' : 'Night mode deactivated.');
       });
 
       document.getElementById('runBtn').addEventListener('click', function () { if (typeof runCode === 'function') runCode(); });

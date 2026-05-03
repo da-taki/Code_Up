@@ -642,7 +642,9 @@ async function runCode() {
       body:    JSON.stringify({ code: getCode(), language: getLanguage() }),
     });
     const data = await res.json();
-    window.executionTrace = (data.trace || []).slice(0, 1000);
+    // Keep the full trace so debugContinue() can hit breakpoints in long programs.
+    // Backend now caps at 5000 events, so this won't be unbounded.
+    window.executionTrace = data.trace || [];
     window.traceIndex = 0;
 
     if (data.success) {

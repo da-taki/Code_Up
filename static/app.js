@@ -459,6 +459,7 @@ UTILITIES:
 - "help" (this menu)
 
 KEYBOARD SHORTCUTS:
+- Escape: Stop speech immediately
 - Ctrl+Enter: Run code
 - Alt+S: Sonify block
 - Alt+L: Read line with context
@@ -551,7 +552,7 @@ window.MonacoEnvironment = {
   getWorkerUrl: function () { return '/static/python.worker.js'; },
 };
 
-require.config({ paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs' } });
+require.config({ paths: { vs: '/static/vendor/monaco/min/vs' } });
 
 require(['vs/editor/editor.main'], function () {
   if (editor) { console.warn('Editor already initialized, skipping'); return; }
@@ -1151,7 +1152,13 @@ function toggleVoice() {
 
 function startListening() {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SR) { alert('Speech recognition not supported in this browser.'); speak('Speech recognition not supported.'); return; }
+  if (!SR) {
+    const msg = 'Speech recognition is not supported in this browser. Please use Chrome or Edge for voice input. You can still use the keyboard and the typed command box.';
+    out(msg);
+    speak(msg);
+    srAnnounce('Speech recognition unavailable');
+    return;
+  }
   if (isListening) { speak('Already listening.'); return; }
 
   recognition = new SR();
@@ -1344,6 +1351,21 @@ window.addEventListener('DOMContentLoaded', () => {
   document.addEventListener('keydown', e => {
     resumeAudio();
     if (e.ctrlKey && e.shiftKey && e.key === 'M') { e.preventDefault(); toggleVoice(); }
+    // Escape stops speech immediately. Ignored when command palette or input
+    // dialog is open — those have their own Escape handlers.
+    if (e.key === 'Escape') {
+      const paletteOverlay = document.getElementById('commandPaletteOverlay');
+      const paletteOpen = paletteOverlay && !paletteOverlay.hasAttribute('hidden');
+      const dialogOpen  = !!document.getElementById('_cuInputDialog');
+      if (paletteOpen || dialogOpen) return;
+      if (AppState.isSpeaking || (window.speechSynthesis && window.speechSynthesis.speaking)) {
+        SpeechManager.cancelAll();
+        ErrorBeaconManager.stop();
+        srAnnounce('Speech stopped');
+        SonificationManager.playTone(600, 0.05, 0.06);
+        e.preventDefault();
+      }
+    }
   });
 
   // Command palette input — registered once here only (removed the duplicate at bottom of file)

@@ -108,7 +108,7 @@ class IntentParser:
         r"^execute\s*(?:code|program|it)?$",
         r"^start\s*(?:code|program|it)?$",
         # Hindi: "चलाओ" / "कोड चलाओ" / "रन करो"
-        r"^(?:कोड\s+)?(?:चलाओ|चलाइए|चलाना)$",
+        r"^(?:कोड\s+)?(?:चलाओ|चलाइए)$",
         r"^रन\s*(?:करो|कीजिए)?$",
     ]
 

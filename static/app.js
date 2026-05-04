@@ -121,7 +121,6 @@ function sleep(ms) {
 // ---------- SONIFICATION MANAGER ----------
 const SonificationManager = (function () {
   const jobs = new Map();
-  const REDUCED = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   function ensureAudio() {
     if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -132,7 +131,9 @@ const SonificationManager = (function () {
   }
 
   function playTone(freq, duration = 0.08, vol = 0.1) {
-    if (REDUCED) return;
+    const reduced = (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) ||
+                    document.body.classList.contains('theme-reduced-motion');
+    if (reduced) return;
     try {
       const ctx = ensureAudio();
       const osc  = ctx.createOscillator();
@@ -1199,6 +1200,53 @@ async function handleCommandText(txt) {
   const field = document.getElementById('voiceText');
   if (field) field.value = txt;
 
+  // Quiz answer intercept (mirrors handleVoiceCommand)
+  if (window._pendingQuizAnswer) {
+    if (window._pendingQuizAnswer.expiresAt && Date.now() > window._pendingQuizAnswer.expiresAt) {
+      window._pendingQuizAnswer = null;
+    }
+  }
+  if (window._pendingQuizAnswer) {
+    const t = txt.toLowerCase().trim();
+    const match = t.match(/(?:answer|option|choose)\s+([abc])|^([abc])$/);
+    if (match) {
+      const q = window._pendingQuizAnswer;
+      window._pendingQuizAnswer = null;
+      const chosen = (match[1] || match[2]).toUpperCase();
+      if (chosen === q.answer) {
+        SonificationManager.playTone(900, 0.1, 0.1);
+        speak(`Correct! ${q.explanation}`);
+        srAnnounce('Correct answer');
+        out(`✓ CORRECT!\n\n${q.explanation}`);
+      } else {
+        SonificationManager.playTone(200, 0.15, 0.08);
+        speak(`Not quite. The correct answer was ${q.answer}. ${q.explanation}`);
+        srAnnounce('Wrong answer');
+        out(`✗ The correct answer was ${q.answer}.\n\n${q.explanation}`);
+      }
+      return;
+    }
+  }
+
+  // Bug challenge intercept (mirrors handleVoiceCommand)
+  if (window._pendingBugChallenge) {
+    if (window._pendingBugChallenge.expiresAt && Date.now() > window._pendingBugChallenge.expiresAt) {
+      window._pendingBugChallenge = null;
+    }
+  }
+  if (window._pendingBugChallenge) {
+    const t = txt.toLowerCase().trim();
+    if (t.includes('show answer') || t.includes('give up') || t.includes('reveal') || t.includes('answer दिखाओ')) {
+      const ch = window._pendingBugChallenge;
+      window._pendingBugChallenge = null;
+      out(`THE BUG:\n${ch.bug}\n\nFIXED CODE:\n${ch.fixed}`);
+      speak(`The bug was: ${ch.bug}`);
+      setTimeout(() => setCode(ch.fixed), 2000);
+      srAnnounce('Answer revealed');
+      return;
+    }
+  }
+
   if (pendingConfirm) {
     tryResolveConfirmation(txt);
     return;
@@ -1553,7 +1601,7 @@ function registerEditorShortcuts() {
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyV, () => { pasteCode(); });
 
   try { loadSnippets(); } catch (e) {}
-  console.log('All accessibility features loaded.');
+  _debugLog('All accessibility features loaded.');
 }
 
 async function speakNextStep() {
@@ -2279,7 +2327,7 @@ function debugContinue() {
       if (_watchedVars.size > 0 && stateEvents.length > 0) {
         const lastState = stateEvents[stateEvents.length - 1];
         const relevant  = (lastState.changes || []).filter(c =>
-          Array.from(_watchedVars).some(v => c.startsWith(v))
+          Array.from(_watchedVars).some(v => c.startsWith(v + ' '))
         );
         if (relevant.length) varReport = ' ' + relevant.join(', ');
       }

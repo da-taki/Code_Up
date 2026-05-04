@@ -158,7 +158,7 @@ def _check_run_rate_limit(session_id: str) -> bool:
     now = time.time()
     with _run_rate_lock:
         # Opportunistic cleanup: drop session entries that have no live timestamps
-        if len(_run_timestamps) > 100 and (now * 1000) % 50 < 1:
+        if len(_run_timestamps) > 100 and __import__('random').random() < 0.02:
             stale = [sid for sid, ts in _run_timestamps.items()
                      if not any(now - t < RUN_RATE_WINDOW for t in ts)]
             for sid in stale:
@@ -406,7 +406,9 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en"):
 
 def extract_code(text: str):
     m = re.search(r"```(?:python)?\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
-    raw = m.group(1).strip() if m else text.strip()
+    if not m:
+        return ""
+    raw = m.group(1).strip()
     lines = []
     for line in raw.splitlines():
         low = line.strip().lower()
@@ -480,7 +482,7 @@ def sanitize_traceback(traceback_str: str) -> str:
 def explain_error(code: str, err_text: str, language="en") -> str:
     if language == "hi":
         system = (
-            "आप एक पायथन ट्यूटर हैं जो एक अंधे प्रथम IDE में काम करते हैं।\n"
+            "आप एक पायथन ट्यूटर हैं जो एक दृष्टिबाधित-केंद्रित IDE में काम करते हैं।\n"
             "उपयोगकर्ता के कोड और त्रुटि को देखते हुए, समझाएं:\n"
             "- क्या त्रुटि हुई\n"
             "- किस पंक्ति पर (यदि दृश्यमान हो)\n"
@@ -609,7 +611,7 @@ def run_code():
         # session from overwriting each other's trace.json mid-flight.
         trace_file = os.path.join(workspace_dir, f"trace_{uuid.uuid4().hex}.json")
 
-        script_content = f'''
+        script_content = '''
 import sys, time, json, traceback, os
 
 ALLOWED_MODULES = {{'math','random','string','datetime','date'}}
@@ -668,8 +670,7 @@ SAFE_GLOBALS = {{
     'repr': SafeFunction(repr),
     '__builtins__': {{
         'None': None, 'False': False, 'True': True,
-        'isinstance': isinstance, 'type': type,
-        'hasattr': hasattr, 'getattr': getattr,
+        'isinstance': isinstance,
         'AttributeError': AttributeError, 'TypeError': TypeError,
         'ValueError': ValueError, 'Exception': Exception,
         'BaseException': BaseException, 'StopIteration': StopIteration,
@@ -898,12 +899,12 @@ def analyze():
 
     if language == "hi":
         system = (
-            "आप एक अंधे-पहले IDE में एक विशेषज्ञ पायथन ट्यूटर हैं।\n"
+            "आप एक दृष्टिबाधित-केंद्रित IDE में एक विशेषज्ञ पायथन ट्यूटर हैं।\n"
             "दिए गए पायथन कोड का विश्लेषण करें। रिपोर्ट करें:\n"
             "- यह क्या करता है\n"
             "- कोई बग या edge cases\n"
             "- कोई बुरी प्रथाएं\n"
-            "कोई फ्लफ नहीं। अधिकतम 10 पंक्तियां।"
+            "कोई बकवास नहीं। अधिकतम 10 पंक्तियां।"
         )
     else:
         system = (
@@ -959,7 +960,7 @@ def advise():
 
     if language == "hi":
         system = (
-            "आप एक शुरुआती को मेंटर करने वाले एक वरिष्ठ पायथन इंजीनियर हैं।\n"
+            "आप एक शुरुआती को मार्गदर्शन देने वाले वरिष्ठ पायथन इंजीनियर हैं।\n"
             "उनके कोड को देखते हुए, 3-7 ठोस सुधार सुझाएं:\n"
             "- नई सुविधाएं जो वे जोड़ सकते हैं\n"
             "- इसे साफ करने के लिए रीफैक्टर\n"
@@ -1061,7 +1062,7 @@ def describe():
 
     if language == "hi":
         system = (
-            "आप एक अंधे डेवलपर के लिए केवल TARGET Python पंक्ति की व्याख्या करते हैं।\n"
+            "आप एक दृष्टिबाधित डेवलपर के लिए केवल TARGET Python पंक्ति की व्याख्या करते हैं।\n"
             "सरल भाषा का प्रयोग करें। अधिकतम 3 छोटी पंक्तियां।"
         )
     else:
@@ -1620,8 +1621,8 @@ def generate_code():
 
     if language == "hi":
         system = (
-            "आप एक शुरुआत-अनुकूल, अंधे-प्रथम IDE के लिए एक पायथन कोड जेनरेटर हैं।\n"
-            "उपयोगकर्ता एक कार्य को प्राकृतिक भाषा में वर्णित करेगा।\n"
+            "आप एक शुरुआती-अनुकूल, दृष्टिबाधित-केंद्रित IDE के लिए एक पायथन कोड जेनरेटर हैं।\n"
+            "उपयोगकर्ता एक कार्य का वर्णन प्राकृतिक भाषा में करेगा।\n"
             "आपको केवल वैध पायथन कोड लौटाना चाहिए जो कार्य को हल करता है।\n"
             "टिप्पणी, markdown, या व्याख्या न जोड़ें।\n"
             "बस कोड।"
@@ -1819,7 +1820,7 @@ def summarize():
 
     if language == "hi":
         system = (
-            "आप एक अंधे शुरुआत के लिए पायथन कोड को सारांशित करते हैं।\n"
+            "आप एक दृष्टिबाधित शुरुआती के लिए पायथन कोड को सारांशित करते हैं।\n"
             "4 से 7 छोटे बुलेट पॉइंट्स में समझाएं:\n"
             "- उद्देश्य\n"
             "- इनपुट\n"
@@ -1947,7 +1948,8 @@ def _trace_playback(direction):
     else:
         return "Unknown trace navigation command."
 
-    storage['current_trace_index'] = idx
+    with _session_traces_lock:
+        storage['current_trace_index'] = idx
     event = _get_trace_event(idx)
     return _event_to_speech(event, idx, len(trace))
 
@@ -1975,7 +1977,8 @@ def voice():
 
     def _store_and_return(response_dict, status_code=200):
         """Helper: save action for repeat, then return the response."""
-        storage['last_voice_action'] = (response_dict, status_code)
+        with _session_traces_lock:
+            storage['last_voice_action'] = (response_dict, status_code)
         return jsonify(response_dict), status_code
 
     if intent and confidence >= 0.75:

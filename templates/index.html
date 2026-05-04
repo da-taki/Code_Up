@@ -187,10 +187,24 @@
     </div>
   </div>
 
-  <!-- Onboarding modal -->
-  <!-- Onboarding modal -->
+  <!-- Audio gate — must be dismissed by user gesture to unlock speech synthesis -->
+  <div id="audioGate" role="dialog" aria-modal="true" aria-labelledby="audioGateTitle"
+       style="position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:25000;display:flex;align-items:center;justify-content:center;">
+    <div style="background:var(--bg-panel);border:1px solid var(--border-strong);border-radius:12px;padding:32px;max-width:480px;width:90%;box-shadow:0 10px 40px rgba(0,0,0,0.15);color:var(--text-main);text-align:center;">
+      <h2 id="audioGateTitle" style="font-size:1.4rem;margin-bottom:12px;color:var(--text-main);font-family:var(--font-main);">CodeUp</h2>
+      <p style="color:var(--text-main);line-height:1.7;margin-bottom:24px;">
+        Press <strong>Enter</strong> or <strong>Space</strong> to begin, or click the button below.
+        This unlocks audio narration in your browser.
+      </p>
+      <button id="audioGateBtn" class="cu-button cu-button-primary" style="min-width:200px;font-size:1rem;padding:12px 24px;" autofocus>
+        Begin (Enter)
+      </button>
+    </div>
+  </div>
+
+  <!-- Onboarding modal — hidden until the audio gate is cleared -->
   <div id="onboardingModal" role="dialog" aria-modal="true" aria-labelledby="onboardingTitle"
-       style="position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:20000;display:flex;align-items:center;justify-content:center;">
+       style="position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:20000;display:none;align-items:center;justify-content:center;">
     <div style="background:var(--bg-panel);border:1px solid var(--border-strong);border-radius:12px;padding:32px;max-width:480px;width:90%;box-shadow:0 10px 40px rgba(0,0,0,0.15);color:var(--text-main);">
       <h2 id="onboardingTitle" style="font-size:1.4rem;margin-bottom:12px;color:var(--text-main);font-family:var(--font-main);">Welcome to CodeUp</h2>
       <p id="onboardingMsg" style="color:var(--text-main);line-height:1.7;margin-bottom:24px;">
@@ -370,54 +384,161 @@
         },
       };
 
-      // Expose for voice commands in app.js
+      /// Expose for voice commands in app.js
       window.TutorialController = Tutorial;
-      window._tutorialOnRunSuccess = function () {};
+      window._tutorialOnRunSuccess = function () {
+        // Only auto-advance if the tutorial is open AND the current step had code to run.
+        // Steps without code (intro, outro) advance only on Enter / Next button.
+        if (!Tutorial.active) return;
+        var steps = Tutorial.steps();
+        var current = steps[Tutorial.step];
+        if (!current || !current.code) return;
+        // Don't auto-advance the final step
+        if (Tutorial.step >= steps.length - 1) return;
+        // Give the user a moment to hear the program output before moving on
+        setTimeout(function () {
+          if (Tutorial.active) {
+            speak('Nice. Moving to the next step.');
+            Tutorial.next();
+          }
+        }, 3500);
+      };
 
       // ── Onboarding: language pick only ──────────────────────────────────
       function runOnboarding() {
         var modal = document.getElementById('onboardingModal');
         if (!modal) return;
 
+        var enBtn = document.getElementById('obEnglish');
+        var hiBtn = document.getElementById('obHindi');
+
+        // Move focus to the first option immediately so screen readers announce the dialog
+        // and Tab cycling stays inside the modal.
+        requestAnimationFrame(function () {
+          if (enBtn) enBtn.focus();
+        });
+
+        // Trap Tab inside the two buttons until a choice is made
+        function trapTab(e) {
+          if (e.key !== 'Tab') return;
+          var active = document.activeElement;
+          if (e.shiftKey) {
+            if (active === enBtn) { e.preventDefault(); hiBtn.focus(); }
+            else if (active === hiBtn) { e.preventDefault(); enBtn.focus(); }
+            else { e.preventDefault(); enBtn.focus(); }
+          } else {
+            if (active === enBtn) { e.preventDefault(); hiBtn.focus(); }
+            else if (active === hiBtn) { e.preventDefault(); enBtn.focus(); }
+            else { e.preventDefault(); enBtn.focus(); }
+          }
+        }
+        modal.addEventListener('keydown', trapTab);
+
         setTimeout(function () {
-          speak('Welcome to CodeUp. Choose your language. Press 1 for English or 2 for Hindi.');
+          speak('Welcome to CodeUp. Choose your language. Press 1 or Enter for English, or press 2 for Hindi.');
         }, 800);
 
         function pickLang(lang) {
           safeStorage(function () { localStorage.setItem(LANG_KEY, lang); });
           var sel = document.getElementById('languageSelector');
           if (sel) { sel.value = lang; sel.dispatchEvent(new Event('change')); }
+          modal.removeEventListener('keydown', trapTab);
+          document.removeEventListener('keydown', onboardingKey);
           modal.style.display = 'none';
+
+          // Move focus somewhere sensible after the modal closes
+          var tutorialBtn = document.getElementById('tutorialBtn');
+          if (tutorialBtn) tutorialBtn.focus();
+
           if (typeof window.warnIfHindiUnavailable === 'function') {
             window.warnIfHindiUnavailable(lang);
           }
           speak(lang === 'hi'
-            ? 'हिंदी चुना गया। Tutorial के लिए Tutorial बटन दबाएं, या सीधे code लिखना शुरू करें।'
-            : 'English selected. Press the Tutorial button to begin, or start coding right away.');
+            ? 'हिंदी चुना गया। Tutorial के लिए Tutorial बटन दबाएं, या Ctrl Shift M से voice control शुरू करें।'
+            : 'English selected. Press Enter on the Tutorial button to begin, or press Control Shift M to start voice control.');
         }
 
-        document.getElementById('obEnglish').addEventListener('click', function () { pickLang('en'); });
-        document.getElementById('obHindi').addEventListener('click', function () { pickLang('hi'); });
+        if (enBtn) enBtn.addEventListener('click', function () { pickLang('en'); });
+        if (hiBtn) hiBtn.addEventListener('click', function () { pickLang('hi'); });
 
         function onboardingKey(e) {
-          if (e.key === '1') { document.removeEventListener('keydown', onboardingKey); pickLang('en'); }
-          if (e.key === '2') { document.removeEventListener('keydown', onboardingKey); pickLang('hi'); }
+          if (e.key === '1') { pickLang('en'); }
+          if (e.key === '2') { pickLang('hi'); }
         }
         document.addEventListener('keydown', onboardingKey);
       }
 
-      // ── Boot ────────────────────────────────────────────────────────────
-      var savedLang = safeStorage(function () { return localStorage.getItem(LANG_KEY); });
-      if (savedLang) {
-        var modal = document.getElementById('onboardingModal');
-        if (modal) modal.style.display = 'none';
-        var sel = document.getElementById('languageSelector');
-        if (sel) sel.value = savedLang;
-      } else {
-        window.addEventListener('load', function () { setTimeout(runOnboarding, 600); });
+      // ── Audio gate — speech synthesis needs a user gesture in most browsers ─
+      function dismissAudioGate(onDone) {
+        var gate = document.getElementById('audioGate');
+        if (!gate) { if (onDone) onDone(); return; }
+
+        function clear() {
+          gate.style.display = 'none';
+          // Prime the speech engine with a silent utterance so the first real
+          // call doesn't get dropped by autoplay policy.
+          try {
+            if ('speechSynthesis' in window) {
+              var primer = new SpeechSynthesisUtterance(' ');
+              primer.volume = 0;
+              window.speechSynthesis.speak(primer);
+            }
+          } catch (e) {}
+          if (onDone) onDone();
+        }
+
+        var btn = document.getElementById('audioGateBtn');
+        if (btn) btn.addEventListener('click', clear);
+
+        function gateKey(e) {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            document.removeEventListener('keydown', gateKey);
+            clear();
+          }
+        }
+        document.addEventListener('keydown', gateKey);
+
+        // Focus the button so screen readers announce it
+        requestAnimationFrame(function () {
+          if (btn) btn.focus();
+        });
       }
 
+      // ── Boot ────────────────────────────────────────────────────────────
+      var savedLang = safeStorage(function () { return localStorage.getItem(LANG_KEY); });
+
+      window.addEventListener('load', function () {
+        dismissAudioGate(function () {
+          if (savedLang) {
+            var modal = document.getElementById('onboardingModal');
+            if (modal) modal.style.display = 'none';
+            var sel = document.getElementById('languageSelector');
+            if (sel) sel.value = savedLang;
+            // Returning user — speak a brief welcome back
+            setTimeout(function () {
+              speak(savedLang === 'hi'
+                ? 'CodeUp में वापस स्वागत है। Tutorial के लिए Tutorial बटन, या Ctrl Shift M से voice शुरू करें।'
+                : 'Welcome back to CodeUp. Press Enter on the Tutorial button, or press Control Shift M for voice control.');
+            }, 400);
+          } else {
+            var modal = document.getElementById('onboardingModal');
+            if (modal) modal.style.display = 'flex';
+            setTimeout(runOnboarding, 300);
+          }
+        });
+      });
+
       window.addEventListener('DOMContentLoaded', function () {
+        // Detect Firefox up front and warn the user once
+        var isFirefox = navigator.userAgent.toLowerCase().indexOf('firefox') !== -1;
+        if (isFirefox && !safeStorage(function () { return localStorage.getItem('firefoxWarningShown'); })) {
+          setTimeout(function () {
+            speak('Note: voice input is not supported in Firefox. All other features work, but for voice control please use Chrome or Edge.');
+            safeStorage(function () { localStorage.setItem('firefoxWarningShown', 'true'); });
+          }, 3500);
+        }
+
         // Tutorial buttons
         var tutorialBtn = document.getElementById('tutorialBtn');
         if (tutorialBtn) tutorialBtn.addEventListener('click', function () { Tutorial.open(); });
@@ -553,8 +674,19 @@
         }
       });
       document.getElementById('sendCommandBtn').addEventListener('click', function () { if (typeof submitCommand === 'function') submitCommand(); });
-      document.getElementById('submitApiKeyBtn').addEventListener('click', function () { if (typeof submitApiKey === 'function') submitApiKey(); });
-      document.getElementById('closeApiKeyModalBtn').addEventListener('click', function () { if (typeof closeApiKeyModal === 'function') closeApiKeyModal(); });
+      document.getElementById('submitApiKeyBtn').addEventListener('click', function () {
+        if (typeof submitApiKey === 'function') submitApiKey();
+      });
+      document.getElementById('closeApiKeyModalBtn').addEventListener('click', function () {
+        if (typeof closeApiKeyModal === 'function') closeApiKeyModal();
+      });
+      var apiKeyInput = document.getElementById('apiKeyInput');
+      if (apiKeyInput) {
+        apiKeyInput.addEventListener('keydown', function (e) {
+          if (e.key === 'Enter') { e.preventDefault(); if (typeof submitApiKey === 'function') submitApiKey(); }
+          if (e.key === 'Escape') { e.preventDefault(); if (typeof closeApiKeyModal === 'function') closeApiKeyModal(); }
+        });
+      }
 
       document.addEventListener('keydown', function (e) {
         if (e.altKey && e.key === 'a') { e.preventDefault(); var s = document.getElementById('colorVisionMode'); s.selectedIndex = (s.selectedIndex + 1) % s.options.length; applyColorVisionMode(s.value); }

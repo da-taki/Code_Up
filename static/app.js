@@ -538,7 +538,9 @@ function repeatLastSpeech() {
 }
 
 // ---------- AI BUBBLE ----------
-// Use showEl/hideEl (hidden attribute) to avoid inline style conflicting with HTML's `hidden` attr.
+// Always-visible bubble whose contents change. Toggling visibility doesn't
+// fire aria-live announcements, but text changes inside an aria-live region
+// do — so we just update text and use a placeholder when idle.
 function showAI(msg) {
   const b = document.getElementById('aiBubble');
   if (!b) return;
@@ -546,7 +548,12 @@ function showAI(msg) {
   showEl(b);
 }
 function hideAI() {
-  hideEl(document.getElementById('aiBubble'));
+  const b = document.getElementById('aiBubble');
+  if (!b) return;
+  // Set a brief idle message so the live region announces "Idle" rather than
+  // appearing to vanish without notice. Then hide visually after a short delay.
+  b.textContent = 'Idle.';
+  setTimeout(() => hideEl(b), 1500);
 }
 
 // ---------- API KEY MODAL ----------
@@ -668,10 +675,15 @@ function getLanguage() { return (document.getElementById('languageSelector') || 
 function setCode(v) {
   if (typeof ErrorBeaconManager !== 'undefined') ErrorBeaconManager.stop();
   SpeechManager.cancelAll();
-  // Reset execution state but keep navigation history — a fix/generate should not erase history
   lastSpokenText = null;
   window.executionTrace = [];
   window.traceIndex = 0;
+  // Navigation history points to line numbers in the OLD code. After a setCode,
+  // those line numbers may not exist anymore. Clear it so "go back" doesn't
+  // jump into invalid territory. clearEditor() also clears history but does so
+  // explicitly; this catches fix/generate/load-snippet too.
+  navigationHistory = [];
+  historyIndex = -1;
   if (editor) editor.setValue(v);
 }
 
@@ -732,6 +744,12 @@ async function runCode() {
       speak(data.output);
       if (data.semantic_issues && data.semantic_issues.length) {
         data.semantic_issues.forEach(e => speak(`${e.category}. ${e.message}`));
+      }
+      // Warn if the trace was truncated. Story mode and step playback build
+      // narratives from the trace; if it's incomplete the narrative will be too.
+      const truncated = (data.trace || []).some(e => e.type === 'overflow');
+      if (truncated) {
+        speak('Heads up: your code ran more than five thousand steps, so the execution trace was truncated. Story mode and step-by-step playback may be incomplete.');
       }
       // Tutorial hook — single source of truth lives in index.html's TutorialState
       if (typeof window._tutorialOnRunSuccess === 'function') {
@@ -1339,6 +1357,12 @@ function stopListening() {
 async function handleVoiceCommand(rawText) {
   // Quiz answer intercept
   if (window._pendingQuizAnswer) {
+    // Expire stale quizzes
+    if (window._pendingQuizAnswer.expiresAt && Date.now() > window._pendingQuizAnswer.expiresAt) {
+      window._pendingQuizAnswer = null;
+    }
+  }
+  if (window._pendingQuizAnswer) {
     const t = rawText.toLowerCase().trim();
     const match = t.match(/(?:answer|option|choose)\s+([abc])|^([abc])$/);
     if (match) {
@@ -1361,6 +1385,12 @@ async function handleVoiceCommand(rawText) {
   }
 
   // Bug challenge reveal intercept
+  if (window._pendingBugChallenge) {
+    // Expire stale challenges
+    if (window._pendingBugChallenge.expiresAt && Date.now() > window._pendingBugChallenge.expiresAt) {
+      window._pendingBugChallenge = null;
+    }
+  }
   if (window._pendingBugChallenge) {
     const t = rawText.toLowerCase().trim();
     if (t.includes('show answer') || t.includes('give up') || t.includes('reveal') || t.includes('answer दिखाओ')) {
@@ -2301,10 +2331,12 @@ async function quizMe(topic) {
     q.options.forEach(o => speak(o));
     speak('Say answer A, answer B, or answer C.');
 
-    // Store expected answer — handleVoiceCommand checks this cleanly
+    // Store expected answer — handleVoiceCommand checks this cleanly.
+    // Expires after 5 minutes so a stale quiz doesn't catch later voice input.
     window._pendingQuizAnswer = {
       answer: q.answer,
       explanation: q.explanation,
+      expiresAt: Date.now() + 5 * 60 * 1000,
     };
 
   } catch (e) {
@@ -2359,10 +2391,12 @@ async function bugChallenge() {
     srAnnounce('Bug challenge loaded');
     speak(`Bug challenge loaded into editor. ${ch.hint}. Say show answer when you are ready.`);
 
-    // Store pending bug challenge — handleVoiceCommand checks this cleanly
+    // Store pending bug challenge — handleVoiceCommand checks this cleanly.
+    // Expires after 10 minutes so a stale challenge doesn't catch later voice input.
     window._pendingBugChallenge = {
       bug: ch.bug,
       fixed: ch.fixed,
+      expiresAt: Date.now() + 10 * 60 * 1000,
     };
 
   } catch (e) {

@@ -149,9 +149,21 @@ _run_timestamps: dict = {}   # session_id -> list[float]
 _run_rate_lock = threading.Lock()
 
 def _check_run_rate_limit(session_id: str) -> bool:
-    """Return True if the session is within the rate limit, False if throttled."""
+    """Return True if the session is within the rate limit, False if throttled.
+
+    Also opportunistically sweeps stale entries so _run_timestamps doesn't
+    grow without bound on long-running deployments. We sweep on roughly 1 in
+    every 50 calls to amortize the cost.
+    """
     now = time.time()
     with _run_rate_lock:
+        # Opportunistic cleanup: drop session entries that have no live timestamps
+        if len(_run_timestamps) > 100 and (now * 1000) % 50 < 1:
+            stale = [sid for sid, ts in _run_timestamps.items()
+                     if not any(now - t < RUN_RATE_WINDOW for t in ts)]
+            for sid in stale:
+                del _run_timestamps[sid]
+
         timestamps = _run_timestamps.get(session_id, [])
         # Drop entries outside the window
         timestamps = [t for t in timestamps if now - t < RUN_RATE_WINDOW]
@@ -161,10 +173,14 @@ def _check_run_rate_limit(session_id: str) -> bool:
         timestamps.append(now)
         _run_timestamps[session_id] = timestamps
         return True
-# FIX L-4: Named constant with explanatory comment replaces magic number 40.
-# Threshold of 40/100 chosen to allow reasonable fuzzy flexibility while
-# rejecting clearly unrelated input; values below ~35 produce too many false positives.
-VOICE_FUZZY_THRESHOLD = 40
+    
+    
+# Threshold for fuzzy voice command matching. Raised from 40 to 55 because
+# 40 was permissive enough that ambient speech ("no thanks", "what was that")
+# would fuzzy-match command keywords and trigger spurious confirm prompts.
+# 55 still allows for typos and partial commands but rejects genuinely
+# unrelated phrases. Below this threshold the input falls through to "unknown".
+VOICE_FUZZY_THRESHOLD = 55
 
 @app.before_request
 def validate_request_size():
@@ -177,10 +193,13 @@ def validate_request_size():
 def enforce_same_origin():
     """Block cross-origin POST/PUT/DELETE requests.
 
-    Without this, a malicious page the user visits can fetch() against
-    localhost:5000 and execute arbitrary Python in their sandbox. We
-    require Origin or Referer to match Host on any state-changing method.
-    Test client requests have no Origin/Referer and are allowed through.
+    SECURITY NOTE: This is a defense-in-depth measure for localhost dev usage.
+    Requests with NO Origin AND NO Referer header are allowed through, which
+    covers test clients, curl, and direct API access. For school deployments
+    behind HTTPS, set FLASK_TESTING=false and consider tightening this to
+    require an explicit allowlist of origins. The current policy is sufficient
+    against drive-by browser attacks (which always send Origin) but not against
+    a malicious local script that strips headers.
     """
     if request.method not in ("POST", "PUT", "DELETE", "PATCH"):
         return None
@@ -516,9 +535,13 @@ def classify_semantic_errors(trace):
     for line, count in execution_count.items():
         if count > 1000:
             issues.append({
-                "category": "Possible Infinite Loop (Heuristic)",
+                "category": "High iteration count",
                 "line": line,
-                "message": f"This line executed {count} times. You may have an infinite loop, but this is a heuristic hint, not a guarantee."
+                "message": (
+                    f"Line {line} executed {count} times. The program completed "
+                    f"successfully, but if this looks higher than you expected, "
+                    f"check whether your loop terminates correctly."
+                )
             })
 
     return issues
@@ -582,7 +605,9 @@ def run_code():
         execution_start = time.time()
         sandbox = get_sandbox(get_session_id())
         workspace_dir = sandbox.workspace_dir
-        trace_file = os.path.join(workspace_dir, "last_trace.json")
+        # Per-request UUID prevents two concurrent /run calls in the same
+        # session from overwriting each other's trace.json mid-flight.
+        trace_file = os.path.join(workspace_dir, f"trace_{uuid.uuid4().hex}.json")
 
         script_content = f'''
 import sys, time, json, traceback, os
@@ -792,6 +817,12 @@ finally:
                     os.unlink(_tmp)
                 except OSError:
                     pass
+            # Also clean up the trace file after we've read it
+            try:
+                if os.path.exists(trace_file):
+                    os.unlink(trace_file)
+            except OSError:
+                pass
 
         trace = []
         trace_error = None
@@ -806,6 +837,13 @@ finally:
             trace_error = 'Trace data was corrupted or incomplete'
         except Exception as e:
             trace_error = f'Error reading trace: {str(e)}'
+        finally:
+            # Clean up the per-request trace file so workspace doesn't bloat
+            try:
+                if os.path.exists(trace_file):
+                    os.unlink(trace_file)
+            except OSError:
+                pass
 
         if not trace:
             msg = trace_error or 'No detailed trace available from subprocess (likely timed out or crashed)'
@@ -1302,6 +1340,17 @@ def track_variables():
     })
 
 
+# Single-letter variable names get NATO-phonetic expansion so screen readers
+# don't mangle them ("x" → "ks" or "ex" depending on the engine).
+_SINGLE_LETTER_PRONUNCIATION = {
+    'a': 'a', 'b': 'bee', 'c': 'see', 'd': 'dee', 'e': 'ee',
+    'f': 'eff', 'g': 'gee', 'h': 'aitch', 'i': 'eye', 'j': 'jay',
+    'k': 'kay', 'l': 'ell', 'm': 'em', 'n': 'en', 'o': 'oh',
+    'p': 'pee', 'q': 'cue', 'r': 'arr', 's': 'ess', 't': 'tee',
+    'u': 'you', 'v': 'vee', 'w': 'double-you', 'x': 'ex', 'y': 'why', 'z': 'zee',
+}
+
+
 def pronounce_variable(var_name: str) -> str:
     """Convert variable name to phonetic pronunciation for screen readers."""
     if not var_name or not isinstance(var_name, str):
@@ -1310,6 +1359,10 @@ def pronounce_variable(var_name: str) -> str:
     var_name = var_name.strip()
     if not var_name:
         return "unknown variable"
+
+    # Single character — use phonetic spelling to avoid TTS ambiguity
+    if len(var_name) == 1:
+        return _SINGLE_LETTER_PRONUNCIATION.get(var_name.lower(), var_name)
 
     if "_" in var_name:
         segments = var_name.split("_")
@@ -2085,16 +2138,28 @@ def fs_info():
 def get_execution_trace():
     """Get the last execution trace for playback.
 
-    FIX C-3: Rewritten to read from session storage (get_trace_storage()) instead
-    of _trace_context (a threading.local() that was never written). Previously
-    this endpoint always returned an empty trace because _trace_context.last_trace
-    was never assigned anywhere; save_execution_trace() writes to _session_traces,
-    not to _trace_context.
+    Reads under the session lock and returns a snapshot copy so a concurrent
+    /run that's mid-write can't return a partially-mutated trace.
     """
-    storage = get_trace_storage()
-    trace = storage.get('last_trace', []) or []
-    idx = storage.get('current_trace_index', -1)
-    duration = storage.get('trace_duration_ms', 0)
+    session_id = get_session_id()
+    with _session_traces_lock:
+        if session_id not in _session_traces:
+            _session_traces[session_id] = {
+                'last_trace': [],
+                'current_trace_index': -1,
+                'trace_timestamp': time.time(),
+                'trace_duration_ms': 0,
+                'last_voice_action': None,
+                'created_at': time.time(),
+                'last_accessed': time.time()
+            }
+        storage = _session_traces[session_id]
+        storage['last_accessed'] = time.time()
+        # Snapshot under the lock — list copy is shallow but trace events are
+        # immutable dicts so this is safe.
+        trace = list(storage.get('last_trace', []) or [])
+        idx = storage.get('current_trace_index', -1)
+        duration = storage.get('trace_duration_ms', 0)
 
     return jsonify({
         "trace": trace,

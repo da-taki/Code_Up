@@ -1365,6 +1365,11 @@ def pronounce_variable(var_name: str) -> str:
         return _SINGLE_LETTER_PRONUNCIATION.get(var_name.lower(), var_name)
 
     if "_" in var_name:
+        # Special case for dunders: __init__, __name__, __main__ etc.
+        # Pronounce as "dunder X" rather than "underscore underscore X underscore underscore"
+        if var_name.startswith("__") and var_name.endswith("__") and len(var_name) > 4:
+            inner = var_name[2:-2]
+            return f"dunder {inner}"
         segments = var_name.split("_")
         parts = [seg for seg in segments if seg]
         if not parts:

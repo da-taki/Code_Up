@@ -15,7 +15,7 @@
   <link rel="stylesheet" href="/static/vendor/monaco/min/vs/editor/editor.main.css">
 </head>
 
-<body class="cu-body theme-default">
+<body class="cu-body">
 
   <div id="srAnnouncer" role="status" aria-live="assertive" aria-atomic="true"
        style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;"></div>
@@ -23,7 +23,7 @@
   <header class="cu-header">
     <div class="cu-header-top">
       <h1 class="cu-title">CODEUP</h1>
-      <div class="cu-status-pill" aria-label="AI model: Gemini Pro">GEMINI • PRO</div>
+      <div class="cu-status-pill" aria-label="AI model: Gemini 2.0 Flash">GEMINI 2.0</div>
     </div>
     <div class="cu-subtitle">
       A blind-first Python IDE for accessible learning.
@@ -574,9 +574,12 @@
       function applyColorVisionMode(mode) {
         document.body.classList.remove(
           'theme-protanopia','theme-deuteranopia',
-          'theme-tritanopia','theme-high-contrast','theme-default'
+          'theme-tritanopia','theme-high-contrast'
         );
-        document.body.classList.add(mode !== 'default' ? 'theme-' + mode : 'theme-default');
+        // theme-default has no CSS rules — only add a real theme class when one is selected
+        if (mode !== 'default') {
+          document.body.classList.add('theme-' + mode);
+        }
         safeStorage(function () { localStorage.setItem('colorVisionMode', mode); });
         var modeNames = {
           'default':       'Default colors',
@@ -607,17 +610,22 @@
 
         var motionBtn = document.getElementById('motionToggle');
         var sysPrefReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-        var shouldReduce = reducedMotion || (sysPrefReduced && !safeStorage(function () { return localStorage.getItem('reducedMotion'); }));
+        // Use === null check so a stored value of 'false' is treated as "user explicitly disabled"
+        // not as "user has no preference, fall back to OS"
+        var motionStored = safeStorage(function () { return localStorage.getItem('reducedMotion'); });
+        var shouldReduce = reducedMotion || (sysPrefReduced && motionStored === null);
         if (shouldReduce && motionBtn) {
           document.body.classList.add('theme-reduced-motion');
           motionBtn.classList.add('active');
           motionBtn.setAttribute('aria-pressed', 'true');
         }
 
-        // Night mode — also auto-enable if OS prefers dark and user hasn't set a preference
+        // Night mode — also auto-enable if OS prefers dark and user hasn't set a preference.
+        // Same === null pattern: a stored 'false' must override OS preference.
         var nightBtn = document.getElementById('nightToggle');
         var sysPrefDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-        var shouldNight = nightMode || (sysPrefDark && !safeStorage(function () { return localStorage.getItem('nightMode'); }));
+        var nightStored = safeStorage(function () { return localStorage.getItem('nightMode'); });
+        var shouldNight = nightMode || (sysPrefDark && nightStored === null);
         if (shouldNight && nightBtn) {
           document.body.classList.add('theme-night');
           nightBtn.classList.add('active');

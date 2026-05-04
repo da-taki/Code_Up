@@ -14,6 +14,14 @@ let _loadingSnippets = false;
 let _apiKeyConfigured = false;
 let _apiKeyPromptShown = false;
 
+// Set window.CODEUP_DEBUG = true in the browser console to see debug logs.
+// Off by default so deployments don't spam the console.
+const _debugLog = (...args) => {
+  if (typeof window !== 'undefined' && window.CODEUP_DEBUG) {
+    console.log(...args);
+  }
+};
+
 // Utility: calculate indentation level (spaces and tabs)
 function getIndentLevel(line) {
   let indent = 0;
@@ -1283,12 +1291,12 @@ function startListening() {
     }
     cueSuccess();
     speak('Voice control activated. Say help at any time to hear available commands.');
-    console.log('Voice: Listening started');
+    _debugLog('Voice: Listening started');
   };
 
   recognition.onresult = async (event) => {
     const transcript = event.results[event.results.length - 1][0].transcript;
-    console.log('Voice heard:', transcript);
+    _debugLog('Voice heard:', transcript);
     await handleVoiceCommand(transcript);
   };
 
@@ -1309,7 +1317,7 @@ function startListening() {
   };
 
   recognition.onend = () => {
-    console.log('Voice: Session ended');
+    _debugLog('Voice: Session ended');
     if (!isListening) return;
 
     // Only increment restart counter on unexpected ends (not clean user stops)
@@ -1350,7 +1358,7 @@ function stopListening() {
   }
   recognition.stop();
   speak('Voice control deactivated.');
-  console.log('Voice: Listening stopped');
+  _debugLog('Voice: Listening stopped');
 }
 
 // ---------- VOICE COMMAND HANDLER ----------
@@ -1416,7 +1424,7 @@ async function handleVoiceCommand(rawText) {
     .replace(/\s+(please|thanks|thank you)$/gi, '')
     .trim();
 
-  console.log('Voice parsing:', cleaned);
+  _debugLog('Voice parsing:', cleaned);
 
   try {
     const res  = await fetch('/voice-command', {
@@ -1442,11 +1450,11 @@ async function handleVoiceCommand(rawText) {
     }
 
     if (data.success && data.action && data.action !== 'unknown') {
-      console.log('Backend action:', data.action);
+      _debugLog('Backend action:', data.action);
       await handleConfirmedAction(data.action, data);
     } else {
       speak("I didn't understand that command. Say 'help' for available commands.");
-      console.log('Command not recognized:', cleaned);
+      _debugLog('Command not recognized:', cleaned);
     }
   } catch (e) {
     console.error('Backend interpretation failed:', e);

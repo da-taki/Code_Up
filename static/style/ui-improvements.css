@@ -8,30 +8,6 @@
   to   { opacity: 1; }
 }
 
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to   { transform: rotate(360deg); }
-}
-
-.cu-loading {
-  position: relative;
-  pointer-events: none;
-  opacity: 0.7;
-}
-
-.cu-loading::after {
-  content: '';
-  position: absolute;
-  top: 50%;
-  right: 8px;
-  width: 16px;
-  height: 16px;
-  margin-top: -8px;
-  border: 2px solid var(--text-dim);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: spin 0.6s linear infinite;
-}
 
 .snippet-item.active {
   background: var(--accent-soft);

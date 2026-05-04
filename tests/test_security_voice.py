@@ -76,7 +76,7 @@ def test_gemini_key_not_configured_returns_message(client, monkeypatch):
     ),
     (
         "print(object.__subclasses__())",
-        ["not defined", "object"],
+        ["not allowed", "__subclasses__"],
     ),
     (
         "open('../outside.txt', 'w').write('x')",

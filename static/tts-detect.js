@@ -39,13 +39,34 @@
       const msg = 'Hindi voice is not installed on this device. Narration will use the default voice. ' +
                   'For best results, install a Hindi text-to-speech voice in your operating system settings.';
       console.warn(msg);
+
+      // Play a distinct two-tone alert before speaking so a Hindi-only user
+      // who doesn't understand the English warning still knows something is
+      // off — falling pitch suggests "missing/unavailable".
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        [880, 440].forEach((freq, i) => {
+          setTimeout(() => {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            gain.gain.value = 0.1;
+            osc.frequency.value = freq;
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start();
+            osc.stop(ctx.currentTime + 0.15);
+          }, i * 200);
+        });
+      } catch (e) {}
+
       // Speak the warning in English so the user actually hears it
       try {
         const u = new SpeechSynthesisUtterance(msg);
         u.lang = 'en-US';
         u.rate = 1;
-        window.speechSynthesis.speak(u);
+        setTimeout(() => window.speechSynthesis.speak(u), 600);
       } catch (e) {}
+
       // Also show it in the output panel
       const out = document.getElementById('output');
       if (out) {

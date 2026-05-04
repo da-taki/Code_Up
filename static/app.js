@@ -420,37 +420,72 @@ function stopErrorBeacon() {
 function locateError() { checkSyntaxErrors(); }
 
 // ---------- HELP ----------
-function showHelp() {
+async function showHelp() {
   if (!ensureNotExecuting(() => showHelp(), 'show help')) return;
+
+  // Context-aware: check current state and offer the most relevant action first.
+  const code = getCode();
+  const hasCode = code.trim().length > 0;
+
+  // 1. Empty editor → suggest writing code or starting tutorial
+  if (!hasCode) {
+    const msg = 'The editor is empty. Try saying "tutorial" to learn Python step by step, or "generate code for" followed by what you want, like "generate code for a fibonacci function". Say "more help" for the full command list.';
+    out(msg);
+    speak(msg);
+    return;
+  }
+
+  // 2. Has code → check for syntax errors, offer to fix
+  try {
+    const res = await fetch('/check-syntax', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    const data = await res.json();
+    if (data.success && data.has_errors && data.errors.length > 0) {
+      const err = data.errors[0];
+      const msg = `You have a ${err.type} on line ${err.line}: ${err.message}. Say "fix" to auto-fix it, or "explain error" to hear what's wrong. Say "more help" for the full command list.`;
+      out(msg);
+      speak(msg);
+      return;
+    }
+  } catch (e) {
+    // fall through to general help
+  }
+
+  // 3. Has clean code → suggest running, analyzing, or showing more help
+  const msg = 'Your code looks clean. Say "run" to execute it, "analyze" to get an AI review, "summarize" to hear what it does, or "more help" for the full command list.';
+  out(msg);
+  speak(msg);
+}
+
+function showFullHelp() {
+  if (!ensureNotExecuting(() => showFullHelp(), 'show full help')) return;
   const helpText = `
-CODEUP VOICE COMMANDS:
+CODEUP COMMANDS:
 
 EXECUTION:
 - "run" or "execute code"
 - "analyze code"
 - "fix code"
+- "summarize this file"
 
 NAVIGATION:
 - "go to line [number]"
 - "read line [number]"
-- "next line" / "previous line"
-- "read current line"
-- "go back" / "go forward" (history)
-- "where am I?" (context)
+- "where am I?"
+- "go back" / "go forward"
 
-VARIABLES:
+VARIABLES & ERRORS:
 - "what variables are available?"
 - "find variable [name]"
-
-ERRORS:
 - "check for errors"
 - "where is the error?"
-- "stop error beacon"
 
 CODE STRUCTURE:
 - "sonify block" (Alt+S)
 - "read line with context" (Alt+L)
-- "summarize file"
 
 SNIPPETS:
 - "save snippet named [name]"
@@ -459,45 +494,38 @@ SNIPPETS:
 EDITING:
 - "clear editor"
 - "delete line [number]"
+- "replace line [N] with [text]"
+- "insert function called [name]"
+- "insert a for loop"
 
-GENERATION:
-- "generate code for [task]"
-- "advise on code"
+LEARNING:
+- "tutorial" — restart tutorial
+- "learning mode" — quiz/mentor mode
+- "quiz me on [topic]"
+- "explain [concept]"
+- "bug challenge"
+
+EXECUTION PLAYBACK:
+- "tell the story"
+- "next step" / "previous step"
+- "set breakpoint at line [N]"
+- "watch variable [name]"
+- "continue"
 
 UTILITIES:
-- "repeat" (last action)
-- "say that again" (last speech)
-- "help" (this menu)
+- "repeat" — repeat last action
+- "say that again" — repeat last speech
 
-KEYBOARD SHORTCUTS:
-- Escape: Stop speech immediately
-- Ctrl+Enter: Run code
-- Alt+S: Sonify block
-- Alt+L: Read line with context
-- Alt+V: List variables
-- Alt+E: Check for errors
-- Alt+H: Show this help
+KEYBOARD:
+- Escape: Stop speech
+- Ctrl+Enter: Run
+- Alt+S/L/V/E/H: Sonify/Line/Vars/Errors/Help
 - Alt+Left/Right: Navigate history
-- Alt+Home/End: Jump to top/bottom
-
-NEW VOICE COMMANDS:
-- "save snippet named [name]" — save with a specific name
-- "restart tutorial" / "start over" — restart onboarding
-- "insert function called [name]" — add a function
-- "insert a for loop" — add a loop
-- "replace line 5 with return x" — edit a line
-- "suggest next line" → "choose 1/2/3" — autocomplete
-- "tell the story" — narrate what your code did
-- "set breakpoint at line 10" — audio debugger
-- "watch variable x" — report x at breakpoints
-- "continue" — run to next breakpoint
-- "learning mode" — start mentor/quiz mode
-- "quiz me on loops" — get a quiz question
-- "explain variables" — concept explanation
-- "bug challenge" — find and fix a bug
+- Ctrl+Shift+M: Toggle voice
+- Ctrl+Shift+P: Command palette
   `.trim();
   out(helpText);
-  speak('Help menu displayed. Check the output panel for all commands.');
+  speak('Full command list displayed in the output panel.');
 }
 
 function getFileStats() {
@@ -1146,6 +1174,7 @@ async function handleConfirmedAction(action, payload) {
   else if (action === 'go_forward')      navigateForward();
   else if (action === 'show_history')    showNavigationHistory();
   else if (action === 'help')            showHelp();
+  else if (action === 'more_help')       showFullHelp();
   else if (action === 'file_stats')      getFileStats();
   else if (action === 'go_to_top')       goToTop();
   else if (action === 'go_to_bottom')    goToBottom();

@@ -407,7 +407,7 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en"):
     except Exception as e:
         return f"AI service is currently unavailable: {str(e)}"
     
-    
+
 def extract_code(text: str):
     m = re.search(r"```(?:python)?\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
     if not m:
@@ -656,10 +656,9 @@ def _blocked_input(prompt=''):
     if prompt:
         print(prompt)
     raise RuntimeError(
-        "input() is not supported in CodeUp's sandbox. "
-        "To use a value, assign it directly instead: "
-        "for example, replace  name = input('Your name?')  with  name = 'Alice'  "
-        "and change 'Alice' to whatever you want to test with."
+        "CodeUp doesn't use input(). Instead, just write the value directly. "
+        "For example, change  name = input('Your name?')  to  name = 'Alice' . "
+        "Then run again."
     )
 
 SAFE_GLOBALS = {{
@@ -2060,6 +2059,8 @@ def voice():
             return _store_and_return({"success": True, "action": "choose_suggestion", "choice": slots.get("choice", 1), "confidence": confidence})
         if intent == "story_mode":
             return _store_and_return({"success": True, "action": "story_mode", "confidence": confidence})
+        if intent == "more_help":
+            return _store_and_return({"success": True, "action": "more_help", "confidence": confidence})
         if intent == "set_breakpoint":
             return _store_and_return({"success": True, "action": "set_breakpoint", "line_number": slots.get("line_number", 1), "confidence": confidence})
         if intent == "clear_breakpoints":
@@ -2095,17 +2096,26 @@ def voice():
     lower_text = text.lower().strip()
     best, bscore, second, sscore = best_two_commands(lower_text)
 
+    # High-frequency commands skip the confirm prompt even at moderate confidence,
+    # because in a noisy classroom getting "did you mean run or fix?" on every
+    # command is more frustrating than occasionally running the wrong simple action.
+    HIGH_FREQUENCY_COMMANDS = {"run", "analyze", "fix", "help", "speak", "read_output"}
+
     if best and bscore >= VOICE_FUZZY_THRESHOLD:
-        if bscore < 75 or (second and (bscore - sscore) < 15):
-            options = [best, second] if second else [best]
-            return jsonify({
-                "success": True,
-                "action": "confirm",
-                "options": options,
-                "heard": text,
-                "confidence": bscore / 100.0
-            })
-        return jsonify({"success": True, "action": best, "confidence": bscore / 100.0})
+        is_clear_winner = bscore >= 75 and (not second or (bscore - sscore) >= 15)
+        is_high_freq = best in HIGH_FREQUENCY_COMMANDS and bscore >= 65
+
+        if is_clear_winner or is_high_freq:
+            return jsonify({"success": True, "action": best, "confidence": bscore / 100.0})
+
+        options = [best, second] if second else [best]
+        return jsonify({
+            "success": True,
+            "action": "confirm",
+            "options": options,
+            "heard": text,
+            "confidence": bscore / 100.0
+        })
 
     return jsonify({"success": True, "action": "unknown", "heard": text, "confidence": 0.0})
 

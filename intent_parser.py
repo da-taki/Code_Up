@@ -334,10 +334,18 @@ class IntentParser:
         r"^help$",
         r"^show\s+help$",
         r"^what\s+can\s+(?:i\s+)?(?:do|say)$",
-        r"^list\s+commands$",
         # Hindi: "मदद" / "सहायता" / "क्या कर सकते हो"
         r"^(?:मदद|सहायता|help)\s*(?:चाहिए|करो|दो)?$",
         r"^क्या\s+कर\s+सकते\s+हो$",
+    ]
+
+    MORE_HELP_PATTERNS = [
+        r"^more\s+help$",
+        r"^full\s+help$",
+        r"^all\s+commands$",
+        r"^list\s+commands$",
+        r"^पूरी\s+(?:मदद|help)$",
+        r"^सभी\s+(?:कमांड|commands)$",
         r"^कमांड\s+(?:की\s+)?सूची$",
     ]
 
@@ -479,6 +487,7 @@ class IntentParser:
             # repeat MUST come before choose_suggestion — ^(\w+)$ matches "repeat" too
             "repeat":              self.REPEAT_PATTERNS,
             "help":                self.HELP_PATTERNS,
+            "more_help":           self.MORE_HELP_PATTERNS,
             # Semantic autocomplete
             "suggest_next":        self.SUGGEST_NEXT_PATTERNS,
             "choose_suggestion":   self.CHOOSE_SUGGESTION_PATTERNS,

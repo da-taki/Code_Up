@@ -187,33 +187,27 @@
     </div>
   </div>
 
-  <!-- Audio gate — must be dismissed by user gesture to unlock speech synthesis -->
-  <div id="audioGate" role="dialog" aria-modal="true" aria-labelledby="audioGateTitle"
+  <!-- Combined gate: language pick + audio unlock in one step.
+       First-time users see two buttons; returning users see one Begin button. -->
+  <div id="startGate" role="dialog" aria-modal="true" aria-labelledby="startGateTitle"
        style="position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:25000;display:flex;align-items:center;justify-content:center;">
     <div style="background:var(--bg-panel);border:1px solid var(--border-strong);border-radius:12px;padding:32px;max-width:480px;width:90%;box-shadow:0 10px 40px rgba(0,0,0,0.15);color:var(--text-main);text-align:center;">
-      <h2 id="audioGateTitle" style="font-size:1.4rem;margin-bottom:12px;color:var(--text-main);font-family:var(--font-main);">CodeUp</h2>
-      <p style="color:var(--text-main);line-height:1.7;margin-bottom:24px;">
-        Press <strong>Enter</strong> or <strong>Space</strong> to begin, or click the button below.
-        This unlocks audio narration in your browser.
+      <h2 id="startGateTitle" style="font-size:1.4rem;margin-bottom:12px;color:var(--text-main);font-family:var(--font-main);">CodeUp</h2>
+      <p id="startGateMsg" style="color:var(--text-main);line-height:1.7;margin-bottom:24px;">
+        Choose your language to begin. This also unlocks audio narration.
       </p>
-      <button id="audioGateBtn" class="cu-button cu-button-primary" style="min-width:200px;font-size:1rem;padding:12px 24px;" autofocus>
-        Begin (Enter)
-      </button>
-    </div>
-  </div>
-
-  <!-- Onboarding modal — hidden until the audio gate is cleared -->
-  <div id="onboardingModal" role="dialog" aria-modal="true" aria-labelledby="onboardingTitle"
-       style="position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:20000;display:none;align-items:center;justify-content:center;">
-    <div style="background:var(--bg-panel);border:1px solid var(--border-strong);border-radius:12px;padding:32px;max-width:480px;width:90%;box-shadow:0 10px 40px rgba(0,0,0,0.15);color:var(--text-main);">
-      <h2 id="onboardingTitle" style="font-size:1.4rem;margin-bottom:12px;color:var(--text-main);font-family:var(--font-main);">Welcome to CodeUp</h2>
-      <p id="onboardingMsg" style="color:var(--text-main);line-height:1.7;margin-bottom:24px;">
-        CodeUp is a voice-driven Python IDE built for blind and visually impaired users.
-        Before we start — which language would you prefer?
-      </p>
-      <div style="display:flex;gap:12px;flex-wrap:wrap;">
-        <button id="obEnglish" class="cu-button cu-button-primary" style="flex:1;">English</button>
-        <button id="obHindi"   class="cu-button" style="flex:1;">हिंदी (Hindi)</button>
+      <div id="startGateButtons" style="display:flex;gap:12px;flex-wrap:wrap;">
+        <button id="startEnglish" class="cu-button cu-button-primary" style="flex:1;min-width:140px;font-size:1rem;padding:12px 16px;" autofocus>
+          English (1)
+        </button>
+        <button id="startHindi" class="cu-button" style="flex:1;min-width:140px;font-size:1rem;padding:12px 16px;">
+          हिंदी / Hindi (2)
+        </button>
+      </div>
+      <div id="startGateReturning" style="display:none;">
+        <button id="startReturning" class="cu-button cu-button-primary" style="min-width:200px;font-size:1rem;padding:12px 24px;">
+          Begin (Enter)
+        </button>
       </div>
     </div>
   </div>
@@ -268,17 +262,17 @@
           },
           {
             label: 'Step 3 of 6',
-            text: 'Variables are named boxes that hold values. You can store anything and use the name later. Run this to see all three values printed.',
+            text: 'Variables are named boxes that hold values. Important: CodeUp does not use input() — you assign values directly with the equals sign, like the example below. Run this to see all three values printed.',
             code: 'name = "Alice"\nage = 17\nheight = 5.6\n\nprint(name)\nprint(age)\nprint(height)',
           },
           {
             label: 'Step 4 of 6',
-            text: 'A for loop repeats code a set number of times. range(5) gives you 0, 1, 2, 3, 4. Run this and watch the loop count up.',
+            text: 'A for loop repeats code. range(5) gives 0 through 4. After running, try the voice command "replace line 1 with x = 5" to edit a line by voice. You can also use the keyboard normally.',
             code: 'for i in range(5):\n    print(i)\n\nfruits = ["apple", "banana", "mango"]\nfor fruit in fruits:\n    print(fruit)',
           },
           {
             label: 'Step 5 of 6',
-            text: 'if / elif / else runs different code depending on a condition. Only one branch executes. Try saying "replace line 1 with x = 5" to change the value, then run again to see a different branch trigger.',
+            text: 'if / elif / else runs different code depending on a condition. Try changing line 1 to x = 5 (by voice or keyboard), then run again to see a different branch trigger.',
             code: 'x = 10\n\nif x > 10:\n    print("x is greater than ten")\nelif x == 10:\n    print("x is exactly ten")\nelse:\n    print("x is less than ten")',
           },
           {
@@ -289,34 +283,29 @@
         ],
         hi: [
           {
-            label: 'चरण 1 / 6',
+            label: 'कदम  1 / 6',
             text: 'CodeUp में आपका स्वागत है! यह tutorial Python की बेसिक्स सिखाएगा। हर step editor में example लोड करेगा। आगे बढ़ने के लिए Enter दबाएं या "next" कहें। कभी भी "skip tutorial" कहकर बाहर निकल सकते हैं।',
             code: null,
           },
           {
-            label: 'चरण 2 / 6',
+            label: 'कदम  2 / 6',
             text: 'print() output panel में कुछ भी दिखाता है। इस example को Ctrl+Enter से run करें।',
             code: 'print("नमस्ते, CodeUp!")\nprint(42)\nprint(3.14)',
           },
           {
-            label: 'चरण 3 / 6',
-            text: 'चर (variable) एक नामित डिब्बे की तरह है जो कोई भी मान रख सकता है। नाम लिखें, फिर बराबर का निशान, फिर मान। Ctrl+Enter से चलाएं।',
-            code: 'naam = "Alice"\numar = 17\n\nprint(naam)\nprint(umar)',
+            label: 'कदम 3 / 6',
+            text: 'चर (variable) एक नामित डिब्बे की तरह है जो कोई भी मान रख सकता है। ज़रूरी बात: CodeUp में input() काम नहीं करता — मान सीधे बराबर के निशान से दें, जैसे नीचे दिखाया है। Ctrl+Enter से चलाएं।',
+            code: 'name = "Alice"\nage = 17\n\nprint(name)\nprint(age)',
           },
           {
-            label: 'चरण 4 / 6',
-            text: 'for लूप कोड को बार-बार दोहराता है। range(5) लिखने पर 0 से 4 तक गिनती मिलती है। Ctrl+Enter से चलाकर देखें।',
-            code: 'for i in range(5):\n    print(i)\n\nfal = ["apple", "banana", "mango"]\nfor f in fal:\n    print(f)',
+            label: 'कदम 4 / 6',
+            text: 'for लूप कोड को बार-बार दोहराता है। range(5) से 0 से 4 तक गिनती मिलती है। चलाने के बाद, voice command "replace line 1 with x = 5" से लाइन बदलकर देखें। Keyboard भी सामान्य रूप से काम करता है।',
+            code: 'for i in range(5):\n    print(i)\n\nfruits = ["apple", "banana", "mango"]\nfor fruit in fruits:\n    print(fruit)',
           },
           {
-            label: 'चरण 5 / 6',
-            text: 'if / elif / else शर्त के आधार पर अलग-अलग कोड चलाता है। "replace line 1 with x = 5" बोलकर value बदलें, फिर दोबारा चलाएं।',
-            code: 'x = 10\n\nif x > 10:\n    print("x दस से बड़ा है")\nelif x == 10:\n    print("x ठीक दस है")\nelse:\n    print("x दस से छोटा है")',
-          },
-          {
-            label: 'चरण 6 / 6',
-            text: 'Tutorial पूरा हुआ! Editor आपका है। सभी voice commands के लिए "help" कहें।',
-            code: null,
+            label: 'कदम 5 / 6',
+            text: 'if / elif / else शर्त के आधार पर अलग-अलग कोड चलाता है। line 1 को x = 5 में बदलें (voice से या keyboard से), फिर दोबारा चलाएं।',
+            code: 'x = 10\n\nif x > 10:\n    print("x dus se bada hai")\nelif x == 10:\n    print("x theek dus hai")\nelse:\n    print("x dus se chota hai")',
           },
         ],
       };
@@ -404,130 +393,93 @@
         }, 3500);
       };
 
-      // ── Onboarding: language pick only ──────────────────────────────────
-      function runOnboarding() {
-        var modal = document.getElementById('onboardingModal');
-        if (!modal) return;
-
-        var enBtn = document.getElementById('obEnglish');
-        var hiBtn = document.getElementById('obHindi');
-
-        // Move focus to the first option immediately so screen readers announce the dialog
-        // and Tab cycling stays inside the modal.
-        requestAnimationFrame(function () {
-          if (enBtn) enBtn.focus();
-        });
-
-        // Trap Tab inside the two buttons until a choice is made
-        function trapTab(e) {
-          if (e.key !== 'Tab') return;
-          var active = document.activeElement;
-          if (e.shiftKey) {
-            if (active === enBtn) { e.preventDefault(); hiBtn.focus(); }
-            else if (active === hiBtn) { e.preventDefault(); enBtn.focus(); }
-            else { e.preventDefault(); enBtn.focus(); }
-          } else {
-            if (active === enBtn) { e.preventDefault(); hiBtn.focus(); }
-            else if (active === hiBtn) { e.preventDefault(); enBtn.focus(); }
-            else { e.preventDefault(); enBtn.focus(); }
+    
+      // ── Combined start gate: pick language AND unlock audio in one step ──
+      function primeAudio() {
+        try {
+          if ('speechSynthesis' in window) {
+            var primer = new SpeechSynthesisUtterance(' ');
+            primer.volume = 0;
+            window.speechSynthesis.speak(primer);
           }
-        }
-        modal.addEventListener('keydown', trapTab);
+        } catch (e) {}
+      }
 
+      function startWithLang(lang) {
+        safeStorage(function () { localStorage.setItem(LANG_KEY, lang); });
+        var sel = document.getElementById('languageSelector');
+        if (sel) { sel.value = lang; sel.dispatchEvent(new Event('change')); }
+        primeAudio();
+        var gate = document.getElementById('startGate');
+        if (gate) gate.style.display = 'none';
+
+        var tutorialBtn = document.getElementById('tutorialBtn');
+        if (tutorialBtn) tutorialBtn.focus();
+
+        if (typeof window.warnIfHindiUnavailable === 'function') {
+          window.warnIfHindiUnavailable(lang);
+        }
         setTimeout(function () {
-          speak('Welcome to CodeUp. Choose your language. Press 1 or Enter for English, or press 2 for Hindi.');
-        }, 800);
-
-        function pickLang(lang) {
-          safeStorage(function () { localStorage.setItem(LANG_KEY, lang); });
-          var sel = document.getElementById('languageSelector');
-          if (sel) { sel.value = lang; sel.dispatchEvent(new Event('change')); }
-          modal.removeEventListener('keydown', trapTab);
-          document.removeEventListener('keydown', onboardingKey);
-          modal.style.display = 'none';
-
-          // Move focus somewhere sensible after the modal closes
-          var tutorialBtn = document.getElementById('tutorialBtn');
-          if (tutorialBtn) tutorialBtn.focus();
-
-          if (typeof window.warnIfHindiUnavailable === 'function') {
-            window.warnIfHindiUnavailable(lang);
-          }
           speak(lang === 'hi'
-            ? 'हिंदी चुना गया। Tutorial के लिए Tutorial बटन दबाएं, या Ctrl Shift M से voice control शुरू करें।'
-            : 'English selected. Press Enter on the Tutorial button to begin, or press Control Shift M to start voice control.');
-        }
-
-        if (enBtn) enBtn.addEventListener('click', function () { pickLang('en'); });
-        if (hiBtn) hiBtn.addEventListener('click', function () { pickLang('hi'); });
-
-        function onboardingKey(e) {
-          if (e.key === '1') { pickLang('en'); }
-          if (e.key === '2') { pickLang('hi'); }
-        }
-        document.addEventListener('keydown', onboardingKey);
+            ? 'CodeUp में स्वागत है। Tutorial के लिए Tutorial बटन दबाएं, या Ctrl Shift M से voice control शुरू करें।'
+            : 'Welcome to CodeUp. Press Enter on the Tutorial button to begin, or press Control Shift M to start voice control.');
+        }, 400);
       }
 
-      // ── Audio gate — speech synthesis needs a user gesture in most browsers ─
-      function dismissAudioGate(onDone) {
-        var gate = document.getElementById('audioGate');
-        if (!gate) { if (onDone) onDone(); return; }
+      function setupStartGate() {
+        var savedLang = safeStorage(function () { return localStorage.getItem(LANG_KEY); });
+        var gate = document.getElementById('startGate');
+        if (!gate) return;
 
-        function clear() {
-          gate.style.display = 'none';
-          // Prime the speech engine with a silent utterance so the first real
-          // call doesn't get dropped by autoplay policy.
-          try {
-            if ('speechSynthesis' in window) {
-              var primer = new SpeechSynthesisUtterance(' ');
-              primer.volume = 0;
-              window.speechSynthesis.speak(primer);
+        var firstTimeBtns = document.getElementById('startGateButtons');
+        var returningBtns = document.getElementById('startGateReturning');
+        var enBtn  = document.getElementById('startEnglish');
+        var hiBtn  = document.getElementById('startHindi');
+        var rBtn   = document.getElementById('startReturning');
+        var msg    = document.getElementById('startGateMsg');
+
+        if (savedLang) {
+          // Returning user — single Begin button, language already chosen
+          firstTimeBtns.style.display = 'none';
+          returningBtns.style.display = 'block';
+          msg.textContent = savedLang === 'hi'
+            ? 'CodeUp में वापस स्वागत है। शुरू करने के लिए Enter दबाएं।'
+            : 'Welcome back to CodeUp. Press Enter to begin.';
+          requestAnimationFrame(function () { rBtn.focus(); });
+          rBtn.addEventListener('click', function () { startWithLang(savedLang); });
+          function rKey(e) {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              document.removeEventListener('keydown', rKey);
+              startWithLang(savedLang);
             }
-          } catch (e) {}
-          if (onDone) onDone();
-        }
-
-        var btn = document.getElementById('audioGateBtn');
-        if (btn) btn.addEventListener('click', clear);
-
-        function gateKey(e) {
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault();
-            document.removeEventListener('keydown', gateKey);
-            clear();
           }
-        }
-        document.addEventListener('keydown', gateKey);
+          document.addEventListener('keydown', rKey);
+        } else {
+          // First-time user — pick language
+          requestAnimationFrame(function () { enBtn.focus(); });
 
-        // Focus the button so screen readers announce it
-        requestAnimationFrame(function () {
-          if (btn) btn.focus();
-        });
+          // Trap Tab between the two language buttons until choice made
+          function trapTab(e) {
+            if (e.key !== 'Tab') return;
+            var active = document.activeElement;
+            e.preventDefault();
+            if (active === enBtn) hiBtn.focus(); else enBtn.focus();
+          }
+          gate.addEventListener('keydown', trapTab);
+
+          enBtn.addEventListener('click', function () { startWithLang('en'); });
+          hiBtn.addEventListener('click', function () { startWithLang('hi'); });
+
+          function pickKey(e) {
+            if (e.key === '1') { e.preventDefault(); document.removeEventListener('keydown', pickKey); startWithLang('en'); }
+            if (e.key === '2') { e.preventDefault(); document.removeEventListener('keydown', pickKey); startWithLang('hi'); }
+          }
+          document.addEventListener('keydown', pickKey);
+        }
       }
 
-      // ── Boot ────────────────────────────────────────────────────────────
-      var savedLang = safeStorage(function () { return localStorage.getItem(LANG_KEY); });
-
-      window.addEventListener('load', function () {
-        dismissAudioGate(function () {
-          if (savedLang) {
-            var modal = document.getElementById('onboardingModal');
-            if (modal) modal.style.display = 'none';
-            var sel = document.getElementById('languageSelector');
-            if (sel) sel.value = savedLang;
-            // Returning user — speak a brief welcome back
-            setTimeout(function () {
-              speak(savedLang === 'hi'
-                ? 'CodeUp में वापस स्वागत है। Tutorial के लिए Tutorial बटन, या Ctrl Shift M से voice शुरू करें।'
-                : 'Welcome back to CodeUp. Press Enter on the Tutorial button, or press Control Shift M for voice control.');
-            }, 400);
-          } else {
-            var modal = document.getElementById('onboardingModal');
-            if (modal) modal.style.display = 'flex';
-            setTimeout(runOnboarding, 300);
-          }
-        });
-      });
+      window.addEventListener('load', setupStartGate);
 
       window.addEventListener('DOMContentLoaded', function () {
         // Detect Firefox up front and warn the user once

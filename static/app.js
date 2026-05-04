@@ -11,6 +11,8 @@ let isListening = false;
 let recognition = null;
 let _restartTimer = null;
 let _loadingSnippets = false;
+let _apiKeyConfigured = false;
+let _apiKeyPromptShown = false;
 
 // Utility: calculate indentation level (spaces and tabs)
 function getIndentLevel(line) {
@@ -547,6 +549,71 @@ function hideAI() {
   hideEl(document.getElementById('aiBubble'));
 }
 
+// ---------- API KEY MODAL ----------
+function openApiKeyModal() {
+  const modal = document.getElementById('apiKeyModal');
+  const input = document.getElementById('apiKeyInput');
+  if (!modal) return;
+  showEl(modal);
+  // Focus the input so screen readers announce the dialog
+  requestAnimationFrame(() => {
+    if (input) input.focus();
+  });
+  speak('AI features need a Gemini API key. Get one for free at ai dot google dot dev. Paste it into the field and press Enter, or press Escape to cancel and continue without AI.');
+  srAnnounce('Gemini API key required');
+}
+
+function closeApiKeyModal() {
+  const modal = document.getElementById('apiKeyModal');
+  if (modal) hideEl(modal);
+  if (editor) editor.focus();
+}
+
+async function submitApiKey() {
+  const input = document.getElementById('apiKeyInput');
+  if (!input) return;
+  const key = input.value.trim();
+  if (!key) { speak('Please enter a key, or press Escape to cancel.'); return; }
+
+  showAI('Testing API key...');
+  speak('Testing your API key.');
+  try {
+    const res = await fetch('/api-config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key: key }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      _apiKeyConfigured = true;
+      input.value = '';
+      closeApiKeyModal();
+      speak('API key configured. AI features are now available.');
+      srAnnounce('API key configured');
+    } else {
+      speak('That key did not work. ' + (data.error || 'Please try again or press Escape to cancel.'));
+    }
+  } catch (e) {
+    console.error(e);
+    speak('Could not configure key. Please check your connection and try again.');
+  } finally {
+    hideAI();
+  }
+}
+
+// Detect when the backend says AI is unconfigured and prompt the user once.
+function maybePromptForApiKey(responseText) {
+  if (_apiKeyConfigured || _apiKeyPromptShown) return false;
+  if (!responseText) return false;
+  const lower = String(responseText).toLowerCase();
+  if (lower.includes('not configured') || lower.includes('insert_api_key_here')) {
+    _apiKeyPromptShown = true;
+    setTimeout(openApiKeyModal, 800);
+    return true;
+  }
+  return false;
+}
+
 // ---------- MONACO SETUP ----------
 window.MonacoEnvironment = {
   getWorkerUrl: function () { return '/static/python.worker.js'; },
@@ -558,12 +625,22 @@ require(['vs/editor/editor.main'], function () {
   if (editor) { console.warn('Editor already initialized, skipping'); return; }
 
   editor = monaco.editor.create(document.getElementById('editor'), {
-    value:            'print("Hello CodeUp!")',
-    language:         'python',
-    theme:            document.body.classList.contains('theme-night') ? 'vs-dark' : 'vs',
-    fontSize:         16,
-    minimap:          { enabled: false },
-    automaticLayout:  true,
+    value:                'print("Hello CodeUp!")',
+    language:             'python',
+    theme:                document.body.classList.contains('theme-night') ? 'vs-dark' : 'vs',
+    fontSize:             16,
+    minimap:              { enabled: false },
+    automaticLayout:      true,
+    // Accessibility — critical for screen reader users
+    accessibilitySupport: 'on',
+    ariaLabel:            'Python code editor. Use arrow keys to navigate, type to edit. Press Escape to stop speech, Control Shift M to toggle voice control, F1 for editor commands.',
+    // Slightly larger line height helps screen-reader sync with cursor
+    lineHeight:           24,
+    // Make sure tabs and tab-trapping work as users expect
+    tabSize:              4,
+    insertSpaces:         true,
+    // Word wrap helps users who navigate by line
+    wordWrap:             'on',
   });
 
   let _structureDebounce = null;
@@ -691,12 +768,13 @@ async function analyzeCode() {
     });
     const data = await res.json();
     out(data.analysis || 'No analysis.');
+    if (maybePromptForApiKey(data.analysis)) return;
     speak(data.analysis ? 'Analysis ready.' : 'No analysis available.');
     if (data.analysis) speak(data.analysis);
   } catch (e) {
     out('Analyze failed.'); console.error(e); cueError(); speak('Analyze failed.');
   } finally {
-    speak('Task completed.'); hideAI();
+    hideAI();
   }
 }
 
@@ -1155,7 +1233,10 @@ function toggleVoice() {
 function startListening() {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SR) {
-    const msg = 'Speech recognition is not supported in this browser. Please use Chrome or Edge for voice input. You can still use the keyboard and the typed command box.';
+    const isFirefox = navigator.userAgent.toLowerCase().includes('firefox');
+    const msg = isFirefox
+      ? 'Voice input is not supported in Firefox. Please open CodeUp in Chrome or Edge for voice control. Keyboard shortcuts and the typed command box still work in Firefox.'
+      : 'Speech recognition is not supported in this browser. Please use Chrome or Edge for voice input. Keyboard shortcuts and the typed command box still work.';
     out(msg);
     speak(msg);
     srAnnounce('Speech recognition unavailable');
@@ -1407,6 +1488,18 @@ function registerEditorShortcuts() {
 
   // Ctrl+Enter: run code (advertised in UI — now actually registered)
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => { runCode(); });
+
+  // Escape inside Monaco — stop speech immediately. Monaco normally swallows
+  // Escape, so the document-level listener in DOMContentLoaded never fires
+  // when focus is in the editor. Register it as an editor command too.
+  editor.addCommand(monaco.KeyCode.Escape, () => {
+    if (AppState.isSpeaking || (window.speechSynthesis && window.speechSynthesis.speaking)) {
+      SpeechManager.cancelAll();
+      ErrorBeaconManager.stop();
+      srAnnounce('Speech stopped');
+      SonificationManager.playTone(600, 0.05, 0.06);
+    }
+  });
 
   editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.KeyS, () => { sonifyCurrentBlock(); });
   editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.KeyL, () => { const pos = editor.getPosition() || { lineNumber: 1 }; readLineEnhanced(pos.lineNumber); });

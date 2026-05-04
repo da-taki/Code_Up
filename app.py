@@ -397,13 +397,17 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en"):
 
     try:
         future = _gemini_executor.submit(_do_call)
-        result = future.result(timeout=MAX_GEMINI_TIMEOUT + 1)
-        return result
     except Exception as e:
         with _gemini_active_lock:
             _gemini_queued_requests = max(0, _gemini_queued_requests - 1)
         return f"AI service is currently unavailable: {str(e)}"
 
+    try:
+        return future.result(timeout=MAX_GEMINI_TIMEOUT + 1)
+    except Exception as e:
+        return f"AI service is currently unavailable: {str(e)}"
+    
+    
 def extract_code(text: str):
     m = re.search(r"```(?:python)?\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
     if not m:
@@ -611,7 +615,7 @@ def run_code():
         # session from overwriting each other's trace.json mid-flight.
         trace_file = os.path.join(workspace_dir, f"trace_{uuid.uuid4().hex}.json")
 
-        script_content = '''
+        script_content = f'''
 import sys, time, json, traceback, os
 
 ALLOWED_MODULES = {{'math','random','string','datetime','date'}}
@@ -626,6 +630,20 @@ class SafeFunction:
         return self._func(*args, **kwargs)
     def __getattr__(self, name):
         raise AttributeError(f'Access to {{name}} is blocked')
+
+import ast as _ast
+_FORBIDDEN_NAMES = {{'__subclasses__', '__bases__', '__mro__', '__class__', '__globals__', '__builtins__', '__import__', '__loader__', '__spec__', '__getattribute__', '__reduce__', '__reduce_ex__'}}
+
+def _audit_ast(source):
+    try:
+        tree = _ast.parse(source)
+    except SyntaxError:
+        return
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.Attribute) and node.attr in _FORBIDDEN_NAMES:
+            raise SyntaxError(f"Access to '{{node.attr}}' is not allowed in the sandbox")
+        if isinstance(node, _ast.Name) and node.id in _FORBIDDEN_NAMES:
+            raise SyntaxError(f"Reference to '{{node.id}}' is not allowed in the sandbox")
 
 def restricted_import(name, *args, **kwargs):
     if name not in ALLOWED_MODULES:
@@ -748,9 +766,11 @@ def tracer(frame, event, arg):
     return tracer
 
 try:
+    _audit_ast(code)
     compiled = compile(code, '<user>', 'exec')
     sys.settrace(tracer)
     exec(compiled, SAFE_GLOBALS, {{}})
+
 except Exception:
     traceback.print_exc(file=sys.stderr)
 finally:
@@ -1864,7 +1884,7 @@ def diff_explain():
     if language == "hi":
         system = (
             "आप Python कोड के दो संस्करणों के बीच क्या बदला है यह समझाते हैं।\n"
-            "एक अंधे छात्र के लिए सरल शब्दों में समझाएं।\n"
+            "एक दृष्टिबाधित छात्र के लिए सरल शब्दों में समझाएं।\n"
             "उल्लेख करें कि क्या ठीक किया गया और क्यों।\n"
             "अधिकतम 6 छोटी पंक्तियां।"
         )

@@ -12,7 +12,7 @@ The project is independently developed and intended for use in schools and acces
 - **Audio code structure** through sonification — pitch maps to indentation, distinct tones for functions, classes, loops, conditionals
 - **Step-by-step execution traces** with spoken playback and a "story mode" narrative
 - **Sandboxed Python execution** with subprocess isolation, restricted imports, time and memory caps
-- **Optional AI assistance** (Gemini) for error explanation, code generation, summarization, and a mentor mode with quizzes and bug challenges
+- **Optional AI assistance** (Groq Llama 3.3 70B) for error explanation, code generation, summarization, and a mentor mode with quizzes and bug challenges
 - **Audio breakpoint debugger** with variable watching
 - **Six-step interactive tutorial** in both English and Hindi covering print, variables, loops, and conditionals
 
@@ -63,9 +63,9 @@ Configure environment:
 Edit `.env` and set at minimum:
 
     FLASK_SECRET_KEY=<a random secret>
-    GEMINI_API_KEY=<your key from https://ai.google.dev/>
+    GROQ_API_KEY=<your free key from https://console.groq.com>
 
-If you don't set a Gemini key, AI features return a clear spoken message rather than crashing. To disable AI entirely, set `GEMINI_ENABLED=0`.
+If you don't set a Groq key, AI features return a clear spoken message rather than crashing. To disable AI entirely, set `GEMINI_ENABLED=0`.
 
 Run the application:
 
@@ -107,8 +107,8 @@ Monaco Editor (vendored locally — no CDN dependency), JavaScript using the Web
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `FLASK_SECRET_KEY` | Yes | `dev-secret-key-change-in-production` | Signs session cookies |
-| `GEMINI_API_KEY` | No | — | Enables AI features |
-| `GEMINI_ENABLED` | No | `1` | Set `0` to disable all AI calls |
+| `GROQ_API_KEY` | No | — | Enables AI features (get free at console.groq.com) |
+| `GEMINI_ENABLED` | No | `1` | Set `0` to disable all AI calls (env var name kept for backward compat) |
 | `SESSION_COOKIE_SECURE` | No | `false` | Set `true` behind HTTPS |
 | `DATA_DIR` | No | `.` | Directory for per-session snippet files |
 

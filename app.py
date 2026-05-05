@@ -376,7 +376,14 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en"):
             content = response.choices[0].message.content
             return content.strip() if content else "No response generated"
         except Exception as e:
-            return f"AI service error: {str(e)}"
+            err_str = str(e).lower()
+            if "rate" in err_str or "quota" in err_str or "429" in err_str:
+                return "The AI service is temporarily busy. Please wait a moment and try again."
+            if "auth" in err_str or "invalid" in err_str or "401" in err_str:
+                return "AI service authentication failed. Please ask your teacher to check the API key."
+            if "timeout" in err_str or "timed out" in err_str:
+                return "The AI took too long to respond. Try a shorter request."
+            return f"AI service had a problem: {str(e)[:100]}"
         finally:
             with _gemini_active_lock:
                 _gemini_active_requests -= 1

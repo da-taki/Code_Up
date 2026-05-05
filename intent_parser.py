@@ -112,6 +112,7 @@ class IntentParser:
         r"^रन\s*(?:करो|कीजिए)?$",
     ]
 
+
     ANALYZE_DEEP_PATTERNS = [
         r"^analyze\s+deeper$",
         r"^(?:go\s+)?deeper$",

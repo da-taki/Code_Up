@@ -187,7 +187,7 @@ Per-session rate limit: 10 runs per 60 seconds.
 
 ## Status
 
-v0.7.0 — School-deployment ready. Calm, professional aesthetic. Locally tested with the full test suite (162 passing tests).
+v0.7.0 — School-deployment ready. Calm, professional aesthetic. Locally tested with the full test suite (162 passing tests). See CHANGELOG for recent fixes.
 
 Next:
 

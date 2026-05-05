@@ -657,12 +657,15 @@ async function submitApiKey() {
 
 // Detect when the backend says AI is unconfigured and prompt the user once.
 function maybePromptForApiKey(responseText) {
-  if (_apiKeyConfigured || _apiKeyPromptShown) return false;
+  // Pilot mode: deployment uses .env. If the AI says "not configured",
+  // tell the user to ask the teacher rather than popping a runtime modal
+  // that needs server restart to take effect.
+  if (_apiKeyPromptShown) return false;
   if (!responseText) return false;
   const lower = String(responseText).toLowerCase();
-  if (lower.includes('not configured') || lower.includes('insert_api_key_here')) {
+  if (lower.includes('not configured')) {
     _apiKeyPromptShown = true;
-    setTimeout(openApiKeyModal, 800);
+    speak('AI features are not configured on this server. Please ask your teacher to set the API key.');
     return true;
   }
   return false;
@@ -761,8 +764,8 @@ async function runCode() {
   // but it's friendlier to warn the user before they wait for execution.
   const codeToCheck = getCode();
   if (/\binput\s*\(/.test(codeToCheck)) {
-    speak('Heads up: your code uses input(), which is not supported in the sandbox. Replace input() with a hardcoded value before running. For example, replace name equals input quote your name quote with name equals quote Alice quote. Continuing anyway.');
-    out('⚠ Warning: input() is not supported. Replace it with a hardcoded value.\nExample: name = "Alice"  instead of  name = input("Your name?")\n\nRunning anyway...');
+    speak('Heads up: your code uses input, which is not supported. I will run it anyway, but you may want to replace input with a fixed value. Say fix to do this automatically.');
+    out('⚠ input() is not supported in CodeUp. Try replacing it with a fixed value (like  name = "Alice")  or say "fix" to auto-fix.\n\nRunning anyway...');
   }
 
   AppState.isExecuting = true;

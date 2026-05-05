@@ -57,13 +57,13 @@ def test_gemini_disabled_returns_message(client):
 def test_gemini_key_not_configured_returns_message(client, monkeypatch):
     """Missing API key returns a human-readable message not a 500."""
     monkeypatch.setenv("GEMINI_ENABLED", "1")
-    monkeypatch.setattr(app_module, "GEMINI_API_KEY", "Insert_API_Key_Here")
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
     res = client.post("/summarize", json={"code": "x = 1", "language": "en"})
     assert res.status_code == 200
     data = res.get_json()
     assert "summary" in data
     assert "configured" in data["summary"].lower() or "api" in data["summary"].lower()
-
+    
 
 # ===========================================================================
 # 2. SANDBOX SECURITY

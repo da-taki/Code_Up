@@ -23,7 +23,7 @@
   <header class="cu-header">
     <div class="cu-header-top">
       <h1 class="cu-title">CODEUP</h1>
-      <div class="cu-status-pill" aria-label="AI model: Gemini 2.0 Flash">GEMINI 2.0</div>
+      <div class="cu-status-pill" aria-label="AI model: Llama 3.3 via Groq">LLAMA 3.3</div>
     </div>
     <div class="cu-subtitle">
       A blind-first Python IDE for accessible learning.
@@ -141,22 +141,22 @@
     aria-labelledby="apiKeyModalTitle"
   >
     <div class="modal-content">
-      <h2 id="apiKeyModalTitle">Configure Gemini API Key</h2>
-      <p>Please enter your Gemini API key to enable AI features:</p>
+      <h2 id="apiKeyModalTitle">Configure AI API Key</h2>
+      <p>Enter your Groq API key to enable AI features. Free tier available.</p>
       <input
         id="apiKeyInput"
         type="password"
-        placeholder="Enter your Gemini API key"
+        placeholder="Enter your Groq API key (gsk_...)"
         class="api-key-input"
-        aria-label="Gemini API key"
+        aria-label="Groq API key"
         autocomplete="off"
       />
       <div class="modal-buttons">
         <button class="cu-button cu-button-primary" id="submitApiKeyBtn">Configure</button>
         <button class="cu-button" id="closeApiKeyModalBtn">Cancel</button>
       </div>
-      <p style="font-size: 0.85rem; margin-top: 10px; color: #888;">
-        Get your API key at <a href="https://ai.google.dev/" target="_blank" rel="noopener noreferrer">ai.google.dev</a>
+      <p style="font-size: 0.85rem; margin-top: 10px; color: var(--text-dim);">
+        Get a free API key at <a href="https://console.groq.com" target="_blank" rel="noopener noreferrer">console.groq.com</a>
       </p>
     </div>
   </div>
@@ -192,9 +192,10 @@
   <div id="startGate" role="dialog" aria-modal="true" aria-labelledby="startGateTitle"
        style="position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:25000;display:flex;align-items:center;justify-content:center;">
     <div style="background:var(--bg-panel);border:1px solid var(--border-strong);border-radius:12px;padding:32px;max-width:480px;width:90%;box-shadow:0 10px 40px rgba(0,0,0,0.15);color:var(--text-main);text-align:center;">
-      <h2 id="startGateTitle" style="font-size:1.4rem;margin-bottom:12px;color:var(--text-main);font-family:var(--font-main);">CodeUp</h2>
+      <h2 id="startGateTitle" style="font-size:1.6rem;margin-bottom:8px;color:var(--text-main);font-family:var(--font-main);">CodeUp</h2>
+      <p style="font-size:0.85rem;color:var(--text-dim);margin-bottom:18px;font-style:italic;">A Python IDE built for blind learners</p>
       <p id="startGateMsg" style="color:var(--text-main);line-height:1.7;margin-bottom:24px;">
-        Choose your language to begin. This also unlocks audio narration.
+        Choose your language to begin. This unlocks voice narration and starts the audio interface.
       </p>
       <div id="startGateButtons" style="display:flex;gap:12px;flex-wrap:wrap;">
         <button id="startEnglish" class="cu-button cu-button-primary" style="flex:1;min-width:140px;font-size:1rem;padding:12px 16px;" autofocus>
@@ -307,6 +308,11 @@
             text: 'if / elif / else शर्त के आधार पर अलग-अलग कोड चलाता है। line 1 को x = 5 में बदलें (voice से या keyboard से), फिर दोबारा चलाएं।',
             code: 'x = 10\n\nif x > 10:\n    print("x dus se bada hai")\nelif x == 10:\n    print("x theek dus hai")\nelse:\n    print("x dus se chota hai")',
           },
+          {
+            label: 'कदम 6 / 6',
+            text: 'Tutorial पूरा हुआ! Editor अब आपका है। सभी voice commands सुनने के लिए "मदद" कहें, या बस कोड लिखना शुरू करें।',
+            code: null,
+          },
         ],
       };
 
@@ -349,6 +355,7 @@
 
           document.getElementById('tutorialStepLabel').textContent = s.label;
           document.getElementById('tutorialText').textContent = s.text;
+          if (typeof srAnnounce === 'function') srAnnounce(s.label);
           if (typeof srAnnounce === 'function') srAnnounce(s.label);
           
           if (typeof setCode === 'function') {
@@ -428,8 +435,8 @@
         }
         setTimeout(function () {
           speak(lang === 'hi'
-            ? 'CodeUp में स्वागत है। Tutorial के लिए Tutorial बटन दबाएं, या Ctrl Shift M से voice control शुरू करें।'
-            : 'Welcome to CodeUp. Press Enter on the Tutorial button to begin, or press Control Shift M to start voice control.');
+            ? 'CodeUp में स्वागत है। शुरू करने के लिए Tab दबाएं और Tutorial button पर Enter, या Control Shift M से voice control शुरू करें। मदद के लिए कभी भी "मदद" कहें।'
+            : 'Welcome to CodeUp. To begin, press Tab to find the Tutorial button and Enter to start. Or press Control Shift M to start voice control. Say "help" any time to learn what you can do.');
         }, 400);
       }
 

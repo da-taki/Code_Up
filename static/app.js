@@ -834,10 +834,37 @@ async function analyzeCode() {
     const data = await res.json();
     out(data.analysis || 'No analysis.');
     if (maybePromptForApiKey(data.analysis)) return;
-    speak(data.analysis ? 'Analysis ready.' : 'No analysis available.');
-    if (data.analysis) speak(data.analysis);
+    if (data.analysis) {
+      speak(data.analysis);
+      // Mark that a brief analysis just happened — enables "analyze deeper" follow-up
+      window._lastAnalyzeContext = { code: getCode(), at: Date.now() };
+    } else {
+      speak('No analysis available.');
+    }
   } catch (e) {
     out('Analyze failed.'); console.error(e); cueError(); speak('Analyze failed.');
+  } finally {
+    hideAI();
+  }
+}
+
+async function analyzeDeep() {
+  if (!window._lastAnalyzeContext || (Date.now() - window._lastAnalyzeContext.at > 5 * 60 * 1000)) {
+    speak('Please run analyze first, then say analyze deeper.');
+    return;
+  }
+  cueSuccess(); showAI('Going deeper...'); speak('Going line by line.');
+  try {
+    const res = await fetch('/analyze-deep', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: getCode(), language: getLanguage() }),
+    });
+    const data = await res.json();
+    out(data.analysis || 'No deeper analysis.');
+    if (data.analysis) speak(data.analysis);
+  } catch (e) {
+    console.error(e); speak('Deeper analysis failed.');
   } finally {
     hideAI();
   }
@@ -934,8 +961,7 @@ async function describeLine(line) {
 // ---------- GENERATE CODE ----------
 async function generateCode(prompt) {
   if (!prompt) { speak('Please provide a description of what you want to generate.'); return; }
-  showAI('Generating code for: ' + prompt); speak('Generating code for ' + prompt);
-  if (getCode().trim()) speak('Warning. This will overwrite the current code.');
+  showAI('Generating code for: ' + prompt); speak('Generating code for ' + prompt + '. One moment.');
   try {
     const res  = await fetch('/generate-code', {
       method:  'POST',
@@ -945,9 +971,10 @@ async function generateCode(prompt) {
     const data = await res.json();
     if (data.success && data.code) {
       window.executionTrace = []; window.traceIndex = 0;
-      setCode(data.code); out('Code generated and inserted into editor.'); cueSuccess(); speak('Code generated and inserted into the editor.');
+      setCode(data.code); out('Code generated and inserted into editor.'); cueSuccess(); speak('Code is ready in the editor. Press Ctrl+Enter to run it, or say "analyze" to hear an explanation.');
     } else {
-      out('Code generation failed.'); cueError(); speak('Code generation failed.');
+      const reason = data.error || 'the AI returned an empty response. Please try rephrasing your request.';
+      out('Code generation failed: ' + reason); cueError(); speak('Code generation did not work. ' + reason);
     }
   } catch (e) {
     console.error(e); out('Code generation failed.'); cueError(); speak('Code generation failed.');
@@ -1146,6 +1173,7 @@ async function renameSnippetById(id, newName) {
 async function handleConfirmedAction(action, payload) {
   if (action === 'run')              await runCode();
   else if (action === 'analyze')     await analyzeCode();
+  else if (action === 'analyze_deep') await analyzeDeep();
   else if (action === 'fix')         await fixCode();
   else if (action === 'speak')       speakOutput();
   else if (action === 'read_output') speakOutput();

@@ -331,28 +331,28 @@ def save_snippets(d: dict) -> None:
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "Insert_API_Key_Here")
 
 # FIX L-3: Updated deprecated "gemini-pro" model name to a current model identifier.
-GEMINI_MODEL = "gemini-2.0-flash"
+GEMINI_MODEL = "llama-3.3-70b-versatile"
 
 # helper to retrieve current API key (session overrides global)
 def _current_api_key():
     return getattr(_api_context, 'gemini_key', GEMINI_API_KEY)
 
 def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en"):
-    """Call Gemini API with hard timeout to prevent hanging.
+    """Call Groq API with hard timeout to prevent hanging.
 
-    Uses a per-session key if set via /api-config; otherwise falls back to a global key.
+    Function name kept as call_gemini for backward compat with all callers.
+    Provider is now Groq (Llama models). Falls back to a clear message if key missing.
     """
     if os.environ.get("GEMINI_ENABLED", "1") != "1":
         return "AI service disabled"
 
     global _gemini_queued_requests
 
-    key = _current_api_key()
-    if not key or key == "Insert_API_Key_Here":
-        return "AI service not configured. Please set GEMINI_API_KEY environment variable or configure via /api-config."
+    key = os.environ.get("GROQ_API_KEY", "")
+    if not key:
+        return "AI service not configured. Please set GROQ_API_KEY environment variable."
 
     def _do_call():
-        # FIX H-1 (active counter): increment before work, decrement in finally.
         global _gemini_active_requests, _gemini_queued_requests
         with _gemini_active_lock:
             _gemini_queued_requests = max(0, _gemini_queued_requests - 1)
@@ -362,31 +362,25 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en"):
             if language == "hi":
                 sp = f"आप एक सहायक हैं जो हिंदी में सहायता प्रदान करते हैं। {system_prompt}"
 
-            # FIX C-2: Construct a per-call genai.Client instance instead of
-            # calling genai.configure() (a process-wide global mutation).
-            # Previously, concurrent threads would overwrite each other's key:
-            # Thread A configures key K1, Thread B overwrites with K2 before
-            # Thread A's worker reads it — Thread A silently uses K2.
-            client = genai.Client(api_key=key)
-            response = client.models.generate_content(
+            from groq import Groq
+            client = Groq(api_key=key)
+            response = client.chat.completions.create(
                 model=GEMINI_MODEL,
-                contents=user_prompt,
-                config=genai_types.GenerateContentConfig(
-                    system_instruction=sp,
-                    temperature=temperature,
-                    max_output_tokens=1024,
-                ),
+                messages=[
+                    {"role": "system", "content": sp},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=temperature,
+                max_tokens=1024,
             )
-            return response.text.strip() if response.text else "No response generated"
+            content = response.choices[0].message.content
+            return content.strip() if content else "No response generated"
         except Exception as e:
             return f"AI service error: {str(e)}"
         finally:
             with _gemini_active_lock:
                 _gemini_active_requests -= 1
 
-    # FIX H-1: Use the thread-safe counters instead of accessing private
-    # executor internals (_threads, _work_queue) which are CPython implementation
-    # details that can break on Python/library upgrades.
     with _gemini_active_lock:
         current_active = _gemini_active_requests
         current_queued = _gemini_queued_requests
@@ -407,8 +401,7 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en"):
     try:
         return future.result(timeout=MAX_GEMINI_TIMEOUT + 1)
     except Exception as e:
-        return f"AI service is currently unavailable: {str(e)}"
-    
+        return f"AI service is currently unavailable: {str(e)}"    
 
 def extract_code(text: str):
     m = re.search(r"```(?:python)?\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
@@ -920,21 +913,23 @@ def analyze():
 
     if language == "hi":
         system = (
-            "आप एक दृष्टिबाधित-केंद्रित IDE में एक विशेषज्ञ पायथन ट्यूटर हैं।\n"
-            "दिए गए पायथन कोड का विश्लेषण करें। रिपोर्ट करें:\n"
-            "- यह क्या करता है\n"
-            "- कोई बग या edge cases\n"
-            "- कोई बुरी प्रथाएं\n"
-            "कोई बकवास नहीं। अधिकतम 10 पंक्तियां।"
+            "आप blind student के लिए conversational Python tutor हैं।\n"
+            "Code का BRIEF analysis दें — 4 से 5 छोटी lines में:\n"
+            "1. यह code overall क्या करता है\n"
+            "2. कौन सी 2-3 main techniques use हुई हैं\n"
+            "3. कोई obvious bug या edge case (अगर हो)\n\n"
+            "End में पूछें: 'क्या आप line by line deeper explanation सुनना चाहते हैं? बोलें: analyze deeper'\n"
+            "Markdown headers न use करें। Spoken Hindi/English में लिखें।"
         )
     else:
         system = (
-            "You are an expert Python tutor inside a blind-first IDE.\n"
-            "Analyze the given Python code. Report:\n"
-            "- What it does\n"
-            "- Any bugs or edge cases\n"
-            "- Any bad practices\n"
-            "No fluff. Max 10 lines."
+            "You are a conversational Python tutor for a blind student.\n"
+            "Give a BRIEF analysis in 4 to 5 short lines:\n"
+            "1. What this code does overall (one line)\n"
+            "2. The 2 or 3 main techniques used (e.g., 'uses a for loop with range', 'recursive function')\n"
+            "3. Any obvious bug or edge case (if any)\n\n"
+            "End with: 'Want a deeper line by line walkthrough? Just say: analyze deeper.'\n"
+            "No markdown headers. No bullet points. Spoken English only."
         )
 
     user = f"Python code:\n```python\n{code}\n```"
@@ -963,6 +958,40 @@ def analyze():
         speech_text = analysis + "\n" + "Parameters: " + " ".join(param_info)
 
     return jsonify({"analysis": analysis, "param_info": param_info, "speech": speech_text, "auto_speak": True})
+
+@app.route("/analyze-deep", methods=["POST"])
+def analyze_deep():
+    body = safejson()
+    code = safe(body.get("code"), "")
+    language = safe(body.get("language"), "en")
+
+    if len(code) > MAX_CODE_SIZE:
+        return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
+    if not code.strip():
+        return jsonify({"success": False, "error": "Code cannot be empty"}), 400
+
+    if language == "hi":
+        system = (
+            "आप blind student के लिए expert Python tutor हैं। Code का DETAILED line-by-line analysis दें:\n"
+            "हर logical block (loop, function, condition) को explain करें।\n"
+            "हर built-in function (print, range, len, int, str, etc.) का नाम लें और बताएं वो क्या करता है।\n"
+            "Variables का role बताएं।\n"
+            "Symbols को words में लिखें: == 'equals equals', != 'not equals'।\n"
+            "Format: 'Lines X to Y: explanation'। Plain text paragraphs। कोई markdown नहीं।"
+        )
+    else:
+        system = (
+            "You are an expert Python tutor for a blind student. Give a DETAILED line-by-line walkthrough:\n"
+            "Walk through each logical block (loop, function, conditional, etc.).\n"
+            "Name every built-in function used (print, range, len, int, str, etc.) and explain what each does.\n"
+            "Name variables and explain their role.\n"
+            "For symbols use words: == as 'equals equals', != as 'not equals', <= as 'less than or equal'.\n"
+            "Format: 'Lines X to Y: explanation'. Plain text paragraphs. No markdown."
+        )
+
+    user = f"Python code:\n```python\n{code}\n```"
+    analysis = call_gemini(system, user, language=language)
+    return jsonify({"analysis": analysis, "speech": analysis, "auto_speak": True})
 
 # ==========================
 # ADVISE (FEATURE / IMPROVEMENT SUGGESTIONS)
@@ -1607,17 +1636,31 @@ def fix():
 
     if language == "hi":
         system = (
-            "आप एक Python ऑटो-फिक्सर हैं।\n"
-            "सिंटैक्स और स्पष्ट runtime त्रुटियों को ठीक करें।\n"
-            "एक ही मकसद रखें। स्पष्टता को थोड़ा सुधारें।\n"
-            "केवल वैध पायथन कोड लौटाएं। कोई टिप्पणी नहीं। कोई MARKDOWN नहीं।"
+            "आप एक expert Python debugger हैं।\n"
+            "नीचे दिए गए कोड में हर तरह की समस्या ढूंढें और ठीक करें:\n"
+            "1. Syntax errors (missing colons, unmatched parentheses, indentation)\n"
+            "2. Runtime errors (NameError, TypeError, IndexError, ZeroDivisionError, KeyError)\n"
+            "3. Logic bugs (off-by-one, wrong comparison operator, wrong variable used, missing return)\n"
+            "4. CodeUp-specific: input() function काम नहीं करता — इसे hardcoded values से replace करें (e.g. name = 'Alice')\n"
+            "5. Edge cases (empty list, division by zero, negative numbers जहां positive expected)\n"
+            "6. Bad practices (mutable default arguments, comparing with == None instead of is None)\n\n"
+            "हर महत्वपूर्ण fix के ऊपर एक comment add करें जो बताए कि क्या बदला और क्यों।\n"
+            "Original intent maintain करें — completely re-write न करें।\n"
+            "केवल valid Python code लौटाएं। कोई markdown fences नहीं।"
         )
     else:
         system = (
-            "You are a Python auto-fixer.\n"
-            "Fix syntax and obvious runtime errors.\n"
-            "Keep the same intent. Improve clarity slightly.\n"
-            "RETURN ONLY VALID PYTHON CODE. NO COMMENTS. NO MARKDOWN."
+            "You are an expert Python debugger for a blind-first IDE.\n"
+            "Find and fix EVERY type of problem in the code below:\n"
+            "1. Syntax errors (missing colons, unmatched parens, bad indentation)\n"
+            "2. Runtime errors (NameError, TypeError, IndexError, ZeroDivisionError, KeyError)\n"
+            "3. Logic bugs (off-by-one, wrong comparison operator, wrong variable, missing return)\n"
+            "4. CodeUp-specific: the input() function is BLOCKED in this sandbox. Replace any input() call with a hardcoded sample value (e.g. name = 'Alice'  instead of  name = input('Your name? '))\n"
+            "5. Edge cases (empty list, division by zero, negative numbers where positive expected)\n"
+            "6. Bad practices (mutable default args, comparing with == None instead of is None, bare except clauses)\n\n"
+            "Add a brief comment above each meaningful fix explaining WHAT changed and WHY. A blind student will hear these comments via screen reader.\n"
+            "Preserve original intent — do not rewrite from scratch.\n"
+            "Return only valid Python code. NO markdown fences. NO prose outside code comments."
         )
 
     user = f"Fix this code:\n```python\n{code}\n```"
@@ -1642,24 +1685,44 @@ def generate_code():
 
     if language == "hi":
         system = (
-            "आप एक शुरुआती-अनुकूल, दृष्टिबाधित-केंद्रित IDE के लिए एक पायथन कोड जेनरेटर हैं।\n"
-            "उपयोगकर्ता एक कार्य का वर्णन प्राकृतिक भाषा में करेगा।\n"
-            "आपको केवल वैध पायथन कोड लौटाना चाहिए जो कार्य को हल करता है।\n"
-            "टिप्पणी, markdown, या व्याख्या न जोड़ें।\n"
-            "बस कोड।"
+            "आप एक beginner-friendly, blind-first Python IDE (CodeUp) के लिए code generator हैं।\n"
+            "User प्राकृतिक भाषा में task बताएगा। आप उसे हल करने वाला Python code generate करें।\n\n"
+            "महत्वपूर्ण constraints:\n"
+            "1. input() function का use NEVER करें। यह CodeUp sandbox में blocked है।\n"
+            "   Instead: variables को hardcoded sample values दें (e.g. length = 10, width = 5, name = 'Alice')\n"
+            "   जब user input की जरूरत हो तो उन values को directly assign करें।\n"
+            "2. केवल इन modules का use कर सकते हैं: math, random, string, datetime। बाकी कुछ blocked है।\n"
+            "3. open(), eval(), exec(), __import__() का NEVER use करें — सब blocked हैं।\n"
+            "4. हर महत्वपूर्ण line के ऊपर एक छोटी comment add करें जो शुरुआती समझ सकें।\n"
+            "5. Code के end में print() statements add करें ताकि user output देख सके।\n\n"
+            "केवल Python code लौटाएं। Markdown fences न डालें। कोई prose explanation नहीं।"
         )
     else:
         system = (
-            "You are a Python code generator for a beginner-friendly, blind-first IDE.\n"
-            "The user will describe a task in natural language.\n"
-            "You must return ONLY valid Python code that solves the task.\n"
-            "Do not add comments, markdown, or explanations.\n"
-            "Just the code."
+            "You are a Python code generator for CodeUp, a beginner-friendly, blind-first IDE.\n"
+            "The user will describe a task in natural language. Generate Python code that solves it.\n\n"
+            "CRITICAL CONSTRAINTS:\n"
+            "1. NEVER use input() — it is BLOCKED in the CodeUp sandbox.\n"
+            "   Instead, hardcode sample values directly into variables.\n"
+            "   Example: instead of `length = float(input('length?'))` write `length = 10  # sample value, change this to test`\n"
+            "   Choose realistic sample values that make the program produce visible output.\n"
+            "2. Only these modules are available: math, random, string, datetime. Do NOT import anything else.\n"
+            "3. NEVER use open(), eval(), exec(), or __import__() — all blocked.\n"
+            "4. Add a brief comment above each non-trivial line explaining what it does, written for a beginner. A blind student will hear these via screen reader.\n"
+            "5. Always include print() statements at the end so the user can see the result when they run it.\n"
+            "6. For interactive-feeling tasks (menus, calculators, games), use hardcoded sample inputs and explain in a comment how to change them.\n\n"
+            "Return ONLY Python code. No markdown fences. No prose outside code comments."
         )
 
     user = f"Task description:\n{prompt}"
     raw = call_gemini(system, user, temperature=0.2, language=language)
     code = extract_code(raw)
+    # Llama sometimes returns code without ``` fences. If extract_code came back empty,
+    # try using the raw response directly (assuming it's already plain code).
+    if not code and raw and not raw.startswith("AI service"):
+        code = raw.strip()
+    if not code:
+        return jsonify({"success": False, "error": "AI returned empty response. Try rephrasing.", "code": ""})
     return jsonify({"success": True, "code": code})
 
 # ==========================
@@ -2025,6 +2088,8 @@ def voice():
             return _store_and_return({"success": True, "action": "show_structure", "confidence": confidence})
         if intent == "run":
             return _store_and_return({"success": True, "action": "run", "confidence": confidence})
+        if intent == "analyze_deep":
+            return _store_and_return({"success": True, "action": "analyze_deep", "confidence": confidence})
         if intent == "analyze":
             return _store_and_return({"success": True, "action": "analyze", "confidence": confidence})
         if intent == "fix":

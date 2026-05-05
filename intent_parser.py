@@ -112,6 +112,16 @@ class IntentParser:
         r"^रन\s*(?:करो|कीजिए)?$",
     ]
 
+    ANALYZE_DEEP_PATTERNS = [
+        r"^analyze\s+deeper$",
+        r"^(?:go\s+)?deeper$",
+        r"^more\s+detail(?:s)?$",
+        r"^line\s+by\s+line$",
+        r"^explain\s+(?:in\s+)?more\s+detail$",
+        r"^गहराई\s+से\s+(?:analyze|समझाओ)$",
+        r"^और\s+detail$",
+    ]
+
     ANALYZE_PATTERNS = [
         r"^analyze\s*(?:(?:the\s+)?code)?$",
         r"^analyse\s*(?:(?:the\s+)?code)?$",
@@ -204,11 +214,22 @@ class IntentParser:
     ]
 
     GENERATE_CODE_PATTERNS = [
-        r"(?:generate|write|create|make)\s+(?:python\s+)?code\s+for\s+(.+)",
-        r"i\s+want\s+(?:python\s+)?code\s+(?:for|to)\s+(.+)",
+        # "write code that does X" / "write code which does X"
+        r"(?:generate|write|create|make|build)\s+(?:a\s+|some\s+)?(?:python\s+)?code\s+(?:that|which|to|for)\s+(.+)",
+        # "write a program that..." / "write a script to..."
+        r"(?:generate|write|create|make|build)\s+(?:a\s+|some\s+)?(?:python\s+)?(?:program|script|function)\s+(?:that|which|to|for)\s+(.+)",
+        # "write code for X" (no verb, just noun)
+        r"(?:generate|write|create|make|build)\s+(?:a\s+|some\s+)?(?:python\s+)?code\s+for\s+(.+)",
+        # "i want code for / to X"
+        r"i\s+want\s+(?:python\s+)?code\s+(?:for|to|that)\s+(.+)",
+        # "code that does X" (very casual)
+        r"^code\s+(?:that|which|for|to)\s+(.+)",
+        # bare command — no prompt, will ask user
         r"(?:generate|write|create|make)\s+(?:python\s+)?code$",
-        # Hindi: "fibonacci के लिए कोड बनाओ" / "code बनाओ for X"
-        r"(.+?)\s+(?:के\s+लिए|का)\s+(?:कोड|code)\s+(?:बनाओ|लिखो|बनाइए)",
+        # Hindi: "X के लिए कोड बनाओ" / "X का code लिखो"
+        r"(.+?)\s+(?:के\s+लिए|का|की)\s+(?:कोड|code)\s+(?:बनाओ|लिखो|बनाइए|बनाइये)",
+        # Hindi: "code बनाओ for X"
+        r"(?:कोड|code)\s+(?:बनाओ|लिखो)\s+(.+)",
     ]
 
     RENAME_SNIPPET_PATTERNS = [
@@ -468,6 +489,7 @@ class IntentParser:
             "sonify_class":   self.SONIFY_CLASS_PATTERNS,
             # Execution and analysis
             "run":            self.RUN_PATTERNS,
+            "analyze_deep":   self.ANALYZE_DEEP_PATTERNS,
             "analyze":        self.ANALYZE_PATTERNS,
             "fix":            self.FIX_PATTERNS,
             "advise":         self.ADVISE_PATTERNS,

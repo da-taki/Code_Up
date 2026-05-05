@@ -324,8 +324,14 @@
           this.step = 0;
           var overlay = document.getElementById('tutorialOverlay');
           if (overlay) overlay.removeAttribute('hidden');
-          if (typeof srAnnounce === 'function') srAnnounce('Tutorial opened. Press Enter or the Next button to advance each step. Say skip tutorial to exit.');
-          this.render();
+          var lang = (document.getElementById('languageSelector') || {}).value || 'en';
+          var intro = lang === 'hi'
+            ? 'Tutorial शुरू हो गया है। कुल 6 कदम हैं। हर कदम के बाद Enter दबाएं या "next" कहें आगे बढ़ने के लिए। कभी भी "skip tutorial" कहकर बाहर निकलें। कोड वाले कदम में Ctrl+Enter से कोड चलाएं।'
+            : 'Tutorial started. There are 6 steps total. After each step, press Enter or say "next" to advance. Say "skip tutorial" anytime to exit. On steps that load code, press Ctrl+Enter to run it.';
+          if (typeof srAnnounce === 'function') srAnnounce('Tutorial opened, step 1 of 6');
+          speak(intro);
+          var self = this;
+          setTimeout(function () { self.render(); }, 4000);
         },
 
         close: function () {
@@ -343,7 +349,8 @@
 
           document.getElementById('tutorialStepLabel').textContent = s.label;
           document.getElementById('tutorialText').textContent = s.text;
-
+          if (typeof srAnnounce === 'function') srAnnounce(s.label);
+          
           if (typeof setCode === 'function') {
             if (s.code) {
               if (window._editorReady) { setCode(s.code); }
@@ -427,7 +434,9 @@
       }
 
       function setupStartGate() {
-        var savedLang = safeStorage(function () { return localStorage.getItem(LANG_KEY); });
+        // Pilot mode: always show language picker, never the returning-user shortcut.
+        // This avoids confusion when localStorage state gets weird across sessions.
+        var savedLang = null;
         var gate = document.getElementById('startGate');
         if (!gate) return;
 

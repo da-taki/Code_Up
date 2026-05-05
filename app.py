@@ -345,6 +345,8 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en"):
     if os.environ.get("GEMINI_ENABLED", "1") != "1":
         return "AI service disabled"
 
+    global _gemini_queued_requests
+
     key = _current_api_key()
     if not key or key == "Insert_API_Key_Here":
         return "AI service not configured. Please set GEMINI_API_KEY environment variable or configure via /api-config."

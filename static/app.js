@@ -366,7 +366,7 @@ async function findVariable(varName) {
       out(`Variable '${varName}' (${data.phonetic}):\nFound ${data.count} usages:\n\n${usageList}`);
       speak(`Found ${data.count} usages of ${data.phonetic}.`);
       data.usages.slice(0, 3).forEach(u => speak(`Line ${u.line}: ${u.type}.`));
-      if (data.count > 3) speak(`And ${data.count - 3} more. Check output for details.`);
+      if (data.count > 3) data.usages.slice(3).forEach(u => speak(`Line ${u.line}: ${u.type}.`));
       if (data.usages.length > 0) gotoLine(data.usages[0].line, false);
     } else {
       out(data.message); speak(data.message);
@@ -525,7 +525,14 @@ KEYBOARD:
 - Ctrl+Shift+P: Command palette
   `.trim();
   out(helpText);
-  speak('Full command list displayed in the output panel.');
+  const speechText = helpText
+    .replace(/[📖🎤💾📊⚠️🎯⚡🔧▶🔍💡↓↑🗺️🔊⏭⏮📋📌🔬❓✓✗]/g, '')
+    .replace(/^[A-Z\s&]+:$/gm, '')
+    .replace(/\n{2,}/g, '. ')
+    .replace(/\n/g, ', ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  speak('Here is the full command list. ' + speechText);
 }
 
 function getFileStats() {
@@ -534,7 +541,10 @@ function getFileStats() {
   const code  = getCode();
   const stats = `File statistics:\n- ${model.getLineCount()} lines\n- ${code.split(/\s+/).filter(w => w.length > 0).length} words\n- ${code.length} characters`;
   out(stats);
-  speak(`File has ${model.getLineCount()} lines.`);
+  const lineCount = model.getLineCount();
+  const wordCount = code.split(/\s+/).filter(w => w.length > 0).length;
+  const charCount = code.length;
+  speak(`File has ${lineCount} lines, ${wordCount} words, and ${charCount} characters.`);
 }
 
 function goToTop()    { gotoLine(1); speak('Jumped to top of file.'); }

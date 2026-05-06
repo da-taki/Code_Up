@@ -336,6 +336,15 @@ html, body {
   border-color: var(--accent);
 }
 
+/* Paused state — distinct from both Off (default) and ON (accent).
+   Uses warning color so a sighted helper can see at a glance that the mic
+   is open but commands are being dropped. */
+.cu-button-voice.cu-button-voice--paused {
+  background: var(--warning);
+  color: #ffffff;
+  border-color: var(--warning);
+}
+
 .theme-toggle.active {
   background: var(--accent-soft);
   border-color: var(--accent);

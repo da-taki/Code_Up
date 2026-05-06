@@ -342,6 +342,11 @@
 
         close: function () {
           this.active = false;
+          // Cancel any pending auto-advance so it doesn't fire after close
+          if (this._pendingAdvance) {
+            clearTimeout(this._pendingAdvance);
+            this._pendingAdvance = null;
+          }
           var overlay = document.getElementById('tutorialOverlay');
           if (overlay) overlay.setAttribute('hidden', '');
           if (typeof srAnnounce === 'function') srAnnounce('Tutorial closed.');
@@ -377,6 +382,11 @@
         },
 
         next: function () {
+          // Cancel any pending auto-advance so we don't double-advance
+          if (this._pendingAdvance) {
+            clearTimeout(this._pendingAdvance);
+            this._pendingAdvance = null;
+          }
           var steps = this.steps();
           if (this.step >= steps.length - 1) {
             this.close();
@@ -398,13 +408,28 @@
         if (!current || !current.code) return;
         // Don't auto-advance the final step
         if (Tutorial.step >= steps.length - 1) return;
+
+        // Capture the step we were on when run succeeded — if the user
+        // manually advances before our timer fires, don't double-advance.
+        var stepWhenScheduled = Tutorial.step;
+
+        // Cancel any earlier pending auto-advance so rapid re-runs don't queue up
+        if (Tutorial._pendingAdvance) {
+          clearTimeout(Tutorial._pendingAdvance);
+          Tutorial._pendingAdvance = null;
+        }
+
         // Give the user a moment to hear the program output before moving on
-        setTimeout(function () {
-          if (Tutorial.active) {
-            speak('Nice. Moving to the next step.');
-            Tutorial.next();
-          }
-        }, 3500);
+        Tutorial._pendingAdvance = setTimeout(function () {
+          Tutorial._pendingAdvance = null;
+          // Re-check everything — user may have skipped, advanced, or stopped tutorial
+          if (!Tutorial.active) return;
+          if (Tutorial.step !== stepWhenScheduled) return;
+          if (Tutorial.step >= Tutorial.steps().length - 1) return;
+          var lang = (document.getElementById('languageSelector') || {}).value || 'en';
+          speak(lang === 'hi' ? 'बढ़िया। अगले कदम पर चलते हैं।' : 'Nice. Moving to the next step.');
+          Tutorial.next();
+        }, 4000);
       };
 
     
@@ -434,9 +459,21 @@
           window.warnIfHindiUnavailable(lang);
         }
         setTimeout(function () {
-          speak(lang === 'hi'
-            ? 'CodeUp में स्वागत है। शुरू करने के लिए Tab दबाएं और Tutorial button पर Enter, या Control Shift M से voice control शुरू करें। मदद के लिए कभी भी "मदद" कहें।'
-            : 'Welcome to CodeUp. To begin, press Tab to find the Tutorial button and Enter to start. Or press Control Shift M to start voice control. Say "help" any time to learn what you can do.');
+          if (lang === 'hi') {
+            speak('CodeUp में स्वागत है — एक blind-first Python IDE।');
+            speak('आपके पास तीन आसान शुरुआती रास्ते हैं।');
+            speak('एक: tutorial — मैं आपको Python की बेसिक्स step by step सिखाऊंगा। Tab दबाकर Tutorial button पर पहुंचें और Enter दबाएं।');
+            speak('दो: demo — कुछ उदाहरण programs देखें। "demo चलाओ" कहें।');
+            speak('तीन: voice control — Control Shift M दबाएं। फिर "मदद" कहें सब commands सुनने के लिए।');
+            speak('अगर कुछ भी confuse करे तो "help" कहें। शुरू करते हैं!');
+          } else {
+            speak('Welcome to CodeUp — a Python IDE built for blind learners.');
+            speak('You have three easy ways to start.');
+            speak('One: take the tutorial. I will walk you through Python basics, step by step. Press Tab to reach the Tutorial button, then press Enter.');
+            speak('Two: try a demo. Say "run demo" to load an example program.');
+            speak('Three: turn on voice control with Control Shift M. Then say "help" to hear what you can do.');
+            speak('If you ever get stuck, just say "help". Let us begin.');
+          }
         }, 400);
       }
 

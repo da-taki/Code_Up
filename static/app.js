@@ -10,6 +10,10 @@ let lastSpokenText = null;
 let isListening = false;
 let recognition = null;
 let _restartTimer = null;
+// Voice paused state — recognition is still running but commands are dropped
+// until the user says "resume". We need to stay in the recognition session so
+// we can actually hear the resume command.
+let _voicePaused = false;
 let _loadingSnippets = false;
 let _apiKeyConfigured = false;
 let _apiKeyPromptShown = false;
@@ -515,6 +519,8 @@ EXECUTION PLAYBACK:
 UTILITIES:
 - "repeat" — repeat last action
 - "say that again" — repeat last speech
+- "pause voice" — keep mic open but ignore commands
+- "resume voice" — start listening again
 
 KEYBOARD:
 - Escape: Stop speech
@@ -660,13 +666,31 @@ function maybePromptForApiKey(responseText) {
   // Pilot mode: deployment uses .env. If the AI says "not configured",
   // tell the user to ask the teacher rather than popping a runtime modal
   // that needs server restart to take effect.
-  if (_apiKeyPromptShown) return false;
   if (!responseText) return false;
   const lower = String(responseText).toLowerCase();
+
+  // Notice offline-mode prefix and announce it (once per response, not once per session)
+  if (lower.startsWith('[offline mode]')) {
+    if (!window._offlineModeAnnounced) {
+      window._offlineModeAnnounced = true;
+      speak('Cloud AI is unavailable. Switching to offline AI for this response.');
+      srAnnounce('Offline AI active');
+    }
+    return false;
+  }
+
+  if (_apiKeyPromptShown) return false;
   if (lower.includes('not configured')) {
     _apiKeyPromptShown = true;
-    speak('AI features are not configured on this server. Please ask your teacher to set the API key.');
+    speak('AI features are not configured on this server. Please ask your teacher to set the API key, or install Ollama for offline AI.');
     return true;
+  }
+  if (lower.includes('offline ai is also not available') || lower.includes('offline ai is not available')) {
+    if (!window._noAiAnnounced) {
+      window._noAiAnnounced = true;
+      speak('Both cloud AI and offline AI are unavailable right now. Core features like running code still work. Try again in a minute.');
+    }
+    return false;
   }
   return false;
 }
@@ -808,12 +832,18 @@ async function runCode() {
     } else {
       out('ERROR:\n' + (data.error || ''));
       cueError();
-      speak('There was an error.');
+      // Cancel any in-flight speech so the error alert isn't queued behind it
+      SpeechManager.cancelAll();
+      // Extract the most actionable line from the traceback
+      const errLines = (data.error || '').trim().split('\n').filter(Boolean);
+      const lastLine = errLines[errLines.length - 1] || 'Unknown error';
+      // Try to extract line number from traceback
+      const lineMatch = (data.error || '').match(/line (\d+)/);
+      const lineHint = lineMatch ? ` on line ${lineMatch[1]}` : '';
+      speak(`Error${lineHint}: ${lastLine}`);
+      srAnnounce('Error in code');
       if (data.explanation) {
-        speak('Analyzing the error, please wait.');
-        setTimeout(function () { speak(data.explanation); }, 500);
-      } else {
-        speak('No explanation available. Check the output panel for details.');
+        speak(data.explanation);
       }
     }
   } catch (e) {
@@ -836,9 +866,12 @@ async function analyzeCode() {
     });
     const data = await res.json();
     out(data.analysis || 'No analysis.');
-    if (maybePromptForApiKey(data.analysis)) return;
+    // Check for AI-unavailable messaging before speaking
+    maybePromptForApiKey(data.analysis);
     if (data.analysis) {
-      speak(data.analysis);
+      // Strip "[offline mode]" prefix from spoken output — already announced separately
+      const spoken = data.analysis.replace(/^\[offline mode\]\s*/i, '');
+      speak(spoken);
       // Mark that a brief analysis just happened — enables "analyze deeper" follow-up
       window._lastAnalyzeContext = { code: getCode(), at: Date.now() };
     } else {
@@ -868,6 +901,149 @@ async function analyzeDeep() {
     if (data.analysis) speak(data.analysis);
   } catch (e) {
     console.error(e); speak('Deeper analysis failed.');
+  } finally {
+    hideAI();
+  }
+}
+
+// ---------- DEMO PRESETS ----------
+let _demoPresetsCache = null;
+
+async function fetchDemoPresets() {
+  if (_demoPresetsCache) return _demoPresetsCache;
+  try {
+    const res = await fetch('/demo-presets');
+    const data = await res.json();
+    if (data.success) {
+      _demoPresetsCache = data.presets;
+      return data.presets;
+    }
+  } catch (e) {
+    console.error('Failed to load demos:', e);
+  }
+  return [];
+}
+
+async function listDemos() {
+  const presets = await fetchDemoPresets();
+  if (!presets.length) {
+    speak('No demos are available right now.');
+    out('No demos available.');
+    return;
+  }
+  let display = 'AVAILABLE DEMOS:\n\n';
+  presets.forEach((p, i) => {
+    display += `${i + 1}. ${p.title} — ${p.description}\n   Say: "demo ${p.id}"\n\n`;
+  });
+  out(display);
+  speak(`There are ${presets.length} demos available.`);
+  presets.forEach(p => speak(`${p.title}. ${p.description}. Say "demo ${p.id}" to load it.`));
+  speak('Or just say "demo" followed by the name.');
+  srAnnounce(`${presets.length} demos available`);
+}
+
+async function runDemo(presetId) {
+  const presets = await fetchDemoPresets();
+  if (!presets.length) {
+    speak('Demos are not available right now.');
+    return;
+  }
+
+  // No preset specified — pick the first one as a default guided experience
+  if (!presetId || !presetId.trim()) {
+    const first = presets[0];
+    speak(`Loading the ${first.title} demo. ${first.description}`);
+    await loadDemoById(first.id);
+    return;
+  }
+
+  // Try to match by id first
+  let match = presets.find(p => p.id === presetId.toLowerCase().trim());
+
+  // Then by title (fuzzy: contains)
+  if (!match) {
+    const needle = presetId.toLowerCase().trim();
+    match = presets.find(p =>
+      p.title.toLowerCase().includes(needle) ||
+      p.id.toLowerCase().includes(needle) ||
+      needle.includes(p.id.toLowerCase())
+    );
+  }
+
+  if (!match) {
+    const names = presets.map(p => p.id).join(', ');
+    speak(`I do not know a demo called ${presetId}. Available demos are: ${names}. Say "show demos" for descriptions.`);
+    return;
+  }
+
+  await loadDemoById(match.id);
+}
+
+async function loadDemoById(id) {
+  showAI(`Loading demo: ${id}...`);
+  try {
+    const res = await fetch(`/demo-presets/${encodeURIComponent(id)}`);
+    const data = await res.json();
+    if (data.success) {
+      setCode(data.code);
+      out(`DEMO LOADED: ${data.title}\n\n${data.description}\n\nPress Ctrl+Enter or say "run" to execute.`);
+      speak(`Demo loaded: ${data.title}. ${data.description}.`);
+      speak('The code is in the editor. Press Control Enter, or say "run", to execute it. Say "narrate" to hear it line by line first.');
+      srAnnounce(`Demo ${data.title} loaded`);
+    } else {
+      speak(`Could not load demo: ${data.error || 'unknown error'}`);
+    }
+  } catch (e) {
+    console.error(e);
+    speak('Demo loading failed.');
+  } finally {
+    hideAI();
+  }
+}
+
+// ---------- NARRATE FULL FILE ----------
+async function narrateFile() {
+  if (!ensureNotExecuting(() => narrateFile(), 'narrate file')) return;
+  const code = getCode();
+  if (!code.trim()) {
+    speak('The editor is empty. There is nothing to narrate.');
+    return;
+  }
+  cueSuccess();
+  out('Narrating file...');
+  showAI('Narrating the entire file...');
+  speak('Narrating the file from start to finish. Press Escape at any time to stop.');
+  try {
+    const res = await fetch('/narrate-file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, language: getLanguage() }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      const prefix = data.truncated
+        ? `File has ${data.line_count} lines. Narrating the first 50.\n\n`
+        : `File has ${data.line_count} lines.\n\n`;
+      out(prefix + data.narration);
+      if (data.truncated) {
+        speak(`Your file has ${data.line_count} lines. I will narrate the first 50.`);
+      }
+      speak(data.narration);
+      if (data.truncated) {
+        speak(`That covers the first 50 lines. There are ${data.line_count - 50} more lines below.`);
+      } else {
+        speak('Narration complete.');
+      }
+      srAnnounce('File narration ready');
+    } else {
+      const msg = data.error || 'Could not narrate file.';
+      out(msg);
+      speak(msg);
+    }
+  } catch (e) {
+    console.error(e);
+    out('Narration failed.');
+    speak('Narration failed. Please try again.');
   } finally {
     hideAI();
   }
@@ -1198,6 +1374,11 @@ async function handleConfirmedAction(action, payload) {
   else if (action === 'clear_editor')    clearEditor();
   else if (action === 'delete_line')     deleteLine(payload && payload.line ? payload.line : 1);
   else if (action === 'summarize')       await summarizeFile();
+  else if (action === 'narrate_file')    await narrateFile();
+  else if (action === 'demo_list')       await listDemos();
+  else if (action === 'demo_run')        await runDemo(payload && payload.preset ? payload.preset : '');
+  else if (action === 'pause_voice')     pauseVoiceRecognition();
+  else if (action === 'resume_voice')    resumeVoiceRecognition();
   else if (action === 'advise')          await adviseCode();
   else if (action === 'read_line_enhanced') await readLineEnhanced(payload && payload.line ? payload.line : (editor && editor.getPosition() ? editor.getPosition().lineNumber : 1));
   else if (action === 'sonify_block')    await sonifyCurrentBlock();
@@ -1408,13 +1589,78 @@ function startListening() {
       btn.classList.add('cu-button-voice--active');
     }
     cueSuccess();
-    speak('Voice control activated. Say help at any time to hear available commands.');
+
+    // Context-aware greeting: tailor the prompt to what's currently in the editor
+    const lang = getLanguage();
+    const code = getCode();
+    const hasCode = code.trim().length > 0;
+    const lineCount = code.split('\n').length;
+
+    // First-time activation in this session gets the longer greeting
+    if (!window._voiceGreetedThisSession) {
+      window._voiceGreetedThisSession = true;
+      if (lang === 'hi') {
+        speak('Voice control चालू हो गया।');
+        if (hasCode) {
+          speak(`Editor में ${lineCount} लाइन का कोड है। आप "चलाओ", "विश्लेषण करो", या "narrate" कह सकते हैं।`);
+        } else {
+          speak('Editor खाली है। आप "demo चलाओ" कहकर example देख सकते हैं, या "tutorial" से शुरू करें।');
+        }
+        speak('कभी भी "मदद" कहें commands सुनने के लिए।');
+      } else {
+        speak('Voice control is on.');
+        if (hasCode) {
+          speak(`The editor has ${lineCount} line${lineCount === 1 ? '' : 's'} of code. You can say "run", "analyze", or "narrate".`);
+        } else {
+          speak('The editor is empty. Say "show demos" to see examples, or "tutorial" to learn Python.');
+        }
+        speak('Say "help" any time to hear commands.');
+      }
+    } else {
+      // Subsequent activations get the short greeting
+      if (lang === 'hi') {
+        speak(hasCode
+          ? `Voice control वापस on। Editor में ${lineCount} लाइन।`
+          : 'Voice control वापस on। Editor खाली है।');
+      } else {
+        speak(hasCode
+          ? `Voice back on. ${lineCount} line${lineCount === 1 ? '' : 's'} of code in the editor.`
+          : 'Voice back on. Editor is empty.');
+      }
+    }
     _debugLog('Voice: Listening started');
   };
 
   recognition.onresult = async (event) => {
     const transcript = event.results[event.results.length - 1][0].transcript;
     _debugLog('Voice heard:', transcript);
+
+    // When paused, only listen for the resume keyword. Drop everything else
+    // so the user can keep talking (e.g. during a pitch) without triggering
+    // commands or appearing in the UI.
+    if (_voicePaused) {
+      const lower = transcript.toLowerCase().trim();
+      // Whitelist of resume phrases — kept inline so the check is fast and
+      // doesn't depend on a backend round-trip while paused.
+      const resumePhrases = [
+        'resume voice', 'resume voice recognition', 'resume voice control',
+        'resume voice input', 'voice resume',
+        'start listening', 'continue listening',
+        'unmute', 'wake up',
+        'are you back', 'are you listening', 'back', 'listening',
+        'आवाज़ चालू करो', 'voice चालू करो', 'voice resume करो',
+        'फिर से सुनो', 'सुनो',
+      ];
+      const isResume = resumePhrases.some(p => lower === p || lower.includes(p));
+      if (isResume) {
+        resumeVoiceRecognition();
+      } else {
+        // Silently drop. Do NOT clear voiceText or output — we want zero UI noise.
+        _debugLog('Voice paused — dropped:', transcript);
+      }
+      return;
+    }
+
     await handleVoiceCommand(transcript);
   };
 
@@ -1468,6 +1714,8 @@ function stopListening() {
   if (_restartTimer) { clearTimeout(_restartTimer); _restartTimer = null; }
   isListening = false;
   AppState.isListening = false;
+  // Stopping fully also clears any paused state — next start is a fresh session
+  _voicePaused = false;
   const btn = document.getElementById('voiceButton');
   if (btn) {
     btn.textContent = '🎤 Voice (Off)';
@@ -1477,6 +1725,66 @@ function stopListening() {
   recognition.stop();
   speak('Voice control deactivated.');
   _debugLog('Voice: Listening stopped');
+}
+
+// Pause: keep the mic open so we can hear "resume", but drop every command
+// in between. This lets the presenter put on a blindfold and pitch without
+// CodeUp reacting to ambient speech.
+function pauseVoiceRecognition() {
+  if (!isListening) { speak('Voice control is not active.'); return; }
+  if (_voicePaused) { speak('Voice is already paused.'); return; }
+  _voicePaused = true;
+
+  // Visual + ARIA state — the button gets a distinct paused look so a sighted
+  // helper can see at a glance that the mic is open but ignoring input.
+  const btn = document.getElementById('voiceButton');
+  if (btn) {
+    btn.textContent = '🎤 Voice (Paused)';
+    btn.setAttribute('aria-pressed', 'mixed');
+    btn.classList.remove('cu-button-voice--active');
+    btn.classList.add('cu-button-voice--paused');
+  }
+
+  // One-tone audio cue (descending) so the user gets non-verbal confirmation
+  // even if their TTS is interrupted or muted.
+  SonificationManager.playTone(700, 0.08, 0.1);
+  setTimeout(() => SonificationManager.playTone(500, 0.12, 0.1), 100);
+
+  const lang = getLanguage();
+  if (lang === 'hi') {
+    speak('Voice recognition रुक गया। बात करते रहें — मैं नहीं सुनूंगा। फिर से शुरू करने के लिए "resume voice" कहें।');
+  } else {
+    speak('Voice recognition paused. Talk freely — I will ignore everything until you say "resume voice".');
+  }
+  srAnnounce('Voice paused');
+  _debugLog('Voice: Paused');
+}
+
+function resumeVoiceRecognition() {
+  if (!isListening) { speak('Voice control is not active.'); return; }
+  if (!_voicePaused) { speak('Voice is already listening.'); return; }
+  _voicePaused = false;
+
+  const btn = document.getElementById('voiceButton');
+  if (btn) {
+    btn.textContent = '🎤 Voice (ON)';
+    btn.setAttribute('aria-pressed', 'true');
+    btn.classList.remove('cu-button-voice--paused');
+    btn.classList.add('cu-button-voice--active');
+  }
+
+  // Ascending tones — mirror of the pause cue
+  SonificationManager.playTone(500, 0.08, 0.1);
+  setTimeout(() => SonificationManager.playTone(700, 0.12, 0.1), 100);
+
+  const lang = getLanguage();
+  if (lang === 'hi') {
+    speak('Voice recognition फिर से चालू है। मैं सुन रहा हूँ।');
+  } else {
+    speak('Voice recognition is back on. I am listening.');
+  }
+  srAnnounce('Voice resumed');
+  _debugLog('Voice: Resumed');
 }
 
 // ---------- VOICE COMMAND HANDLER ----------

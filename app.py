@@ -337,20 +337,73 @@ GEMINI_MODEL = "llama-3.3-70b-versatile"
 def _current_api_key():
     return getattr(_api_context, 'gemini_key', GEMINI_API_KEY)
 
+def _call_ollama(system_prompt, user_prompt, temperature=0.2):
+    """Call local Ollama instance. Returns response string or None on failure."""
+    if os.environ.get("OLLAMA_ENABLED", "0") != "1":
+        return None
+    try:
+        import requests
+        url = os.environ.get("OLLAMA_URL", "http://localhost:11434").rstrip("/")
+        model = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
+        resp = requests.post(
+            f"{url}/api/chat",
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "options": {"temperature": temperature, "num_predict": 1024},
+                "stream": False,
+            },
+            timeout=MAX_GEMINI_TIMEOUT,
+        )
+        if resp.status_code != 200:
+            print(f"Ollama returned HTTP {resp.status_code}", file=sys.stderr)
+            return None
+        data = resp.json()
+        content = (data.get("message") or {}).get("content", "").strip()
+        return content if content else None
+    except Exception as e:
+        print(f"Ollama call failed: {e}", file=sys.stderr)
+        return None
+
+
 def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en"):
-    """Call Groq API with hard timeout to prevent hanging.
+    """Call Groq API with hard timeout, falling back to local Ollama if Groq fails.
 
     Function name kept as call_gemini for backward compat with all callers.
-    Provider is now Groq (Llama models). Falls back to a clear message if key missing.
+    Order: Groq cloud → Ollama local → friendly error message.
     """
     if os.environ.get("GEMINI_ENABLED", "1") != "1":
+        # Cloud disabled — try Ollama directly
+        sp = system_prompt
+        if language == "hi":
+            sp = f"आप एक सहायक हैं जो हिंदी में सहायता प्रदान करते हैं। {system_prompt}"
+        local = _call_ollama(sp, user_prompt, temperature)
+        if local:
+            return local
         return "AI service disabled"
 
     global _gemini_queued_requests
 
     key = os.environ.get("GROQ_API_KEY", "")
+
+    def _try_ollama_fallback():
+        """Try the local Ollama fallback. Returns response or None."""
+        sp = system_prompt
+        if language == "hi":
+            sp = f"आप एक सहायक हैं जो हिंदी में सहायता प्रदान करते हैं। {system_prompt}"
+        return _call_ollama(sp, user_prompt, temperature)
+
     if not key:
-        return "AI service not configured. Please set GROQ_API_KEY environment variable."
+        local = _try_ollama_fallback()
+        if local:
+            return local
+        return (
+            "AI service not configured. Please ask your teacher to set the GROQ_API_KEY, "
+            "or install Ollama locally for offline AI."
+        )
 
     def _do_call():
         global _gemini_active_requests, _gemini_queued_requests
@@ -377,13 +430,19 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en"):
             return content.strip() if content else "No response generated"
         except Exception as e:
             err_str = str(e).lower()
+            # Try Ollama before returning a user-facing error
+            local = _try_ollama_fallback()
+            if local:
+                return f"[offline mode] {local}"
             if "rate" in err_str or "quota" in err_str or "429" in err_str:
-                return "The AI service is temporarily busy. Please wait a moment and try again."
+                return "The cloud AI is busy and offline AI is not available. Please wait a moment and try again."
             if "auth" in err_str or "invalid" in err_str or "401" in err_str:
-                return "AI service authentication failed. Please ask your teacher to check the API key."
+                return "Cloud AI authentication failed and offline AI is not available. Please ask your teacher to check the API key."
             if "timeout" in err_str or "timed out" in err_str:
-                return "The AI took too long to respond. Try a shorter request."
-            return f"AI service had a problem: {str(e)[:100]}"
+                return "The cloud AI took too long to respond and offline AI is not available. Try a shorter request."
+            if "connection" in err_str or "network" in err_str or "dns" in err_str:
+                return "No internet connection and offline AI is not available. Ask your teacher to install Ollama for offline mode."
+            return f"AI service had a problem: {str(e)[:100]}. Offline AI is also not available."
         finally:
             with _gemini_active_lock:
                 _gemini_active_requests -= 1
@@ -393,7 +452,10 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en"):
         current_queued = _gemini_queued_requests
 
     if current_active + current_queued >= 8:
-        return "AI service is busy. Please try again later."
+        local = _try_ollama_fallback()
+        if local:
+            return f"[offline mode] {local}"
+        return "AI service is busy and offline AI is not available. Please try again later."
 
     with _gemini_active_lock:
         _gemini_queued_requests += 1
@@ -403,11 +465,17 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en"):
     except Exception as e:
         with _gemini_active_lock:
             _gemini_queued_requests = max(0, _gemini_queued_requests - 1)
+        local = _try_ollama_fallback()
+        if local:
+            return f"[offline mode] {local}"
         return f"AI service is currently unavailable: {str(e)}"
 
     try:
         return future.result(timeout=MAX_GEMINI_TIMEOUT + 1)
     except Exception as e:
+        local = _try_ollama_fallback()
+        if local:
+            return f"[offline mode] {local}"
         return f"AI service is currently unavailable: {str(e)}"    
 
 def extract_code(text: str):
@@ -430,6 +498,118 @@ def extract_code(text: str):
 @app.route("/")
 def index():
     return render_template("index.html")
+
+# ==========================
+# DEMO PRESETS
+# ==========================
+
+DEMO_PRESETS = {
+    "hello": {
+        "title": "Hello World",
+        "description": "Your very first Python program. Print text to the screen.",
+        "code": 'print("Hello, CodeUp!")\nprint("Welcome to Python.")\n',
+    },
+    "fibonacci": {
+        "title": "Fibonacci Sequence",
+        "description": "Generate the first 10 numbers in the Fibonacci sequence using a loop.",
+        "code": (
+            "# First 10 Fibonacci numbers\n"
+            "a, b = 0, 1\n"
+            "for i in range(10):\n"
+            "    print(a)\n"
+            "    a, b = b, a + b\n"
+        ),
+    },
+    "primes": {
+        "title": "Prime Numbers",
+        "description": "Find all prime numbers between 2 and 30.",
+        "code": (
+            "# Primes between 2 and 30\n"
+            "for n in range(2, 31):\n"
+            "    is_prime = True\n"
+            "    for d in range(2, n):\n"
+            "        if n % d == 0:\n"
+            "            is_prime = False\n"
+            "            break\n"
+            "    if is_prime:\n"
+            "        print(n)\n"
+        ),
+    },
+    "calculator": {
+        "title": "Simple Calculator",
+        "description": "Perform basic arithmetic with hardcoded values.",
+        "code": (
+            "# Change these values to try different calculations\n"
+            "a = 15\n"
+            "b = 4\n"
+            "\n"
+            'print("Sum:", a + b)\n'
+            'print("Difference:", a - b)\n'
+            'print("Product:", a * b)\n'
+            'print("Quotient:", a / b)\n'
+            'print("Remainder:", a % b)\n'
+        ),
+    },
+    "wordcount": {
+        "title": "Word Counter",
+        "description": "Count words in a sentence using string methods.",
+        "code": (
+            'sentence = "The quick brown fox jumps over the lazy dog"\n'
+            "words = sentence.split()\n"
+            'print("Sentence:", sentence)\n'
+            'print("Word count:", len(words))\n'
+            'print("First word:", words[0])\n'
+            'print("Last word:", words[-1])\n'
+        ),
+    },
+    "guess": {
+        "title": "Number Guessing",
+        "description": "A simple guessing game with hardcoded guess (no input() needed).",
+        "code": (
+            "import random\n"
+            "\n"
+            "secret = random.randint(1, 10)\n"
+            "guess = 5  # change this to test different guesses\n"
+            "\n"
+            'print("The secret number was:", secret)\n'
+            'print("Your guess was:", guess)\n'
+            "\n"
+            "if guess == secret:\n"
+            '    print("Correct! You win!")\n'
+            "elif guess < secret:\n"
+            '    print("Too low. Try a higher number.")\n'
+            "else:\n"
+            '    print("Too high. Try a lower number.")\n'
+        ),
+    },
+}
+
+
+@app.route("/demo-presets", methods=["GET"])
+def list_demo_presets():
+    """Return list of available demo presets (id, title, description)."""
+    return jsonify({
+        "success": True,
+        "presets": [
+            {"id": k, "title": v["title"], "description": v["description"]}
+            for k, v in DEMO_PRESETS.items()
+        ]
+    })
+
+
+@app.route("/demo-presets/<preset_id>", methods=["GET"])
+def get_demo_preset(preset_id):
+    """Return a single preset's code by id."""
+    preset = DEMO_PRESETS.get(preset_id)
+    if not preset:
+        return jsonify({"success": False, "error": "Preset not found"}), 404
+    return jsonify({
+        "success": True,
+        "id": preset_id,
+        "title": preset["title"],
+        "description": preset["description"],
+        "code": preset["code"],
+    })
 
 # ==========================
 # API KEY CONFIGURATION
@@ -1895,6 +2075,59 @@ def best_two_commands(text: str):
     return best_name, best_score, second_name, second_score
 
 # ==========================
+# FULL FILE NARRATION
+# ==========================
+
+@app.route("/narrate-file", methods=["POST"])
+def narrate_file():
+    """Narrate the entire file line-by-line in conversational, screen-reader-friendly form.
+
+    Unlike /analyze (brief summary) or /analyze-deep (line-by-line technical),
+    this produces a continuous spoken narrative meant to be played from start to finish.
+    """
+    body = safejson()
+    code = safe(body.get("code"), "")
+    language = safe(body.get("language"), "en")
+
+    if len(code) > MAX_CODE_SIZE:
+        return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
+    if not code.strip():
+        return jsonify({"success": False, "error": "Code is empty"}), 400
+
+    if language == "hi":
+        system = (
+            "आप एक blind learner के लिए Python code का पूरा narration बनाते हैं।\n"
+            "Code को शुरू से अंत तक पढ़ें और हर line को conversational tone में explain करें।\n"
+            "Format: 'Line 1: print statement है जो hello print करता है।'\n"
+            "Symbols को words में: == 'equals equals', != 'not equals'।\n"
+            "हर line का अलग वाक्य। कोई markdown, bullet points, या headers नहीं।\n"
+            "अधिकतम 50 lines। अगर file बड़ी है तो पहली 50 lines narrate करें।"
+        )
+    else:
+        system = (
+            "You are narrating Python code from start to finish for a blind learner.\n"
+            "Walk through every line in order and explain it conversationally.\n"
+            "Format: 'Line 1: a print statement that prints hello.'\n"
+            "Spell out symbols as words: == as 'equals equals', != as 'not equals'.\n"
+            "One sentence per line. No markdown, bullets, or headers.\n"
+            "Maximum 50 lines. If the file is longer, narrate the first 50 and note the truncation at the end.\n"
+            "Keep each sentence short — this will be played aloud."
+        )
+
+    user = f"Narrate this code:\n```python\n{code}\n```"
+    narration = call_gemini(system, user, temperature=0.2, language=language)
+
+    line_count = len(code.splitlines())
+    truncated = line_count > 50
+
+    return jsonify({
+        "success": True,
+        "narration": narration,
+        "line_count": line_count,
+        "truncated": truncated,
+    })
+
+# ==========================
 # FILE SUMMARY
 # ==========================
 
@@ -2045,6 +2278,44 @@ def _trace_playback(direction):
     return _event_to_speech(event, idx, len(trace))
 
 
+# Telemetry: log unrecognized voice commands so we can grow the vocabulary
+# from real usage instead of guessing. Stored per-session, capped, opt-out via env.
+_voice_telemetry_lock = threading.Lock()
+_voice_telemetry: List[Dict[str, Any]] = []
+_VOICE_TELEMETRY_CAP = 1000  # rotate after this many entries
+
+def _log_unrecognized_command(text: str, session_id: str):
+    """Record a command that the parser couldn't match. Used to identify
+    phrasings real users employ that the patterns don't yet cover."""
+    if os.environ.get("VOICE_TELEMETRY", "1") != "1":
+        return
+    if not text or len(text) > 500:
+        return
+    with _voice_telemetry_lock:
+        _voice_telemetry.append({
+            "text": text,
+            "session": session_id[:8],  # truncated for privacy
+            "timestamp": time.time(),
+        })
+        # Keep only the most recent N entries
+        if len(_voice_telemetry) > _VOICE_TELEMETRY_CAP:
+            del _voice_telemetry[:len(_voice_telemetry) - _VOICE_TELEMETRY_CAP]
+
+
+@app.route("/voice-telemetry", methods=["GET"])
+def get_voice_telemetry():
+    """Return logged unrecognized commands for analysis. Local-dev only —
+    in production this should be auth-gated or removed."""
+    if os.environ.get("VOICE_TELEMETRY", "1") != "1":
+        return jsonify({"success": False, "error": "Telemetry disabled"}), 404
+    with _voice_telemetry_lock:
+        return jsonify({
+            "success": True,
+            "count": len(_voice_telemetry),
+            "entries": list(_voice_telemetry),
+        })
+
+
 @app.route("/voice-command", methods=["POST"])
 def voice():
     text = safe(safejson().get("text"), "")
@@ -2105,6 +2376,16 @@ def voice():
             return _store_and_return({"success": True, "action": "advise", "confidence": confidence})
         if intent == "summarize":
             return _store_and_return({"success": True, "action": "summarize", "confidence": confidence})
+        if intent == "narrate_file":
+            return _store_and_return({"success": True, "action": "narrate_file", "confidence": confidence})
+        if intent == "demo_list":
+            return _store_and_return({"success": True, "action": "demo_list", "confidence": confidence})
+        if intent == "demo_run":
+            return _store_and_return({"success": True, "action": "demo_run", "preset": slots.get("preset", ""), "confidence": confidence})
+        if intent == "pause_voice":
+            return _store_and_return({"success": True, "action": "pause_voice", "confidence": confidence})
+        if intent == "resume_voice":
+            return _store_and_return({"success": True, "action": "resume_voice", "confidence": confidence})
         if intent == "generate_code":
             return _store_and_return({"success": True, "action": "generate_code", "prompt": slots.get("prompt", ""), "confidence": confidence})
         if intent == "rename_snippet":
@@ -2191,6 +2472,8 @@ def voice():
             "confidence": bscore / 100.0
         })
 
+    # Log unrecognized commands so we can iterate the vocabulary from real data
+    _log_unrecognized_command(text, get_session_id())
     return jsonify({"success": True, "action": "unknown", "heard": text, "confidence": 0.0})
 
 # ==========================
@@ -2376,6 +2659,27 @@ def execution_story():
 # MENTOR / LEARNING MODE
 # ==========================
 
+def _validate_quiz_response(parsed: dict) -> Optional[str]:
+    """Validate a quiz dict from the LLM. Returns None if valid, error string if not.
+    Defends against the LLM returning malformed or partial JSON that would crash
+    the frontend or confuse the learner."""
+    if not isinstance(parsed, dict):
+        return "Quiz response was not a dictionary"
+    if not parsed.get("question") or not isinstance(parsed["question"], str):
+        return "Quiz missing valid question"
+    options = parsed.get("options", [])
+    if not isinstance(options, list) or len(options) < 2:
+        return "Quiz needs at least 2 options"
+    if len(options) > 4:
+        return "Quiz has too many options"
+    answer = parsed.get("answer", "")
+    if not isinstance(answer, str) or answer.upper() not in ("A", "B", "C", "D"):
+        return "Quiz answer must be A, B, C, or D"
+    if not parsed.get("explanation"):
+        return "Quiz missing explanation"
+    return None
+
+
 @app.route("/mentor/quiz", methods=["POST"])
 def mentor_quiz():
     body = safejson()
@@ -2408,14 +2712,35 @@ def mentor_quiz():
         )
 
     user = f"Topic: {topic}"
+    raw = call_gemini(system, user, temperature=0.4, language=language)
+
+    # Detect AI-disabled / error responses before attempting JSON parse
+    if raw.startswith("AI service") or "not configured" in raw.lower() or "unavailable" in raw.lower():
+        return jsonify({
+            "success": False,
+            "error": "Quiz unavailable: AI not configured. Try the bug challenge or tutorial instead.",
+        })
+
     try:
-        raw = call_gemini(system, user, temperature=0.4, language=language)
         clean = re.sub(r'```(?:json)?\s*|\s*```', '', raw).strip()
         import json as _json
         parsed = _json.loads(clean)
-        return jsonify({"success": True, "quiz": parsed})
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)})
+    except Exception:
+        return jsonify({
+            "success": False,
+            "error": "AI returned a malformed quiz. Try saying 'quiz me' again, or try a different topic.",
+        })
+
+    validation_error = _validate_quiz_response(parsed)
+    if validation_error:
+        return jsonify({
+            "success": False,
+            "error": f"AI returned an incomplete quiz ({validation_error}). Try again.",
+        })
+
+    # Normalize answer to uppercase for the frontend matcher
+    parsed["answer"] = parsed["answer"].upper()
+    return jsonify({"success": True, "quiz": parsed})
 
 
 @app.route("/mentor/explain", methods=["POST"])
@@ -2444,6 +2769,24 @@ def mentor_explain():
     return jsonify({"success": True, "explanation": explanation})
 
 
+def _validate_bug_challenge(parsed: dict) -> Optional[str]:
+    """Validate a bug challenge dict. Critical: the buggy code must be valid
+    enough to load into the editor (even if it doesn't run), and the fixed
+    code must actually compile, otherwise the student gets a 'fix' that's
+    worse than the original."""
+    if not isinstance(parsed, dict):
+        return "Challenge was not a dictionary"
+    for key in ("code", "hint", "bug", "fixed"):
+        if not parsed.get(key) or not isinstance(parsed[key], str):
+            return f"Challenge missing or invalid field: {key}"
+    # The fixed code must at least parse — otherwise the LLM gave us garbage
+    try:
+        compile(parsed["fixed"], "<challenge>", "exec")
+    except SyntaxError:
+        return "AI's 'fixed' code has syntax errors"
+    return None
+
+
 @app.route("/mentor/bug-challenge", methods=["POST"])
 def mentor_bug_challenge():
     body = safejson()
@@ -2469,14 +2812,32 @@ def mentor_bug_challenge():
         )
 
     user = "Generate a bug challenge"
+    raw = call_gemini(system, user, temperature=0.5, language=language)
+
+    if raw.startswith("AI service") or "not configured" in raw.lower() or "unavailable" in raw.lower():
+        return jsonify({
+            "success": False,
+            "error": "Bug challenge unavailable: AI not configured. Try the tutorial or write your own code instead.",
+        })
+
     try:
-        raw = call_gemini(system, user, temperature=0.5, language=language)
         clean = re.sub(r'```(?:json)?\s*|\s*```', '', raw).strip()
         import json as _json
         parsed = _json.loads(clean)
-        return jsonify({"success": True, "challenge": parsed})
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)})
+    except Exception:
+        return jsonify({
+            "success": False,
+            "error": "AI returned a malformed challenge. Try again.",
+        })
+
+    validation_error = _validate_bug_challenge(parsed)
+    if validation_error:
+        return jsonify({
+            "success": False,
+            "error": f"AI generated an invalid challenge ({validation_error}). Try saying 'bug challenge' again.",
+        })
+
+    return jsonify({"success": True, "challenge": parsed})
 
 
 # ==========================

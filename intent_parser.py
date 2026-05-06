@@ -104,12 +104,24 @@ class IntentParser:
     # -----------------------------------------------------------------------
     # Execution patterns
     RUN_PATTERNS = [
-        r"^run\s*(?:code|program|it)?$",
-        r"^execute\s*(?:code|program|it)?$",
-        r"^start\s*(?:code|program|it)?$",
-        # Hindi: "चलाओ" / "कोड चलाओ" / "रन करो"
-        r"^(?:कोड\s+)?(?:चलाओ|चलाइए)$",
-        r"^रन\s*(?:करो|कीजिए)?$",
+        # Core verbs
+        r"^run\s*(?:code|program|it|this|that)?$",
+        r"^execute\s*(?:code|program|it|this|that)?$",
+        r"^start\s*(?:code|program|it|this|that)?$",
+        r"^launch\s*(?:code|program|it|this|that)?$",
+        r"^play\s*(?:code|program|it|this|that)?$",
+        r"^go\s*(?:now)?$",
+        # Casual phrasings real users actually say
+        r"^let'?s?\s+(?:run|go|try)\s*(?:it|this|that)?$",
+        r"^try\s+(?:it|this|that)$",
+        r"^do\s+it$",
+        r"^make\s+it\s+(?:go|run)$",
+        r"^see\s+(?:what|if)\s+(?:happens|it\s+does|it\s+works)$",
+        # Hindi
+        r"^(?:कोड\s+)?(?:चलाओ|चलाइए|चलाइये)$",
+        r"^रन\s*(?:करो|कीजिए|कीजिये)?$",
+        r"^शुरू\s+करो$",
+        r"^देखो\s+क्या\s+होता\s+है$",
     ]
 
 
@@ -133,13 +145,19 @@ class IntentParser:
     ]
 
     FIX_PATTERNS = [
-        r"^fix\s*(?:(?:my\s+)?code)?$",
+        r"^fix\s*(?:(?:my\s+|this\s+|the\s+)?(?:code|it|bug|error))?$",
         r"^auto\s*fix$",
-        r"^repair\s+(?:my\s+)?code$",
-        r"^correct\s+(?:my\s+)?code$",
-        # Hindi: "कोड ठीक करो" / "गलती ठीक करो"
-        r"^(?:कोड|गलती)\s+(?:को\s+)?ठीक\s*(?:करो|कीजिए)?$",
+        r"^repair\s+(?:my\s+|this\s+|the\s+)?code$",
+        r"^correct\s+(?:my\s+|this\s+|the\s+)?code$",
+        r"^debug\s+(?:my\s+|this\s+|the\s+)?code$",
+        r"^make\s+it\s+work$",
+        r"^what'?s?\s+wrong$",
+        r"^why\s+(?:doesn'?t|isn'?t)\s+(?:it|this)\s+work(?:ing)?$",
+        # Hindi
+        r"^(?:कोड|गलती|error|bug)\s+(?:को\s+)?ठीक\s*(?:करो|कीजिए|कीजिये)?$",
         r"^सही\s+करो$",
+        r"^क्या\s+गलत\s+है$",
+        r"^काम\s+क्यों\s+नहीं\s+कर\s+रहा$",
     ]
 
     ADVISE_PATTERNS = [
@@ -212,6 +230,40 @@ class IntentParser:
         r"^summary\s+of\s+(?:this\s+)?(?:file|code)$",
         # Hindi: "कोड का सारांश दो" / "सारांश बताओ"
         r"^(?:कोड\s+(?:का\s+)?)?सारांश\s*(?:दो|बताओ|दीजिए)?$",
+    ]
+    NARRATE_FILE_PATTERNS = [
+        r"^narrate(?:\s+(?:the\s+)?(?:file|code|whole\s+file))?$",
+        r"^read\s+(?:the\s+)?(?:whole|entire|full)\s+(?:file|code)$",
+        r"^read\s+(?:me\s+)?(?:the\s+)?(?:file|code)\s+(?:from\s+)?(?:start\s+to\s+(?:end|finish))?$",
+        r"^(?:walk|talk)\s+(?:me\s+)?through\s+(?:the\s+)?(?:file|code)$",
+        r"^(?:पूरा|पूरी)\s+(?:file|कोड|code)\s+(?:पढ़ो|सुनाओ|narrate\s*करो)$",
+        r"^(?:कोड|file)\s+(?:को\s+)?(?:शुरू\s+से\s+अंत\s+तक\s+)?(?:पढ़ो|सुनाओ)$",
+    ]
+
+    DEMO_LIST_PATTERNS = [
+        r"^(?:show|list)\s+(?:demos|examples|presets)$",
+        r"^what\s+demos?\s+(?:are\s+)?(?:available|there)$",
+        r"^demos?$",
+        r"^(?:कौन\s+से\s+|क्या\s+)?(?:demos?|examples?)\s*(?:हैं|दिखाओ)?$",
+    ]
+
+    PAUSE_VOICE_PATTERNS = [
+        r"^pause\s+voice(?:\s+(?:recognition|control|input))?$",
+        r"^(?:stop|halt)\s+listening$",
+        r"^(?:mute|silence)\s+(?:the\s+)?(?:mic|microphone)$",
+        r"^voice\s+pause$",
+        r"^(?:आवाज़|voice)\s+(?:को\s+)?(?:रोको|बंद\s+करो|pause\s*करो)$",
+        r"^सुनना\s+बंद\s+करो$",
+    ]
+
+    RESUME_VOICE_PATTERNS = [
+        r"^resume\s+voice(?:\s+(?:recognition|control|input))?$",
+        r"^(?:start|continue)\s+listening$",
+        r"^(?:unmute|wake\s+up)$",
+        r"^voice\s+resume$",
+        r"^(?:are\s+you\s+)?(?:back|listening)\??$",
+        r"^(?:आवाज़|voice)\s+(?:को\s+)?(?:चालू\s+करो|शुरू\s+करो|resume\s*करो)$",
+        r"^(?:फिर\s+से\s+)?सुनो$",
     ]
 
     GENERATE_CODE_PATTERNS = [
@@ -356,9 +408,16 @@ class IntentParser:
         r"^help$",
         r"^show\s+help$",
         r"^what\s+can\s+(?:i\s+)?(?:do|say)$",
-        # Hindi: "मदद" / "सहायता" / "क्या कर सकते हो"
-        r"^(?:मदद|सहायता|help)\s*(?:चाहिए|करो|दो)?$",
+        r"^(?:i'?m\s+)?(?:lost|stuck|confused)$",
+        r"^how\s+(?:do\s+i|does\s+this)\s+work$",
+        r"^what\s+now$",
+        r"^(?:i\s+)?(?:don'?t|do\s+not)\s+know\s+what\s+to\s+(?:do|say)$",
+        r"^(?:tell|show)\s+me\s+(?:the\s+)?commands$",
+        # Hindi
+        r"^(?:मदद|सहायता|help)\s*(?:चाहिए|करो|दो|कीजिए)?$",
         r"^क्या\s+कर\s+सकते\s+हो$",
+        r"^मैं\s+(?:क्या|कैसे)\s+करूं$",
+        r"^समझ\s+नहीं\s+आ\s+रहा$",
     ]
 
     MORE_HELP_PATTERNS = [
@@ -495,6 +554,13 @@ class IntentParser:
             "fix":            self.FIX_PATTERNS,
             "advise":         self.ADVISE_PATTERNS,
             "summarize":      self.SUMMARIZE_PATTERNS,
+            "narrate_file":   self.NARRATE_FILE_PATTERNS,
+            "demo_run":       self.DEMO_RUN_PATTERNS,
+            "demo_list":      self.DEMO_LIST_PATTERNS,
+            # Pause/resume must come BEFORE generate_code because "pause" is short
+            # enough that fuzzy matching could route it to other intents otherwise.
+            "pause_voice":    self.PAUSE_VOICE_PATTERNS,
+            "resume_voice":   self.RESUME_VOICE_PATTERNS,
             "generate_code":  self.GENERATE_CODE_PATTERNS,
             "rename_snippet":      self.RENAME_SNIPPET_PATTERNS,
             "save_snippet_named":  self.SAVE_SNIPPET_NAMED_PATTERNS,
@@ -738,6 +804,10 @@ class IntentParser:
         elif intent == "explain_concept":
             if match.groups() and match.group(1):
                 slots["concept"] = match.group(1).strip()
+
+        elif intent == "demo_run":
+            if match.groups() and match.group(1):
+                slots["preset"] = match.group(1).strip().lower()
 
         return slots
 

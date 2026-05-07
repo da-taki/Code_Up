@@ -34,7 +34,7 @@
     </div>
     <div class="cu-theme-controls" role="group" aria-label="Accessibility settings">
       <select id="colorVisionMode" class="theme-selector" aria-label="Color vision mode">
-        <option value="default">Default Colors</option>
+        <option value="default">Standard Colors (no special mode)</option>
         <option value="protanopia">Protanopia (Red-blind)</option>
         <option value="deuteranopia">Deuteranopia (Green-blind)</option>
         <option value="tritanopia">Tritanopia (Blue-blind)</option>
@@ -291,7 +291,7 @@
           {
             label: 'कदम  2 / 6',
             text: 'print() output panel में कुछ भी दिखाता है। इस example को Ctrl+Enter से run करें।',
-            code: 'print("नमस्ते, CodeUp!")\nprint(42)\nprint(3.14)',
+            code: 'print("Namaste, CodeUp!")\nprint(42)\nprint(3.14)',
           },
           {
             label: 'कदम 3 / 6',
@@ -364,7 +364,13 @@
           if (typeof srAnnounce === 'function') srAnnounce(s.label);
           
           if (typeof setCode === 'function') {
+            var hasUserContent = (typeof getCode === 'function') &&
+                                 getCode().trim().length > 0 &&
+                                 getCode().trim() !== 'print("Hello CodeUp!")';
             if (s.code) {
+              if (hasUserContent) {
+                speak('Loading the next example. This will replace your current code.');
+              }
               if (window._editorReady) { setCode(s.code); }
               else { window._editorReadyQueue.push(function () { setCode(s.code); }); }
             } else if (this.step === 0) {
@@ -680,6 +686,15 @@
         if (typeof window.warnIfHindiUnavailable === 'function') {
           window.warnIfHindiUnavailable(e.target.value);
         }
+        // Clear any pending interactive state so a stale quiz/challenge from
+        // the previous language doesn't intercept input in the new language.
+        try {
+          if (typeof tabState === 'function') {
+            var s = tabState();
+            s._pendingQuizAnswer = null;
+            s._pendingBugChallenge = null;
+          }
+        } catch (err) {}
         if (typeof isListening !== 'undefined' && isListening) {
           speak('Language changed. Restarting voice recognition.');
           stopListening();

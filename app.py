@@ -1,9 +1,11 @@
 from dotenv import load_dotenv
 load_dotenv()
 from flask import Flask, render_template, request, jsonify, g
-import json, os, traceback, io, contextlib, re, ast, sys, time, threading, subprocess, tempfile, uuid
+import json, os, traceback, io, contextlib, re, ast, sys, time, threading, subprocess, tempfile, uuid, random
 from concurrent.futures import ThreadPoolExecutor
-from typing import List, Tuple, Optional, Any
+from typing import List, Tuple, Optional, Any, Dict
+
+__version__ = "0.7.1"
 from rapidfuzz import fuzz
 from google import genai
 from google.genai import types as genai_types
@@ -19,7 +21,10 @@ _api_context = threading.local()
 # Keys: session_id (UUID), Values: {last_trace, current_trace_index, trace_timestamp, trace_duration_ms, last_voice_action}
 _session_traces = {}  # dict[str, dict]
 _session_traces_lock = threading.Lock()
-_session_ttl = 3600  # 1 hour session TTL
+
+# Tunable limits — kept together at module top so deployment can tweak via env
+SESSION_TTL_SECONDS = int(os.environ.get("CODEUP_SESSION_TTL", "3600"))
+_session_ttl = SESSION_TTL_SECONDS  # back-compat alias
 
 # Background cleanup thread for old sessions
 def _session_cleanup_worker():
@@ -46,6 +51,26 @@ _gemini_queued_requests = 0  # separate counter for submitted-but-not-started ta
 
 # lock used to serialize tracer installation to avoid cross-thread interference
 _tracer_lock = threading.Lock()
+
+# Subprocess resource limits — POSIX only. Defined at module scope so each
+# subprocess.Popen call doesn't pay the cost of redefining + importing.
+if sys.platform != "win32":
+    import resource as _resource
+
+    def _set_subprocess_limits():
+        try:
+            _resource.setrlimit(_resource.RLIMIT_AS, (256 * 1024 * 1024, 256 * 1024 * 1024))
+            _resource.setrlimit(_resource.RLIMIT_CPU, (10, 10))
+            try:
+                _resource.setrlimit(_resource.RLIMIT_NPROC, (64, 64))
+            except (ValueError, OSError):
+                pass
+        except Exception:
+            pass
+else:
+    def _set_subprocess_limits():
+        pass
+
 app = Flask(__name__)
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'dev-secret-key-change-in-production')
 
@@ -100,23 +125,26 @@ def get_session_id():
     return session_id
 
 
+def _make_session_storage():
+    """Single source of truth for the shape of per-session trace storage."""
+    now = time.time()
+    return {
+        'last_trace': [],
+        'current_trace_index': -1,
+        'trace_timestamp': now,
+        'trace_duration_ms': 0,
+        'last_voice_action': None,
+        'created_at': now,
+        'last_accessed': now,
+    }
+
+
 def get_trace_storage():
     """Get the trace storage dict for current session."""
     session_id = get_session_id()
     with _session_traces_lock:
         if session_id not in _session_traces:
-            _session_traces[session_id] = {
-                'last_trace': [],
-                'current_trace_index': -1,
-                'trace_timestamp': time.time(),
-                'trace_duration_ms': 0,
-                'last_voice_action': None,
-                'created_at': time.time(),
-                # FIX H-2: Track last_accessed so expiry is activity-based, not
-                # creation-based. Previously cleanup used created_at, which would
-                # expire an actively-used 61-minute-old session mid-use.
-                'last_accessed': time.time()
-            }
+            _session_traces[session_id] = _make_session_storage()
         else:
             _session_traces[session_id]['last_accessed'] = time.time()
         return _session_traces[session_id]
@@ -158,7 +186,7 @@ def _check_run_rate_limit(session_id: str) -> bool:
     now = time.time()
     with _run_rate_lock:
         # Opportunistic cleanup: drop session entries that have no live timestamps
-        if len(_run_timestamps) > 100 and __import__('random').random() < 0.02:
+        if len(_run_timestamps) > 100 and random.random() < 0.02:
             stale = [sid for sid, ts in _run_timestamps.items()
                      if not any(now - t < RUN_RATE_WINDOW for t in ts)]
             for sid in stale:
@@ -189,44 +217,58 @@ def validate_request_size():
         return jsonify({"success": False, "error": "Request too large (max 1MB)"}), 413
 
 
+# Parse allowlist once at import time
+_ALLOWED_ORIGINS = {
+    o.strip().lower()
+    for o in os.environ.get("ALLOWED_ORIGINS", "").split(",")
+    if o.strip()
+}
+_TESTING_MODE = os.environ.get("FLASK_TESTING", "false").lower() == "true"
+
+
 @app.before_request
 def enforce_same_origin():
     """Block cross-origin POST/PUT/DELETE requests.
 
-    SECURITY NOTE: This is a defense-in-depth measure for localhost dev usage.
-    Requests with NO Origin AND NO Referer header are allowed through, which
-    covers test clients, curl, and direct API access. For school deployments
-    behind HTTPS, set FLASK_TESTING=false and consider tightening this to
-    require an explicit allowlist of origins. The current policy is sufficient
-    against drive-by browser attacks (which always send Origin) but not against
-    a malicious local script that strips headers.
+    Policy:
+      - Same-origin (Origin host == Host) is allowed.
+      - Origin in ALLOWED_ORIGINS env var (comma-separated) is allowed.
+      - In FLASK_TESTING=true mode, headerless requests (test client, curl) are allowed.
+      - Outside testing mode, a request with neither Origin nor Referer is REJECTED.
     """
     if request.method not in ("POST", "PUT", "DELETE", "PATCH"):
         return None
 
     origin = request.headers.get("Origin")
     referer = request.headers.get("Referer")
-    host = request.headers.get("Host", "")
+    host = request.headers.get("Host", "").lower()
 
-    # No Origin and no Referer = test client or curl, allow it
+    # No Origin and no Referer
     if not origin and not referer:
-        return None
+        if _TESTING_MODE:
+            return None
+        return jsonify({"success": False, "error": "Missing Origin/Referer header"}), 403
 
     # Check Origin first (more reliable)
     if origin:
-        # Origin is scheme://host[:port], strip scheme to compare with Host
-        origin_host = origin.split("://", 1)[-1]
+        origin_lower = origin.lower()
+        origin_host = origin_lower.split("://", 1)[-1]
         if origin_host == host:
+            return None
+        if origin_lower in _ALLOWED_ORIGINS:
             return None
         return jsonify({"success": False, "error": "Cross-origin request blocked"}), 403
 
     # Fall back to Referer
     if referer:
-        # Referer is a full URL, extract host
         try:
             from urllib.parse import urlparse
-            referer_host = urlparse(referer).netloc
+            parsed = urlparse(referer)
+            referer_host = parsed.netloc.lower()
+            referer_origin = f"{parsed.scheme}://{parsed.netloc}".lower()
             if referer_host == host:
+                return None
+            if referer_origin in _ALLOWED_ORIGINS:
                 return None
         except Exception:
             pass
@@ -292,19 +334,23 @@ def load_snippets() -> dict:
 _snippets_lock = threading.Lock()
 
 def save_snippets(d: dict) -> None:
-    """Save snippets atomically using temp-then-move to prevent corruption."""
+    """Save snippets atomically using temp-then-move to prevent corruption.
+    On POSIX, also fsyncs the directory so the rename is durable across power loss."""
     path = _snippets_path()
     dirpath = os.path.dirname(path) or "."
 
     with _snippets_lock:
         temp_path = None
         try:
-            # FIX L-1: Removed redundant `import tempfile` that was previously
-            # inside this function body; tempfile is already imported at module level.
             fd, temp_path = tempfile.mkstemp(suffix=".json", prefix="snippets_", dir=dirpath)
             try:
                 with os.fdopen(fd, 'w', encoding="utf-8") as f:
                     json.dump(d, f, indent=4)
+                    f.flush()
+                    try:
+                        os.fsync(f.fileno())
+                    except OSError:
+                        pass
             except:
                 try:
                     os.close(fd)
@@ -312,6 +358,16 @@ def save_snippets(d: dict) -> None:
                     pass
                 raise
             os.replace(temp_path, path)
+            # Fsync the directory so the rename itself is durable
+            if sys.platform != "win32":
+                try:
+                    dir_fd = os.open(dirpath, os.O_RDONLY)
+                    try:
+                        os.fsync(dir_fd)
+                    finally:
+                        os.close(dir_fd)
+                except OSError:
+                    pass
         except Exception:
             try:
                 if temp_path and os.path.exists(temp_path):
@@ -498,6 +554,12 @@ def extract_code(text: str):
 @app.route("/")
 def index():
     return render_template("index.html")
+
+
+@app.route("/healthz", methods=["GET"])
+def healthz():
+    """Simple liveness probe for deployment monitoring."""
+    return jsonify({"status": "ok", "version": __version__}), 200
 
 # ==========================
 # DEMO PRESETS
@@ -716,12 +778,13 @@ def classify_semantic_errors(trace):
             line = event["line"]
             execution_count[line] = execution_count.get(line, 0) + 1
 
-    # Threshold of 1000 chosen well above typical learner loops (50–200 iterations
-    # for fibonacci, sorting demos, etc.) but well below the 5000 hard cap, so
-    # genuine runaways still trip the heuristic without false-positiving on
-    # ordinary classroom code.
+    # Threshold of 4500 sits just below the 5000 hard cap. Anything above is
+    # extremely likely to be runaway code (recursive fib(30) ~= 2.7M calls
+    # which would already be truncated; ordinary classroom loops never approach
+    # this number). Lower thresholds produced false positives on legitimate
+    # recursive demos like fibonacci.
     for line, count in execution_count.items():
-        if count > 1000:
+        if count > 4500:
             issues.append({
                 "category": "High iteration count",
                 "line": line,
@@ -746,15 +809,7 @@ def save_execution_trace(trace, duration_ms=0):
     session_id = get_session_id()
     with _session_traces_lock:
         if session_id not in _session_traces:
-            _session_traces[session_id] = {
-                'last_trace': [],
-                'current_trace_index': -1,
-                'trace_timestamp': time.time(),
-                'trace_duration_ms': 0,
-                'last_voice_action': None,
-                'created_at': time.time(),
-                'last_accessed': time.time()
-            }
+            _session_traces[session_id] = _make_session_storage()
         storage = _session_traces[session_id]
         storage['last_trace'] = trace or []
         storage['current_trace_index'] = -1
@@ -797,170 +852,15 @@ def run_code():
         # session from overwriting each other's trace.json mid-flight.
         trace_file = os.path.join(workspace_dir, f"trace_{uuid.uuid4().hex}.json")
 
-        script_content = f'''
-import sys, time, json, traceback, os
-
-ALLOWED_MODULES = {{'math','random','string','datetime','date'}}
-
-import math as _math, random as _random, string as _string, datetime as _datetime
-_PRELOADED = {{'math': _math, 'random': _random, 'string': _string, 'datetime': _datetime}}
-
-class SafeFunction:
-    def __init__(self, func):
-        self._func = func
-    def __call__(self, *args, **kwargs):
-        return self._func(*args, **kwargs)
-    def __getattr__(self, name):
-        raise AttributeError(f'Access to {{name}} is blocked')
-
-import ast as _ast
-_FORBIDDEN_NAMES = {{'__subclasses__', '__bases__', '__mro__', '__class__', '__globals__', '__builtins__', '__import__', '__loader__', '__spec__', '__getattribute__', '__reduce__', '__reduce_ex__'}}
-
-def _audit_ast(source):
-    try:
-        tree = _ast.parse(source)
-    except SyntaxError:
-        return
-    for node in _ast.walk(tree):
-        if isinstance(node, _ast.Attribute) and node.attr in _FORBIDDEN_NAMES:
-            raise SyntaxError(f"Access to '{{node.attr}}' is not allowed in the sandbox")
-        if isinstance(node, _ast.Name) and node.id in _FORBIDDEN_NAMES:
-            raise SyntaxError(f"Reference to '{{node.id}}' is not allowed in the sandbox")
-
-def restricted_import(name, *args, **kwargs):
-    if name not in ALLOWED_MODULES:
-        raise ImportError(f"Module '{{name}}' is not allowed.")
-    if name in _PRELOADED:
-        return _PRELOADED[name]
-    return __import__(name, *args, **kwargs)
-
-def _blocked_input(prompt=''):
-    if prompt:
-        print(prompt)
-    raise RuntimeError(
-        "CodeUp doesn't use input(). Instead, just write the value directly. "
-        "For example, change  name = input('Your name?')  to  name = 'Alice' . "
-        "Then run again."
-    )
-
-SAFE_GLOBALS = {{
-    'print': SafeFunction(print),
-    'range': SafeFunction(range),
-    'len': SafeFunction(len),
-    'int': SafeFunction(int),
-    'float': SafeFunction(float),
-    'str': SafeFunction(str),
-    'bool': SafeFunction(bool),
-    'list': SafeFunction(list),
-    'dict': SafeFunction(dict),
-    'tuple': SafeFunction(tuple),
-    'set': SafeFunction(set),
-    'sum': SafeFunction(sum),
-    'min': SafeFunction(min),
-    'max': SafeFunction(max),
-    'abs': SafeFunction(abs),
-    'round': SafeFunction(round),
-    'sorted': SafeFunction(sorted),
-    'enumerate': SafeFunction(enumerate),
-    'zip': SafeFunction(zip),
-    'map': SafeFunction(map),
-    'filter': SafeFunction(filter),
-    'pow': SafeFunction(pow),
-    'repr': SafeFunction(repr),
-    '__builtins__': {{
-        'None': None, 'False': False, 'True': True,
-        'isinstance': isinstance,
-        'AttributeError': AttributeError, 'TypeError': TypeError,
-        'ValueError': ValueError, 'Exception': Exception,
-        'BaseException': BaseException, 'StopIteration': StopIteration,
-        'RuntimeError': RuntimeError, 'ImportError': ImportError,
-        'NameError': NameError, 'IndexError': IndexError,
-        'KeyError': KeyError, 'ZeroDivisionError': ZeroDivisionError,
-        'OverflowError': OverflowError, 'MemoryError': MemoryError,
-        'NotImplemented': NotImplemented,
-        '__import__': restricted_import,
-    }},
-    '__import__': restricted_import,
-    'input': _blocked_input,
-    # Inject allowed modules directly so their C extensions have full builtins access
-    'math': _math,
-    'random': _random,
-    'string': _string,
-    'datetime': _datetime,
-}}
-
-_code_file = os.environ.get('CODEUP_CODE_FILE', '')
-if _code_file and os.path.exists(_code_file):
-    with open(_code_file, encoding='utf-8') as _f:
-        code = _f.read()
-else:
-    code = ''
-trace = []
-last_locals = {{}}
-start = time.time()
-MAX_TRACE_EVENTS = 5000
-_overflow_logged = [False]
-
-def safe_repr(v):
-    try:
-        r = repr(v)
-    except Exception:
-        try:
-            r = str(v)
-        except Exception:
-            r = "<" + type(v).__name__ + ">"
-    if len(r) > 200:
-        return r[:197] + '...'
-    return r
-
-def tracer(frame, event, arg):
-    global last_locals
-    if frame.f_code.co_filename != '<user>':
-        return tracer
-
-    if len(trace) >= MAX_TRACE_EVENTS:
-        if not _overflow_logged[0]:
-            trace.append({{'type':'overflow','note':'event limit reached; further events dropped'}})
-            _overflow_logged[0] = True
-        return tracer
-
-    if event == 'line':
-        line = frame.f_lineno
-        trace.append({{'type':'line_exec','line':line}})
-        current = frame.f_locals.copy()
-        changes = []
-        for k,v in current.items():
-            if k not in last_locals:
-                changes.append(k + " initialized to " + safe_repr(v))
-            elif last_locals[k] != v:
-                changes.append(k + " changed from " + safe_repr(last_locals[k]) + " to " + safe_repr(v))
-        for k in last_locals:
-            if k not in current:
-                changes.append(k + " went out of scope")
-        if changes:
-            trace.append({{'type':'state_change','line':line,'changes':changes}})
-        last_locals = current
-    elif event == 'call':
-        trace.append({{'type':'call','function':frame.f_code.co_name,'line':frame.f_lineno}})
-    elif event == 'return':
-        trace.append({{'type':'return','value':safe_repr(arg)}})
-    return tracer
-
-try:
-    _audit_ast(code)
-    compiled = compile(code, '<user>', 'exec')
-    sys.settrace(tracer)
-    exec(compiled, SAFE_GLOBALS, {{}})
-
-except Exception:
-    traceback.print_exc(file=sys.stderr)
-finally:
-    sys.settrace(None)
-    trace_file = os.environ.get('CODEUP_TRACE_FILE', '')
-    if trace_file:
-        with open(trace_file, 'w', encoding='utf-8') as f:
-            json.dump({{'trace':trace,'duration_ms':int((time.time()-start)*1000)}}, f)
-'''
+        # Sandbox runner is shipped as a separate file (sandbox_runner.py at
+        # module root). Reading it on each request keeps complexity out of an
+        # f-string with brace-doubling. The runner reads code and trace paths
+        # from environment variables, so no formatting is needed here.
+        _runner_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sandbox_runner.py')
+        with open(_runner_path, 'r', encoding='utf-8') as _rf:
+            script_content = _rf.read()
+                    
+# (sandbox runner body moved to sandbox_runner.py — see new file)
 
         # Write user code to a separate temp file instead of an env var.
         # This avoids /proc leakage and env-var size limits.
@@ -987,32 +887,38 @@ finally:
             # the subprocess timeout still bounds CPU time.
             preexec = None
             if sys.platform != "win32":
-                def _set_subprocess_limits():
-                    try:
-                        import resource
-                        # 512 MB address space cap — kills the subprocess if it
-                        # tries to allocate more, instead of crashing the server.
-                        resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024, 512 * 1024 * 1024))
-                        # 30 second CPU time cap as belt-and-suspenders alongside
-                        # the wall-clock timeout below.
-                        resource.setrlimit(resource.RLIMIT_CPU, (30, 30))
-                    except Exception:
-                        pass
-                preexec = _set_subprocess_limits
+                preexec = _set_subprocess_limits  # defined at module level below
 
-            proc = subprocess.run(
-                [sys.executable, script_file_path],
-                capture_output=True,
-                text=True,
-                timeout=max(1, int(time_limit)),
+            popen_kwargs = dict(
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 env=env,
-                cwd=workspace_dir,           # confine subprocess to its sandbox
-                preexec_fn=preexec,           # POSIX-only, ignored on Windows
+                cwd=workspace_dir,
+                text=True,
             )
-            stdout_buf.write(proc.stdout)
-            stderr_buf.write(proc.stderr)
-        except subprocess.TimeoutExpired:
-            stderr_buf.write(f"Execution timed out after {time_limit}s (subprocess)")
+            if sys.platform != "win32":
+                popen_kwargs["preexec_fn"] = preexec
+                popen_kwargs["start_new_session"] = True  # new process group for killpg
+            proc_handle = subprocess.Popen([sys.executable, script_file_path], **popen_kwargs)
+            try:
+                proc_stdout, proc_stderr = proc_handle.communicate(timeout=max(1, int(time_limit)))
+                stdout_buf.write(proc_stdout or "")
+                stderr_buf.write(proc_stderr or "")
+            except subprocess.TimeoutExpired:
+                # Kill the entire process group on POSIX so threads/children die too
+                try:
+                    if sys.platform != "win32":
+                        import signal as _signal
+                        os.killpg(os.getpgid(proc_handle.pid), _signal.SIGKILL)
+                    else:
+                        proc_handle.kill()
+                except Exception:
+                    pass
+                try:
+                    proc_handle.communicate(timeout=2)
+                except Exception:
+                    pass
+                stderr_buf.write(f"Execution timed out after {time_limit}s (subprocess)")
         finally:
             for _tmp in (script_file_path, code_file_path):
                 try:
@@ -1853,6 +1759,23 @@ def fix():
     user = f"Fix this code:\n```python\n{code}\n```"
     raw = call_gemini(system, user, temperature=0.1, language=language)
     fixed = extract_code(raw)
+    if not fixed and raw and not raw.startswith("AI service"):
+        fixed = raw.strip()
+
+    # Reject suspicious "fixes" that bear no resemblance to the original. The LLM
+    # sometimes ignores "do not rewrite from scratch" and ships an unrelated
+    # solution, which is dangerous because the student loses their work.
+    if fixed and code:
+        import difflib
+        ratio = difflib.SequenceMatcher(None, code, fixed).ratio()
+        if ratio < 0.3:
+            retry_system = system + "\n\nCRITICAL: Your previous answer was rejected because it was too different from the user's original code. Make MINIMAL changes — preserve variable names, structure, and overall approach. Only fix the specific bugs."
+            raw_retry = call_gemini(retry_system, user, temperature=0.05, language=language)
+            retry_fixed = extract_code(raw_retry) or (raw_retry.strip() if raw_retry and not raw_retry.startswith("AI service") else "")
+            if retry_fixed:
+                retry_ratio = difflib.SequenceMatcher(None, code, retry_fixed).ratio()
+                if retry_ratio >= 0.3:
+                    fixed = retry_fixed
     return jsonify({"success": True, "code": fixed})
 
 # ==========================
@@ -1910,6 +1833,21 @@ def generate_code():
         code = raw.strip()
     if not code:
         return jsonify({"success": False, "error": "AI returned empty response. Try rephrasing.", "code": ""})
+
+    # Verify the result actually parses as Python before shipping it to the editor.
+    # If the LLM returned an explanation paragraph by mistake, this catches it.
+    try:
+        compile(code, "<generated>", "exec")
+    except SyntaxError:
+        # One retry with a stricter system message
+        retry_system = system + "\n\nIMPORTANT: Return ONLY syntactically valid Python. No prose. No markdown."
+        raw_retry = call_gemini(retry_system, user, temperature=0.1, language=language)
+        retry_code = extract_code(raw_retry) or (raw_retry.strip() if raw_retry and not raw_retry.startswith("AI service") else "")
+        try:
+            compile(retry_code, "<generated>", "exec")
+            code = retry_code
+        except SyntaxError:
+            return jsonify({"success": False, "error": "AI returned invalid Python code. Please try rephrasing your request.", "code": ""})
     return jsonify({"success": True, "code": code})
 
 # ==========================
@@ -2094,6 +2032,20 @@ def narrate_file():
     if not code.strip():
         return jsonify({"success": False, "error": "Code is empty"}), 400
 
+    # Cap at 5KB OR 50 lines, whichever comes first, to keep LLM input in budget.
+    NARRATE_CHAR_CAP = 5000
+    NARRATE_LINE_CAP = 50
+    code_lines_full = code.splitlines()
+    if len(code) > NARRATE_CHAR_CAP or len(code_lines_full) > NARRATE_LINE_CAP:
+        truncated_code = "\n".join(code_lines_full[:NARRATE_LINE_CAP])
+        if len(truncated_code) > NARRATE_CHAR_CAP:
+            truncated_code = truncated_code[:NARRATE_CHAR_CAP]
+        code_to_narrate = truncated_code
+        was_truncated = True
+    else:
+        code_to_narrate = code
+        was_truncated = False
+
     if language == "hi":
         system = (
             "आप एक blind learner के लिए Python code का पूरा narration बनाते हैं।\n"
@@ -2114,17 +2066,16 @@ def narrate_file():
             "Keep each sentence short — this will be played aloud."
         )
 
-    user = f"Narrate this code:\n```python\n{code}\n```"
+    user = f"Narrate this code:\n```python\n{code_to_narrate}\n```"
     narration = call_gemini(system, user, temperature=0.2, language=language)
 
-    line_count = len(code.splitlines())
-    truncated = line_count > 50
+    line_count = len(code_lines_full)
 
     return jsonify({
         "success": True,
         "narration": narration,
         "line_count": line_count,
-        "truncated": truncated,
+        "truncated": was_truncated,
     })
 
 # ==========================
@@ -2246,35 +2197,42 @@ def suggest_next():
 
     try:
         raw = call_gemini(system, user, temperature=0.2, language=language)
-        import json as _json
-        # Strip markdown fences if present
         clean = re.sub(r'```(?:json)?\s*|\s*```', '', raw).strip()
-        parsed = _json.loads(clean)
+        parsed = json.loads(clean)
         suggestions = parsed.get("suggestions", [])[:3]
         return jsonify({"success": True, "suggestions": suggestions})
     except Exception as e:
         return jsonify({"success": False, "suggestions": [], "error": str(e)})
 
 def _trace_playback(direction):
-    storage = get_trace_storage()
-    trace = storage.get('last_trace', []) or []
-    if not trace:
-        return "No execution trace available."
-
-    idx = storage.get('current_trace_index', -1)
-    if direction == 'next':
-        idx = min(len(trace) - 1, idx + 1)
-    elif direction == 'prev':
-        idx = max(0, idx - 1)
-    elif direction == 'current_change':
-        if idx < 0:
-            return "No current trace step selected. Say 'next step' to begin."
-    else:
-        return "Unknown trace navigation command."
-
+    """Advance, rewind, or report the current trace step. All reads and the
+    follow-up write happen under the same lock so a concurrent session
+    cleanup cannot delete the dict between fetch and mutation."""
+    session_id = get_session_id()
     with _session_traces_lock:
+        storage = _session_traces.get(session_id)
+        if storage is None:
+            # Cleanup happened or session never ran code
+            return "No execution trace available."
+        storage['last_accessed'] = time.time()
+        trace = list(storage.get('last_trace', []) or [])
+        if not trace:
+            return "No execution trace available."
+
+        idx = storage.get('current_trace_index', -1)
+        if direction == 'next':
+            idx = min(len(trace) - 1, idx + 1)
+        elif direction == 'prev':
+            idx = max(0, idx - 1)
+        elif direction == 'current_change':
+            if idx < 0:
+                return "No current trace step selected. Say 'next step' to begin."
+        else:
+            return "Unknown trace navigation command."
+
         storage['current_trace_index'] = idx
-    event = _get_trace_event(idx)
+        event = trace[idx] if 0 <= idx < len(trace) else None
+
     return _event_to_speech(event, idx, len(trace))
 
 
@@ -2286,8 +2244,9 @@ _VOICE_TELEMETRY_CAP = 1000  # rotate after this many entries
 
 def _log_unrecognized_command(text: str, session_id: str):
     """Record a command that the parser couldn't match. Used to identify
-    phrasings real users employ that the patterns don't yet cover."""
-    if os.environ.get("VOICE_TELEMETRY", "1") != "1":
+    phrasings real users employ that the patterns don't yet cover.
+    Default-OFF — set VOICE_TELEMETRY=1 to enable."""
+    if os.environ.get("VOICE_TELEMETRY", "0") != "1":
         return
     if not text or len(text) > 500:
         return
@@ -2304,10 +2263,17 @@ def _log_unrecognized_command(text: str, session_id: str):
 
 @app.route("/voice-telemetry", methods=["GET"])
 def get_voice_telemetry():
-    """Return logged unrecognized commands for analysis. Local-dev only —
-    in production this should be auth-gated or removed."""
-    if os.environ.get("VOICE_TELEMETRY", "1") != "1":
+    """Return logged unrecognized commands for analysis. Auth-gated via
+    VOICE_TELEMETRY_TOKEN env var. Default-OFF: telemetry must be explicitly
+    enabled with VOICE_TELEMETRY=1 AND a token must be set and supplied."""
+    if os.environ.get("VOICE_TELEMETRY", "0") != "1":
         return jsonify({"success": False, "error": "Telemetry disabled"}), 404
+    expected_token = os.environ.get("VOICE_TELEMETRY_TOKEN", "")
+    if not expected_token:
+        return jsonify({"success": False, "error": "Telemetry not configured"}), 404
+    supplied = request.headers.get("X-Telemetry-Token", "") or request.args.get("token", "")
+    if supplied != expected_token:
+        return jsonify({"success": False, "error": "Unauthorized"}), 401
     with _voice_telemetry_lock:
         return jsonify({
             "success": True,
@@ -2392,6 +2358,8 @@ def voice():
             return _store_and_return({"success": True, "action": "rename_snippet", "id": slots.get("id"), "new_name": slots.get("new_name"), "confidence": confidence})
         if intent == "save_snippet_named":
             return _store_and_return({"success": True, "action": "save_snippet_named", "name": slots.get("name", "Untitled"), "confidence": confidence})
+        if intent == "preview_snippet":
+            return _store_and_return({"success": True, "action": "preview_snippet", "snippet_id": slots.get("snippet_id"), "confidence": confidence})
         if intent == "insert_function":
             return _store_and_return({"success": True, "action": "insert_function", "function_name": slots.get("function_name", "my_function"), "confidence": confidence})
         if intent == "insert_class":
@@ -2539,15 +2507,7 @@ def get_execution_trace():
     session_id = get_session_id()
     with _session_traces_lock:
         if session_id not in _session_traces:
-            _session_traces[session_id] = {
-                'last_trace': [],
-                'current_trace_index': -1,
-                'trace_timestamp': time.time(),
-                'trace_duration_ms': 0,
-                'last_voice_action': None,
-                'created_at': time.time(),
-                'last_accessed': time.time()
-            }
+            _session_traces[session_id] = _make_session_storage()
         storage = _session_traces[session_id]
         storage['last_accessed'] = time.time()
         # Snapshot under the lock — list copy is shallow but trace events are
@@ -2662,19 +2622,18 @@ def execution_story():
 def _validate_quiz_response(parsed: dict) -> Optional[str]:
     """Validate a quiz dict from the LLM. Returns None if valid, error string if not.
     Defends against the LLM returning malformed or partial JSON that would crash
-    the frontend or confuse the learner."""
+    the frontend or confuse the learner. Restricts to exactly 3 options (A/B/C)
+    so the frontend regex can match cleanly."""
     if not isinstance(parsed, dict):
         return "Quiz response was not a dictionary"
     if not parsed.get("question") or not isinstance(parsed["question"], str):
         return "Quiz missing valid question"
     options = parsed.get("options", [])
-    if not isinstance(options, list) or len(options) < 2:
-        return "Quiz needs at least 2 options"
-    if len(options) > 4:
-        return "Quiz has too many options"
+    if not isinstance(options, list) or len(options) != 3:
+        return "Quiz must have exactly 3 options"
     answer = parsed.get("answer", "")
-    if not isinstance(answer, str) or answer.upper() not in ("A", "B", "C", "D"):
-        return "Quiz answer must be A, B, C, or D"
+    if not isinstance(answer, str) or answer.upper() not in ("A", "B", "C"):
+        return "Quiz answer must be A, B, or C"
     if not parsed.get("explanation"):
         return "Quiz missing explanation"
     return None
@@ -2723,8 +2682,7 @@ def mentor_quiz():
 
     try:
         clean = re.sub(r'```(?:json)?\s*|\s*```', '', raw).strip()
-        import json as _json
-        parsed = _json.loads(clean)
+        parsed = json.loads(clean)
     except Exception:
         return jsonify({
             "success": False,
@@ -2766,6 +2724,18 @@ def mentor_explain():
 
     user = f"Concept: {concept}"
     explanation = call_gemini(system, user, temperature=0.2, language=language)
+
+    # Reject empty or near-empty responses so the frontend doesn't speak silence.
+    if not explanation or not explanation.strip() or len(explanation.strip()) < 20:
+        return jsonify({
+            "success": False,
+            "error": "AI returned an incomplete explanation. Try asking again, or try a different concept name."
+        })
+    if explanation.startswith("AI service") or "not configured" in explanation.lower():
+        return jsonify({
+            "success": False,
+            "error": explanation,
+        })
     return jsonify({"success": True, "explanation": explanation})
 
 
@@ -2822,8 +2792,7 @@ def mentor_bug_challenge():
 
     try:
         clean = re.sub(r'```(?:json)?\s*|\s*```', '', raw).strip()
-        import json as _json
-        parsed = _json.loads(clean)
+        parsed = json.loads(clean)
     except Exception:
         return jsonify({
             "success": False,
@@ -2854,4 +2823,6 @@ def mentor_bug_challenge():
 # ==========================
 
 if __name__ == "__main__":
-    app.run(debug=False, host="127.0.0.1", port=5000)
+    port = int(os.environ.get("PORT", "5000"))
+    host = os.environ.get("HOST", "127.0.0.1")
+    app.run(debug=False, host=host, port=port)

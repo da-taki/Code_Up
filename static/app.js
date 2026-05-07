@@ -7,6 +7,15 @@ let audioCtx = null;
 let snippetsCache = [];
 let pendingConfirm = null;
 let lastSpokenText = null;
+
+// Per-tab unique ID so quiz/bug-challenge state cannot bleed across tabs.
+// All transient interactive state is scoped under window._tabState[_tabId].
+const _tabId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+  ? crypto.randomUUID()
+  : 'tab-' + Math.random().toString(36).slice(2);
+window._tabState = window._tabState || {};
+window._tabState[_tabId] = window._tabState[_tabId] || {};
+function tabState() { return window._tabState[_tabId]; }
 let isListening = false;
 let recognition = null;
 let _restartTimer = null;
@@ -15,7 +24,6 @@ let _restartTimer = null;
 // we can actually hear the resume command.
 let _voicePaused = false;
 let _loadingSnippets = false;
-let _apiKeyConfigured = false;
 let _apiKeyPromptShown = false;
 
 // Set window.CODEUP_DEBUG = true in the browser console to see debug logs.
@@ -108,6 +116,23 @@ const SpeechManager = (function () {
     function cancelAll() {
       queue.length = 0;
       try { window.speechSynthesis.cancel(); } catch (e) {}
+      // Chrome on Android (and occasionally desktop Chrome) leaves
+      // speechSynthesis.speaking === true after cancel(). Retry once after
+      // a tick, then again at 250ms, to clear stuck utterances.
+      setTimeout(() => {
+        try {
+          if (window.speechSynthesis && window.speechSynthesis.speaking) {
+            window.speechSynthesis.cancel();
+          }
+        } catch (e) {}
+      }, 100);
+      setTimeout(() => {
+        try {
+          if (window.speechSynthesis && window.speechSynthesis.speaking) {
+            window.speechSynthesis.cancel();
+          }
+        } catch (e) {}
+      }, 250);
       AppState.isSpeaking = false;
       currentUtterance = null;
     }
@@ -645,7 +670,6 @@ async function submitApiKey() {
     });
     const data = await res.json();
     if (data.success) {
-      _apiKeyConfigured = true;
       input.value = '';
       closeApiKeyModal();
       speak('API key configured. AI features are now available.');
@@ -754,14 +778,30 @@ function setCode(v) {
   window.traceIndex = 0;
   // Navigation history points to line numbers in the OLD code. After a setCode,
   // those line numbers may not exist anymore. Clear it so "go back" doesn't
-  // jump into invalid territory. clearEditor() also clears history but does so
-  // explicitly; this catches fix/generate/load-snippet too.
+  // jump into invalid territory.
   navigationHistory = [];
   historyIndex = -1;
+  // Breakpoints reference lines in the OLD code. Clear them and their decorations
+  // so the gutter dots don't end up pointing at unrelated lines.
+  if (typeof _breakpoints !== 'undefined') {
+    _breakpoints.clear();
+    _watchedVars.clear();
+    if (editor && typeof _breakpointDecorations !== 'undefined') {
+      try { _breakpointDecorations = editor.deltaDecorations(_breakpointDecorations, []); } catch (e) {}
+    }
+  }
   if (editor) editor.setValue(v);
 }
 
 function out(t) { document.getElementById('output').textContent = t; }
+
+// Convenience: write to output panel AND speak it. Removes the boilerplate
+// `out(x); speak(x);` pair that appears 30+ times in this file.
+function tellUser(text, opts) {
+  if (!text) return;
+  out(text);
+  speak(text, opts || {});
+}
 
 // ---------- PENDING ACTIONS ----------
 const pendingActions = [];
@@ -794,10 +834,13 @@ async function runCode() {
 
   AppState.isExecuting = true;
   cueSuccess();
-  if (!/\binput\s*\(/.test(codeToCheck)) out('Running...');
-  showAI('Running code...');
-  speak('Running code.');
-  srAnnounce('Running code');
+  const _runMsgOut = getLanguage() === 'hi' ? 'चल रहा है...' : 'Running...';
+  const _runMsgSpoken = getLanguage() === 'hi' ? 'कोड चल रहा है।' : 'Running code.';
+  const _runMsgAI = getLanguage() === 'hi' ? 'कोड चल रहा है...' : 'Running code...';
+  if (!/\binput\s*\(/.test(codeToCheck)) out(_runMsgOut);
+  showAI(_runMsgAI);
+  speak(_runMsgSpoken);
+  srAnnounce(_runMsgSpoken);
   try {
     const res  = await fetch('/run', {
       method:  'POST',
@@ -889,12 +932,19 @@ async function analyzeDeep() {
     speak('Please run analyze first, then say analyze deeper.');
     return;
   }
+  // Use the SAME code that was analyzed briefly. If the user edited since then,
+  // the deep analysis should match the brief one — not silently re-analyze new code.
+  const codeForDeep = window._lastAnalyzeContext.code;
+  const currentCode = getCode();
+  if (codeForDeep !== currentCode) {
+    speak('Your code has changed since the last analyze. I will analyze the version you originally asked about. Say analyze again to refresh.');
+  }
   cueSuccess(); showAI('Going deeper...'); speak('Going line by line.');
   try {
     const res = await fetch('/analyze-deep', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code: getCode(), language: getLanguage() }),
+      body: JSON.stringify({ code: codeForDeep, language: getLanguage() }),
     });
     const data = await res.json();
     out(data.analysis || 'No deeper analysis.');
@@ -908,27 +958,32 @@ async function analyzeDeep() {
 
 // ---------- DEMO PRESETS ----------
 let _demoPresetsCache = null;
+let _demoPresetsCacheAt = 0;
+const _DEMO_CACHE_TTL_MS = 5 * 60 * 1000;  // 5 minutes
 
 async function fetchDemoPresets() {
-  if (_demoPresetsCache) return _demoPresetsCache;
+  // Cache with TTL — if presets ever change at runtime we don't get stuck on stale data.
+  if (_demoPresetsCache && (Date.now() - _demoPresetsCacheAt) < _DEMO_CACHE_TTL_MS) {
+    return _demoPresetsCache;
+  }
   try {
     const res = await fetch('/demo-presets');
     const data = await res.json();
     if (data.success) {
       _demoPresetsCache = data.presets;
+      _demoPresetsCacheAt = Date.now();
       return data.presets;
     }
   } catch (e) {
     console.error('Failed to load demos:', e);
   }
-  return [];
+  return _demoPresetsCache || [];
 }
 
 async function listDemos() {
   const presets = await fetchDemoPresets();
   if (!presets.length) {
-    speak('No demos are available right now.');
-    out('No demos available.');
+    tellUser('No demos available.');
     return;
   }
   let display = 'AVAILABLE DEMOS:\n\n';
@@ -936,10 +991,11 @@ async function listDemos() {
     display += `${i + 1}. ${p.title} — ${p.description}\n   Say: "demo ${p.id}"\n\n`;
   });
   out(display);
+  // Use srAnnounce only — speak() will be heard by the user; double-announcing
+  // via screen reader live region causes "5 demos available" to be read twice.
   speak(`There are ${presets.length} demos available.`);
   presets.forEach(p => speak(`${p.title}. ${p.description}. Say "demo ${p.id}" to load it.`));
   speak('Or just say "demo" followed by the name.');
-  srAnnounce(`${presets.length} demos available`);
 }
 
 async function runDemo(presetId) {
@@ -1294,8 +1350,13 @@ async function saveSnippetWithName(name) {
   speak(`Snippet saved as ${name}.`);
 }
 
+let _loadSnippetsQueued = false;
 async function loadSnippets() {
-  if (_loadingSnippets) return;
+  if (_loadingSnippets) {
+    // Mark a refresh as needed; the in-flight call will pick it up when it finishes.
+    _loadSnippetsQueued = true;
+    return;
+  }
   _loadingSnippets = true;
   const list = document.getElementById('snippetList');
   if (!list) { _loadingSnippets = false; return; }
@@ -1310,7 +1371,6 @@ async function loadSnippets() {
       div.className  = 'snippet-item';
       div.textContent = sn.name || 'Untitled Snippet';
       div.dataset.id  = sn.id;
-      // Keyboard accessibility: focusable and activatable via Enter/Space
       div.setAttribute('tabindex', '0');
       div.setAttribute('role', 'button');
       div.setAttribute('aria-label', `Load snippet: ${sn.name || 'Untitled'}`);
@@ -1323,6 +1383,11 @@ async function loadSnippets() {
     list.appendChild(fragment);
   } finally {
     _loadingSnippets = false;
+    if (_loadSnippetsQueued) {
+      _loadSnippetsQueued = false;
+      // Recurse to handle the queued refresh
+      loadSnippets();
+    }
   }
 }
 
@@ -1348,6 +1413,24 @@ async function renameSnippetById(id, newName) {
   speak(`Renamed snippet ${id} to ${newName}.`); out(`Renamed snippet ${id} to ${newName}.`);
 }
 
+async function previewSnippetById(id) {
+  // Read first 5 lines aloud WITHOUT loading the snippet into the editor.
+  // Lets the user audit a snippet before destroying their current work.
+  if (!id) { speak('Please specify which snippet to preview.'); return; }
+  const sn = snippetsCache.find(s => String(s.id) === String(id) ||
+                                      (s.name && s.name.toLowerCase() === String(id).toLowerCase()));
+  if (!sn) {
+    speak(`I could not find a snippet matching ${id}. Say list snippets to hear what is saved.`);
+    return;
+  }
+  const lines = (sn.code || '').split('\n').slice(0, 5);
+  out(`PREVIEW: ${sn.name}\n\n${lines.join('\n')}${(sn.code || '').split('\n').length > 5 ? '\n...' : ''}`);
+  speak(`Preview of ${sn.name}. First ${lines.length} line${lines.length === 1 ? '' : 's'}:`);
+  lines.forEach((l, i) => speak(`Line ${i + 1}: ${l || 'empty line'}`));
+  speak('Say load snippet ' + sn.name + ' to open it in the editor.');
+  srAnnounce('Snippet previewed');
+}
+
 // ---------- COMMAND HANDLER ----------
 async function handleConfirmedAction(action, payload) {
   if (action === 'run')              await runCode();
@@ -1366,6 +1449,7 @@ async function handleConfirmedAction(action, payload) {
   else if (action === 'load_snippet')    await loadSnippetById(payload && payload.id);
   else if (action === 'delete_snippet')  await deleteSnippetById(payload && payload.id);
   else if (action === 'rename_snippet')  await renameSnippetById(payload && payload.id, payload && payload.new_name ? payload.new_name : 'Renamed');
+  else if (action === 'preview_snippet') await previewSnippetById(payload && payload.snippet_id);
   else if (action === 'goto_line')       gotoLine(payload && payload.line ? payload.line : 1);
   else if (action === 'read_line')       readLine(payload && payload.line ? payload.line : 1);
   else if (action === 'read_current_line') readCurrentLine();
@@ -1451,18 +1535,19 @@ async function handleCommandText(txt) {
   const field = document.getElementById('voiceText');
   if (field) field.value = txt;
 
-  // Quiz answer intercept (mirrors handleVoiceCommand)
-  if (window._pendingQuizAnswer) {
-    if (window._pendingQuizAnswer.expiresAt && Date.now() > window._pendingQuizAnswer.expiresAt) {
-      window._pendingQuizAnswer = null;
+  // Quiz answer intercept (mirrors handleVoiceCommand) — per-tab state
+  const _ts = tabState();
+  if (_ts._pendingQuizAnswer) {
+    if (_ts._pendingQuizAnswer.expiresAt && Date.now() > _ts._pendingQuizAnswer.expiresAt) {
+      _ts._pendingQuizAnswer = null;
     }
   }
-  if (window._pendingQuizAnswer) {
+  if (_ts._pendingQuizAnswer) {
     const t = txt.toLowerCase().trim();
-    const match = t.match(/(?:answer|option|choose)\s+([abc])|^([abc])$/);
+    const match = t.match(/(?:answer|option|choose)\s+([abcd])|^([abcd])$/);
     if (match) {
-      const q = window._pendingQuizAnswer;
-      window._pendingQuizAnswer = null;
+      const q = _ts._pendingQuizAnswer;
+      _ts._pendingQuizAnswer = null;
       const chosen = (match[1] || match[2]).toUpperCase();
       if (chosen === q.answer) {
         SonificationManager.playTone(900, 0.1, 0.1);
@@ -1479,17 +1564,17 @@ async function handleCommandText(txt) {
     }
   }
 
-  // Bug challenge intercept (mirrors handleVoiceCommand)
-  if (window._pendingBugChallenge) {
-    if (window._pendingBugChallenge.expiresAt && Date.now() > window._pendingBugChallenge.expiresAt) {
-      window._pendingBugChallenge = null;
+  // Bug challenge intercept (mirrors handleVoiceCommand) — per-tab state
+  if (_ts._pendingBugChallenge) {
+    if (_ts._pendingBugChallenge.expiresAt && Date.now() > _ts._pendingBugChallenge.expiresAt) {
+      _ts._pendingBugChallenge = null;
     }
   }
-  if (window._pendingBugChallenge) {
+  if (_ts._pendingBugChallenge) {
     const t = txt.toLowerCase().trim();
     if (t.includes('show answer') || t.includes('give up') || t.includes('reveal') || t.includes('answer दिखाओ')) {
-      const ch = window._pendingBugChallenge;
-      window._pendingBugChallenge = null;
+      const ch = _ts._pendingBugChallenge;
+      _ts._pendingBugChallenge = null;
       out(`THE BUG:\n${ch.bug}\n\nFIXED CODE:\n${ch.fixed}`);
       speak(`The bug was: ${ch.bug}`);
       setTimeout(() => setCode(ch.fixed), 2000);
@@ -1789,19 +1874,19 @@ function resumeVoiceRecognition() {
 
 // ---------- VOICE COMMAND HANDLER ----------
 async function handleVoiceCommand(rawText) {
-  // Quiz answer intercept
-  if (window._pendingQuizAnswer) {
-    // Expire stale quizzes
-    if (window._pendingQuizAnswer.expiresAt && Date.now() > window._pendingQuizAnswer.expiresAt) {
-      window._pendingQuizAnswer = null;
+  const _ts = tabState();
+  // Quiz answer intercept — per-tab state
+  if (_ts._pendingQuizAnswer) {
+    if (_ts._pendingQuizAnswer.expiresAt && Date.now() > _ts._pendingQuizAnswer.expiresAt) {
+      _ts._pendingQuizAnswer = null;
     }
   }
-  if (window._pendingQuizAnswer) {
+  if (_ts._pendingQuizAnswer) {
     const t = rawText.toLowerCase().trim();
-    const match = t.match(/(?:answer|option|choose)\s+([abc])|^([abc])$/);
+    const match = t.match(/(?:answer|option|choose)\s+([abcd])|^([abcd])$/);
     if (match) {
-      const q = window._pendingQuizAnswer;
-      window._pendingQuizAnswer = null;
+      const q = _ts._pendingQuizAnswer;
+      _ts._pendingQuizAnswer = null;
       const chosen = (match[1] || match[2]).toUpperCase();
       if (chosen === q.answer) {
         SonificationManager.playTone(900, 0.1, 0.1);
@@ -1818,18 +1903,17 @@ async function handleVoiceCommand(rawText) {
     }
   }
 
-  // Bug challenge reveal intercept
-  if (window._pendingBugChallenge) {
-    // Expire stale challenges
-    if (window._pendingBugChallenge.expiresAt && Date.now() > window._pendingBugChallenge.expiresAt) {
-      window._pendingBugChallenge = null;
+  // Bug challenge reveal intercept — per-tab state
+  if (_ts._pendingBugChallenge) {
+    if (_ts._pendingBugChallenge.expiresAt && Date.now() > _ts._pendingBugChallenge.expiresAt) {
+      _ts._pendingBugChallenge = null;
     }
   }
-  if (window._pendingBugChallenge) {
+  if (_ts._pendingBugChallenge) {
     const t = rawText.toLowerCase().trim();
     if (t.includes('show answer') || t.includes('give up') || t.includes('reveal') || t.includes('answer दिखाओ')) {
-      const ch = window._pendingBugChallenge;
-      window._pendingBugChallenge = null;
+      const ch = _ts._pendingBugChallenge;
+      _ts._pendingBugChallenge = null;
       out(`THE BUG:\n${ch.bug}\n\nFIXED CODE:\n${ch.fixed}`);
       speak(`The bug was: ${ch.bug}`);
       setTimeout(() => setCode(ch.fixed), 2000);
@@ -2685,9 +2769,22 @@ function watchVariable(varName) {
 
 function debugContinue() {
   // Walk the trace forward until we hit a breakpoint line
-  const storage = window._sessionStorage || {};
-  const trace   = window.executionTrace || [];
+  const trace = window.executionTrace || [];
   if (!trace.length) { speak('No trace available. Run your code first.'); return; }
+
+  // If the trace was truncated by the 5000-event cap AND we have unhit breakpoints,
+  // warn the user that breakpoints past the truncation point are unreachable.
+  const truncated = trace.some(e => e.type === 'overflow');
+  if (truncated && _breakpoints.size > 0) {
+    const bpLines = Array.from(_breakpoints).sort((a, b) => a - b);
+    const linesHitInTrace = new Set(
+      trace.filter(e => e.type === 'line_exec').map(e => e.line)
+    );
+    const unreachable = bpLines.filter(l => !linesHitInTrace.has(l));
+    if (unreachable.length > 0) {
+      speak(`Heads up: your trace was truncated at five thousand steps. Breakpoint${unreachable.length === 1 ? '' : 's'} at line ${unreachable.join(', line ')} may not be reachable. Try simplifying the loop and re-running.`);
+    }
+  }
 
   let idx = window.traceIndex || 0;
   let hitBreakpoint = false;
@@ -2765,9 +2862,9 @@ async function quizMe(topic) {
     q.options.forEach(o => speak(o));
     speak('Say answer A, answer B, or answer C.');
 
-    // Store expected answer — handleVoiceCommand checks this cleanly.
+    // Store expected answer in per-tab state so other tabs don't intercept.
     // Expires after 5 minutes so a stale quiz doesn't catch later voice input.
-    window._pendingQuizAnswer = {
+    tabState()._pendingQuizAnswer = {
       answer: q.answer,
       explanation: q.explanation,
       expiresAt: Date.now() + 5 * 60 * 1000,
@@ -2825,9 +2922,9 @@ async function bugChallenge() {
     srAnnounce('Bug challenge loaded');
     speak(`Bug challenge loaded into editor. ${ch.hint}. Say show answer when you are ready.`);
 
-    // Store pending bug challenge — handleVoiceCommand checks this cleanly.
+    // Store pending bug challenge in per-tab state so other tabs don't intercept.
     // Expires after 10 minutes so a stale challenge doesn't catch later voice input.
-    window._pendingBugChallenge = {
+    tabState()._pendingBugChallenge = {
       bug: ch.bug,
       fixed: ch.fixed,
       expiresAt: Date.now() + 10 * 60 * 1000,

@@ -35,29 +35,29 @@ class SandboxedFileSystem:
     def _validate_path(self, filepath: str) -> str:
         """
         Validate and normalize path to ensure it's within workspace.
-        
+        Resolves symlinks on both sides to prevent symlink-escape attacks.
+
         Args:
             filepath: Path to validate
-            
+
         Returns:
             Absolute normalized path within workspace
-            
+
         Raises:
-            ValueError: If path attempts to escape workspace
+            ValueError: If path attempts to escape workspace (including via symlink)
         """
-        # Normalize and make absolute
-        # Normalize and make absolute path joined to workspace
-        abs_path = os.path.abspath(os.path.join(self.workspace_dir, filepath))
-        # Use pathlib to perform relative check (needed since abs_path is a string)
-        abs_path_obj = Path(abs_path)
-        workspace_obj = Path(self.workspace_dir)
+        candidate = Path(self.workspace_dir) / filepath
+        # Resolve symlinks. strict=False so non-existent paths (writes) still resolve.
+        resolved = candidate.resolve(strict=False)
+        workspace_resolved = Path(self.workspace_dir).resolve(strict=False)
         try:
-            abs_path_obj.relative_to(workspace_obj)
+            resolved.relative_to(workspace_resolved)
         except ValueError:
             raise ValueError(f"Path '{filepath}' is outside workspace")
-        return str(abs_path_obj)
+        return str(resolved)
     
-    MAX_FILE_SIZE = 5_000_000  # bytes, arbitrary safety cap
+    # Configurable via SANDBOX_MAX_FILE_SIZE env var. Default 5 MB.
+    MAX_FILE_SIZE = int(os.environ.get("SANDBOX_MAX_FILE_SIZE", "5000000"))
 
     def write(self, filepath: str, content: str, encoding: str = "utf-8") -> Dict:
         """
@@ -274,9 +274,9 @@ class SandboxedFileSystem:
 
 
 # Per-session sandbox storage (thread-safe dict keyed by session id)
-import threading as _threading
+import threading
 _sandboxes: dict = {}
-_sandboxes_lock = _threading.Lock()
+_sandboxes_lock = threading.Lock()
 
 import atexit
 

@@ -11,7 +11,7 @@ The project is independently developed and intended for use in schools and acces
 - **Voice commands** in English and Hindi for navigation, execution, and editing
 - **Audio code structure** through sonification — pitch maps to indentation, distinct tones for functions, classes, loops, conditionals
 - **Step-by-step execution traces** with spoken playback and a "story mode" narrative
-- **Sandboxed Python execution** with subprocess isolation, restricted imports, time and memory caps
+- **Sandboxed Python execution** with subprocess isolation, restricted imports, time and memory caps, AST audit, and same-origin enforcement on state-changing requests
 - **Optional AI assistance** (Groq Llama 3.3 70B) for error explanation, code generation, summarization, and a mentor mode with quizzes and bug challenges
 - **Audio breakpoint debugger** with variable watching
 - **Six-step interactive tutorial** in both English and Hindi covering print, variables, loops, and conditionals

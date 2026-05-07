@@ -1059,3 +1059,287 @@ class TestSnippetSessionIsolation:
             assert "bob_only" not in alice_names
         finally:
             os.environ["GEMINI_ENABLED"] = "1"
+
+
+# ===========================================================================
+# 16. PRE-FLIGHT INPUTS (Mechanism A)
+# ===========================================================================
+
+class TestPreflightInputs:
+
+    @pytest.mark.timeout(15)
+    def test_input_with_preflight_succeeds(self, client):
+        code = "name = input('Your name: ')\nprint('Hello,', name)"
+        res = client.post("/run", json={"code": code, "inputs": ["Alice"]})
+        data = res.get_json()
+        assert data["success"] is True, f"Pre-flight input failed: {data.get('error')}"
+        assert "Alice" in data["output"]
+        assert "Hello" in data["output"]
+
+    @pytest.mark.timeout(15)
+    def test_multiple_preflight_inputs(self, client):
+        code = "a = input('a: ')\nb = input('b: ')\nprint(a + ' and ' + b)"
+        res = client.post("/run", json={"code": code, "inputs": ["foo", "bar"]})
+        data = res.get_json()
+        assert data["success"] is True
+        assert "foo and bar" in data["output"]
+
+    @pytest.mark.timeout(15)
+    def test_too_few_inputs_friendly_error(self, client):
+        code = "a = input('a: ')\nb = input('b: ')\nprint(a, b)"
+        res = client.post("/run", json={"code": code, "inputs": ["only_one"]})
+        data = res.get_json()
+        assert data["success"] is False
+        combined = (data.get("error") or "") + (data.get("explanation") or "")
+        assert "input" in combined.lower()
+
+    @pytest.mark.timeout(15)
+    def test_magic_comment_inputs(self, client):
+        code = "# inputs: hello, world\na = input()\nb = input()\nprint(a, b)"
+        res = client.post("/run", json={"code": code})
+        data = res.get_json()
+        assert data["success"] is True
+        assert "hello" in data["output"] and "world" in data["output"]
+
+    @pytest.mark.timeout(15)
+    def test_body_inputs_override_magic_comment(self, client):
+        code = "# inputs: from_magic\nname = input()\nprint(name)"
+        res = client.post("/run", json={"code": code, "inputs": ["from_body"]})
+        data = res.get_json()
+        assert data["success"] is True
+        assert "from_body" in data["output"]
+        assert "from_magic" not in data["output"]
+
+    @pytest.mark.timeout(15)
+    def test_inputs_hint_when_input_used_without_inputs(self, client):
+        code = "x = input('?')\nprint(x)"
+        res = client.post("/run", json={"code": code})
+        data = res.get_json()
+        assert data.get("inputs_hint")
+        assert "input" in data["inputs_hint"].lower()
+
+
+class TestVoiceSetInputs:
+
+    def test_set_inputs_basic(self, client):
+        res = client.post("/voice-command", json={"text": "set inputs to Alice and 17"})
+        data = res.get_json()
+        assert data["action"] == "set_inputs"
+        assert "Alice" in data["values"]
+        assert "17" in data["values"]
+
+    def test_set_inputs_with_commas(self, client):
+        res = client.post("/voice-command", json={"text": "set inputs to foo, bar, baz"})
+        data = res.get_json()
+        assert data["action"] == "set_inputs"
+        assert data["values"] == ["foo", "bar", "baz"]
+
+    def test_clear_inputs_command(self, client):
+        res = client.post("/voice-command", json={"text": "clear inputs"})
+        data = res.get_json()
+        assert data["action"] == "clear_inputs"
+
+    def test_live_input_mode_command(self, client):
+        res = client.post("/voice-command", json={"text": "live input mode"})
+        data = res.get_json()
+        assert data["action"] == "live_input_mode"
+
+
+# ===========================================================================
+# 17. VOICE MACROS
+# ===========================================================================
+
+class TestVoiceMacros:
+
+    def test_save_macro_via_command(self, client):
+        res = client.post("/voice-command", json={"text": "remember this as my pattern"})
+        data = res.get_json()
+        assert data["action"] == "save_macro"
+        assert data["name"] == "my pattern"
+
+    def test_use_macro_via_command(self, client):
+        res = client.post("/voice-command", json={"text": "use macro my pattern"})
+        data = res.get_json()
+        assert data["action"] == "use_macro"
+        assert data["name"] == "my pattern"
+
+    def test_save_and_load_macro_endpoint(self, client):
+        save = client.post("/macros", json={"name": "greeting", "code": "print('hi')"})
+        assert save.get_json()["success"] is True
+
+        get = client.get("/macros/get/greeting")
+        data = get.get_json()
+        assert data["success"] is True
+        assert "print" in data["code"]
+
+    def test_macro_invalid_name_rejected(self, client):
+        res = client.post("/macros", json={"name": "bad/name", "code": "x"})
+        assert res.status_code == 400
+
+    def test_macro_too_large_rejected(self, client):
+        res = client.post("/macros", json={"name": "big", "code": "x = 1\n" * 20_000})
+        assert res.status_code == 413
+
+    def test_list_macros_endpoint(self, client):
+        client.post("/macros", json={"name": "alpha", "code": "print(1)"})
+        res = client.get("/macros")
+        data = res.get_json()
+        assert data["success"] is True
+        assert "alpha" in data["names"]
+
+
+# ===========================================================================
+# 18. OUTPUT BOOKMARKS
+# ===========================================================================
+
+class TestOutputBookmarks:
+
+    def test_save_bookmark(self, client):
+        res = client.post("/bookmarks", json={"label": "test_mark", "position": 100})
+        data = res.get_json()
+        assert data["success"] is True
+
+    def test_list_bookmarks(self, client):
+        client.post("/bookmarks", json={"label": "first", "position": 0})
+        client.post("/bookmarks", json={"label": "second", "position": 50})
+        res = client.get("/bookmarks")
+        data = res.get_json()
+        assert len(data["bookmarks"]) == 2
+
+    def test_clear_bookmarks(self, client):
+        client.post("/bookmarks", json={"label": "x", "position": 0})
+        client.delete("/bookmarks")
+        res = client.get("/bookmarks")
+        assert res.get_json()["bookmarks"] == []
+
+    def test_read_from_bookmark(self, client):
+        client.post("/bookmarks", json={"label": "mid", "position": 6})
+        res = client.post("/bookmarks/read", json={"label": "mid", "output": "abcdef_END"})
+        data = res.get_json()
+        assert data["success"] is True
+        assert data["slice"] == "_END"
+
+
+# ===========================================================================
+# 19. BREADCRUMBS
+# ===========================================================================
+
+class TestBreadcrumbs:
+
+    def test_top_level(self, client):
+        res = client.post("/breadcrumbs", json={"code": "x = 1", "line": 1})
+        data = res.get_json()
+        assert data["success"] is True
+        assert "top level" in data["breadcrumb"].lower()
+
+    def test_inside_function(self, client):
+        code = "def hello():\n    x = 1\n    print(x)"
+        res = client.post("/breadcrumbs", json={"code": code, "line": 3})
+        data = res.get_json()
+        assert data["success"] is True
+        assert "function" in data["breadcrumb"].lower()
+        assert "hello" in data["breadcrumb"]
+
+    def test_inside_loop_in_function(self, client):
+        code = "def calc():\n    for i in range(5):\n        print(i)"
+        res = client.post("/breadcrumbs", json={"code": code, "line": 3})
+        data = res.get_json()
+        assert data["success"] is True
+        assert "calc" in data["breadcrumb"]
+        assert "for loop" in data["breadcrumb"].lower()
+
+
+# ===========================================================================
+# 20. OUTPUT DIFF NARRATION
+# ===========================================================================
+
+class TestOutputDiff:
+
+    @pytest.mark.timeout(15)
+    def test_first_run_no_diff(self, client):
+        res = client.post("/run", json={"code": "print('hi')"})
+        data = res.get_json()
+        assert data["success"] is True
+        # First run: diff present but identical=False with empty changed_lines
+        assert "diff" in data
+
+    @pytest.mark.timeout(15)
+    def test_second_identical_run_marked_identical(self, client):
+        client.post("/run", json={"code": "print('same')"})
+        res = client.post("/run", json={"code": "print('same')"})
+        data = res.get_json()
+        assert data["success"] is True
+        assert data["diff"]["identical"] is True
+
+    @pytest.mark.timeout(15)
+    def test_changed_output_diff_detected(self, client):
+        client.post("/run", json={"code": "print(1)"})
+        res = client.post("/run", json={"code": "print(2)"})
+        data = res.get_json()
+        assert data["success"] is True
+        assert data["diff"]["identical"] is False
+        assert data["diff"]["total_changes"] >= 1
+
+
+# ===========================================================================
+# 21. BEGINNER ERROR EXPLANATION
+# ===========================================================================
+
+class TestBeginnerErrorExplanation:
+
+    def test_endpoint_exists(self, client):
+        res = client.post("/explain-error-beginner", json={
+            "code": "x = 1",
+            "error": "NameError: name 'y' is not defined",
+            "language": "en"
+        })
+        # AI is disabled in tests so we get a "service disabled" response
+        # but the endpoint should respond 200, not crash.
+        assert res.status_code == 200
+        data = res.get_json()
+        assert data["success"] is True
+        assert "explanation" in data
+
+    def test_endpoint_rejects_empty_error(self, client):
+        res = client.post("/explain-error-beginner", json={
+            "code": "x = 1",
+            "error": "",
+            "language": "en"
+        })
+        assert res.status_code == 400
+
+
+# ===========================================================================
+# 22. INTENT PARSER — NEW INTENTS
+# ===========================================================================
+
+class TestNewIntents:
+
+    @pytest.mark.parametrize("text, intent, slot_check", [
+        ("set inputs to alice and seventeen",
+            "set_inputs", lambda s: "alice" in [v.lower() for v in s.get("values", [])]),
+        ("set inputs to foo, bar, baz",
+            "set_inputs", lambda s: s.get("values") == ["foo", "bar", "baz"]),
+        ("clear inputs",          "clear_inputs", lambda s: True),
+        ("list inputs",           "list_inputs",  lambda s: True),
+        ("live input mode",       "live_input_mode", lambda s: True),
+        ("preflight input mode",  "preflight_input_mode", lambda s: True),
+        ("remember this as quick sort", "save_macro", lambda s: s.get("name") == "quick sort"),
+        ("use macro quick sort",  "use_macro", lambda s: s.get("name") == "quick sort"),
+        ("list macros",           "list_macros", lambda s: True),
+        ("bookmark this",         "bookmark_output", lambda s: True),
+        ("bookmark this as totals", "bookmark_output", lambda s: s.get("label") == "totals"),
+        ("read from bookmark totals", "read_bookmark", lambda s: s.get("label") == "totals"),
+        ("list bookmarks",        "list_bookmarks", lambda s: True),
+        ("where am i",            "where_am_i", lambda s: True),
+        ("explain like i'm five", "explain_simply", lambda s: True),
+        ("what's different",      "narrate_diff", lambda s: True),
+    ])
+    def test_intent(self, text, intent, slot_check):
+        result = parse_intent(text)
+        assert result["intent"] == intent, (
+            f"Input {text!r}: expected {intent!r}, got {result['intent']!r}"
+        )
+        assert slot_check(result["slots"]), (
+            f"Slot check failed for {text!r}: {result['slots']}"
+        )

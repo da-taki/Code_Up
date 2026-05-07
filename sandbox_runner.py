@@ -1,9 +1,21 @@
 """
 CodeUp sandbox runner. Executed as a subprocess by app.py /run handler.
 
-Reads the user's code from the file at $CODEUP_CODE_FILE and writes a JSON
-trace to $CODEUP_TRACE_FILE. Never imported by the parent app — only ever
-executed via `python sandbox_runner.py`.
+Reads the user's code from $CODEUP_CODE_FILE and writes a JSON trace to
+$CODEUP_TRACE_FILE. Two input mechanisms supported:
+
+Mechanism A (default, pre-flight queue):
+  $CODEUP_INPUTS_FILE points to a file with one input value per line.
+  input() pops sequentially. Empty queue raises a friendly error.
+
+Mechanism B (interactive streaming):
+  $CODEUP_INTERACTIVE=1 enables it. input() writes a sentinel
+  (CODEUP::INPUT_REQUEST::<prompt>\n) to stdout, then blocks reading one
+  line from the FIFO at $CODEUP_INPUT_FIFO. Parent process drives the
+  conversation over SSE. Falls back to RuntimeError if FIFO read fails.
+
+Never imported by the parent app — only ever executed via
+`python sandbox_runner.py`.
 """
 import sys, time, json, traceback, os
 
@@ -84,14 +96,82 @@ def _strict_import(name, globals_arg=None, locals_arg=None, fromlist=(), level=0
     return restricted_import(name)
 
 
-def _blocked_input(prompt=''):
+# ---------------------------------------------------------------------------
+# Input mechanisms
+# ---------------------------------------------------------------------------
+_INPUT_QUEUE = []
+_INPUT_INDEX = [0]
+_INTERACTIVE = os.environ.get('CODEUP_INTERACTIVE', '0') == '1'
+_INPUT_FIFO = os.environ.get('CODEUP_INPUT_FIFO', '')
+
+# Sentinel pattern that the parent process watches for in stdout.
+# Format chosen to be unambiguous and unlikely to appear in user output.
+_INPUT_SENTINEL_PREFIX = "CODEUP::INPUT_REQUEST::"
+
+
+def _interactive_input(prompt=''):
+    """Mechanism B: write sentinel to stdout, block on FIFO read."""
+    # Echo prompt to stdout BEFORE the sentinel so the user hears it
     if prompt:
-        print(prompt)
-    raise RuntimeError(
-        "CodeUp doesn't use input(). Instead, just write the value directly. "
-        "For example, change  name = input('Your name?')  to  name = 'Alice' . "
-        "Then run again."
-    )
+        sys.stdout.write(prompt)
+        sys.stdout.flush()
+    # Sentinel tells parent process: pause output streaming, ask user for input
+    sys.stdout.write(f"\n{_INPUT_SENTINEL_PREFIX}{prompt}\n")
+    sys.stdout.flush()
+
+    if not _INPUT_FIFO or not os.path.exists(_INPUT_FIFO):
+        raise RuntimeError(
+            "Interactive input is enabled but the input channel is not "
+            "available. Switch to pre-flight inputs or restart the run."
+        )
+    try:
+        # Open the FIFO for reading. This blocks until parent writes a line.
+        # Open inside a `with` so the file handle is closed after each read,
+        # which is required for FIFOs to allow subsequent writes from parent.
+        with open(_INPUT_FIFO, 'r', encoding='utf-8') as fifo:
+            line = fifo.readline()
+        if not line:
+            raise RuntimeError(
+                "Input channel closed unexpectedly. The run may have been "
+                "interrupted."
+            )
+        value = line.rstrip('\n').rstrip('\r')
+        # Echo what the user "typed" so it appears in the transcript
+        sys.stdout.write(value + '\n')
+        sys.stdout.flush()
+        return value
+    except (OSError, IOError) as e:
+        raise RuntimeError(f"Could not read input: {e}")
+
+
+def _queued_input(prompt=''):
+    """Mechanism A: pop from pre-declared queue."""
+    if prompt:
+        sys.stdout.write(prompt)
+        sys.stdout.flush()
+    idx = _INPUT_INDEX[0]
+    if idx >= len(_INPUT_QUEUE):
+        needed = idx + 1
+        provided = len(_INPUT_QUEUE)
+        raise RuntimeError(
+            f"Your code asked for input number {needed}, but you only "
+            f"provided {provided}. Add more inputs in the inputs panel, or "
+            f"say 'set inputs to' followed by your values. For example: "
+            f"'set inputs to Alice and 17'. Alternatively, switch to live "
+            f"input mode."
+        )
+    value = _INPUT_QUEUE[idx]
+    _INPUT_INDEX[0] = idx + 1
+    sys.stdout.write(value + '\n')
+    sys.stdout.flush()
+    return value
+
+
+def _select_input_func():
+    """Pick the input function based on environment configuration."""
+    if _INTERACTIVE and _INPUT_FIFO:
+        return _interactive_input
+    return _queued_input
 
 
 SAFE_GLOBALS = {
@@ -132,7 +212,7 @@ SAFE_GLOBALS = {
         '__import__': _strict_import,
     },
     '__import__': _strict_import,
-    'input': _blocked_input,
+    'input': _select_input_func(),
     'math': _math,
     'random': _random,
     'string': _string,
@@ -153,6 +233,18 @@ def _safe_repr(v):
     return r
 
 
+def _load_input_queue():
+    inputs_file = os.environ.get('CODEUP_INPUTS_FILE', '')
+    if not inputs_file or not os.path.exists(inputs_file):
+        return
+    try:
+        with open(inputs_file, encoding='utf-8') as f:
+            for line in f:
+                _INPUT_QUEUE.append(line.rstrip('\n').rstrip('\r'))
+    except Exception:
+        pass
+
+
 def main():
     code_file = os.environ.get('CODEUP_CODE_FILE', '')
     if code_file and os.path.exists(code_file):
@@ -160,6 +252,8 @@ def main():
             code = f.read()
     else:
         code = ''
+
+    _load_input_queue()
 
     trace = []
     last_locals = {}
@@ -215,8 +309,15 @@ def main():
         sys.settrace(None)
         trace_file = os.environ.get('CODEUP_TRACE_FILE', '')
         if trace_file:
-            with open(trace_file, 'w', encoding='utf-8') as f:
-                json.dump({'trace': trace, 'duration_ms': int((time.time() - start) * 1000)}, f)
+            try:
+                with open(trace_file, 'w', encoding='utf-8') as f:
+                    json.dump({
+                        'trace': trace,
+                        'duration_ms': int((time.time() - start) * 1000),
+                        'inputs_consumed': _INPUT_INDEX[0],
+                    }, f)
+            except Exception:
+                pass
 
 
 if __name__ == '__main__':

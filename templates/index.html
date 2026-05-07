@@ -77,7 +77,36 @@
           style="padding:6px 10px;font-size:0.8rem;"
         >💾</button>
       </div>
-      <div id="snippetList" class="cu-snippet-list" aria-labelledby="snippets-heading"></div>
+      <div id="snippetList" class="cu-snippet-list" aria-labelledby="snippets-heading" style="max-height:180px;"></div>
+
+      <div class="cu-panel-title" style="margin-top:16px;display:flex;justify-content:space-between;align-items:center;">
+        <span>INPUTS</span>
+        <span id="inputModeIndicator"
+              style="font-size:0.65rem;padding:2px 6px;border-radius:4px;background:var(--accent-soft);color:var(--accent);border:1px solid var(--accent);"
+              title="Pre-flight input mode">📋 PRE-FLIGHT</span>
+      </div>
+      <div style="display:flex;gap:6px;margin-bottom:8px;">
+        <input
+          id="inputAddField"
+          type="text"
+          placeholder="Add an input value..."
+          aria-label="Add a pre-flight input value"
+          style="flex:1;padding:7px 10px;border-radius:var(--radius-sm);border:1px solid var(--border-soft);background:var(--bg-soft);color:var(--text-main);font-family:inherit;font-size:0.85rem;"
+        />
+        <button
+          id="inputAddBtn"
+          class="cu-button cu-button-secondary"
+          aria-label="Add this input value"
+          style="padding:6px 10px;font-size:0.8rem;"
+        >+</button>
+      </div>
+      <div id="inputsPanelList" aria-label="Pre-flight inputs">
+        <div style="color:var(--text-dim);font-style:italic;padding:6px 0;font-size:0.8rem;">No inputs declared</div>
+      </div>
+      <div style="display:flex;gap:6px;margin-top:8px;">
+        <button id="clearInputsBtn" class="cu-button" style="flex:1;font-size:0.75rem;padding:6px 8px;" aria-label="Clear all pre-flight inputs">Clear</button>
+        <button id="toggleInputModeBtn" class="cu-button" style="flex:1;font-size:0.75rem;padding:6px 8px;" aria-label="Toggle between pre-flight and live input mode">Live ⚡</button>
+      </div>
     </aside>
 
     <section class="cu-panel cu-editor-wrapper" aria-label="Code editor">
@@ -680,6 +709,44 @@
       document.getElementById('snippetSaveBtn').addEventListener('click', function () { if (typeof saveSnippetAccessible === 'function') saveSnippetAccessible(); });
       document.getElementById('snippetNameInput').addEventListener('keydown', function (e) {
         if (e.key === 'Enter') { e.preventDefault(); if (typeof saveSnippetAccessible === 'function') saveSnippetAccessible(); }
+      });
+
+      // Inputs panel — add button and Enter key on the input field
+      var inputAddField = document.getElementById('inputAddField');
+      var inputAddBtn   = document.getElementById('inputAddBtn');
+      var clearInputsBtn = document.getElementById('clearInputsBtn');
+      var toggleInputModeBtn = document.getElementById('toggleInputModeBtn');
+
+      function _addInputFromField() {
+        if (!inputAddField) return;
+        var v = inputAddField.value.trim();
+        if (!v) return;
+        if (typeof window._preflightInputs === 'undefined') window._preflightInputs = [];
+        // Push to the actual variable in app.js scope by calling the public setter
+        if (typeof setPreflightInputs === 'function') {
+          // Read existing list, append, set
+          var existing = (typeof _preflightInputs !== 'undefined' && Array.isArray(_preflightInputs))
+            ? _preflightInputs.slice() : [];
+          existing.push(v);
+          setPreflightInputs(existing);
+        }
+        inputAddField.value = '';
+      }
+      if (inputAddBtn)   inputAddBtn.addEventListener('click', _addInputFromField);
+      if (inputAddField) inputAddField.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); _addInputFromField(); }
+      });
+      if (clearInputsBtn) clearInputsBtn.addEventListener('click', function () {
+        if (typeof clearPreflightInputs === 'function') clearPreflightInputs();
+      });
+      if (toggleInputModeBtn) toggleInputModeBtn.addEventListener('click', function () {
+        if (typeof _liveInputMode !== 'undefined' && _liveInputMode) {
+          if (typeof enablePreflightInputMode === 'function') enablePreflightInputMode();
+          this.textContent = 'Live ⚡';
+        } else {
+          if (typeof enableLiveInputMode === 'function') enableLiveInputMode();
+          this.textContent = 'Pre-flight 📋';
+        }
       });
       document.getElementById('voiceButton').addEventListener('click', function () { if (typeof toggleVoice === 'function') toggleVoice(); });
       document.getElementById('languageSelector').addEventListener('change', function (e) {

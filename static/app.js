@@ -26,6 +26,30 @@ let _voicePaused = false;
 let _loadingSnippets = false;
 let _apiKeyPromptShown = false;
 
+// Pre-flight inputs queue (Mechanism A). Mirrors the inputs the user has
+// declared via voice or the inputs panel. Sent with every /run call.
+let _preflightInputs = [];
+
+// Live input mode toggle (Mechanism B). When true, "run" goes to /run-stream
+// instead of /run.
+let _liveInputMode = false;
+
+// Active streaming run state (only one at a time per tab)
+let _activeStreamRun = null;  // {runId, eventSource, awaitingPrompt, awaitingResolve}
+
+// Audio heartbeat timer — soft tone every 500ms while a run is in flight
+let _heartbeatTimer = null;
+
+// Last output stored for diff narration and bookmarks
+let _lastOutput = '';
+let _lastOutputDiff = null;
+
+// Autosave config
+const AUTOSAVE_INTERVAL_MS = 30000;
+let _autosaveTimer = null;
+let _autosaveLastCode = '';
+const AUTOSAVE_KEY = 'codeup_autosave_draft';
+
 // Set window.CODEUP_DEBUG = true in the browser console to see debug logs.
 // Off by default so deployments don't spam the console.
 const _debugLog = (...args) => {
@@ -820,36 +844,63 @@ function ensureNotExecuting(actionFn, description) {
   return true;
 }
 
+// ---------- HEARTBEAT (audio progress indicator) ----------
+function startHeartbeat() {
+  stopHeartbeat();
+  _heartbeatTimer = setInterval(() => {
+    // Very soft brief tone — barely audible but present
+    SonificationManager.playTone(440, 0.03, 0.025);
+  }, 500);
+}
+function stopHeartbeat() {
+  if (_heartbeatTimer) {
+    clearInterval(_heartbeatTimer);
+    _heartbeatTimer = null;
+  }
+}
+
+// ---------- LAST ERROR FOR BEGINNER RE-EXPLANATION ----------
+let _lastErrorContext = null;  // {code, error, language}
+
 // ---------- RUN ----------
 async function runCode() {
+  // Live input mode reroutes through the streaming endpoint
+  if (_liveInputMode) {
+    return runCodeStreaming();
+  }
+
   SpeechManager.cancelAll();
 
-  // Heads-up if the code uses input() — the sandbox will block it mid-run
-  // but it's friendlier to warn the user before they wait for execution.
   const codeToCheck = getCode();
-  if (/\binput\s*\(/.test(codeToCheck)) {
-    speak('Heads up: your code uses input, which is not supported. I will run it anyway, but you may want to replace input with a fixed value. Say fix to do this automatically.');
-    out('⚠ input() is not supported in CodeUp. Try replacing it with a fixed value (like  name = "Alice")  or say "fix" to auto-fix.\n\nRunning anyway...');
+  const usesInput = /\binput\s*\(/.test(codeToCheck);
+  if (usesInput && _preflightInputs.length === 0) {
+    speak('Heads up: your code uses input, but you have not declared any pre-flight inputs. The first input call will fail with a friendly error. To fix: say "set inputs to" followed by your values, or add a magic comment like "hash inputs colon Alice comma 17" at the top of your code, or say "live input mode" to switch to interactive mode.');
+    out('⚠ Your code uses input() but no pre-flight inputs are declared.\n\nFix one of these ways:\n  • Say: "set inputs to Alice and 17"\n  • Add at top of code: # inputs: Alice, 17\n  • Say: "live input mode"\n\nRunning anyway — first input() will explain.');
+  } else if (usesInput && _preflightInputs.length > 0) {
+    speak(`Pre-flight inputs ready: ${_preflightInputs.length} value${_preflightInputs.length === 1 ? '' : 's'}.`);
   }
 
   AppState.isExecuting = true;
   cueSuccess();
+  startHeartbeat();
   const _runMsgOut = getLanguage() === 'hi' ? 'चल रहा है...' : 'Running...';
   const _runMsgSpoken = getLanguage() === 'hi' ? 'कोड चल रहा है।' : 'Running code.';
   const _runMsgAI = getLanguage() === 'hi' ? 'कोड चल रहा है...' : 'Running code...';
-  if (!/\binput\s*\(/.test(codeToCheck)) out(_runMsgOut);
+  if (!usesInput) out(_runMsgOut);
   showAI(_runMsgAI);
   speak(_runMsgSpoken);
   srAnnounce(_runMsgSpoken);
   try {
-    const res  = await fetch('/run', {
-      method:  'POST',
+    const res = await fetch('/run', {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ code: getCode(), language: getLanguage() }),
+      body: JSON.stringify({
+        code: getCode(),
+        language: getLanguage(),
+        inputs: _preflightInputs,
+      }),
     });
     const data = await res.json();
-    // Keep the full trace so debugContinue() can hit breakpoints in long programs.
-    // Backend now caps at 5000 events, so this won't be unbounded.
     window.executionTrace = data.trace || [];
     window.traceIndex = 0;
 
@@ -857,30 +908,44 @@ async function runCode() {
       out(data.output);
       cueSuccess();
       ErrorBeaconManager.stop();
+      _lastErrorContext = null;
+
+      // Diff narration: only mention if there were changes from the previous run
+      const diff = data.diff;
+      _lastOutputDiff = diff;
+      _lastOutput = data.output || '';
+
       speak('Program output:');
       speak(data.output);
+
+      // Narrate diff if useful (skip on first run and on identical output)
+      if (diff && !diff.identical && diff.total_changes > 0) {
+        speak(diff.summary);
+        // Don't auto-read every changed line — too noisy. Provide voice cmd "what's different" for detail.
+        speak('Say "what is different" to hear the changed lines.');
+      }
+
       if (data.semantic_issues && data.semantic_issues.length) {
         data.semantic_issues.forEach(e => speak(`${e.category}. ${e.message}`));
       }
-      // Warn if the trace was truncated. Story mode and step playback build
-      // narratives from the trace; if it's incomplete the narrative will be too.
       const truncated = (data.trace || []).some(e => e.type === 'overflow');
       if (truncated) {
         speak('Heads up: your code ran more than five thousand steps, so the execution trace was truncated. Story mode and step-by-step playback may be incomplete.');
       }
-      // Tutorial hook — single source of truth lives in index.html's TutorialState
       if (typeof window._tutorialOnRunSuccess === 'function') {
         setTimeout(function () { window._tutorialOnRunSuccess(); }, 2000);
       }
     } else {
       out('ERROR:\n' + (data.error || ''));
       cueError();
-      // Cancel any in-flight speech so the error alert isn't queued behind it
       SpeechManager.cancelAll();
-      // Extract the most actionable line from the traceback
+      _lastErrorContext = {
+        code: getCode(),
+        error: data.error || '',
+        language: getLanguage(),
+      };
       const errLines = (data.error || '').trim().split('\n').filter(Boolean);
       const lastLine = errLines[errLines.length - 1] || 'Unknown error';
-      // Try to extract line number from traceback
       const lineMatch = (data.error || '').match(/line (\d+)/);
       const lineHint = lineMatch ? ` on line ${lineMatch[1]}` : '';
       speak(`Error${lineHint}: ${lastLine}`);
@@ -888,13 +953,146 @@ async function runCode() {
       if (data.explanation) {
         speak(data.explanation);
       }
+      if (data.inputs_hint) {
+        speak(data.inputs_hint);
+      }
+      speak('Say "explain simply" if that was confusing.');
     }
   } catch (e) {
     out('System error.'); console.error(e); cueError(); speak('System error.');
   } finally {
+    stopHeartbeat();
     AppState.isExecuting = false;
     hideAI();
     await flushPendingActions();
+  }
+}
+
+// ---------- STREAMING RUN (Mechanism B — live interactive input) ----------
+async function runCodeStreaming() {
+  SpeechManager.cancelAll();
+  AppState.isExecuting = true;
+  cueSuccess();
+  startHeartbeat();
+  out('Running in live input mode...\n');
+  showAI('Live run started.');
+  speak('Live input mode. I will read prompts as your code asks for them. Say or type your answer.');
+  srAnnounce('Live run started');
+
+  try {
+    const startRes = await fetch('/run-stream/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: getCode() }),
+    });
+    const startData = await startRes.json();
+    if (!startData.success) {
+      stopHeartbeat();
+      AppState.isExecuting = false;
+      hideAI();
+      const msg = startData.error || 'Could not start live run.';
+      out(msg);
+      speak(msg);
+      if (msg.toLowerCase().includes('windows') || msg.toLowerCase().includes('posix')) {
+        speak('Switching back to pre-flight input mode.');
+        _liveInputMode = false;
+        updateInputModeUI();
+      }
+      return;
+    }
+
+    const runId = startData.run_id;
+    _activeStreamRun = { runId, awaitingPrompt: null, awaitingResolve: null };
+
+    const url = `/run-stream/${encodeURIComponent(runId)}/stream`;
+    const es = new EventSource(url);
+    _activeStreamRun.eventSource = es;
+
+    let buffer = '';
+    let outputElement = document.getElementById('output');
+
+    es.onmessage = (evt) => {
+      let event;
+      try { event = JSON.parse(evt.data); } catch { return; }
+      if (event.type === 'stdout') {
+        buffer += event.text;
+        outputElement.textContent = buffer;
+        // Speak chunks as they arrive — but only meaningful ones
+        const chunk = event.text.trim();
+        if (chunk) speak(chunk);
+      } else if (event.type === 'stderr') {
+        buffer += '[error] ' + event.text;
+        outputElement.textContent = buffer;
+        const chunk = event.text.trim();
+        if (chunk) speak('Error: ' + chunk);
+      } else if (event.type === 'input_request') {
+        const prompt = event.prompt || 'Input requested';
+        _activeStreamRun.awaitingPrompt = prompt;
+        speak(`Your code is asking: ${prompt}. Say your answer, or type it in the command box and press Enter.`);
+        srAnnounce('Input requested');
+        SonificationManager.playTone(800, 0.15, 0.1);
+        // Focus the command input so keyboard users can type immediately
+        const cmd = document.getElementById('voiceText');
+        if (cmd) {
+          cmd.placeholder = 'Type your input and press Enter…';
+          cmd.focus();
+        }
+      } else if (event.type === 'done') {
+        const cmd = document.getElementById('voiceText');
+        if (cmd) cmd.placeholder = 'Voice & typed commands appear here...';
+        speak('Run complete.');
+        srAnnounce('Run complete');
+        es.close();
+        stopHeartbeat();
+        AppState.isExecuting = false;
+        hideAI();
+        _lastOutput = buffer;
+        _activeStreamRun = null;
+      } else if (event.type === 'error') {
+        speak('Stream error.');
+        es.close();
+        stopHeartbeat();
+        AppState.isExecuting = false;
+        hideAI();
+        _activeStreamRun = null;
+      }
+    };
+
+    es.onerror = () => {
+      speak('Connection to live run lost.');
+      try { es.close(); } catch (e) {}
+      stopHeartbeat();
+      AppState.isExecuting = false;
+      hideAI();
+      _activeStreamRun = null;
+    };
+  } catch (e) {
+    console.error(e);
+    stopHeartbeat();
+    AppState.isExecuting = false;
+    hideAI();
+    speak('Live run failed to start.');
+  }
+}
+
+async function sendStreamingInput(value) {
+  if (!_activeStreamRun || !_activeStreamRun.runId) return false;
+  if (!_activeStreamRun.awaitingPrompt) {
+    speak('Your code is not waiting for input right now.');
+    return false;
+  }
+  try {
+    await fetch(`/run-stream/${encodeURIComponent(_activeStreamRun.runId)}/input`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value: value }),
+    });
+    _activeStreamRun.awaitingPrompt = null;
+    speak(`Sent: ${value}`);
+    return true;
+  } catch (e) {
+    speak('Failed to send input.');
+    return false;
   }
 }
 
@@ -1511,6 +1709,318 @@ async function handleConfirmedAction(action, payload) {
   else if (action === 'quiz_me')            await quizMe(payload && payload.topic);
   else if (action === 'explain_concept')    await explainConcept(payload && payload.concept);
   else if (action === 'bug_challenge')      await bugChallenge();
+  // Pre-flight inputs
+  else if (action === 'set_inputs')         setPreflightInputs(payload && payload.values);
+  else if (action === 'clear_inputs')       clearPreflightInputs();
+  else if (action === 'list_inputs')        listPreflightInputs();
+  else if (action === 'live_input_mode')    enableLiveInputMode();
+  else if (action === 'preflight_input_mode') enablePreflightInputMode();
+  // Voice macros
+  else if (action === 'save_macro')         await saveMacro(payload && payload.name);
+  else if (action === 'use_macro')          await useMacro(payload && payload.name);
+  else if (action === 'list_macros')        await listMacrosVoice();
+  // Output bookmarks
+  else if (action === 'bookmark_output')    await bookmarkOutput(payload && payload.label);
+  else if (action === 'read_bookmark')      await readBookmark(payload && payload.label);
+  else if (action === 'list_bookmarks')     await listBookmarks();
+  // Live execution position
+  else if (action === 'where_am_i')         await reportPosition();
+  // Beginner-mode error explanation
+  else if (action === 'explain_simply')     await explainErrorSimply();
+  // Output diff narration
+  else if (action === 'narrate_diff')       narrateOutputDiff();
+}
+
+// ---------- PRE-FLIGHT INPUTS ----------
+function setPreflightInputs(values) {
+  if (!Array.isArray(values) || values.length === 0) {
+    speak('No values heard. Try saying "set inputs to" followed by your values separated by "and" or commas.');
+    return;
+  }
+  _preflightInputs = values.map(v => String(v));
+  updateInputsPanel();
+  const summary = _preflightInputs.join(', ');
+  speak(`${_preflightInputs.length} input${_preflightInputs.length === 1 ? '' : 's'} ready: ${summary}.`);
+  out(`PRE-FLIGHT INPUTS SET (${_preflightInputs.length}):\n${_preflightInputs.map((v, i) => `  ${i + 1}. ${v}`).join('\n')}\n\nThese will be used in order when your code calls input().`);
+  srAnnounce(`${_preflightInputs.length} inputs set`);
+}
+
+function clearPreflightInputs() {
+  _preflightInputs = [];
+  updateInputsPanel();
+  speak('Pre-flight inputs cleared.');
+  out('Pre-flight inputs cleared.');
+  srAnnounce('Inputs cleared');
+}
+
+function listPreflightInputs() {
+  if (_preflightInputs.length === 0) {
+    speak('You have no pre-flight inputs declared.');
+    out('No pre-flight inputs declared.');
+    return;
+  }
+  speak(`You have ${_preflightInputs.length} input${_preflightInputs.length === 1 ? '' : 's'}:`);
+  _preflightInputs.forEach((v, i) => speak(`Input ${i + 1}: ${v}.`));
+  out(`PRE-FLIGHT INPUTS (${_preflightInputs.length}):\n${_preflightInputs.map((v, i) => `  ${i + 1}. ${v}`).join('\n')}`);
+}
+
+function enableLiveInputMode() {
+  _liveInputMode = true;
+  updateInputModeUI();
+  speak('Switched to live input mode. When you press run, your code will pause and ask for each input as it needs it. Note: live mode requires Linux or macOS on the server.');
+  out('LIVE INPUT MODE ON\n\nYour code will pause at each input() call and wait for you to answer by voice or by typing in the command box.');
+  srAnnounce('Live input mode on');
+}
+
+function enablePreflightInputMode() {
+  _liveInputMode = false;
+  updateInputModeUI();
+  speak('Switched to pre-flight input mode. Declare your inputs ahead of time, then press run.');
+  out('PRE-FLIGHT INPUT MODE ON (default)\n\nDeclare inputs first: say "set inputs to value1 and value2", then press run.');
+  srAnnounce('Pre-flight input mode on');
+}
+
+function updateInputModeUI() {
+  const indicator = document.getElementById('inputModeIndicator');
+  if (indicator) {
+    indicator.textContent = _liveInputMode ? '⚡ LIVE' : '📋 PRE-FLIGHT';
+    indicator.title = _liveInputMode
+      ? 'Live input mode: your code pauses and asks for inputs in real time.'
+      : 'Pre-flight input mode: inputs are declared ahead of time.';
+  }
+}
+
+function updateInputsPanel() {
+  const panel = document.getElementById('inputsPanelList');
+  if (!panel) return;
+  if (_preflightInputs.length === 0) {
+    panel.innerHTML = '<div style="color:var(--text-dim);font-style:italic;padding:6px 0;font-size:0.8rem;">No inputs declared</div>';
+    return;
+  }
+  panel.innerHTML = _preflightInputs.map((v, i) =>
+    `<div class="snippet-item" style="font-size:0.8rem;padding:6px 10px;"><span>${i + 1}. ${escapeHtml(v)}</span></div>`
+  ).join('');
+}
+
+// ---------- VOICE MACROS ----------
+async function saveMacro(name) {
+  if (!name) { speak('Please give the macro a name. Say "remember this as" followed by a name.'); return; }
+  const code = getCode();
+  if (!code.trim()) { speak('The editor is empty. Nothing to save as a macro.'); return; }
+  try {
+    const res = await fetch('/macros', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, code }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      speak(data.speech || `Macro ${name} saved.`);
+      srAnnounce(`Macro ${name} saved`);
+    } else {
+      speak(data.error || 'Could not save macro.');
+    }
+  } catch (e) {
+    speak('Macro save failed.');
+  }
+}
+
+async function useMacro(name) {
+  if (!name) { speak('Which macro? Say "use macro" followed by the name.'); return; }
+  try {
+    const res = await fetch(`/macros/get/${encodeURIComponent(name)}`);
+    const data = await res.json();
+    if (data.success) {
+      setCode(data.code);
+      speak(`Loaded macro ${name}.`);
+      out(`Macro "${name}" loaded into the editor.`);
+      srAnnounce(`Macro ${name} loaded`);
+    } else {
+      speak(`No macro named ${name}. Say "list macros" to hear what is saved.`);
+    }
+  } catch (e) {
+    speak('Macro load failed.');
+  }
+}
+
+async function listMacrosVoice() {
+  try {
+    const res = await fetch('/macros');
+    const data = await res.json();
+    if (!data.success) { speak('Could not list macros.'); return; }
+    speak(data.speech);
+    if (data.names && data.names.length) {
+      out(`MACROS (${data.names.length}):\n${data.names.map((n, i) => `  ${i + 1}. ${n}`).join('\n')}\n\nSay "use macro" followed by a name.`);
+    } else {
+      out('No macros saved. Save one by writing code, then saying "remember this as" followed by a name.');
+    }
+  } catch (e) {
+    speak('Macro list failed.');
+  }
+}
+
+// ---------- OUTPUT BOOKMARKS ----------
+async function bookmarkOutput(label) {
+  const outputEl = document.getElementById('output');
+  const position = outputEl ? (outputEl.textContent || '').length : 0;
+  try {
+    const res = await fetch('/bookmarks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ label: label || '', position }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      SonificationManager.playTone(750, 0.08, 0.08);
+      speak(data.speech);
+      srAnnounce('Bookmark saved');
+    }
+  } catch (e) {
+    speak('Could not save bookmark.');
+  }
+}
+
+async function readBookmark(label) {
+  if (!label) {
+    // Read from most recent
+    const res = await fetch('/bookmarks');
+    const data = await res.json();
+    if (!data.success || !data.bookmarks.length) {
+      speak('No bookmarks saved.');
+      return;
+    }
+    label = data.bookmarks[data.bookmarks.length - 1].label;
+  }
+  const outputEl = document.getElementById('output');
+  const fullOutput = outputEl ? outputEl.textContent : '';
+  try {
+    const res = await fetch('/bookmarks/read', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ label, output: fullOutput }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      speak(`Reading from bookmark ${data.label}.`);
+      speak(data.slice || 'Empty.');
+    } else {
+      speak(data.error || 'Bookmark not found.');
+    }
+  } catch (e) {
+    speak('Could not read from bookmark.');
+  }
+}
+
+async function listBookmarks() {
+  try {
+    const res = await fetch('/bookmarks');
+    const data = await res.json();
+    if (!data.success) { speak('Could not list bookmarks.'); return; }
+    if (!data.bookmarks.length) {
+      speak('You have no bookmarks.');
+      out('No bookmarks. Say "bookmark this" while output is showing to save one.');
+      return;
+    }
+    speak(`You have ${data.bookmarks.length} bookmark${data.bookmarks.length === 1 ? '' : 's'}:`);
+    data.bookmarks.forEach(b => speak(b.label));
+    out(`BOOKMARKS (${data.bookmarks.length}):\n${data.bookmarks.map((b, i) => `  ${i + 1}. ${b.label}`).join('\n')}`);
+  } catch (e) {
+    speak('Bookmark list failed.');
+  }
+}
+
+// ---------- LIVE EXECUTION POSITION ----------
+async function reportPosition() {
+  if (_activeStreamRun && _activeStreamRun.runId) {
+    try {
+      const res = await fetch(`/run-stream/${encodeURIComponent(_activeStreamRun.runId)}/position`);
+      const data = await res.json();
+      if (data.success && data.alive) {
+        const sec = (data.elapsed_ms / 1000).toFixed(1);
+        if (data.awaiting_input) {
+          speak(`Your code has been running for ${sec} seconds and is waiting for your input.`);
+        } else {
+          speak(`Your code has been running for ${sec} seconds.`);
+        }
+        return;
+      }
+    } catch (e) {}
+  }
+  // Fall back to breadcrumb at cursor
+  await readBreadcrumb();
+}
+
+async function readBreadcrumb() {
+  const model = getModel();
+  if (!model) { speak('Editor not ready.'); return; }
+  const pos = editor.getPosition() || { lineNumber: 1 };
+  try {
+    const res = await fetch('/breadcrumbs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: getCode(), line: pos.lineNumber }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      speak(`You are in: ${data.breadcrumb}.`);
+      out(`Position: ${data.breadcrumb}`);
+    } else {
+      speak(data.message || 'Could not determine position.');
+    }
+  } catch (e) {
+    speak('Position lookup failed.');
+  }
+}
+
+// ---------- BEGINNER ERROR EXPLANATION ----------
+async function explainErrorSimply() {
+  if (!_lastErrorContext) {
+    speak('There is no recent error to explain. Run your code first.');
+    return;
+  }
+  showAI('Explaining in simpler terms...');
+  speak('Let me explain that more simply.');
+  try {
+    const res = await fetch('/explain-error-beginner', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(_lastErrorContext),
+    });
+    const data = await res.json();
+    if (data.success) {
+      out(data.explanation);
+      speak(data.explanation);
+      srAnnounce('Beginner explanation ready');
+    } else {
+      speak('Could not generate a simpler explanation.');
+    }
+  } catch (e) {
+    speak('Explanation failed.');
+  } finally {
+    hideAI();
+  }
+}
+
+// ---------- OUTPUT DIFF NARRATION ----------
+function narrateOutputDiff() {
+  if (!_lastOutputDiff) {
+    speak('No diff available. Run your code at least twice to compare outputs.');
+    return;
+  }
+  if (_lastOutputDiff.identical) {
+    speak('The output is identical to the previous run.');
+    return;
+  }
+  if (!_lastOutputDiff.changed_lines || _lastOutputDiff.changed_lines.length === 0) {
+    speak(_lastOutputDiff.summary || 'First run — nothing to compare yet.');
+    return;
+  }
+  speak(_lastOutputDiff.summary);
+  _lastOutputDiff.changed_lines.forEach(c => {
+    if (c.kind === 'added') speak(`Line ${c.line_no}, added: ${c.after}.`);
+    else if (c.kind === 'removed') speak(`Line ${c.line_no}, removed: ${c.before}.`);
+    else speak(`Line ${c.line_no}, was "${c.before}", now "${c.after}".`);
+  });
 }
 
 function tryResolveConfirmation(txt) {
@@ -2055,6 +2565,7 @@ function registerEditorShortcuts() {
   editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.KeyE, () => { checkSyntaxErrors(); });
   editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.KeyN, () => { speakNextStep(); });
   editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.KeyH, () => { showHelp(); });
+  editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.KeyB, () => { readBreadcrumb(); });
   editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.LeftArrow,  () => { navigateBack(); });
   editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.RightArrow, () => { navigateForward(); });
   editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.Home, () => { goToTop(); });
@@ -2063,6 +2574,10 @@ function registerEditorShortcuts() {
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyV, () => { pasteCode(); });
 
   try { loadSnippets(); } catch (e) {}
+  startAutosave();
+  recoverAutosaveDraft();
+  updateInputModeUI();
+  updateInputsPanel();
   _debugLog('All accessibility features loaded.');
 }
 

@@ -514,6 +514,100 @@ class IntentParser:
         r"^(?:एक\s+)?bug\s+(?:challenge|ढूंढो)$",
     ]
 
+    # ----- Pre-flight input controls -----
+    SET_INPUTS_PATTERNS = [
+        r"^set\s+inputs?\s+to\s+(.+)$",
+        r"^use\s+inputs?\s+(.+)$",
+        r"^inputs?\s+are\s+(.+)$",
+        r"^(?:पहले\s+से\s+|preflight\s+)?inputs?\s+(.+?)\s+(?:set|डालो|दो)$",
+    ]
+    CLEAR_INPUTS_PATTERNS = [
+        r"^clear\s+inputs?$",
+        r"^remove\s+(?:all\s+)?inputs?$",
+        r"^reset\s+inputs?$",
+        r"^inputs?\s+(?:साफ|खाली)\s*करो$",
+    ]
+    LIST_INPUTS_PATTERNS = [
+        r"^(?:list|show|read)\s+(?:my\s+)?inputs?$",
+        r"^what\s+(?:are\s+my\s+)?inputs?$",
+        r"^inputs?\s+(?:सुनाओ|बताओ)$",
+    ]
+    LIVE_INPUT_MODE_PATTERNS = [
+        r"^(?:switch\s+to\s+)?live\s+input(?:\s+mode)?$",
+        r"^interactive\s+(?:mode|input)$",
+        r"^live\s+(?:run|mode)$",
+        r"^(?:लाइव|interactive)\s+(?:मोड|mode)$",
+    ]
+    PREFLIGHT_INPUT_MODE_PATTERNS = [
+        r"^(?:switch\s+to\s+)?(?:pre-?flight|preflight)\s+(?:input\s+)?mode$",
+        r"^(?:pre-?flight|preflight)\s+inputs?$",
+        r"^batch\s+(?:input\s+)?mode$",
+    ]
+
+    # ----- Voice macros -----
+    SAVE_MACRO_PATTERNS = [
+        r"^remember\s+(?:this\s+)?as\s+(.+)$",
+        r"^save\s+(?:this\s+)?(?:as\s+)?macro\s+(.+)$",
+        r"^macro\s+save\s+(.+)$",
+        r"^(?:इसे\s+)?(.+?)\s+(?:नाम\s+से\s+)?(?:याद|macro)\s*(?:रखो|करो)$",
+    ]
+    USE_MACRO_PATTERNS = [
+        r"^use\s+macro\s+(.+)$",
+        r"^(?:run|load)\s+macro\s+(.+)$",
+        r"^macro\s+(.+?)\s+(?:use|run|load)$",
+        r"^macro\s+(.+)$",  # last because greediest
+        r"^(.+?)\s+macro\s+(?:चलाओ|use\s*करो)$",
+    ]
+    LIST_MACROS_PATTERNS = [
+        r"^list\s+macros?$",
+        r"^show\s+(?:my\s+)?macros?$",
+        r"^what\s+macros?\s+(?:do\s+i\s+have|are\s+saved)$",
+        r"^macros?\s+(?:की\s+सूची|बताओ)$",
+    ]
+
+    # ----- Output bookmarks -----
+    BOOKMARK_OUTPUT_PATTERNS = [
+        r"^bookmark\s+(?:this|here)?(?:\s+as\s+(.+))?$",
+        r"^mark\s+(?:this|here)?(?:\s+as\s+(.+))?$",
+        r"^(?:यहां|यह)\s+bookmark\s*(?:करो)?(?:\s+(?:नाम\s+)?(.+))?$",
+    ]
+    READ_BOOKMARK_PATTERNS = [
+        r"^read\s+from\s+bookmark(?:\s+(.+))?$",
+        r"^(?:go\s+to|jump\s+to)\s+bookmark(?:\s+(.+))?$",
+        r"^bookmark(?:\s+(.+))?\s+(?:से|से\s+पढ़ो|पढ़ो)$",
+    ]
+    LIST_BOOKMARKS_PATTERNS = [
+        r"^list\s+bookmarks?$",
+        r"^show\s+(?:my\s+)?bookmarks?$",
+        r"^bookmarks?$",
+        r"^bookmarks?\s+(?:बताओ|सूची)$",
+    ]
+
+    # ----- Where am I (live execution position) -----
+    WHERE_AM_I_PATTERNS = [
+        r"^where\s+am\s+i(?:\s+in\s+execution)?$",
+        r"^(?:current\s+)?(?:execution\s+)?position$",
+        r"^what\s+line\s+(?:is\s+running|am\s+i\s+on)$",
+        r"^(?:मैं\s+)?कहां\s+हूं$",
+        r"^कौन\s+सी\s+line$",
+    ]
+
+    # ----- Beginner explanation -----
+    EXPLAIN_SIMPLY_PATTERNS = [
+        r"^explain\s+(?:like\s+i'?m\s+(?:five|new|a\s+beginner)|simpler|simply|in\s+plain\s+(?:words|english))$",
+        r"^(?:simpler|too\s+complicated|i\s+don'?t\s+understand)$",
+        r"^(?:और\s+आसान|simple\s+में|बच्चे\s+की\s+तरह)\s*(?:समझाओ)?$",
+    ]
+
+    # ----- Diff narration -----
+    NARRATE_DIFF_PATTERNS = [
+        r"^(?:what'?s|whats)\s+different$",
+        r"^(?:narrate|tell\s+me)\s+(?:the\s+)?diff(?:erence)?$",
+        r"^(?:what\s+)?changed\s+(?:in|from)\s+(?:the\s+)?(?:last\s+)?(?:run|output)$",
+        r"^output\s+diff$",
+        r"^(?:पिछले\s+से\s+)?क्या\s+अलग\s+है$",
+    ]
+
     START_TUTORIAL_PATTERNS = [
         r"^(?:start|open|begin|launch)\s+tutorial$",
         r"^tutorial$",
@@ -613,6 +707,25 @@ class IntentParser:
             "start_tutorial":      self.START_TUTORIAL_PATTERNS,
             "skip_tutorial":       self.SKIP_TUTORIAL_PATTERNS,
             "tutorial_next":       self.TUTORIAL_NEXT_PATTERNS,
+            # Input mechanisms
+            "set_inputs":          self.SET_INPUTS_PATTERNS,
+            "clear_inputs":        self.CLEAR_INPUTS_PATTERNS,
+            "list_inputs":         self.LIST_INPUTS_PATTERNS,
+            "live_input_mode":     self.LIVE_INPUT_MODE_PATTERNS,
+            "preflight_input_mode": self.PREFLIGHT_INPUT_MODE_PATTERNS,
+            # Voice macros
+            "save_macro":          self.SAVE_MACRO_PATTERNS,
+            "use_macro":           self.USE_MACRO_PATTERNS,
+            "list_macros":         self.LIST_MACROS_PATTERNS,
+            # Output bookmarks
+            "bookmark_output":     self.BOOKMARK_OUTPUT_PATTERNS,
+            "read_bookmark":       self.READ_BOOKMARK_PATTERNS,
+            "list_bookmarks":      self.LIST_BOOKMARKS_PATTERNS,
+            # Live execution position
+            "where_am_i":          self.WHERE_AM_I_PATTERNS,
+            # Beginner explanation + diff narration
+            "explain_simply":      self.EXPLAIN_SIMPLY_PATTERNS,
+            "narrate_diff":        self.NARRATE_DIFF_PATTERNS,
         }
 
     # -----------------------------------------------------------------------
@@ -717,6 +830,12 @@ class IntentParser:
                 if intent == "set_breakpoint" and "line_number" not in slots:
                     continue
                 if intent == "explain_concept" and "concept" not in slots:
+                    continue
+                if intent == "set_inputs" and "values" not in slots:
+                    continue
+                if intent == "save_macro" and "name" not in slots:
+                    continue
+                if intent == "use_macro" and "name" not in slots:
                     continue
 
                 return {
@@ -843,6 +962,41 @@ class IntentParser:
         elif intent == "preview_snippet":
             if match.groups() and match.group(1):
                 slots["snippet_id"] = match.group(1).strip()
+
+        elif intent == "set_inputs":
+            if match.groups() and match.group(1):
+                raw = match.group(1).strip()
+                # Split on " and ", commas, semicolons. Keeps "Alice" and "17"
+                # together in 'Alice and 17'. Cap at 50 items, 1000 chars each.
+                parts = re.split(r'\s*(?:,|;|\band\b)\s*', raw, flags=re.IGNORECASE)
+                values = [p.strip() for p in parts if p.strip()]
+                if values:
+                    slots["values"] = values[:50]
+
+        elif intent == "save_macro":
+            if match.groups() and match.group(1):
+                # Sanitize: lowercase, strip, allow only safe chars
+                name = match.group(1).strip().lower()
+                name = re.sub(r'[^a-z0-9 _-]', '', name)[:64].strip()
+                if name:
+                    slots["name"] = name
+
+        elif intent == "use_macro":
+            if match.groups() and match.group(1):
+                name = match.group(1).strip().lower()
+                name = re.sub(r'[^a-z0-9 _-]', '', name)[:64].strip()
+                if name:
+                    slots["name"] = name
+
+        elif intent == "bookmark_output":
+            if match.groups() and len(match.groups()) >= 1 and match.group(1):
+                label = match.group(1).strip().lower()[:64]
+                if label:
+                    slots["label"] = label
+
+        elif intent == "read_bookmark":
+            if match.groups() and len(match.groups()) >= 1 and match.group(1):
+                slots["label"] = match.group(1).strip().lower()[:64]
 
         return slots
 

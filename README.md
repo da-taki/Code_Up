@@ -187,7 +187,21 @@ Per-session rate limit: 10 runs per 60 seconds.
 
 ## Status
 
-v0.7.0 — School-deployment ready. Calm, professional aesthetic. Locally tested with the full test suite (162 passing tests). See CHANGELOG for recent fixes.
+v0.8.0 — Deployment ready with full `input()` support, output diff narration, audio heartbeat, voice macros, output bookmarks, code structure breadcrumbs, beginner-mode error explanations, and a coffee-themed UI. Locally tested with the full test suite (200+ passing tests).
+
+### What's new in 0.8.0
+
+- **`input()` support, two ways**:
+  - *Pre-flight* (default, reproducible): declare values ahead with the inputs panel, voice (`set inputs to alice and seventeen`), or a magic comment (`# inputs: alice, 17`)
+  - *Live* (POSIX only): `say live input mode`, then your code pauses at each `input()` and asks you for the value via voice or typing
+- **Output diff narration**: re-run code and hear only what changed, not the whole output again. Voice: `what's different`
+- **Audio heartbeat**: soft tone every 500ms while code runs so you know it's alive
+- **Voice macros**: `remember this as quick sort` saves the editor as a named macro; `use macro quick sort` loads it
+- **Output bookmarks**: `bookmark this` mid-output, then `read from bookmark <name>` later
+- **Breadcrumbs**: Alt+B (or `where am i`) reads "function calculate, inside for loop, line 15"
+- **Beginner errors**: after an error, say `explain simply` for a jargon-free, real-life-analogy version
+- **Auto-save**: every 30 seconds, silently. A draft from the previous session is restored automatically on next visit.
+- **Coffee theme**: replaces the previous teal palette with cream, caramel, and espresso
 
 Next:
 

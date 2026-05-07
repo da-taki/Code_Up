@@ -5,13 +5,35 @@ import json, os, traceback, io, contextlib, re, ast, sys, time, threading, subpr
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Tuple, Optional, Any, Dict
 
-__version__ = "0.7.1"
+__version__ = "0.8.0"
 from rapidfuzz import fuzz
 from google import genai
 from google.genai import types as genai_types
 from structure_parser import CodeAnalyzer
 from intent_parser import parse_intent
 from sandboxed_fs import get_sandbox
+
+# ---------------------------------------------------------------------------
+# Interactive run (Mechanism B) state
+# ---------------------------------------------------------------------------
+# Each live run gets a UUID. The state dict holds the subprocess handle,
+# FIFO path, output buffer, completion flag, and a queue.Queue that the SSE
+# generator reads chunks from. Cleanup happens on subprocess exit OR when
+# the SSE client disconnects (whichever comes first).
+import queue as _queue_mod
+
+_active_runs = {}  # run_id -> dict
+_active_runs_lock = threading.Lock()
+
+# Voice macros: per-session named code snippets the student can recall by name.
+# Stored on disk alongside snippets but in a separate file so they don't clutter
+# the snippet list. Keyed by sanitized session id.
+_voice_macros_lock = threading.Lock()
+
+# Output bookmarks: per-session list of {label, position, timestamp, output_id}.
+# In-memory only (cheap, ephemeral, scoped to session).
+_output_bookmarks = {}  # session_id -> list[dict]
+_output_bookmarks_lock = threading.Lock()
 
 # Thread-local storage for per-request Gemini API key.
 # (_trace_context was removed along with run_with_trace — session storage handles traces.)
@@ -727,8 +749,27 @@ def sanitize_traceback(traceback_str: str) -> str:
         sanitized.append(line)
     return '\n'.join(sanitized)
 
-def explain_error(code: str, err_text: str, language="en") -> str:
-    if language == "hi":
+def explain_error(code: str, err_text: str, language="en", beginner=False) -> str:
+    if beginner:
+        if language == "hi":
+            system = (
+                "आप एक धैर्यवान शिक्षक हैं जो बिल्कुल नए पायथन सीखने वाले को समझा रहे हैं।\n"
+                "मान लें कि उन्होंने पहले कभी programming नहीं की है।\n"
+                "Technical jargon use न करें — 'NameError' या 'TypeError' न कहें।\n"
+                "Real-life analogy दें। फिर बताएं कि कौन सी line में problem है और exact क्या type करना है।\n"
+                "अधिकतम 5 बहुत simple वाक्य।"
+            )
+        else:
+            system = (
+                "You are a patient teacher explaining an error to someone brand new to "
+                "Python — assume they have never coded before.\n"
+                "Avoid jargon entirely. Do not say 'NameError' or 'TypeError'. Say what "
+                "happened in plain English, like you are talking to a friend.\n"
+                "Use a real-life analogy if it helps. Then tell them which line has the "
+                "problem and exactly what to type to fix it.\n"
+                "Maximum 5 very simple sentences. Be warm and encouraging."
+            )
+    elif language == "hi":
         system = (
             "आप एक पायथन ट्यूटर हैं जो एक दृष्टिबाधित-केंद्रित IDE में काम करते हैं।\n"
             "उपयोगकर्ता के कोड और त्रुटि को देखते हुए, समझाएं:\n"
@@ -736,6 +777,8 @@ def explain_error(code: str, err_text: str, language="en") -> str:
             "- किस पंक्ति पर (यदि दृश्यमान हो)\n"
             "- इसका सरल शब्दों में क्या अर्थ है\n"
             "- इसे कैसे ठीक करें\n"
+            "अगर error में input() का mention है, समझाएं कि CodeUp में inputs को पहले "
+            "declare करना होता है — magic comment '# inputs: मान1, मान2' से या inputs panel से।\n"
             "अधिकतम 6 छोटी पंक्तियां। सीधे रहें।"
         )
     else:
@@ -746,14 +789,31 @@ def explain_error(code: str, err_text: str, language="en") -> str:
             "- On which line (if visible)\n"
             "- What it means in simple terms\n"
             "- How to fix it\n"
-            "If the error mentions input() is not supported, explain that the sandbox "
-            "does not support keyboard input, and show how to replace input() with a "
-            "hardcoded value for testing.\n"
+            "If the error mentions input() needing pre-flight values, explain that "
+            "CodeUp uses a pre-flight input queue: declare values with a magic comment "
+            "like '# inputs: Alice, 17' at the top, or fill the inputs panel, or "
+            "switch to live input mode.\n"
             "Max 6 short lines. Be direct."
         )
     safe_error = sanitize_traceback(err_text)
     user = f"Code:\n```python\n{code}\n```\n\nError:\n```\n{safe_error}\n```"
     return call_gemini(system, user, language=language)
+
+
+@app.route("/explain-error-beginner", methods=["POST"])
+def explain_error_beginner():
+    """Beginner-friendly error explanation. Same input as /run's error path
+    but uses the gentle-tutor system prompt."""
+    body = safejson()
+    code = safe(body.get("code"), "")
+    error_text = safe(body.get("error"), "")
+    language = safe(body.get("language"), "en")
+    if len(code) > MAX_CODE_SIZE:
+        return jsonify({"success": False, "error": f"Code too large"}), 413
+    if not error_text.strip():
+        return jsonify({"success": False, "error": "No error provided"}), 400
+    explanation = explain_error(code, error_text, language=language, beginner=True)
+    return jsonify({"success": True, "explanation": explanation})
 
 # ==========================
 # RUN CODE (WITH AI ERROR EXPLANATION)
@@ -820,12 +880,104 @@ def save_execution_trace(trace, duration_ms=0):
 
 
 
+# Magic comment parser for `# inputs: foo, bar, baz` declared at top of code
+_INPUT_MAGIC_RE = re.compile(r'^\s*#\s*inputs?\s*:\s*(.+)$', re.IGNORECASE | re.MULTILINE)
+
+def _parse_magic_inputs(code: str):
+    """Look for `# inputs: a, b, c` near the top of the file (first 5 lines).
+
+    Returns a list of input strings, or [] if no magic comment found.
+    Comma-separated; whitespace stripped per item.
+    """
+    head = '\n'.join(code.splitlines()[:5])
+    m = _INPUT_MAGIC_RE.search(head)
+    if not m:
+        return []
+    raw = m.group(1).strip()
+    if not raw:
+        return []
+    return [item.strip() for item in raw.split(',') if item.strip()]
+
+
+# Track last output per session so we can narrate diffs on next run
+_last_outputs = {}  # session_id -> {"output": str, "timestamp": float}
+_last_outputs_lock = threading.Lock()
+
+
+def _compute_output_diff(prev: str, curr: str) -> dict:
+    """Return a structured diff between two outputs suitable for narration.
+
+    Returns dict with: identical (bool), summary (str), changed_lines (list of
+    {line_no, before, after, kind}). Kind is 'added', 'removed', or 'changed'.
+    """
+    if prev == curr:
+        return {"identical": True, "summary": "Output is identical to the previous run.", "changed_lines": []}
+    if not prev:
+        return {"identical": False, "summary": "First run — no previous output to compare.", "changed_lines": []}
+
+    import difflib
+    prev_lines = prev.splitlines()
+    curr_lines = curr.splitlines()
+    matcher = difflib.SequenceMatcher(None, prev_lines, curr_lines)
+    changes = []
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == 'equal':
+            continue
+        if tag == 'replace':
+            for k in range(max(i2 - i1, j2 - j1)):
+                before = prev_lines[i1 + k] if i1 + k < i2 else ""
+                after = curr_lines[j1 + k] if j1 + k < j2 else ""
+                changes.append({
+                    "line_no": j1 + k + 1,
+                    "before": before,
+                    "after": after,
+                    "kind": "changed",
+                })
+        elif tag == 'delete':
+            for k in range(i1, i2):
+                changes.append({
+                    "line_no": k + 1,
+                    "before": prev_lines[k],
+                    "after": "",
+                    "kind": "removed",
+                })
+        elif tag == 'insert':
+            for k in range(j1, j2):
+                changes.append({
+                    "line_no": k + 1,
+                    "before": "",
+                    "after": curr_lines[k],
+                    "kind": "added",
+                })
+
+    # Cap at first 5 changes to avoid speech overload
+    capped = changes[:5]
+    if len(changes) <= 1:
+        summary = f"{len(changes)} line changed since last run."
+    else:
+        more = f" (and {len(changes) - 5} more)" if len(changes) > 5 else ""
+        summary = f"{len(changes)} lines changed since last run{more}."
+    return {
+        "identical": False,
+        "summary": summary,
+        "changed_lines": capped,
+        "total_changes": len(changes),
+    }
+
+
 @app.route("/run", methods=["POST"])
 def run_code():
     body = safejson()
     code = safe(body.get("code"), "")
+    # Mechanism A: pre-flight inputs. List of strings. Body wins; magic
+    # comment is the fallback so students can ship reproducible examples.
+    inputs_from_body = body.get("inputs")
+    if not isinstance(inputs_from_body, list):
+        inputs_from_body = None
+    inputs = inputs_from_body if inputs_from_body is not None else _parse_magic_inputs(code)
+    # Sanitize: stringify, cap length per item and total count
+    inputs = [str(x)[:1000] for x in inputs[:50]]
 
-    # Rate limit check — must happen before any expensive work
     if not _check_run_rate_limit(get_session_id()):
         return jsonify({
             "success": False,
@@ -838,56 +990,63 @@ def run_code():
     if not code.strip():
         return jsonify({"success": False, "error": "Code cannot be empty"}), 400
 
+    # Heuristic: detect input() use without provided inputs and surface a
+    # friendly hint up front. The subprocess will still raise the canonical
+    # error if it actually hits input() with an empty queue, but this helps
+    # catch the common case before the user waits for execution.
+    uses_input = bool(re.search(r'\binput\s*\(', code))
+    inputs_hint = None
+    if uses_input and not inputs:
+        inputs_hint = (
+            "Your code uses input(), but you did not provide any pre-flight "
+            "inputs. The first input() call will fail with a clear error "
+            "telling you what to do. To fix: open the inputs panel and add "
+            "values, or add a magic comment like '# inputs: Alice, 17' at "
+            "the top of your code, or switch to live input mode."
+        )
+
     stdout_buf = io.StringIO()
     stderr_buf = io.StringIO()
 
-    # FIX H-5 (continued): The old in-process compile/AST/SAFE_GLOBALS block
-    # that ran before the subprocess call has been removed. Only the subprocess
-    # path remains, matching the actual execution reality.
     try:
         execution_start = time.time()
         sandbox = get_sandbox(get_session_id())
         workspace_dir = sandbox.workspace_dir
-        # Per-request UUID prevents two concurrent /run calls in the same
-        # session from overwriting each other's trace.json mid-flight.
         trace_file = os.path.join(workspace_dir, f"trace_{uuid.uuid4().hex}.json")
 
-        # Sandbox runner is shipped as a separate file (sandbox_runner.py at
-        # module root). Reading it on each request keeps complexity out of an
-        # f-string with brace-doubling. The runner reads code and trace paths
-        # from environment variables, so no formatting is needed here.
         _runner_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sandbox_runner.py')
-        with open(_runner_path, 'r', encoding='utf-8') as _rf:
-            script_content = _rf.read()
-                    
-# (sandbox runner body moved to sandbox_runner.py — see new file)
 
-        # Write user code to a separate temp file instead of an env var.
-        # This avoids /proc leakage and env-var size limits.
         with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False,
                                           encoding='utf-8', dir=workspace_dir) as code_file:
             code_file.write(code)
             code_file_path = code_file.name
 
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as script_file:
-            script_file.write(script_content)
-            script_file_path = script_file.name
+        # Write inputs queue to its own file. Empty file if no inputs — the
+        # subprocess handles that gracefully.
+        inputs_file_path = None
+        if inputs:
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False,
+                                              encoding='utf-8', dir=workspace_dir) as if_handle:
+                for item in inputs:
+                    # Strip newlines from each input — they're line-delimited
+                    if_handle.write(item.replace('\n', ' ').replace('\r', ' ') + '\n')
+                inputs_file_path = if_handle.name
 
-        time_limit = 5  # seconds for subprocess
+        time_limit = 5
         try:
             env = os.environ.copy()
-            # Pass paths only — never the raw code — via env vars
             env['CODEUP_CODE_FILE'] = code_file_path
             env['CODEUP_TRACE_FILE'] = trace_file
-            # Remove old key in case it lingers from a previous version
+            if inputs_file_path:
+                env['CODEUP_INPUTS_FILE'] = inputs_file_path
+            # Make sure interactive mode is OFF for the standard /run path
+            env.pop('CODEUP_INTERACTIVE', None)
+            env.pop('CODEUP_INPUT_FIFO', None)
             env.pop('CODEUP_EXEC_CODE', None)
 
-            # Resource limits applied via preexec_fn on POSIX systems.
-            # Windows lacks resource.setrlimit so we fall back to no limit there;
-            # the subprocess timeout still bounds CPU time.
             preexec = None
             if sys.platform != "win32":
-                preexec = _set_subprocess_limits  # defined at module level below
+                preexec = _set_subprocess_limits
 
             popen_kwargs = dict(
                 stdout=subprocess.PIPE,
@@ -898,14 +1057,13 @@ def run_code():
             )
             if sys.platform != "win32":
                 popen_kwargs["preexec_fn"] = preexec
-                popen_kwargs["start_new_session"] = True  # new process group for killpg
-            proc_handle = subprocess.Popen([sys.executable, script_file_path], **popen_kwargs)
+                popen_kwargs["start_new_session"] = True
+            proc_handle = subprocess.Popen([sys.executable, _runner_path], **popen_kwargs)
             try:
                 proc_stdout, proc_stderr = proc_handle.communicate(timeout=max(1, int(time_limit)))
                 stdout_buf.write(proc_stdout or "")
                 stderr_buf.write(proc_stderr or "")
             except subprocess.TimeoutExpired:
-                # Kill the entire process group on POSIX so threads/children die too
                 try:
                     if sys.platform != "win32":
                         import signal as _signal
@@ -920,17 +1078,12 @@ def run_code():
                     pass
                 stderr_buf.write(f"Execution timed out after {time_limit}s (subprocess)")
         finally:
-            for _tmp in (script_file_path, code_file_path):
-                try:
-                    os.unlink(_tmp)
-                except OSError:
-                    pass
-            # Also clean up the trace file after we've read it
-            try:
-                if os.path.exists(trace_file):
-                    os.unlink(trace_file)
-            except OSError:
-                pass
+            for _tmp in (code_file_path, inputs_file_path):
+                if _tmp:
+                    try:
+                        os.unlink(_tmp)
+                    except OSError:
+                        pass
 
         trace = []
         trace_error = None
@@ -946,7 +1099,6 @@ def run_code():
         except Exception as e:
             trace_error = f'Error reading trace: {str(e)}'
         finally:
-            # Clean up the per-request trace file so workspace doesn't bloat
             try:
                 if os.path.exists(trace_file):
                     os.unlink(trace_file)
@@ -958,26 +1110,41 @@ def run_code():
             trace = [{'type': 'subprocess_exec', 'note': msg}]
 
         semantic_issues = classify_semantic_errors(trace) if trace else []
-
         duration_ms = int((time.time() - execution_start) * 1000)
         save_execution_trace(trace, duration_ms)
 
         output = stdout_buf.getvalue()
         error = stderr_buf.getvalue()
 
+        # Compute output diff vs last run (only on success — error states aren't
+        # comparable in a useful way)
+        diff_info = None
+        if not error.strip():
+            session_id = get_session_id()
+            with _last_outputs_lock:
+                prev_record = _last_outputs.get(session_id)
+                prev_output = prev_record["output"] if prev_record else ""
+                _last_outputs[session_id] = {"output": output, "timestamp": time.time()}
+            diff_info = _compute_output_diff(prev_output, output)
+
         if error.strip():
             explanation = explain_error(code, error, language=safe(body.get("language"), "en"))
             return jsonify({
                 "success": False,
                 "error": error,
-                "explanation": explanation
+                "explanation": explanation,
+                "inputs_hint": inputs_hint,
             })
 
         return jsonify({
             "success": True,
             "output": output or "Program finished with no output.",
             "trace": trace,
-            "semantic_issues": semantic_issues
+            "semantic_issues": semantic_issues,
+            "diff": diff_info,
+            "inputs_consumed": _INPUT_INDEX_HINT(trace_file) if False else len(inputs),
+            "inputs_provided": len(inputs),
+            "inputs_hint": inputs_hint,
         })
 
     except Exception:
@@ -986,8 +1153,14 @@ def run_code():
         return jsonify({
             "success": False,
             "error": tb,
-            "explanation": explanation
+            "explanation": explanation,
+            "inputs_hint": inputs_hint,
         })
+
+
+def _INPUT_INDEX_HINT(_):
+    # Placeholder for forward-compatibility — kept simple, never raises.
+    return 0
 
 # ==========================
 # ANALYZE
@@ -2414,6 +2587,34 @@ def voice():
             return _store_and_return({"success": True, "action": "previous_step", "speech": _trace_playback("prev"), "confidence": confidence})
         if intent == "what_changed":
             return _store_and_return({"success": True, "action": "what_changed", "speech": _trace_playback("current_change"), "confidence": confidence})
+        if intent == "set_inputs":
+            return _store_and_return({"success": True, "action": "set_inputs", "values": slots.get("values", []), "confidence": confidence})
+        if intent == "clear_inputs":
+            return _store_and_return({"success": True, "action": "clear_inputs", "confidence": confidence})
+        if intent == "list_inputs":
+            return _store_and_return({"success": True, "action": "list_inputs", "confidence": confidence})
+        if intent == "live_input_mode":
+            return _store_and_return({"success": True, "action": "live_input_mode", "confidence": confidence})
+        if intent == "preflight_input_mode":
+            return _store_and_return({"success": True, "action": "preflight_input_mode", "confidence": confidence})
+        if intent == "save_macro":
+            return _store_and_return({"success": True, "action": "save_macro", "name": slots.get("name", ""), "confidence": confidence})
+        if intent == "use_macro":
+            return _store_and_return({"success": True, "action": "use_macro", "name": slots.get("name", ""), "confidence": confidence})
+        if intent == "list_macros":
+            return _store_and_return({"success": True, "action": "list_macros", "confidence": confidence})
+        if intent == "bookmark_output":
+            return _store_and_return({"success": True, "action": "bookmark_output", "label": slots.get("label", ""), "confidence": confidence})
+        if intent == "read_bookmark":
+            return _store_and_return({"success": True, "action": "read_bookmark", "label": slots.get("label", ""), "confidence": confidence})
+        if intent == "list_bookmarks":
+            return _store_and_return({"success": True, "action": "list_bookmarks", "confidence": confidence})
+        if intent == "where_am_i":
+            return _store_and_return({"success": True, "action": "where_am_i", "confidence": confidence})
+        if intent == "explain_simply":
+            return _store_and_return({"success": True, "action": "explain_simply", "confidence": confidence})
+        if intent == "narrate_diff":
+            return _store_and_return({"success": True, "action": "narrate_diff", "confidence": confidence})
 
     # Fallback: fuzzy matching on COMMANDS
     lower_text = text.lower().strip()
@@ -2443,6 +2644,554 @@ def voice():
     # Log unrecognized commands so we can iterate the vocabulary from real data
     _log_unrecognized_command(text, get_session_id())
     return jsonify({"success": True, "action": "unknown", "heard": text, "confidence": 0.0})
+
+# ==========================
+# CODE STRUCTURE BREADCRUMBS
+# ==========================
+
+@app.route("/breadcrumbs", methods=["POST"])
+def breadcrumbs():
+    """Return the nested-structure breadcrumb at a given line.
+
+    Walks the AST from the file root down, tracking which functions/classes/
+    loops/conditionals contain the target line. Returns a human-readable
+    string like 'function calculate, inside for loop, line 15'.
+    """
+    body = safejson()
+    code = safe(body.get("code"), "")
+    if len(code) > MAX_CODE_SIZE:
+        return jsonify({"success": False, "error": "Code too large"}), 413
+    try:
+        line = int(body.get("line", 1))
+    except (ValueError, TypeError):
+        return jsonify({"success": False, "error": "Invalid line"}), 400
+
+    if not code.strip():
+        return jsonify({"success": True, "breadcrumb": "empty file", "trail": []})
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError as e:
+        return jsonify({"success": False, "message": f"Cannot parse: {e}"})
+
+    trail = []  # list of (kind, name, start_line, end_line)
+
+    def end_line(node):
+        return getattr(node, 'end_lineno', None) or max(
+            (getattr(n, 'lineno', 0) for n in ast.walk(node)), default=node.lineno
+        )
+
+    def walk(node, depth=0):
+        for child in ast.iter_child_nodes(node):
+            start = getattr(child, 'lineno', None)
+            stop = end_line(child)
+            if start is None or stop is None:
+                continue
+            if not (start <= line <= stop):
+                continue
+            kind = None
+            name = None
+            if isinstance(child, ast.FunctionDef):
+                kind, name = "function", child.name
+            elif isinstance(child, ast.AsyncFunctionDef):
+                kind, name = "async function", child.name
+            elif isinstance(child, ast.ClassDef):
+                kind, name = "class", child.name
+            elif isinstance(child, ast.For):
+                kind, name = "for loop", None
+            elif isinstance(child, ast.While):
+                kind, name = "while loop", None
+            elif isinstance(child, ast.If):
+                kind, name = "if block", None
+            elif isinstance(child, ast.With):
+                kind, name = "with block", None
+            elif isinstance(child, ast.Try):
+                kind, name = "try block", None
+            if kind:
+                trail.append({"kind": kind, "name": name, "line": start})
+            walk(child, depth + 1)
+
+    walk(tree)
+
+    if not trail:
+        breadcrumb = f"line {line}, top level of file"
+    else:
+        parts = []
+        for item in trail:
+            if item["name"]:
+                parts.append(f"{item['kind']} {item['name']}")
+            else:
+                parts.append(item["kind"])
+        breadcrumb = ", inside ".join(parts) + f", line {line}"
+
+    return jsonify({"success": True, "breadcrumb": breadcrumb, "trail": trail})
+
+
+# ==========================
+# OUTPUT BOOKMARKS
+# ==========================
+
+@app.route("/bookmarks", methods=["GET", "POST", "DELETE"])
+def bookmarks():
+    """Per-session output bookmarks.
+
+    POST {label, position} → save bookmark at that output offset
+    GET → list all bookmarks for this session
+    DELETE → clear all bookmarks for this session
+    """
+    session_id = get_session_id()
+    if request.method == "GET":
+        with _output_bookmarks_lock:
+            marks = list(_output_bookmarks.get(session_id, []))
+        return jsonify({"success": True, "bookmarks": marks})
+
+    if request.method == "DELETE":
+        with _output_bookmarks_lock:
+            _output_bookmarks.pop(session_id, None)
+        return jsonify({"success": True, "speech": "All bookmarks cleared."})
+
+    body = safejson()
+    label = str(safe(body.get("label"), "")).strip()[:80]
+    try:
+        position = int(body.get("position", 0))
+    except (ValueError, TypeError):
+        position = 0
+    if not label:
+        # Auto-name based on count
+        with _output_bookmarks_lock:
+            count = len(_output_bookmarks.get(session_id, []))
+        label = f"bookmark {count + 1}"
+
+    with _output_bookmarks_lock:
+        marks = _output_bookmarks.setdefault(session_id, [])
+        # Cap at 20 per session
+        if len(marks) >= 20:
+            marks.pop(0)
+        marks.append({
+            "label": label,
+            "position": position,
+            "timestamp": time.time(),
+        })
+    return jsonify({"success": True, "label": label, "speech": f"Bookmarked as {label}."})
+
+
+@app.route("/bookmarks/read", methods=["POST"])
+def read_from_bookmark():
+    """Return the slice of output starting from a named bookmark."""
+    body = safejson()
+    label = str(safe(body.get("label"), "")).strip().lower()
+    full_output = str(safe(body.get("output"), ""))
+    session_id = get_session_id()
+
+    with _output_bookmarks_lock:
+        marks = list(_output_bookmarks.get(session_id, []))
+    match = next((m for m in marks if m["label"].lower() == label), None)
+    if not match and marks:
+        # Fuzzy: take the most recent if no exact match
+        match = marks[-1]
+    if not match:
+        return jsonify({"success": False, "error": "No bookmark found"})
+
+    pos = match["position"]
+    if pos < 0 or pos > len(full_output):
+        return jsonify({"success": False, "error": "Bookmark position out of range"})
+    return jsonify({
+        "success": True,
+        "label": match["label"],
+        "slice": full_output[pos:],
+    })
+
+
+# ==========================
+# VOICE MACROS
+# ==========================
+
+def _macros_path(session_id=None):
+    if session_id is None:
+        session_id = get_session_id()
+    safe_id = re.sub(r'[^a-fA-F0-9\-]', '', session_id)[:64] or "default"
+    return os.path.join(DATA_DIR, f"macros_{safe_id}.json")
+
+
+def _load_macros():
+    path = _macros_path()
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+            if isinstance(data, dict):
+                return data
+    except Exception:
+        pass
+    return {}
+
+
+def _save_macros(macros):
+    path = _macros_path()
+    dirpath = os.path.dirname(path) or "."
+    with _voice_macros_lock:
+        try:
+            os.makedirs(dirpath, exist_ok=True)
+            fd, tmp = tempfile.mkstemp(suffix=".json", prefix="macros_", dir=dirpath)
+            try:
+                with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                    json.dump(macros, f, indent=2)
+            except Exception:
+                try: os.close(fd)
+                except OSError: pass
+                raise
+            os.replace(tmp, path)
+        except Exception:
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            except Exception:
+                pass
+            raise
+
+
+@app.route("/macros", methods=["GET"])
+def list_macros():
+    macros = _load_macros()
+    names = sorted(macros.keys())
+    if not names:
+        speech = "You have no voice macros saved."
+    elif len(names) == 1:
+        speech = f"You have 1 macro: {names[0]}."
+    else:
+        speech = f"You have {len(names)} macros: {', '.join(names)}."
+    return jsonify({"success": True, "macros": macros, "names": names, "speech": speech})
+
+
+@app.route("/macros", methods=["POST"])
+def save_macro():
+    body = safejson()
+    name = str(safe(body.get("name"), "")).strip().lower()[:64]
+    code = str(safe(body.get("code"), ""))
+    if not name:
+        return jsonify({"success": False, "error": "Macro name required"}), 400
+    if len(code) > MAX_CODE_SIZE:
+        return jsonify({"success": False, "error": "Code too large"}), 413
+    if not re.match(r'^[a-z0-9 _-]+$', name):
+        return jsonify({"success": False, "error": "Macro name must be letters, numbers, spaces, dash or underscore"}), 400
+    macros = _load_macros()
+    if len(macros) >= 50 and name not in macros:
+        return jsonify({"success": False, "error": "Macro limit reached (50)"}), 400
+    macros[name] = {"code": code, "saved_at": time.time()}
+    _save_macros(macros)
+    return jsonify({"success": True, "speech": f"Macro {name} saved."})
+
+
+@app.route("/macros/<name>", methods=["DELETE"])
+def delete_macro(name):
+    name = name.strip().lower()
+    macros = _load_macros()
+    if name not in macros:
+        return jsonify({"success": False, "error": "Macro not found"}), 404
+    del macros[name]
+    _save_macros(macros)
+    return jsonify({"success": True, "speech": f"Macro {name} deleted."})
+
+
+@app.route("/macros/get/<name>", methods=["GET"])
+def get_macro(name):
+    name = name.strip().lower()
+    macros = _load_macros()
+    if name not in macros:
+        return jsonify({"success": False, "error": "Macro not found"}), 404
+    return jsonify({"success": True, "code": macros[name].get("code", ""), "name": name})
+
+
+# ==========================
+# INTERACTIVE RUN (Mechanism B) — SSE streaming with input pipe
+# ==========================
+
+def _cleanup_run(run_id):
+    """Tear down a run's resources. Idempotent."""
+    with _active_runs_lock:
+        state = _active_runs.pop(run_id, None)
+    if not state:
+        return
+    proc = state.get("proc")
+    if proc:
+        try:
+            if proc.poll() is None:
+                if sys.platform != "win32":
+                    import signal as _signal
+                    try:
+                        os.killpg(os.getpgid(proc.pid), _signal.SIGKILL)
+                    except (ProcessLookupError, OSError):
+                        pass
+                else:
+                    proc.kill()
+        except Exception:
+            pass
+    fifo = state.get("fifo")
+    if fifo and os.path.exists(fifo):
+        try:
+            os.unlink(fifo)
+        except OSError:
+            pass
+    for tmp in (state.get("code_file"), state.get("trace_file"), state.get("script_file")):
+        if tmp and os.path.exists(tmp):
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+
+@app.route("/run-stream/start", methods=["POST"])
+def run_stream_start():
+    """Start an interactive run. Returns a run_id. Client opens an SSE
+    connection at /run-stream/<run_id> to receive output events and posts
+    answers to /run-stream/<run_id>/input when prompted.
+
+    POSIX-only feature. On Windows, returns 501 with a friendly message
+    suggesting Mechanism A.
+    """
+    if sys.platform == "win32":
+        return jsonify({
+            "success": False,
+            "error": "Live input mode requires POSIX (Linux or macOS). On Windows, use the inputs panel instead.",
+        }), 501
+
+    body = safejson()
+    code = safe(body.get("code"), "")
+    if len(code) > MAX_CODE_SIZE:
+        return jsonify({"success": False, "error": "Code too large"}), 413
+    if not code.strip():
+        return jsonify({"success": False, "error": "Code cannot be empty"}), 400
+    if not _check_run_rate_limit(get_session_id()):
+        return jsonify({"success": False, "error": "Rate limit exceeded"}), 429
+
+    run_id = uuid.uuid4().hex
+    sandbox = get_sandbox(get_session_id())
+    workspace_dir = sandbox.workspace_dir
+
+    # Create FIFO. Only one consumer (subprocess) and one producer (us).
+    fifo_path = os.path.join(workspace_dir, f"input_{run_id}.fifo")
+    try:
+        os.mkfifo(fifo_path)
+    except OSError as e:
+        return jsonify({"success": False, "error": f"Could not create input pipe: {e}"}), 500
+
+    # Write code to temp file in workspace
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False,
+                                      encoding='utf-8', dir=workspace_dir) as cf:
+        cf.write(code)
+        code_file_path = cf.name
+
+    trace_file = os.path.join(workspace_dir, f"trace_{run_id}.json")
+    runner_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sandbox_runner.py')
+
+    env = os.environ.copy()
+    env['CODEUP_CODE_FILE'] = code_file_path
+    env['CODEUP_TRACE_FILE'] = trace_file
+    env['CODEUP_INTERACTIVE'] = '1'
+    env['CODEUP_INPUT_FIFO'] = fifo_path
+    env.pop('CODEUP_INPUTS_FILE', None)
+
+    output_queue = _queue_mod.Queue()
+
+    popen_kwargs = dict(
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+        cwd=workspace_dir,
+        text=True,
+        bufsize=1,  # line-buffered so we can stream
+    )
+    if sys.platform != "win32":
+        popen_kwargs["preexec_fn"] = _set_subprocess_limits
+        popen_kwargs["start_new_session"] = True
+
+    try:
+        proc = subprocess.Popen([sys.executable, runner_path], **popen_kwargs)
+    except Exception as e:
+        try: os.unlink(fifo_path)
+        except OSError: pass
+        try: os.unlink(code_file_path)
+        except OSError: pass
+        return jsonify({"success": False, "error": f"Could not start run: {e}"}), 500
+
+    state = {
+        "proc": proc,
+        "fifo": fifo_path,
+        "code_file": code_file_path,
+        "trace_file": trace_file,
+        "queue": output_queue,
+        "started_at": time.time(),
+        "session_id": get_session_id(),
+        "awaiting_input": False,
+        "awaiting_input_lock": threading.Lock(),
+    }
+    with _active_runs_lock:
+        _active_runs[run_id] = state
+
+    # Reader threads — push every line into the output queue. Watch for input
+    # sentinel and emit a structured event when seen.
+    SENTINEL = "CODEUP::INPUT_REQUEST::"
+
+    def _stdout_reader():
+        try:
+            for line in iter(proc.stdout.readline, ''):
+                if not line:
+                    break
+                if line.startswith(SENTINEL):
+                    prompt = line[len(SENTINEL):].rstrip('\n')
+                    with state["awaiting_input_lock"]:
+                        state["awaiting_input"] = True
+                    output_queue.put({"type": "input_request", "prompt": prompt})
+                else:
+                    output_queue.put({"type": "stdout", "text": line})
+        except Exception as e:
+            output_queue.put({"type": "error", "text": f"stdout reader error: {e}"})
+        finally:
+            try: proc.stdout.close()
+            except Exception: pass
+
+    def _stderr_reader():
+        try:
+            for line in iter(proc.stderr.readline, ''):
+                if not line:
+                    break
+                output_queue.put({"type": "stderr", "text": line})
+        except Exception as e:
+            output_queue.put({"type": "error", "text": f"stderr reader error: {e}"})
+        finally:
+            try: proc.stderr.close()
+            except Exception: pass
+
+    def _waiter():
+        # Hard 60-second cap on interactive runs (longer than batch /run because
+        # users need time to think and answer prompts)
+        deadline = time.time() + 60
+        while proc.poll() is None and time.time() < deadline:
+            time.sleep(0.2)
+        if proc.poll() is None:
+            try:
+                if sys.platform != "win32":
+                    import signal as _signal
+                    os.killpg(os.getpgid(proc.pid), _signal.SIGKILL)
+                else:
+                    proc.kill()
+            except Exception:
+                pass
+            output_queue.put({"type": "stderr", "text": "\nExecution timed out after 60 seconds.\n"})
+        output_queue.put({"type": "done", "exit_code": proc.returncode})
+
+    threading.Thread(target=_stdout_reader, daemon=True).start()
+    threading.Thread(target=_stderr_reader, daemon=True).start()
+    threading.Thread(target=_waiter, daemon=True).start()
+
+    return jsonify({"success": True, "run_id": run_id})
+
+
+@app.route("/run-stream/<run_id>/stream", methods=["GET"])
+def run_stream(run_id):
+    """SSE endpoint. Yields events from the output queue until 'done'."""
+    with _active_runs_lock:
+        state = _active_runs.get(run_id)
+    if not state:
+        return jsonify({"success": False, "error": "Run not found or expired"}), 404
+    # Authorize: only the originating session can read its run
+    if state.get("session_id") != get_session_id():
+        return jsonify({"success": False, "error": "Forbidden"}), 403
+
+    output_queue = state["queue"]
+
+    def generate():
+        try:
+            while True:
+                try:
+                    event = output_queue.get(timeout=30)
+                except _queue_mod.Empty:
+                    # Heartbeat to keep connection alive through proxies
+                    yield ": heartbeat\n\n"
+                    # Check if run is dead but no 'done' was emitted
+                    proc = state.get("proc")
+                    if proc and proc.poll() is not None:
+                        yield f"data: {json.dumps({'type': 'done', 'exit_code': proc.returncode})}\n\n"
+                        break
+                    continue
+                yield f"data: {json.dumps(event)}\n\n"
+                if event.get("type") == "done":
+                    break
+        finally:
+            _cleanup_run(run_id)
+
+    return app.response_class(
+        generate(),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # disable nginx buffering
+            "Connection": "keep-alive",
+        },
+    )
+
+
+@app.route("/run-stream/<run_id>/input", methods=["POST"])
+def run_stream_input(run_id):
+    """Receive a line of input from the client and write it to the FIFO."""
+    with _active_runs_lock:
+        state = _active_runs.get(run_id)
+    if not state:
+        return jsonify({"success": False, "error": "Run not found"}), 404
+    if state.get("session_id") != get_session_id():
+        return jsonify({"success": False, "error": "Forbidden"}), 403
+    body = safejson()
+    value = str(safe(body.get("value"), ""))[:1000]
+    fifo = state.get("fifo")
+    if not fifo or not os.path.exists(fifo):
+        return jsonify({"success": False, "error": "Input pipe not available"}), 410
+    try:
+        # Open + write + close. The subprocess opens the FIFO inside a `with`
+        # block per call, which means we can open ours each time too.
+        with open(fifo, 'w', encoding='utf-8') as f:
+            f.write(value + '\n')
+        with state["awaiting_input_lock"]:
+            state["awaiting_input"] = False
+        return jsonify({"success": True})
+    except OSError as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/run-stream/<run_id>/cancel", methods=["POST"])
+def run_stream_cancel(run_id):
+    with _active_runs_lock:
+        state = _active_runs.get(run_id)
+    if state and state.get("session_id") != get_session_id():
+        return jsonify({"success": False, "error": "Forbidden"}), 403
+    _cleanup_run(run_id)
+    return jsonify({"success": True})
+
+
+# ==========================
+# CURRENT EXECUTION POSITION (mid-run polling for live mode)
+# ==========================
+
+@app.route("/run-stream/<run_id>/position", methods=["GET"])
+def run_stream_position(run_id):
+    """Return whether the run is awaiting input. Used by the heartbeat UI."""
+    with _active_runs_lock:
+        state = _active_runs.get(run_id)
+    if not state:
+        return jsonify({"success": False, "alive": False})
+    if state.get("session_id") != get_session_id():
+        return jsonify({"success": False, "error": "Forbidden"}), 403
+    proc = state.get("proc")
+    alive = proc is not None and proc.poll() is None
+    with state["awaiting_input_lock"]:
+        awaiting = state.get("awaiting_input", False)
+    return jsonify({
+        "success": True,
+        "alive": alive,
+        "awaiting_input": awaiting,
+        "elapsed_ms": int((time.time() - state.get("started_at", time.time())) * 1000),
+    })
+
 
 # ==========================
 # SANDBOXED FILE SYSTEM

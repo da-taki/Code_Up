@@ -337,12 +337,18 @@ html, body {
 }
 
 /* Paused state — distinct from both Off (default) and ON (accent).
-   Uses warning color so a sighted helper can see at a glance that the mic
-   is open but commands are being dropped. */
+   Uses a deeper amber than --warning so contrast against #ffffff text passes
+   WCAG AA (>= 4.5:1) on both light and dark themes. */
 .cu-button-voice.cu-button-voice--paused {
-  background: var(--warning);
+  background: #b45309;  /* WCAG AA against white */
   color: #ffffff;
-  border-color: var(--warning);
+  border-color: #b45309;
+}
+
+body.theme-night .cu-button-voice.cu-button-voice--paused {
+  background: #d97706;
+  color: #1a1a1a;
+  border-color: #d97706;
 }
 
 .theme-toggle.active {

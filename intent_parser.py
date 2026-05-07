@@ -61,6 +61,8 @@ _HINDI_NUMBERS: Dict[str, int] = {
     "छियानवे": 96, "सत्तानवे": 97, "अट्ठानवे": 98, "निन्यानवे": 99, "सौ": 100,
 }
 
+# "hundred" and "thousand" appear here as standalone tokens but are also
+# handled in compound parsing in IntentParser._word_to_number.
 WORD_TO_NUMBER: Dict[str, int] = {
     **_ONES, **_TENS, **_HINDI_NUMBERS,
     "hundred": 100, "thousand": 1000,
@@ -111,12 +113,12 @@ class IntentParser:
         r"^launch\s*(?:code|program|it|this|that)?$",
         r"^play\s*(?:code|program|it|this|that)?$",
         r"^go\s*(?:now)?$",
-        # Casual phrasings real users actually say
-        r"^let'?s?\s+(?:run|go|try)\s*(?:it|this|that)?$",
-        r"^try\s+(?:it|this|that)$",
-        r"^do\s+it$",
-        r"^make\s+it\s+(?:go|run)$",
-        r"^see\s+(?:what|if)\s+(?:happens|it\s+does|it\s+works)$",
+        # Casual phrasings — explicit terminators so "do it yourself" doesn't fire
+        r"^let'?s?\s+(?:run|go|try)\s*(?:it|this|that)?\.?$",
+        r"^try\s+(?:it|this|that)\.?$",
+        r"^do\s+it\.?$",
+        r"^make\s+it\s+(?:go|run)\.?$",
+        r"^see\s+(?:what|if)\s+(?:happens|it\s+does|it\s+works)\.?$",
         # Hindi
         r"^(?:कोड\s+)?(?:चलाओ|चलाइए|चलाइये)$",
         r"^रन\s*(?:करो|कीजिए|कीजिये)?$",
@@ -266,23 +268,20 @@ class IntentParser:
         r"^(?:फिर\s+से\s+)?सुनो$",
     ]
 
+    # Require an explicit code-generation verb at the start of the utterance and
+    # at least 3 words in the prompt so ambient speech ("code for that exam")
+    # cannot be misrouted to the LLM.
     GENERATE_CODE_PATTERNS = [
-        # "write code that does X" / "write code which does X"
-        r"(?:generate|write|create|make|build)\s+(?:a\s+|some\s+)?(?:python\s+)?code\s+(?:that|which|to|for)\s+(.+)",
-        # "write a program that..." / "write a script to..."
-        r"(?:generate|write|create|make|build)\s+(?:a\s+|some\s+)?(?:python\s+)?(?:program|script|function)\s+(?:that|which|to|for)\s+(.+)",
-        # "write code for X" (no verb, just noun)
-        r"(?:generate|write|create|make|build)\s+(?:a\s+|some\s+)?(?:python\s+)?code\s+for\s+(.+)",
-        # "i want code for / to X"
-        r"i\s+want\s+(?:python\s+)?code\s+(?:for|to|that)\s+(.+)",
-        # "code that does X" (very casual)
-        r"^code\s+(?:that|which|for|to)\s+(.+)",
+        r"^(?:please\s+)?(?:generate|write|create|make|build)\s+(?:a\s+|some\s+)?(?:python\s+)?code\s+(?:that|which|to|for)\s+(\S+(?:\s+\S+){2,})",
+        r"^(?:please\s+)?(?:generate|write|create|make|build)\s+(?:a\s+|some\s+)?(?:python\s+)?(?:program|script|function)\s+(?:that|which|to|for)\s+(\S+(?:\s+\S+){2,})",
+        r"^(?:please\s+)?(?:generate|write|create|make|build)\s+(?:a\s+|some\s+)?(?:python\s+)?code\s+for\s+(\S+(?:\s+\S+){2,})",
+        r"^i\s+want\s+(?:python\s+)?code\s+(?:for|to|that)\s+(\S+(?:\s+\S+){2,})",
         # bare command — no prompt, will ask user
-        r"(?:generate|write|create|make)\s+(?:python\s+)?code$",
-        # Hindi: "X के लिए कोड बनाओ" / "X का code लिखो"
-        r"(.+?)\s+(?:के\s+लिए|का|की)\s+(?:कोड|code)\s+(?:बनाओ|लिखो|बनाइए|बनाइये)",
-        # Hindi: "code बनाओ for X"
-        r"(?:कोड|code)\s+(?:बनाओ|लिखो)\s+(.+)",
+        r"^(?:generate|write|create|make)\s+(?:python\s+)?code$",
+        # Hindi: "X के लिए कोड बनाओ" — require at least 2 words before the trigger
+        r"^(\S+(?:\s+\S+){1,})\s+(?:के\s+लिए|का|की)\s+(?:कोड|code)\s+(?:बनाओ|लिखो|बनाइए|बनाइये)$",
+        # Hindi: "code बनाओ X Y Z"
+        r"^(?:कोड|code)\s+(?:बनाओ|लिखो)\s+(\S+(?:\s+\S+){2,})$",
     ]
 
     RENAME_SNIPPET_PATTERNS = [
@@ -294,6 +293,13 @@ class IntentParser:
         r"save\s+(?:this\s+)?(?:as\s+|named?\s+)(.+)",
         # Hindi: "snippet नाम से सेव करो X"
         r"(?:snippet|कोड)\s+(?:को\s+)?(.+?)\s+(?:नाम\s+से\s+)?(?:सेव|save)\s*(?:करो|कीजिए)?",
+    ]
+
+    PREVIEW_SNIPPET_PATTERNS = [
+        r"^preview\s+snippet\s+(\w+)$",
+        r"^(?:peek|read)\s+(?:at\s+)?snippet\s+(\w+)$",
+        r"^snippet\s+preview\s+(\w+)$",
+        r"^snippet\s+(\w+)\s+(?:झलक|preview)$",
     ]
 
     # -----------------------------------------------------------------------
@@ -564,6 +570,7 @@ class IntentParser:
             "generate_code":  self.GENERATE_CODE_PATTERNS,
             "rename_snippet":      self.RENAME_SNIPPET_PATTERNS,
             "save_snippet_named":  self.SAVE_SNIPPET_NAMED_PATTERNS,
+            "preview_snippet":     self.PREVIEW_SNIPPET_PATTERNS,
             # Voice code editing
             "insert_function":     self.INSERT_FUNCTION_PATTERNS,
             "insert_class":        self.INSERT_CLASS_PATTERNS,
@@ -613,26 +620,50 @@ class IntentParser:
     # -----------------------------------------------------------------------
 
     def _word_to_number(self, word: str) -> Optional[int]:
-
+        """Convert a spoken or written number into an integer.
+        Supports: digit strings, single words, two-word compounds (twenty five),
+        and three/four-word hundreds compounds (one hundred fifty, two hundred forty two)."""
         word = word.lower().strip()
 
-        # Digit string: "5", "42", "100"
+        # Digit string
         try:
             return int(word)
         except ValueError:
             pass
 
-        # Single word: "five", "twenty", "nineteen"
+        # Single word: "five", "twenty", "nineteen", or any Hindi number
         if word in WORD_TO_NUMBER:
             return WORD_TO_NUMBER[word]
 
-        # Two-word compound: "twenty five", "forty two"
         parts = word.split()
+
+        # Two-word compound: "twenty five", "forty two"
         if len(parts) == 2:
             tens_val = _TENS.get(parts[0])
             ones_val = _ONES.get(parts[1])
             if tens_val is not None and ones_val is not None and ones_val < 10:
                 return tens_val + ones_val
+
+        # Three-word compound: "one hundred fifty" / "two hundred ten"
+        if len(parts) == 3 and parts[1] == "hundred":
+            hundreds = _ONES.get(parts[0])
+            rest = WORD_TO_NUMBER.get(parts[2])
+            if hundreds is not None and 1 <= hundreds <= 9 and rest is not None and rest < 100:
+                return hundreds * 100 + rest
+
+        # Four-word compound: "two hundred forty two"
+        if len(parts) == 4 and parts[1] == "hundred":
+            hundreds = _ONES.get(parts[0])
+            tens_val = _TENS.get(parts[2])
+            ones_val = _ONES.get(parts[3])
+            if hundreds is not None and 1 <= hundreds <= 9 and tens_val is not None and ones_val is not None and ones_val < 10:
+                return hundreds * 100 + tens_val + ones_val
+
+        # "X hundred" exactly
+        if len(parts) == 2 and parts[1] == "hundred":
+            hundreds = _ONES.get(parts[0])
+            if hundreds is not None and 1 <= hundreds <= 9:
+                return hundreds * 100
 
         return None
 
@@ -808,6 +839,10 @@ class IntentParser:
         elif intent == "demo_run":
             if match.groups() and match.group(1):
                 slots["preset"] = match.group(1).strip().lower()
+
+        elif intent == "preview_snippet":
+            if match.groups() and match.group(1):
+                slots["snippet_id"] = match.group(1).strip()
 
         return slots
 

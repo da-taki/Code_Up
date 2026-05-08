@@ -574,8 +574,12 @@ def extract_code(text: str):
 # ==========================
 
 @app.route("/")
-def index():
-    return render_template("index.html")
+def landing():
+    return render_template('landing.html')
+
+@app.route("/ide")
+def ide():
+    return render_template('index.html')
 
 
 @app.route("/healthz", methods=["GET"])

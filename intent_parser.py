@@ -249,6 +249,13 @@ class IntentParser:
         r"^(?:कौन\s+से\s+|क्या\s+)?(?:demos?|examples?)\s*(?:हैं|दिखाओ)?$",
     ]
 
+    DEMO_RUN_PATTERNS = [
+        r"^(?:run|load|play|start)\s+demo\s+(.+)$",
+        r"^demo\s+(.+?)\s+(?:run|load|चलाओ)$",
+        r"^(?:run|load|play|start)\s+(?:the\s+)?(\w+)\s+demo$",
+        r"^demo\s+(\w+)$",
+    ]
+
     PAUSE_VOICE_PATTERNS = [
         r"^pause\s+voice(?:\s+(?:recognition|control|input))?$",
         r"^(?:stop|halt)\s+listening$",

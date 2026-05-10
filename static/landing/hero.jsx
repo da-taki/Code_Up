@@ -87,7 +87,7 @@ function Waveform({ count = 96 }) {
       ></div>
     );
   }
-  return <div className="hero-wave" aria-hidden="true">{bars}</div>;
+  return <div className="hero-wave" aria-hidden="true" role="presentation">{bars}</div>;
 }
 
 // ────────────────────────────────────────────────────────────
@@ -95,8 +95,12 @@ function Waveform({ count = 96 }) {
 // ────────────────────────────────────────────────────────────
 function Hero() {
   return (
-    <section id="top" className="hero">
-      <div className="hero-grid-bg" aria-hidden="true"></div>
+    <section id="top" className="hero" aria-labelledby="hero-heading">
+      {/* Second skip link — only visible/reachable after the editor-hero one,
+          so screen reader users have an explicit way past the decorative
+          waveform and ticker without tabbing through every animated element. */}
+      <a href="#features" className="skip-link" style={{top: '40px'}}>Skip decorative hero</a>
+      <div className="hero-grid-bg" aria-hidden="true" role="presentation"></div>
       <div className="wrap hero-top">
         <div className="meta">
           <span><b>blind-first</b> python ide</span>
@@ -148,6 +152,8 @@ function Hero() {
 // Voice command marquee
 // ────────────────────────────────────────────────────────────
 function Ticker() {
+  // aria-hidden — this is a decorative scrolling marquee. Real command list
+  // lives in the Voice section below with semantic markup.
   const cmds = [
     'run', 'go to line twenty five', 'sonify block', 'tell the story',
     'चलाओ', 'what changed here', 'set breakpoint at line 10',

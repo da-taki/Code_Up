@@ -150,14 +150,19 @@ function EditorHero() {
 
   function run() {
     setRunning(true);
-    setStatus("running");
+    setStatus("preview only — opening real IDE recommended");
     setTimeout(() => {
       const r = mockRun(src);
-      setOut(r || "// (no output)");
+      setOut(
+        "// PREVIEW MODE — limited interpreter (def, print, for, f-strings only)\n" +
+        "// For real Python execution, open the IDE: /ide\n" +
+        "// ────────────────────────────────────────────────\n" +
+        (r || "// (no output)")
+      );
       setRunning(false);
-      setStatus("ok · " + (r.split("\n").length) + " lines out");
+      setStatus("preview · " + (r.split("\n").length) + " lines · /ide for real run");
       const speakLang = lang === "EN" ? "en-US" : "hi-IN";
-      speak("Run complete. Output: " + r, speakLang);
+      speak("This is a preview. For real Python execution, open the full IDE.", speakLang);
     }, 350);
   }
 
@@ -213,7 +218,8 @@ function EditorHero() {
 
   return (
     <section className="eh" aria-label="Code editor — start coding">
-      <a href="#editor-area" className="skip-link">Skip to editor</a>
+      <a href="#editor-area" className="skip-link">Skip to editor preview</a>
+        <a href="/ide" className="skip-link" style={{left: 'auto', right: 0}}>Open real IDE</a>
 
       <div className="wrap eh-wrap">
         <div className="eh-head">
@@ -225,9 +231,11 @@ function EditorHero() {
               Open. <span className="accent">Code.</span> Listen.
             </h1>
             <p className="eh-sub">
-              The editor is right here. Tab once to focus it.
-              <kbd>Ctrl</kbd>+<kbd>Enter</kbd> runs.
-              <kbd>Alt</kbd>+<kbd>S</kbd> sonifies.
+              <strong style={{color: 'var(--accent)'}}>Preview only —</strong> a tiny
+              JS interpreter that handles <code>def</code>, <code>print</code>, <code>for</code>,
+              and f-strings. For real Python, <a href="/ide" style={{color: 'var(--accent)', textDecoration: 'underline'}}>open the IDE →</a>
+              &nbsp;<kbd>Ctrl</kbd>+<kbd>Enter</kbd> runs preview ·
+              <kbd>Alt</kbd>+<kbd>S</kbd> sonifies ·
               <kbd>Esc</kbd> stops speech.
             </p>
           </div>
@@ -309,8 +317,8 @@ function EditorHero() {
           </div>
         </div>
 
-        <div className="eh-marquee" aria-hidden="true">
-          <div className="eh-marquee-track">
+        <div className="eh-marquee" aria-hidden="true" role="presentation">
+          <div className="eh-marquee-track" aria-hidden="true">
             {["run", "sonify block", "tell the story", "what changed here", "go to line twenty five",
               "set breakpoint at line 10", "explain simply", "remember this as quick sort",
               "चलाओ", "लाइन बीस पर जाओ", "कोड समझाओ", "मदद",

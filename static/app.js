@@ -22,10 +22,14 @@ let _restartTimer = null;
 // Voice paused state — recognition is still running but commands are dropped
 // until the user says "resume". We need to stay in the recognition session so
 // we can actually hear the resume command.
-let _voicePaused = false;
+let _voicePaused = (function() {
+  try { return localStorage.getItem('codeup_voice_paused') === '1'; }
+  catch (e) { return false; }
+})();
 let _voiceStartIsUserInitiated = false;
 let _loadingSnippets = false;
-let _apiKeyPromptShown = false;
+// Stored on window so the language-change handler in index.html can reset it.
+window._apiKeyPromptShown = false;
 
 // Pre-flight inputs queue (Mechanism A). Mirrors the inputs the user has
 // declared via voice or the inputs panel. Sent with every /run call.
@@ -100,7 +104,16 @@ const SpeechManager = (function () {
     let currentUtterance = null;
 
     function dequeue() {
+      // Gate on the actual synthesis state, not just our local pointer.
+      // Chrome can have currentUtterance==null while speechSynthesis is
+      // still draining a previously-cancelled utterance; if we dequeue
+      // into that gap we get doubled speech.
       if (currentUtterance || !queue.length) return;
+      if (window.speechSynthesis && window.speechSynthesis.speaking) {
+        // Try again once the engine actually drains
+        setTimeout(dequeue, 80);
+        return;
+      }
       speakNow(queue.shift());
     }
 
@@ -728,9 +741,9 @@ function maybePromptForApiKey(responseText) {
     return false;
   }
 
-  if (_apiKeyPromptShown) return false;
+  if (window._apiKeyPromptShown) return false;
   if (lower.includes('not configured')) {
-    _apiKeyPromptShown = true;
+    window._apiKeyPromptShown = true;
     speak('AI features are not configured on this server. Please ask your teacher to set the API key, or install Ollama for offline AI.');
     return true;
   }
@@ -1256,6 +1269,7 @@ async function loadDemoById(id) {
 // ---------- NARRATE FULL FILE ----------
 async function narrateFile() {
   if (!ensureNotExecuting(() => narrateFile(), 'narrate file')) return;
+  SpeechManager.cancelAll();
   const code = getCode();
   if (!code.trim()) {
     speak('The editor is empty. There is nothing to narrate.');
@@ -2321,6 +2335,7 @@ function stopListening() {
   AppState.isListening = false;
   // Stopping fully also clears any paused state — next start is a fresh session
   _voicePaused = false;
+  try { localStorage.removeItem('codeup_voice_paused'); } catch (e) {}
   const btn = document.getElementById('voiceButton');
   if (btn) {
     btn.textContent = '🎤 Voice (Off)';
@@ -2339,6 +2354,7 @@ function pauseVoiceRecognition() {
   if (!isListening) { speak('Voice control is not active.'); return; }
   if (_voicePaused) { speak('Voice is already paused.'); return; }
   _voicePaused = true;
+  try { localStorage.setItem('codeup_voice_paused', '1'); } catch (e) {}
 
   // Visual + ARIA state — the button gets a distinct paused look so a sighted
   // helper can see at a glance that the mic is open but ignoring input.
@@ -2369,6 +2385,7 @@ function resumeVoiceRecognition() {
   if (!isListening) { speak('Voice control is not active.'); return; }
   if (!_voicePaused) { speak('Voice is already listening.'); return; }
   _voicePaused = false;
+  try { localStorage.removeItem('codeup_voice_paused'); } catch (e) {}
 
   const btn = document.getElementById('voiceButton');
   if (btn) {
@@ -2554,12 +2571,14 @@ function registerEditorShortcuts() {
   if (!editor) return;
   window._editorShortcutsRegistered = true;
 
-  // Ctrl+Enter: run code (advertised in UI — now actually registered)
+  // Ctrl+Enter: run code. Registered as a Monaco editor command only —
+  // Monaco swallows the event before the document-level handler sees it,
+  // which is fine because this is the only path we need.
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => { runCode(); });
 
   // Escape inside Monaco — stop speech immediately. Monaco normally swallows
-  // Escape, so the document-level listener in DOMContentLoaded never fires
-  // when focus is in the editor. Register it as an editor command too.
+  // Escape (its suggestion widget and command palette consume it first), so
+  // we also listen on the editor's DOM node in capture phase to beat them.
   editor.addCommand(monaco.KeyCode.Escape, () => {
     if (AppState.isSpeaking || (window.speechSynthesis && window.speechSynthesis.speaking)) {
       SpeechManager.cancelAll();
@@ -2568,14 +2587,32 @@ function registerEditorShortcuts() {
       SonificationManager.playTone(600, 0.05, 0.06);
     }
   });
+  // Capture-phase listener on the editor's DOM container. Fires BEFORE
+  // Monaco's suggestion widget / IntelliSense popup can swallow Escape,
+  // so speech still stops even when those popups are open. We don't
+  // preventDefault — the popup can still close after we cancel speech.
+  const editorDom = editor.getDomNode();
+  if (editorDom) {
+    editorDom.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' &&
+          (AppState.isSpeaking || (window.speechSynthesis && window.speechSynthesis.speaking))) {
+        SpeechManager.cancelAll();
+        ErrorBeaconManager.stop();
+        srAnnounce('Speech stopped');
+        SonificationManager.playTone(600, 0.05, 0.06);
+      }
+    }, true);  // capture phase — beats Monaco's internal handlers
+  }
 
-  editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.KeyS, () => { sonifyCurrentBlock(); });
-  editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.KeyL, () => { const pos = editor.getPosition() || { lineNumber: 1 }; readLineEnhanced(pos.lineNumber); });
-  editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.KeyV, () => { listVariables(); });
-  editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.KeyE, () => { checkSyntaxErrors(); });
-  editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.KeyN, () => { speakNextStep(); });
-  editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.KeyH, () => { showHelp(); });
-  editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.KeyB, () => { readBreadcrumb(); });
+  // All Alt-shortcut entry points cancel pending speech first so a new
+  // user action immediately interrupts whatever's currently being said.
+  editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.KeyS, () => { SpeechManager.cancelAll(); sonifyCurrentBlock(); });
+  editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.KeyL, () => { SpeechManager.cancelAll(); const pos = editor.getPosition() || { lineNumber: 1 }; readLineEnhanced(pos.lineNumber); });
+  editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.KeyV, () => { SpeechManager.cancelAll(); listVariables(); });
+  editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.KeyE, () => { SpeechManager.cancelAll(); checkSyntaxErrors(); });
+  editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.KeyN, () => { SpeechManager.cancelAll(); speakNextStep(); });
+  editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.KeyH, () => { SpeechManager.cancelAll(); showHelp(); });
+  editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.KeyB, () => { SpeechManager.cancelAll(); readBreadcrumb(); });
   editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.LeftArrow,  () => { navigateBack(); });
   editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.RightArrow, () => { navigateForward(); });
   editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.Home, () => { goToTop(); });
@@ -2584,11 +2621,52 @@ function registerEditorShortcuts() {
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyV, () => { pasteCode(); });
 
   try { loadSnippets(); } catch (e) {}
-  startAutosave();
-  recoverAutosaveDraft();
+  try { startAutosave(); } catch (e) { console.warn('autosave init failed', e); }
+  try { recoverAutosaveDraft(); } catch (e) { console.warn('autosave recover failed', e); }
   updateInputModeUI();
   updateInputsPanel();
   _debugLog('All accessibility features loaded.');
+}
+
+// ---------- AUTOSAVE ----------
+// Periodically writes the editor contents to localStorage so a refresh
+// or accidental tab-close doesn't lose work. Recovery prompts on next load.
+function startAutosave() {
+  if (_autosaveTimer) return;
+  _autosaveTimer = setInterval(() => {
+    try {
+      const code = getCode();
+      if (code === _autosaveLastCode) return;  // no-op if nothing changed
+      if (!code.trim()) return;                 // don't autosave empty
+      localStorage.setItem(AUTOSAVE_KEY, JSON.stringify({
+        code,
+        timestamp: Date.now(),
+      }));
+      _autosaveLastCode = code;
+    } catch (e) { /* localStorage full or disabled — silent fail */ }
+  }, AUTOSAVE_INTERVAL_MS);
+}
+
+function recoverAutosaveDraft() {
+  try {
+    const raw = localStorage.getItem(AUTOSAVE_KEY);
+    if (!raw) return;
+    const draft = JSON.parse(raw);
+    if (!draft || !draft.code) return;
+    // Only restore if the editor is empty/default — don't clobber an active session
+    const current = getCode().trim();
+    const isDefault = !current || current === 'print("Hello CodeUp!")';
+    if (!isDefault) return;
+    // Only restore drafts from within the last 7 days — older is probably stale
+    const ageMs = Date.now() - (draft.timestamp || 0);
+    if (ageMs > 7 * 24 * 60 * 60 * 1000) {
+      localStorage.removeItem(AUTOSAVE_KEY);
+      return;
+    }
+    setCode(draft.code);
+    speak('A draft from your previous session has been restored. Press Control Z to undo if you did not want this.');
+    srAnnounce('Previous draft restored');
+  } catch (e) { /* corrupted or missing — silent fail */ }
 }
 
 async function speakNextStep() {
@@ -3216,6 +3294,7 @@ function chooseSuggestion(choice) {
 // ---------- EXECUTION STORY MODE ----------
 
 async function tellExecutionStory() {
+  SpeechManager.cancelAll();
   showAI('Narrating your execution...');
   speak('Narrating what happened when your code ran.');
   try {
@@ -3365,6 +3444,7 @@ function startMentorMode() {
 }
 
 async function quizMe(topic) {
+  SpeechManager.cancelAll();
   const t = topic || 'Python basics';
   showAI(`Creating quiz on ${t}...`);
   speak(`Creating a quiz question on ${t}.`);
@@ -3404,6 +3484,7 @@ async function quizMe(topic) {
 }
 
 async function explainConcept(concept) {
+  SpeechManager.cancelAll();
   const c = concept || 'variables';
   showAI(`Explaining ${c}...`);
   speak(`Explaining ${c}.`);
@@ -3430,6 +3511,7 @@ async function explainConcept(concept) {
 }
 
 async function bugChallenge() {
+  SpeechManager.cancelAll();
   showAI('Generating bug challenge...');
   speak('Generating a bug fixing challenge. Get ready.');
   try {

@@ -121,7 +121,7 @@ function Sonify() {
             ))}
           </div>
 
-          <div className="sonify-tones">
+          <div className="sonify-tones" aria-hidden="true" role="presentation">
             {SONIFY_CODE.map((row, i) => {
               const lvl = (PITCH[Math.min(row.indent, PITCH.length - 1)] - 110) / (660 - 110);
               return (

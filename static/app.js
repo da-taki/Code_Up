@@ -23,6 +23,7 @@ let _restartTimer = null;
 // until the user says "resume". We need to stay in the recognition session so
 // we can actually hear the resume command.
 let _voicePaused = false;
+let _voiceStartIsUserInitiated = false;
 let _loadingSnippets = false;
 let _apiKeyPromptShown = false;
 
@@ -918,11 +919,8 @@ async function runCode() {
       speak('Program output:');
       speak(data.output);
 
-      // Narrate diff if useful (skip on first run and on identical output)
       if (diff && !diff.identical && diff.total_changes > 0) {
         speak(diff.summary);
-        // Don't auto-read every changed line — too noisy. Provide voice cmd "what's different" for detail.
-        speak('Say "what is different" to hear the changed lines.');
       }
 
       if (data.semantic_issues && data.semantic_issues.length) {
@@ -956,7 +954,6 @@ async function runCode() {
       if (data.inputs_hint) {
         speak(data.inputs_hint);
       }
-      speak('Say "explain simply" if that was confusing.');
     }
   } catch (e) {
     out('System error.'); console.error(e); cueError(); speak('System error.');
@@ -1110,10 +1107,11 @@ async function analyzeCode() {
     // Check for AI-unavailable messaging before speaking
     maybePromptForApiKey(data.analysis);
     if (data.analysis) {
-      // Strip "[offline mode]" prefix from spoken output — already announced separately
-      const spoken = data.analysis.replace(/^\[offline mode\]\s*/i, '');
+      const spoken = data.analysis
+        .replace(/^\[offline mode\]\s*/i, '')
+        .replace(/\s*want a deeper line by line walkthrough\??.*$/i, '')
+        .replace(/\s*just say:?\s*analyze deeper\.?\s*$/i, '');
       speak(spoken);
-      // Mark that a brief analysis just happened — enables "analyze deeper" follow-up
       window._lastAnalyzeContext = { code: getCode(), at: Date.now() };
     } else {
       speak('No analysis available.');
@@ -1631,6 +1629,8 @@ async function previewSnippetById(id) {
 
 // ---------- COMMAND HANDLER ----------
 async function handleConfirmedAction(action, payload) {
+  // New action interrupts previous narration. Most-recent intent wins.
+  SpeechManager.cancelAll();
   if (action === 'run')              await runCode();
   else if (action === 'analyze')     await analyzeCode();
   else if (action === 'analyze_deep') await analyzeDeep();
@@ -2175,52 +2175,61 @@ function startListening() {
   recognition.onstart = () => {
     isListening = true;
     AppState.isListening = true;
-    // Reset restart counter on clean session start
     recognition._restartAttempts = 0;
+
+    // If paused, keep paused UI on session restart and stay silent
+    if (_voicePaused) {
+      const btn = document.getElementById('voiceButton');
+      if (btn) {
+        btn.textContent = '🎤 Voice (Paused)';
+        btn.setAttribute('aria-pressed', 'mixed');
+        btn.classList.remove('cu-button-voice--active');
+        btn.classList.add('cu-button-voice--paused');
+      }
+      _debugLog('Voice: session restarted while paused — staying silent');
+      return;
+    }
+
     const btn = document.getElementById('voiceButton');
     if (btn) {
       btn.textContent = '🎤 Voice (ON)';
       btn.setAttribute('aria-pressed', 'true');
+      btn.classList.remove('cu-button-voice--paused');
       btn.classList.add('cu-button-voice--active');
     }
+
+    // Auto-restart from Chrome's idle timeout: silent except for a brief tone
+    if (!_voiceStartIsUserInitiated) {
+      cueSuccess();
+      _debugLog('Voice: silent auto-restart');
+      return;
+    }
+    _voiceStartIsUserInitiated = false;
     cueSuccess();
 
-    // Context-aware greeting: tailor the prompt to what's currently in the editor
     const lang = getLanguage();
     const code = getCode();
     const hasCode = code.trim().length > 0;
     const lineCount = code.split('\n').length;
 
-    // First-time activation in this session gets the longer greeting
     if (!window._voiceGreetedThisSession) {
       window._voiceGreetedThisSession = true;
       if (lang === 'hi') {
         speak('Voice control चालू हो गया।');
         if (hasCode) {
-          speak(`Editor में ${lineCount} लाइन का कोड है। आप "चलाओ", "विश्लेषण करो", या "narrate" कह सकते हैं।`);
+          speak(`Editor में ${lineCount} लाइन का कोड है।`);
         } else {
-          speak('Editor खाली है। आप "demo चलाओ" कहकर example देख सकते हैं, या "tutorial" से शुरू करें।');
+          speak('Editor खाली है।');
         }
-        speak('कभी भी "मदद" कहें commands सुनने के लिए।');
+        speak('"मदद" कहें commands के लिए।');
       } else {
-        speak('Voice control is on.');
+        speak('Voice on.');
         if (hasCode) {
-          speak(`The editor has ${lineCount} line${lineCount === 1 ? '' : 's'} of code. You can say "run", "analyze", or "narrate".`);
+          speak(`${lineCount} line${lineCount === 1 ? '' : 's'} in the editor.`);
         } else {
-          speak('The editor is empty. Say "show demos" to see examples, or "tutorial" to learn Python.');
+          speak('Editor is empty.');
         }
-        speak('Say "help" any time to hear commands.');
-      }
-    } else {
-      // Subsequent activations get the short greeting
-      if (lang === 'hi') {
-        speak(hasCode
-          ? `Voice control वापस on। Editor में ${lineCount} लाइन।`
-          : 'Voice control वापस on। Editor खाली है।');
-      } else {
-        speak(hasCode
-          ? `Voice back on. ${lineCount} line${lineCount === 1 ? '' : 's'} of code in the editor.`
-          : 'Voice back on. Editor is empty.');
+        speak('Say "help" for commands.');
       }
     }
     _debugLog('Voice: Listening started');
@@ -2279,8 +2288,6 @@ function startListening() {
     _debugLog('Voice: Session ended');
     if (!isListening) return;
 
-    // Only increment restart counter on unexpected ends (not clean user stops)
-    // _restartAttempts is already reset to 0 on onstart so this only accumulates during a session
     recognition._restartAttempts = (recognition._restartAttempts || 0) + 1;
     if (recognition._restartAttempts > recognition._maxRestarts) {
       speak('Voice recognition stopped after repeated failures.');
@@ -2291,16 +2298,19 @@ function startListening() {
     const delay = recognition._backoffBase * Math.pow(2, recognition._restartAttempts - 1);
     _restartTimer = setTimeout(() => {
       _restartTimer = null;
+      _voiceStartIsUserInitiated = false;
       try { if (isListening) recognition.start(); } catch (e) { console.error('Auto-restart failed', e); }
     }, delay);
   };
 
   try {
+    _voiceStartIsUserInitiated = true;
     recognition.start();
   } catch (e) {
     console.error('Failed to start recognition:', e);
     speak('Failed to start voice control.');
     isListening = false; AppState.isListening = false;
+    _voiceStartIsUserInitiated = false;
   }
 }
 

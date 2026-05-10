@@ -36,7 +36,7 @@ AI assistance is strictly optional. Every core feature works without an API key 
 
 ## Quickstart
 
-Requirements: Python 3.8 or newer. The application bundles its own copies of Monaco Editor and the JetBrains Mono / Atkinson Hyperlegible fonts, so it runs offline once installed.
+Requirements: Python 3.8 or newer. The IDE itself runs offline once installed — Monaco, JetBrains Mono, and Atkinson Hyperlegible are all vendored. The landing page additionally requires a one-time Node build to vendor React and bundle the JSX components (see "Building the landing page" below).
 
 Clone and set up a virtualenv:
 
@@ -67,6 +67,20 @@ Edit `.env` and set at minimum:
 
 If you don't set a Groq key, AI features return a clear spoken message rather than crashing. To disable AI entirely, set `GEMINI_ENABLED=0`.
 
+### Optional: Offline AI via Ollama
+
+CodeUp can fall back to a locally-running Ollama instance when Groq is unavailable (no internet, no API key, rate-limited). To enable:
+
+1. Install Ollama from <https://ollama.com>
+2. Pull a small model: `ollama pull llama3.2:3b`
+3. Set environment variables in `.env`:
+
+       OLLAMA_ENABLED=1
+       OLLAMA_URL=http://localhost:11434
+       OLLAMA_MODEL=llama3.2:3b
+
+When enabled, Groq is tried first; on any failure (network, auth, rate-limit), CodeUp transparently routes to Ollama and prefixes responses with `[offline mode]` so the user knows.
+
 Run the application:
 
     python app.py
@@ -82,6 +96,26 @@ Tests are fully isolated — snippet storage redirects to a temp directory and n
 
 ---
 
+## Building the landing page
+
+The IDE at `/ide` works without any Node tooling. The marketing landing page at `/` uses React components that need to be bundled.
+
+First-time setup:
+
+    npm install
+    npm run build
+
+This produces:
+
+- `static/vendor/react/react.production.min.js`
+- `static/vendor/react/react-dom.production.min.js`
+- `static/landing/dist/bundle.js`
+
+After editing any `static/landing/*.jsx` file, rerun `npm run build`. Node is only required for the landing page — running, deploying, or hacking on the IDE never needs it.
+
+If you're deploying to a school environment without Node, the three built files above can be committed to the repo so end users skip the build step entirely.
+
+---
 ## Architecture
 
 ### Backend (`app.py`)
@@ -111,6 +145,9 @@ Monaco Editor (vendored locally — no CDN dependency), JavaScript using the Web
 | `GEMINI_ENABLED` | No | `1` | Set `0` to disable all AI calls (env var name kept for backward compat) |
 | `SESSION_COOKIE_SECURE` | No | `false` | Set `true` behind HTTPS |
 | `DATA_DIR` | No | `.` | Directory for per-session snippet files |
+| `OLLAMA_ENABLED` | No | `0` | Set `1` to enable local Ollama fallback when Groq fails |
+| `OLLAMA_URL` | No | `http://localhost:11434` | Ollama server URL |
+| `OLLAMA_MODEL` | No | `llama3.2:3b` | Ollama model name |
 
 ---
 

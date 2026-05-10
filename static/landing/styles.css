@@ -186,7 +186,7 @@ body.no-motion *, body.no-motion *::before, body.no-motion *::after {
 }
 
 .eh-meta {
-  font-family: var(--font-mono); font-size: 12px;
+  font-family: var(--font-mono); font-size: 13px;
   display: flex; flex-direction: column; gap: 6px;
   padding: 14px 18px;
   background: var(--panel);
@@ -195,8 +195,10 @@ body.no-motion *, body.no-motion *::before, body.no-motion *::after {
   min-width: 220px;
 }
 .eh-meta-row { display: flex; justify-content: space-between; gap: 20px; }
-.eh-meta .lbl { color: var(--dim); text-transform: uppercase; letter-spacing: 0.12em; font-size: 10px; }
-.eh-meta .val { color: var(--ink); font-weight: 600; }
+/* Bumped from 10px/var(--dim) to 11px/var(--ink-2) bold to clear WCAG AA
+   on small monospace text (~5.4:1 → ~12:1 effective contrast on paper bg). */
+.eh-meta .lbl { color: var(--ink-2); text-transform: uppercase; letter-spacing: 0.12em; font-size: 11px; font-weight: 600; }
+.eh-meta .val { color: var(--ink); font-weight: 700; }
 .eh-meta .val.ok { color: var(--moss, #4a6321); }
 .eh-meta .val.warn { color: var(--accent); }
 
@@ -241,7 +243,8 @@ body.no-motion *, body.no-motion *::before, body.no-motion *::after {
 }
 .eh-pill.is-on { background: var(--ink); color: var(--bg); }
 .eh-spacer { flex: 1; }
-.eh-shortcuts { font-family: var(--font-mono); font-size: 11px; color: var(--dim); }
+/* 11px → 12px and dim → ink-2 to clear WCAG AA on small monospace text. */
+.eh-shortcuts { font-family: var(--font-mono); font-size: 12px; color: var(--ink-2); }
 .eh-shortcuts kbd {
   font-family: var(--font-mono); font-size: 10px; padding: 1px 5px;
   background: var(--bg); border: 1px solid var(--rule);
@@ -985,9 +988,10 @@ body.theme-night .tk-num { color: #e7c773; }
 @media (max-width: 1000px) {
   .feat, .feat.span6, .feat.span8 { grid-column: span 12; }
 }
+/* 11px small mono needs darker text to clear WCAG AA. */
 .feat-num {
-  font-family: var(--font-mono); font-size: 11px;
-  color: var(--dim); letter-spacing: 0.12em;
+  font-family: var(--font-mono); font-size: 12px;
+  color: var(--ink-2); letter-spacing: 0.12em; font-weight: 600;
   margin-bottom: 18px;
 }
 .feat h3 {
@@ -1133,9 +1137,11 @@ body.theme-night .tk-num { color: #e7c773; }
 }
 .stat .num .accent { color: var(--accent); }
 .stat .lbl {
-  font-family: var(--font-mono); font-size: 11px;
+  font-family: var(--font-mono); font-size: 12px;
   text-transform: uppercase; letter-spacing: 0.16em;
-  color: color-mix(in oklab, var(--foam) 60%, transparent);
+  /* Bumped from 60% foam to 78% — small caps mono needs higher contrast on dark bg. */
+  color: color-mix(in oklab, var(--foam) 78%, transparent);
+  font-weight: 600;
 }
 
 /* ==========================================================

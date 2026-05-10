@@ -261,9 +261,14 @@
       </button>
     </div>
   </div>
-  <script src="/static/tts-detect.js"></script>
-  <script src="/static/vendor/monaco/min/vs/loader.js"></script>
-  <script src="/static/app.js"></script>
+  <!-- React + pre-built landing bundle, vendored locally. No CDN, no Babel-in-browser.
+     To regenerate after editing any landing/*.jsx file:
+         npm install      (first time only)
+         npm run build
+     This produces static/vendor/react/* and static/landing/dist/bundle.js. -->
+  <script src="/static/vendor/react/react.production.min.js"></script>
+  <script src="/static/vendor/react/react-dom.production.min.js"></script>
+  <script src="/static/landing/dist/bundle.js"></script>
 
   <script>
     (function () {
@@ -753,6 +758,10 @@
         if (typeof window.warnIfHindiUnavailable === 'function') {
           window.warnIfHindiUnavailable(e.target.value);
         }
+        // Reset the API-key-prompt flag so users get a fresh prompt after
+        // switching language (they may have dismissed it in the other lang
+        // before realizing they actually want AI).
+        try { window._apiKeyPromptShown = false; } catch (err) {}
         // Clear any pending interactive state so a stale quiz/challenge from
         // the previous language doesn't intercept input in the new language.
         try {

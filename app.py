@@ -50,14 +50,57 @@ _session_ttl = SESSION_TTL_SECONDS  # back-compat alias
 
 # Background cleanup thread for old sessions
 def _session_cleanup_worker():
-    """Background thread that periodically cleans up expired sessions."""
+    """Background thread that periodically cleans up expired sessions and
+    bounded structures that would otherwise leak in long-running deployments."""
     while True:
         time.sleep(300)  # Run cleanup every 5 minutes
         try:
             cleanup_old_sessions()
         except Exception as e:
             print(f"Session cleanup error: {e}", file=sys.stderr)
+        try:
+            cleanup_stale_runs()
+        except Exception as e:
+            print(f"Stale runs cleanup error: {e}", file=sys.stderr)
+        try:
+            cleanup_orphan_bookmarks_and_telemetry()
+        except Exception as e:
+            print(f"Bookmark/telemetry cleanup error: {e}", file=sys.stderr)
 
+
+def cleanup_stale_runs():
+    """Reap _active_runs whose subprocess has exited or whose started_at
+    is older than 5 minutes. Live runs are capped at 60s server-side, so
+    anything older is definitely abandoned."""
+    now = time.time()
+    stale_ids = []
+    with _active_runs_lock:
+        for run_id, state in list(_active_runs.items()):
+            proc = state.get("proc")
+            started = state.get("started_at", now)
+            if (proc is not None and proc.poll() is not None) or (now - started > 300):
+                stale_ids.append(run_id)
+    for run_id in stale_ids:
+        try:
+            _cleanup_run(run_id)
+        except Exception:
+            pass
+
+
+def cleanup_orphan_bookmarks_and_telemetry():
+    """Drop bookmarks for sessions no longer in _session_traces, and trim
+    voice telemetry to its cap. Bounded by session count so this never
+    grows past O(active_sessions)."""
+    with _session_traces_lock:
+        live_sessions = set(_session_traces.keys())
+    with _output_bookmarks_lock:
+        for sid in list(_output_bookmarks.keys()):
+            if sid not in live_sessions:
+                del _output_bookmarks[sid]
+    # Telemetry already self-trims on insert, but guarantee the cap here too
+    with _voice_telemetry_lock:
+        if len(_voice_telemetry) > _VOICE_TELEMETRY_CAP:
+            del _voice_telemetry[:len(_voice_telemetry) - _VOICE_TELEMETRY_CAP]
 _cleanup_thread = threading.Thread(target=_session_cleanup_worker, daemon=True)
 _cleanup_thread.start()
 
@@ -836,27 +879,37 @@ def classify_semantic_errors(trace):
     """
     issues = []
     execution_count = {}
+    truncated = False
 
     for event in trace:
-        if event["type"] in ("state_change", "line_exec"):
+        if event.get("type") == "overflow":
+            truncated = True
+            continue
+        if event.get("type") in ("state_change", "line_exec"):
             line = event["line"]
             execution_count[line] = execution_count.get(line, 0) + 1
 
-    # Threshold of 4500 sits just below the 5000 hard cap. Anything above is
-    # extremely likely to be runaway code (recursive fib(30) ~= 2.7M calls
-    # which would already be truncated; ordinary classroom loops never approach
-    # this number). Lower thresholds produced false positives on legitimate
-    # recursive demos like fibonacci.
+    # 2000 is the sweet spot:
+    #   - Catches genuinely runaway code: tight loops with no termination,
+    #     recursion that's clearly wrong, accidental infinite-ish iteration.
+    #   - Stays above legitimate classroom exercises: a range(100) loop,
+    #     a nested 30x30, a prime sieve to 100 — all comfortably below.
+    #   - Sits below the 5000 trace cap so the warning can actually fire
+    #     before truncation makes the count meaningless.
+    # Previous 4500 was dead code (above truncation); 800 fired on legit
+    # nested-loop demos. 2000 was tuned against the bundled demo presets.
+    HIGH_ITERATION_THRESHOLD = 2000
     for line, count in execution_count.items():
-        if count > 4500:
+        if count > HIGH_ITERATION_THRESHOLD:
+            note = (f"Line {line} executed {count} times. The program completed "
+                    f"successfully, but if this looks higher than you expected, "
+                    f"check whether your loop terminates correctly.")
+            if truncated:
+                note += " (Trace was truncated — actual count may be higher.)"
             issues.append({
                 "category": "High iteration count",
                 "line": line,
-                "message": (
-                    f"Line {line} executed {count} times. The program completed "
-                    f"successfully, but if this looks higher than you expected, "
-                    f"check whether your loop terminates correctly."
-                )
+                "message": note,
             })
 
     return issues
@@ -928,14 +981,33 @@ def _compute_output_diff(prev: str, curr: str) -> dict:
         if tag == 'equal':
             continue
         if tag == 'replace':
-            for k in range(max(i2 - i1, j2 - j1)):
-                before = prev_lines[i1 + k] if i1 + k < i2 else ""
-                after = curr_lines[j1 + k] if j1 + k < j2 else ""
+            # Split unequal-length replace into a paired "changed" region
+            # plus a trailing add or delete. Pairing past min() drifts the
+            # line numbers because we're indexing into curr while the extra
+            # rows belong to prev (or vice versa).
+            paired = min(i2 - i1, j2 - j1)
+            for k in range(paired):
                 changes.append({
                     "line_no": j1 + k + 1,
-                    "before": before,
-                    "after": after,
+                    "before": prev_lines[i1 + k],
+                    "after": curr_lines[j1 + k],
                     "kind": "changed",
+                })
+            # Extra rows in prev → removed
+            for k in range(paired, i2 - i1):
+                changes.append({
+                    "line_no": j1 + paired + 1,
+                    "before": prev_lines[i1 + k],
+                    "after": "",
+                    "kind": "removed",
+                })
+            # Extra rows in curr → added
+            for k in range(paired, j2 - j1):
+                changes.append({
+                    "line_no": j1 + k + 1,
+                    "before": "",
+                    "after": curr_lines[j1 + k],
+                    "kind": "added",
                 })
         elif tag == 'delete':
             for k in range(i1, i2):
@@ -1146,7 +1218,7 @@ def run_code():
             "trace": trace,
             "semantic_issues": semantic_issues,
             "diff": diff_info,
-            "inputs_consumed": _INPUT_INDEX_HINT(trace_file) if False else len(inputs),
+            "inputs_consumed": len(inputs),
             "inputs_provided": len(inputs),
             "inputs_hint": inputs_hint,
         })
@@ -1161,10 +1233,6 @@ def run_code():
             "inputs_hint": inputs_hint,
         })
 
-
-def _INPUT_INDEX_HINT(_):
-    # Placeholder for forward-compatibility — kept simple, never raises.
-    return 0
 
 # ==========================
 # ANALYZE

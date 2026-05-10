@@ -193,9 +193,11 @@ class IntentParser:
     ]
 
     SONIFY_BLOCK_PATTERNS = [
-        r"^sonify\s+(?:block|current\s+block)$",
+        r"^sonify\s+(?:block|current\s+block|this|this\s+block)?$",
         r"^sonify$",
-        r"^(?:audio|hear|play|sound\s+out)\s+(?:code\s+)?structure$",
+        r"^(?:audio|hear|play|sound\s+out)\s+(?:code\s+)?(?:structure|block)?$",
+        r"^play\s+(?:the\s+)?code$",
+        r"^make\s+(?:it\s+)?sing$",
     ]
 
     # -----------------------------------------------------------------------
@@ -431,6 +433,10 @@ class IntentParser:
         r"^क्या\s+कर\s+सकते\s+हो$",
         r"^मैं\s+(?:क्या|कैसे)\s+करूं$",
         r"^समझ\s+नहीं\s+आ\s+रहा$",
+        r"^madad$",
+        r"^madat$",
+        r"^madad\s+karo$",
+        r"^help\s+me$",
     ]
 
     MORE_HELP_PATTERNS = [

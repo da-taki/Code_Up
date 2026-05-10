@@ -277,26 +277,31 @@ function sonifyLine(lineContent, indentLevel) {
 // ---------- LINE READING ----------
 async function readLineEnhanced(line) {
   const model = getModel();
-  if (!model) return;
+  if (!model) { speak('Editor not ready.'); return; }
   const maxLine = model.getLineCount();
   if (line < 1 || line > maxLine) {
     const msg = `Line ${line} is out of range. File has ${maxLine} lines.`;
     out(msg); speak(msg); return;
   }
+  // Speak the line content immediately as a fallback, before backend call
+  const lineText = model.getLineContent(line);
+  const fallback = `Line ${line}: ${lineText || 'empty line'}`;
   try {
-    const res  = await fetch('/read-line-context', {
+    const res = await fetch('/read-line-context', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ code: getCode(), line }),
     });
     const data = await res.json();
-    if (data.success) {
-      sonifyLine(data.content, data.indent_level);
+    if (data.success && data.response) {
+      sonifyLine(data.content || lineText, data.indent_level || 0);
       setTimeout(() => { out(data.response); speak(data.response); }, 150);
+    } else {
+      out(fallback); speak(fallback);
     }
   } catch (e) {
     console.error(e);
-    speak('Failed to read line context.');
+    out(fallback); speak(fallback);
   }
 }
 
@@ -489,40 +494,13 @@ function locateError() { checkSyntaxErrors(); }
 // ---------- HELP ----------
 async function showHelp() {
   if (!ensureNotExecuting(() => showHelp(), 'show help')) return;
-
-  // Context-aware: check current state and offer the most relevant action first.
-  const code = getCode();
-  const hasCode = code.trim().length > 0;
-
-  // 1. Empty editor → suggest writing code or starting tutorial
-  if (!hasCode) {
-    const msg = 'The editor is empty. Try saying "tutorial" to learn Python step by step, or "generate code for" followed by what you want, like "generate code for a fibonacci function". Say "more help" for the full command list.';
-    out(msg);
-    speak(msg);
-    return;
+  const lang = getLanguage();
+  let msg;
+  if (lang === 'hi') {
+    msg = 'मुख्य commands: चलाओ कोड चलाने के लिए, कोड समझाओ analysis के लिए, कोड ठीक करो fix के लिए, सारांश दो summary के लिए, लाइन पांच पर जाओ navigate करने के लिए, tutorial खोलने के लिए "tutorial" कहें, "quiz करो" practice के लिए, "bug challenge" debugging के लिए, "मदद और" पूरी list के लिए।';
+  } else {
+    msg = 'Top commands: run to execute code, analyze for AI review, fix to repair errors, summarize for a quick overview, go to line five to navigate, save snippet to keep your work, tutorial to learn Python, quiz me to practice, bug challenge to debug, sonify block to hear code structure, what variables to list current variables, set inputs to provide input values, night mode to toggle dark theme. Say "more help" for the complete list of every command.';
   }
-
-  // 2. Has code → check for syntax errors, offer to fix
-  try {
-    const res = await fetch('/check-syntax', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code }),
-    });
-    const data = await res.json();
-    if (data.success && data.has_errors && data.errors.length > 0) {
-      const err = data.errors[0];
-      const msg = `You have a ${err.type} on line ${err.line}: ${err.message}. Say "fix" to auto-fix it, or "explain error" to hear what's wrong. Say "more help" for the full command list.`;
-      out(msg);
-      speak(msg);
-      return;
-    }
-  } catch (e) {
-    // fall through to general help
-  }
-
-  // 3. Has clean code → suggest running, analyzing, or showing more help
-  const msg = 'Your code looks clean. Say "run" to execute it, "analyze" to get an AI review, "summarize" to hear what it does, or "more help" for the full command list.';
   out(msg);
   speak(msg);
 }
@@ -1416,7 +1394,16 @@ async function generateCode(prompt) {
     const data = await res.json();
     if (data.success && data.code) {
       window.executionTrace = []; window.traceIndex = 0;
-      setCode(data.code); out('Code generated and inserted into editor.'); cueSuccess(); speak('Code is ready in the editor. Press Ctrl+Enter to run it, or say "analyze" to hear an explanation.');
+      setCode(data.code); cueSuccess();
+      const usesInput = /\binput\s*\(/.test(data.code);
+      if (usesInput) {
+        const inputCount = (data.code.match(/\binput\s*\(/g) || []).length;
+        out(`Code generated with ${inputCount} input() call${inputCount === 1 ? '' : 's'}.\n\nBefore running, declare your inputs by saying:\n  "set inputs to value1 and value2"\nor type values into the Inputs panel on the left.`);
+        speak(`Code generated. Heads up: it uses input ${inputCount} time${inputCount === 1 ? '' : 's'}. Before pressing run, declare your input values by saying "set inputs to" followed by your values. For example, "set inputs to Alice and seventeen". Or type them in the inputs panel.`);
+      } else {
+        out('Code generated and inserted into editor.');
+        speak('Code is ready in the editor. Press Control Enter to run it, or say "analyze" to hear an explanation.');
+      }
     } else {
       const reason = data.error || 'the AI returned an empty response. Please try rephrasing your request.';
       out('Code generation failed: ' + reason); cueError(); speak('Code generation did not work. ' + reason);
@@ -1699,6 +1686,15 @@ async function handleConfirmedAction(action, payload) {
   else if (action === 'copy_code')       copyCode();
   else if (action === 'paste_code')         pasteCode();
   else if (action === 'restart_tutorial')   restartTutorial();
+  else if (action === 'toggle_dyslexia')    { document.getElementById('dyslexiaToggle').click(); }
+  else if (action === 'toggle_motion')      { document.getElementById('motionToggle').click(); }
+  else if (action === 'toggle_night')       { document.getElementById('nightToggle').click(); }
+  else if (action === 'cycle_color_mode')   {
+    const s = document.getElementById('colorVisionMode');
+    s.selectedIndex = (s.selectedIndex + 1) % s.options.length;
+    s.dispatchEvent(new Event('change'));
+  }
+  else if (action === 'list_variables_voice') await listVariablesWithValues();
   else if (action === 'start_tutorial')     { if (window.TutorialController) window.TutorialController.open(); }
   else if (action === 'skip_tutorial')      { if (window.TutorialController) window.TutorialController.close(); }
   else if (action === 'tutorial_next')      { if (window.TutorialController && window.TutorialController.active) window.TutorialController.next(); }
@@ -2284,37 +2280,31 @@ function startListening() {
 
   recognition.onerror = (event) => {
     console.error('Voice error:', event.error);
-    if (event.error === 'no-speech') { speak('No speech detected. Still listening.'); return; }
+    if (event.error === 'no-speech') { return; }
     if (event.error === 'aborted')   { isListening = false; AppState.isListening = false; return; }
-
-    recognition._restartAttempts = (recognition._restartAttempts || 0) + 1;
-    if (recognition._restartAttempts > recognition._maxRestarts) {
-      speak('Voice recognition repeatedly failed. Voice control is paused.');
+    if (event.error === 'audio-capture' || event.error === 'not-allowed') {
+      speak('Microphone access blocked. Please grant microphone permission and toggle voice again.');
       isListening = false; AppState.isListening = false; return;
     }
-
-    const delay = recognition._backoffBase * Math.pow(2, recognition._restartAttempts - 1);
-    speak('Voice recognition error. Attempting to restart.');
-    setTimeout(() => { try { if (isListening) recognition.start(); } catch (e) { console.error('Restart failed', e); } }, delay);
+    console.warn('Voice error (will retry):', event.error);
   };
 
   recognition.onend = () => {
     _debugLog('Voice: Session ended');
     if (!isListening) return;
-
     recognition._restartAttempts = (recognition._restartAttempts || 0) + 1;
-    if (recognition._restartAttempts > recognition._maxRestarts) {
-      speak('Voice recognition stopped after repeated failures.');
-      isListening = false; AppState.isListening = false; return;
+    if (recognition._restartAttempts > 10) {
+      recognition._restartAttempts = 0;
     }
-
     if (_restartTimer) { clearTimeout(_restartTimer); _restartTimer = null; }
-    const delay = recognition._backoffBase * Math.pow(2, recognition._restartAttempts - 1);
     _restartTimer = setTimeout(() => {
       _restartTimer = null;
       _voiceStartIsUserInitiated = false;
-      try { if (isListening) recognition.start(); } catch (e) { console.error('Auto-restart failed', e); }
-    }, delay);
+      try { if (isListening) recognition.start(); } catch (e) {
+        console.error('Auto-restart failed', e);
+        setTimeout(() => { try { if (isListening) recognition.start(); } catch(e2){} }, 1000);
+      }
+    }, 200);
   };
 
   try {
@@ -3606,4 +3596,47 @@ function showInputDialog(promptText, callback) {
     input.focus();
     speak(promptText + '. Type a number and press Enter, or press Escape to cancel.');
   });
+}
+// ---------- LIST VARIABLES WITH VALUES (from execution trace) ----------
+async function listVariablesWithValues() {
+  const trace = window.executionTrace || [];
+  if (!trace.length) {
+    speak('No variables to report yet. Please run your code first by pressing Control Enter or saying "run".');
+    out('No execution trace available. Run your code first.');
+    return;
+  }
+  // Walk trace forward, building current variable values from state_change events
+  const vars = {};
+  for (const event of trace) {
+    if (event.type === 'state_change' && event.changes) {
+      for (const change of event.changes) {
+        // Match: "x changed from 0 to 5" or "x initialized to 5"
+        const initMatch = change.match(/^(\w+) initialized to (.+)$/);
+        const changeMatch = change.match(/^(\w+) changed from .+ to (.+)$/);
+        if (initMatch) vars[initMatch[1]] = initMatch[2];
+        else if (changeMatch) vars[changeMatch[1]] = changeMatch[2];
+      }
+    }
+  }
+  const names = Object.keys(vars);
+  if (!names.length) {
+    speak('Your code ran but no variables were declared.');
+    out('No variables found in execution trace.');
+    return;
+  }
+  let display = `VARIABLES AND VALUES (${names.length}):\n\n`;
+  let speech = `You have ${names.length} variable${names.length === 1 ? '' : 's'}. `;
+  for (const name of names) {
+    display += `  ${name} = ${vars[name]}\n`;
+    speech += `${pronounceVariableJS(name)} equals ${vars[name]}. `;
+  }
+  out(display);
+  speak(speech);
+}
+
+// Lightweight phonetic helper for single letters (NATO-style for screen readers)
+function pronounceVariableJS(name) {
+  if (!name || name.length !== 1) return name;
+  const map = {a:'a',b:'bee',c:'see',d:'dee',e:'ee',f:'eff',g:'gee',h:'aitch',i:'eye',j:'jay',k:'kay',l:'ell',m:'em',n:'en',o:'oh',p:'pee',q:'cue',r:'arr',s:'ess',t:'tee',u:'you',v:'vee',w:'double-you',x:'ex',y:'why',z:'zee'};
+  return map[name.toLowerCase()] || name;
 }

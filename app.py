@@ -2215,7 +2215,8 @@ COMMANDS = {
         "clear editor", "clear code", "clear file", "reset code",
         "एडिटर साफ करो", "कोड हटाओ", "कोड मिटाओ",
     ],    "read_line_enhanced": ["read line with context", "enhanced read line", "describe line position", "where am i", "line context"],
-    "sonify_block": ["sonify block", "audio structure", "hear structure", "play code structure", "sound out code"],
+    "sonify_block": ["sonify block", "sonify", "audio structure", "hear structure", "play code structure", "sound out code", "play this", "play code"],
+    "read_line_enhanced": ["read line", "read current line", "read this line", "what is this line", "describe this line"],
     "list_variables": ["what variables", "list variables", "show variables", "what variables are available", "variables in scope"],
     "check_errors": ["check for errors", "check syntax", "find errors", "are there errors", "syntax check"],
     "locate_error": ["where is the error", "where is error", "find error", "jump to error", "go to error"],
@@ -2224,12 +2225,13 @@ COMMANDS = {
     "go_forward": ["go forward", "navigate forward", "forward", "next position"],
     "show_history": ["show history", "navigation history", "where have i been"],
     "help": ["help", "show help", "what can you do", "list commands"],
+    "walk_through": ["walk through", "walk to", "walk through code", "walk me through", "walk through the code", "explain line by line", "narrate each line", "go through code", "explain the code line by line"],
     "file_stats": ["file stats", "how many lines", "file statistics", "code stats"],
     "go_to_top": ["go to top", "jump to top", "top of file"],
     "go_to_bottom": ["go to bottom", "jump to bottom", "bottom of file", "end of file"],
     "copy_code": ["copy code", "copy to clipboard", "copy this"],
     "paste_code": ["paste code", "paste from clipboard", "paste"],
-    "start_tutorial":   ["start tutorial", "open tutorial", "begin tutorial", "tutorial", "restart tutorial", "reset tutorial", "redo tutorial", "tutorial again"],
+    "start_tutorial":     ["start tutorial", "open tutorial", "begin tutorial", "tutorial"],
     "skip_tutorial":    ["skip tutorial", "close tutorial", "exit tutorial", "stop tutorial"],
     "toggle_dyslexia":  ["dyslexia mode", "toggle dyslexia", "turn on dyslexia", "turn off dyslexia"],
     "toggle_motion":    ["reduce motion", "reduced motion", "toggle motion", "motion mode"],
@@ -2240,25 +2242,42 @@ COMMANDS = {
     "mentor_mode":      ["learning mode", "mentor mode", "tutor mode", "teach me", "मुझे सिखाओ"],
     "quiz_me":          ["quiz me", "test me", "challenge me", "quiz करो", "test करो"],
     "bug_challenge":    ["bug challenge", "debug challenge", "give me a bug", "bug ढूंढो"],
-    "clear_breakpoints":["clear breakpoints", "remove breakpoints", "delete breakpoints"]
+    "clear_breakpoints":["clear breakpoints", "remove breakpoints", "delete breakpoints"],
+    "stop_everything": ["stop", "stop it", "shut up", "be quiet", "silence", "stop talking", "cancel", "रुको", "बंद करो", "चुप", "रुक"],
 }
 
 
 def best_two_commands(text: str):
-    text = text.lower().strip()
-    best_name = None
-    best_score = 0
-    second_name = None
-    second_score = 0
+    """Return the top two DISTINCT command names by fuzzy score.
 
+    Bug fix: previously this scored every phrase independently, so a command
+    with multiple similar phrases could occupy both the best AND second slot
+    (e.g. "walk to" → ["walk through", "walk through"]). Now we collapse to
+    the best score per command name first, then pick the top two distinct
+    commands.
+    """
+    text = text.lower().strip()
+
+    # Best score per command name
+    per_command_best = {}
     for name, phrases in COMMANDS.items():
+        top = 0
         for p in phrases:
             s = fuzz.ratio(text, p)
-            if s > best_score:
-                second_name, second_score = best_name, best_score
-                best_name, best_score = name, s
-            elif s > second_score:
-                second_name, second_score = name, s
+            if s > top:
+                top = s
+        per_command_best[name] = top
+
+    # Sort commands by best score, take top two distinct names
+    ranked = sorted(per_command_best.items(), key=lambda kv: kv[1], reverse=True)
+
+    best_name, best_score = (None, 0)
+    second_name, second_score = (None, 0)
+    if len(ranked) >= 1:
+        best_name, best_score = ranked[0]
+    if len(ranked) >= 2:
+        second_name, second_score = ranked[1]
+
     return best_name, best_score, second_name, second_score
 
 # ==========================
@@ -2699,7 +2718,7 @@ def voice():
     # High-frequency commands skip the confirm prompt even at moderate confidence,
     # because in a noisy classroom getting "did you mean run or fix?" on every
     # command is more frustrating than occasionally running the wrong simple action.
-    HIGH_FREQUENCY_COMMANDS = {"run", "analyze", "fix", "help", "speak", "read_output"}
+    HIGH_FREQUENCY_COMMANDS = {"run", "analyze", "fix", "help", "speak", "read_output", "walk_through", "sonify_block", "stop_everything"}
 
     if best and bscore >= VOICE_FUZZY_THRESHOLD:
         is_clear_winner = bscore >= 75 and (not second or (bscore - sscore) >= 15)

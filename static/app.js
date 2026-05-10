@@ -102,6 +102,7 @@ const SpeechManager = (function () {
   try {
     const queue = [];
     let currentUtterance = null;
+    let _lastSynthKick = 0;
 
     function dequeue() {
       // Gate on the actual synthesis state, not just our local pointer.
@@ -124,10 +125,23 @@ const SpeechManager = (function () {
       }
       AppState.isSpeaking = true;
       currentUtterance = new SpeechSynthesisUtterance(item.text);
+
+      const now = Date.now();
+      if (now - _lastSynthKick > 8000) {
+        try {
+          window.speechSynthesis.pause();
+          window.speechSynthesis.resume();
+        } catch (e) {}
+
+        _lastSynthKick = now;
+      }
+
       currentUtterance.rate  = item.rate  || 1;
       currentUtterance.pitch = item.pitch || 1;
       currentUtterance.lang  = (typeof getLanguage === 'function' && getLanguage() === 'hi') ? 'hi-IN' : 'en-US';
+
       let finished = false;
+      let started = false;
       const cleanup = () => {
         if (finished) return;
         finished = true;
@@ -138,9 +152,25 @@ const SpeechManager = (function () {
         dequeue();
       };
 
-      currentUtterance.onend  = cleanup;
+      currentUtterance.onstart = () => {
+        started = true;
+      };
+
+      currentUtterance.onend = cleanup;
       currentUtterance.onerror = cleanup;
+
       item.timeoutId = setTimeout(cleanup, 30000);
+
+      setTimeout(() => {
+        if (!started && !finished) {
+          try {
+            window.speechSynthesis.cancel();
+          } catch (e) {}
+
+          cleanup();
+        }
+      }, 1200);
+
       window.speechSynthesis.speak(currentUtterance);
     }
 
@@ -283,26 +313,15 @@ async function readLineEnhanced(line) {
     const msg = `Line ${line} is out of range. File has ${maxLine} lines.`;
     out(msg); speak(msg); return;
   }
-  // Speak the line content immediately as a fallback, before backend call
   const lineText = model.getLineContent(line);
-  const fallback = `Line ${line}: ${lineText || 'empty line'}`;
-  try {
-    const res = await fetch('/read-line-context', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ code: getCode(), line }),
-    });
-    const data = await res.json();
-    if (data.success && data.response) {
-      sonifyLine(data.content || lineText, data.indent_level || 0);
-      setTimeout(() => { out(data.response); speak(data.response); }, 150);
-    } else {
-      out(fallback); speak(fallback);
-    }
-  } catch (e) {
-    console.error(e);
-    out(fallback); speak(fallback);
-  }
+  const indent = Math.floor(getIndentLevel(lineText));
+  // Sonify first, then speak
+  sonifyLine(lineText, indent);
+  setTimeout(() => {
+    const msg = `Line ${line}: ${lineText || 'empty line'}`;
+    out(msg);
+    speak(msg);
+  }, 200);
 }
 
 // ---------- BLOCK SONIFICATION ----------
@@ -406,10 +425,20 @@ async function listVariables() {
           `${v.name} (${v.phonetic}): used ${v.usage_count} times, defined at line ${v.first_line}`
         ).join('\n');
         out(`Variables in ${data.current_scope}:\n\n${varList}`);
+
+        // Do not clear the speech queue here.
+        // Variable narration should flow naturally in sequence.
+        // cancelAll() was interrupting active utterances and
+        // occasionally causing Chrome speech synthesis deadlocks.
         speak(`Found ${data.variables.length} variables in ${data.current_scope}.`);
-        SpeechManager.cancelAll();
-        data.variables.slice(0, 5).forEach(v => speak(`${v.phonetic}, used ${v.usage_count} times.`));
-        if (data.variables.length > 5) speak(`And ${data.variables.length - 5} more. Check output for full list.`);
+
+        data.variables.slice(0, 5).forEach(v =>
+          speak(`${v.phonetic}, used ${v.usage_count} times.`)
+        );
+
+        if (data.variables.length > 5) {
+          speak(`And ${data.variables.length - 5} more. Check output for full list.`);
+        }
       }
     } else {
       const msg = data.message || 'Failed to analyze variables.';
@@ -452,6 +481,8 @@ async function findVariable(varName) {
 
 // ---------- ERROR BEACON ----------
 async function checkSyntaxErrors() {
+  // Cancel any prior speech so "checking..." is heard immediately.
+  SpeechManager.cancelAll();
   showAI('Checking for errors...');
   speak('Checking code for errors.');
   try {
@@ -463,22 +494,36 @@ async function checkSyntaxErrors() {
     const data = await res.json();
     if (data.success && !data.has_errors) {
       out('✓ No errors detected. Code looks good!');
-      speak('No errors detected. Code looks good!');
-      srAnnounce('No errors detected');
+      // Cancel the "checking..." utterance so the result speaks cleanly.
+      // Without this, Chrome's synth sometimes truncates the second utterance
+      // mid-word when transitioning from one queued item to the next.
       stopErrorBeacon();
+
+      speak('No errors detected.');
+      speak('Code looks good.');
     } else if (data.success && data.has_errors) {
       const errorList = data.errors.map(e => `Line ${e.line || 'unknown'}: ${e.type} - ${e.message}`).join('\n');
       out(`⚠ Found ${data.error_count} error(s):\n\n${errorList}`);
-      speak(`Found ${data.error_count} errors.`);
-      srAnnounce('Found ' + data.error_count + ' error' + (data.error_count !== 1 ? 's' : ''));
+
+      // Do NOT cancel speech here.
+      // The speech queue already handles sequencing safely now.
+      // Canceling here was causing Chrome TTS race conditions
+      // where the first utterance cut off the second one.
+      speak(`Found ${data.error_count} error${data.error_count !== 1 ? 's' : ''}.`);
       data.errors.forEach(e => speak(`${e.type} on line ${e.line || 'unknown'}.`));
+
       if (data.errors.length > 0 && data.errors[0].line > 0) {
         ErrorBeaconManager.start(data.errors[0].line, data.errors[0].severity);
         gotoLine(data.errors[0].line, false);
       }
     }
   } catch (e) {
-    console.error(e); out('Syntax check failed.'); speak('Syntax check failed.');
+    console.error(e);
+    out('Syntax check failed.');
+
+    // Do not cancel queued speech on syntax failure.
+    // Just append the failure message normally.
+    speak('Syntax check failed.');
   } finally {
     hideAI();
   }
@@ -786,9 +831,10 @@ function getModel() { return editor && editor.getModel(); }
 function getCode()  { return (editor && editor.getValue()) || ''; }
 function getLanguage() { return (document.getElementById('languageSelector') || {}).value || 'en'; }
 
-function setCode(v) {
+function setCode(v, opts) {
+  opts = opts || {};
   if (typeof ErrorBeaconManager !== 'undefined') ErrorBeaconManager.stop();
-  SpeechManager.cancelAll();
+  if (!opts.preserveSpeech) SpeechManager.cancelAll();
   lastSpokenText = null;
   window.executionTrace = [];
   window.traceIndex = 0;
@@ -927,7 +973,9 @@ async function runCode() {
     } else {
       out('ERROR:\n' + (data.error || ''));
       cueError();
-      SpeechManager.cancelAll();
+      // Avoid clearing speech here.
+      // The queued narration system already handles sequencing.
+      // Clearing here could interrupt the spoken error explanation.
       _lastErrorContext = {
         code: getCode(),
         error: data.error || '',
@@ -1228,7 +1276,7 @@ async function loadDemoById(id) {
     const res = await fetch(`/demo-presets/${encodeURIComponent(id)}`);
     const data = await res.json();
     if (data.success) {
-      setCode(data.code);
+      setCode(data.code, { preserveSpeech: true });
       out(`DEMO LOADED: ${data.title}\n\n${data.description}\n\nPress Ctrl+Enter or say "run" to execute.`);
       speak(`Demo loaded: ${data.title}. ${data.description}.`);
       speak('The code is in the editor. Press Control Enter, or say "run", to execute it. Say "narrate" to hear it line by line first.');
@@ -1383,10 +1431,25 @@ async function describeLine(line) {
 
 // ---------- GENERATE CODE ----------
 async function generateCode(prompt) {
-  if (!prompt) { speak('Please provide a description of what you want to generate.'); return; }
-  showAI('Generating code for: ' + prompt); speak('Generating code for ' + prompt + '. One moment.');
+  if (!prompt) {
+    SpeechManager.cancelAll();
+    speak('Please provide a description of what you want to generate.');
+    return;
+  }
+
+  // Cancel any prior speech so the "generating" announcement is heard immediately.
+  SpeechManager.cancelAll();
+
+  // Audio cue + visible status + screen reader announcement + spoken status.
+  // All four channels so sighted, blind, and screen-reader users each get feedback.
+  cueSuccess();
+  out('Generating code for: ' + prompt);
+  showAI('Generating code for: ' + prompt);
+  srAnnounce('Generating code');
+  speak('Generating code for ' + prompt + '. One moment please.');
+
   try {
-    const res  = await fetch('/generate-code', {
+    const res = await fetch('/generate-code', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ prompt, language: getLanguage() }),
@@ -1394,22 +1457,37 @@ async function generateCode(prompt) {
     const data = await res.json();
     if (data.success && data.code) {
       window.executionTrace = []; window.traceIndex = 0;
-      setCode(data.code); cueSuccess();
+      // CRITICAL: setCode() calls SpeechManager.cancelAll() internally, which
+      // would kill our pending "generating..." utterance AND any follow-up
+      // speak() we queue in the same tick. Pass preserveSpeech:true so the
+      // user actually hears the success announcement.
+      setCode(data.code, { preserveSpeech: true });
+      cueSuccess();
+
       const usesInput = /\binput\s*\(/.test(data.code);
       if (usesInput) {
         const inputCount = (data.code.match(/\binput\s*\(/g) || []).length;
-        out(`Code generated with ${inputCount} input() call${inputCount === 1 ? '' : 's'}.\n\nBefore running, declare your inputs by saying:\n  "set inputs to value1 and value2"\nor type values into the Inputs panel on the left.`);
-        speak(`Code generated. Heads up: it uses input ${inputCount} time${inputCount === 1 ? '' : 's'}. Before pressing run, declare your input values by saying "set inputs to" followed by your values. For example, "set inputs to Alice and seventeen". Or type them in the inputs panel.`);
+        out(`Code generated with ${inputCount} input() call${inputCount === 1 ? '' : 's'}.\n\nBefore running, declare your inputs by saying:\n  "set inputs to value1 and value2"`);
+        srAnnounce('Code generated');
+        speak(`Code is ready. Heads up: it uses input ${inputCount} time${inputCount === 1 ? '' : 's'}. Before pressing run, say "set inputs to" followed by your values.`);
       } else {
-        out('Code generated and inserted into editor.');
-        speak('Code is ready in the editor. Press Control Enter to run it, or say "analyze" to hear an explanation.');
+        out('Code generated and inserted into editor. Press Control Enter to run, or say "analyze" to hear an explanation.');
+        srAnnounce('Code generated');
+        speak('Code is ready in the editor. Press Control Enter to run it, or say "walk through code" to hear it explained.');
       }
     } else {
       const reason = data.error || 'the AI returned an empty response. Please try rephrasing your request.';
-      out('Code generation failed: ' + reason); cueError(); speak('Code generation did not work. ' + reason);
+      out('Code generation failed: ' + reason);
+      cueError();
+      srAnnounce('Code generation failed');
+      speak('Code generation did not work. ' + reason);
     }
   } catch (e) {
-    console.error(e); out('Code generation failed.'); cueError(); speak('Code generation failed.');
+    console.error(e);
+    out('Code generation failed.');
+    cueError();
+    srAnnounce('Code generation failed');
+    speak('Code generation failed.');
   } finally {
     hideAI();
   }
@@ -1630,12 +1708,25 @@ async function previewSnippetById(id) {
 
 // ---------- COMMAND HANDLER ----------
 async function handleConfirmedAction(action, payload) {
-  // New action interrupts previous narration. Most-recent intent wins.
-  SpeechManager.cancelAll();
+  // Most actions should interrupt previous narration, but some need it to finish first.
+  // Generate, analyze, walk: they speak feedback BEFORE the long async wait, don't kill it.
+  const _noCancelActions = new Set(['generate_code', 'analyze', 'analyze_deep', 'fix', 'summarize', 'narrate_file', 'walk_through', 'advise', 'story_mode']);
+  if (!_noCancelActions.has(action)) {
+    SpeechManager.cancelAll();
+  }
   if (action === 'run')              await runCode();
   else if (action === 'analyze')     await analyzeCode();
+  else if (action === 'walk_through')       await walkThroughCode();
   else if (action === 'analyze_deep') await analyzeDeep();
   else if (action === 'fix')         await fixCode();
+  else if (action === 'stop_everything') {
+    SpeechManager.cancelAll();
+    SonificationManager.clearAll();
+    ErrorBeaconManager.stop();
+    if (typeof _walkActive !== 'undefined') _walkActive = false;
+    out('Stopped.');
+    SonificationManager.playTone(400, 0.08, 0.08);
+  }
   else if (action === 'speak')       speakOutput();
   else if (action === 'read_output') speakOutput();
   else if (action === 'describe_line') await describeLine(payload && payload.line ? payload.line : 1);
@@ -2401,6 +2492,27 @@ function resumeVoiceRecognition() {
 
 // ---------- VOICE COMMAND HANDLER ----------
 async function handleVoiceCommand(rawText) {
+  // FAST PATH: if a walkthrough is running, intercept "stop" / "shut up" /
+  // "be quiet" / "cancel" client-side BEFORE the /voice-command round trip.
+  // Going through the backend takes ~200ms and by then the walkthrough has
+  // already moved on to the next line, defeating the whole point of "stop".
+  if (_walkActive) {
+    const t = rawText.toLowerCase().trim();
+    const stopWords = ['stop', 'stop it', 'shut up', 'be quiet', 'silence',
+                       'stop talking', 'cancel', 'enough', 'quit',
+                       'रुको', 'बंद करो', 'चुप', 'रुक'];
+    if (stopWords.some(w => t === w || t.includes(w))) {
+      _walkActive = false;
+      SpeechManager.cancelAll();
+      SonificationManager.clearAll();
+      ErrorBeaconManager.stop();
+      out('Stopped.');
+      SonificationManager.playTone(400, 0.08, 0.08);
+      srAnnounce('Stopped');
+      return;
+    }
+  }
+
   const _ts = tabState();
   // Quiz answer intercept — per-tab state
   if (_ts._pendingQuizAnswer) {
@@ -2516,7 +2628,8 @@ window.addEventListener('DOMContentLoaded', () => {
       const paletteOpen = paletteOverlay && !paletteOverlay.hasAttribute('hidden');
       const dialogOpen  = !!document.getElementById('_cuInputDialog');
       if (paletteOpen || dialogOpen) return;
-      if (AppState.isSpeaking || (window.speechSynthesis && window.speechSynthesis.speaking)) {
+      if (AppState.isSpeaking || (window.speechSynthesis && window.speechSynthesis.speaking) || _walkActive) {
+        _walkActive = false;
         SpeechManager.cancelAll();
         ErrorBeaconManager.stop();
         srAnnounce('Speech stopped');
@@ -2603,6 +2716,7 @@ function registerEditorShortcuts() {
   editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.KeyN, () => { SpeechManager.cancelAll(); speakNextStep(); });
   editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.KeyH, () => { SpeechManager.cancelAll(); showHelp(); });
   editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.KeyB, () => { SpeechManager.cancelAll(); readBreadcrumb(); });
+  editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.KeyW, () => { walkThroughCode(); });
   editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.LeftArrow,  () => { navigateBack(); });
   editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.RightArrow, () => { navigateForward(); });
   editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.Home, () => { goToTop(); });
@@ -3639,4 +3753,100 @@ function pronounceVariableJS(name) {
   if (!name || name.length !== 1) return name;
   const map = {a:'a',b:'bee',c:'see',d:'dee',e:'ee',f:'eff',g:'gee',h:'aitch',i:'eye',j:'jay',k:'kay',l:'ell',m:'em',n:'en',o:'oh',p:'pee',q:'cue',r:'arr',s:'ess',t:'tee',u:'you',v:'vee',w:'double-you',x:'ex',y:'why',z:'zee'};
   return map[name.toLowerCase()] || name;
+}
+
+// ---------- WALK THROUGH CODE (sonify + narrate every line) ----------
+let _walkActive = false;
+
+async function walkThroughCode() {
+  if (_walkActive) {
+    _walkActive = false;
+    SpeechManager.cancelAll();
+    SonificationManager.clearAll();
+    speak('Walkthrough stopped.');
+    return;
+  }
+  const model = getModel();
+  if (!model) { speak('Editor not ready.'); return; }
+  const code = getCode();
+  if (!code.trim()) { speak('The editor is empty. Write some code first.'); return; }
+
+  _walkActive = true;
+  SpeechManager.cancelAll();
+  speak('Walking through your code. Press Escape to stop.');
+  await sleep(2500);
+
+  const lines = code.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    if (!_walkActive) return;
+    const line = lines[i];
+    const lineNum = i + 1;
+    const trimmed = line.trim();
+
+    // Move cursor to this line so the user can see/hear progress
+    try {
+      editor.setPosition({ lineNumber: lineNum, column: 1 });
+      editor.revealLineInCenter(lineNum);
+    } catch (e) {}
+
+    const indent = Math.floor(getIndentLevel(line));  
+
+    // Build a description
+    let desc;
+    if (!trimmed) {
+      desc = `Line ${lineNum}: blank line.`;
+    } else if (trimmed.startsWith('#')) {
+      desc = `Line ${lineNum}, comment: ${trimmed.replace(/^#\s*/, '')}.`;
+    } else if (trimmed.startsWith('def ')) {
+      const m = trimmed.match(/^def\s+(\w+)\(([^)]*)\)/);
+      if (m) {
+        const params = m[2].trim();
+        desc = `Line ${lineNum}, defines function ${m[1]}` + (params ? ` taking ${params}.` : ' with no parameters.');
+      } else {
+        desc = `Line ${lineNum}, function definition: ${trimmed}.`;
+      }
+    } else if (trimmed.startsWith('class ')) {
+      const m = trimmed.match(/^class\s+(\w+)/);
+      desc = m ? `Line ${lineNum}, defines class ${m[1]}.` : `Line ${lineNum}, class definition.`;
+    } else if (trimmed.startsWith('for ')) {
+      desc = `Line ${lineNum}, for loop: ${trimmed.replace(/^for\s+/, '').replace(/:$/, '')}.`;
+    } else if (trimmed.startsWith('while ')) {
+      desc = `Line ${lineNum}, while loop: ${trimmed.replace(/^while\s+/, '').replace(/:$/, '')}.`;
+    } else if (trimmed.startsWith('if ')) {
+      desc = `Line ${lineNum}, if condition: ${trimmed.replace(/^if\s+/, '').replace(/:$/, '')}.`;
+    } else if (trimmed.startsWith('elif ')) {
+      desc = `Line ${lineNum}, else if: ${trimmed.replace(/^elif\s+/, '').replace(/:$/, '')}.`;
+    } else if (trimmed.startsWith('else')) {
+      desc = `Line ${lineNum}, else branch.`;
+    } else if (trimmed.startsWith('return')) {
+      desc = `Line ${lineNum}, returns: ${trimmed.replace(/^return\s*/, '') || 'nothing'}.`;
+    } else if (trimmed.startsWith('import ') || trimmed.startsWith('from ')) {
+      desc = `Line ${lineNum}, ${trimmed}.`;
+    } else if (/^\w+\s*=/.test(trimmed)) {
+      const m = trimmed.match(/^(\w+)\s*=\s*(.+)$/);
+      desc = m ? `Line ${lineNum}, assigns ${m[1]} to ${m[2]}.` : `Line ${lineNum}: ${trimmed}.`;
+    } else if (trimmed.startsWith('print(')) {
+      desc = `Line ${lineNum}, prints: ${trimmed.replace(/^print\(/, '').replace(/\)$/, '')}.`;
+    } else {
+      desc = `Line ${lineNum}: ${trimmed}.`;
+    }
+
+    out(desc);
+    // Sonify first
+    sonifyLine(line, indent);
+    await sleep(300);
+    if (!_walkActive) return;  // Check after each await so "stop" interrupts cleanly
+    // Then speak and wait until done. enqueue resolves when speech ends OR
+    // when SpeechManager.cancelAll() is called (cancel triggers utterance.onend).
+    await SpeechManager.enqueue(desc);
+    if (!_walkActive) return;  // After speech: stop may have fired during the await
+    await sleep(400);
+    if (!_walkActive) return;  // After the inter-line pause too
+  }
+
+  if (_walkActive) {
+    _walkActive = false;
+    speak('Walkthrough complete.');
+    out('Walkthrough complete.');
+  }
 }

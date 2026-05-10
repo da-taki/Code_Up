@@ -404,10 +404,8 @@
               }
               if (window._editorReady) { setCode(s.code); }
               else { window._editorReadyQueue.push(function () { setCode(s.code); }); }
-            } else if (this.step === 0) {
-              if (window._editorReady) { setCode(''); }
-              else { window._editorReadyQueue.push(function () { setCode(''); }); }
             }
+            // Removed: don't clear editor on step 0, it cancels the speech
           }
 
           var nextBtn = document.getElementById('tutorialNextBtn');

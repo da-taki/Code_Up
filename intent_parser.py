@@ -193,11 +193,13 @@ class IntentParser:
     ]
 
     SONIFY_BLOCK_PATTERNS = [
-        r"^sonify\s+(?:block|current\s+block|this|this\s+block)?$",
-        r"^sonify$",
+        r"^sonify(?:\s+(?:block|current\s+block|this|this\s+block|code))?$",
         r"^(?:audio|hear|play|sound\s+out)\s+(?:code\s+)?(?:structure|block)?$",
         r"^play\s+(?:the\s+)?code$",
         r"^make\s+(?:it\s+)?sing$",
+        r"^read\s+(?:current\s+)?line$",
+        r"^read\s+this\s+line$",
+        r"^what\s+(?:does\s+)?this\s+line\s+(?:say|do)$",
     ]
 
     # -----------------------------------------------------------------------

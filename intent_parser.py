@@ -226,6 +226,13 @@ class IntentParser:
         r"^(?:कोड|code)\s+(?:को\s+)?(?:हटाओ|मिटाओ)$",
     ]
 
+    SET_COLOR_MODE_PATTERNS = [
+        r"^(?:turn\s+on|enable|activate|use|set|toggle)\s+(protanopia|deuteranopia|tritanopia|high\s*contrast|red\s*blind|green\s*blind|blue\s*blind|normal|default|standard)\s*(?:mode|colors?)?$",
+        r"^(?:switch\s+to|change\s+to)\s+(protanopia|deuteranopia|tritanopia|high\s*contrast|red\s*blind|green\s*blind|blue\s*blind|normal|default|standard)\s*(?:mode|colors?)?$",
+        r"^(protanopia|deuteranopia|tritanopia|high\s*contrast|red\s*blind|green\s*blind|blue\s*blind)\s+mode$",
+        r"^(?:turn\s+off|disable|reset)\s+(?:color\s+(?:blind\s+)?|colour\s+(?:blind\s+)?)?mode$",
+    ]
+
     DELETE_LINE_PATTERNS = [
         r"delete\s+(?:the\s+)?line\s+([\w\s]+?)(?:\s*$|\s+(?:please|now))",
         r"delete\s+(?:the\s+)?line\s+(\w+)",
@@ -261,20 +268,27 @@ class IntentParser:
     ]
 
     PAUSE_VOICE_PATTERNS = [
+        r"^pause$",
         r"^pause\s+voice(?:\s+(?:recognition|control|input))?$",
+        r"^pause\s+please$",
         r"^(?:stop|halt)\s+listening$",
-        r"^(?:mute|silence)\s+(?:the\s+)?(?:mic|microphone)$",
+        r"^(?:mute|silence)\s+(?:the\s+)?(?:mic|microphone)?$",
         r"^voice\s+pause$",
+        r"^go\s+(?:to\s+)?silent$",
+        r"^(?:रुको\s+थोड़ा|pause\s*करो)$",
         r"^(?:आवाज़|voice)\s+(?:को\s+)?(?:रोको|बंद\s+करो|pause\s*करो)$",
         r"^सुनना\s+बंद\s+करो$",
     ]
 
     RESUME_VOICE_PATTERNS = [
+        r"^resume$",
         r"^resume\s+voice(?:\s+(?:recognition|control|input))?$",
+        r"^resume\s+please$",
         r"^(?:start|continue)\s+listening$",
         r"^(?:unmute|wake\s+up)$",
         r"^voice\s+resume$",
-        r"^(?:are\s+you\s+)?(?:back|listening)\??$",
+        r"^(?:are\s+you\s+)?(?:listening)\??$",
+        r"^come\s+back$",
         r"^(?:आवाज़|voice)\s+(?:को\s+)?(?:चालू\s+करो|शुरू\s+करो|resume\s*करो)$",
         r"^(?:फिर\s+से\s+)?सुनो$",
     ]
@@ -524,6 +538,7 @@ class IntentParser:
     ]
 
     BUG_CHALLENGE_PATTERNS = [
+        r"explain\s+(.+?)(?:\s+to\s+me)?\s+(?:like\s+i['\u2019]?m\s+new|for\s+(?:a\s+)?beginner|simply|in\s+simple\s+(?:terms|words))"
         r"^(?:give\s+me\s+)?(?:a\s+)?bug\s+(?:fixing\s+)?challenge$",
         r"^(?:debug\s+)?challenge(?:\s+me)?$",
         r"^(?:एक\s+)?bug\s+(?:challenge|ढूंढो)$",
@@ -697,6 +712,7 @@ class IntentParser:
             "suggest_next":        self.SUGGEST_NEXT_PATTERNS,
             "choose_suggestion":   self.CHOOSE_SUGGESTION_PATTERNS,
             "clear_editor":   self.CLEAR_EDITOR_PATTERNS,
+            "set_color_mode": self.SET_COLOR_MODE_PATTERNS,
             "read_output":    self.READ_OUTPUT_PATTERNS,
             # Structure and playback
             "show_structure": self.SHOW_STRUCTURE_PATTERNS,
@@ -852,7 +868,9 @@ class IntentParser:
                     continue
                 if intent == "use_macro" and "name" not in slots:
                     continue
-
+                if intent == "set_color_mode" and "mode" not in slots:
+                    continue
+                
                 return {
                     "intent": intent,
                     "slots": slots,
@@ -978,6 +996,22 @@ class IntentParser:
             if match.groups() and match.group(1):
                 slots["snippet_id"] = match.group(1).strip()
 
+        elif intent == "set_color_mode":
+            if match.groups() and match.group(1):
+                raw = match.group(1).strip().lower().replace(' ', '')
+                # Map natural phrases to the actual mode names
+                aliases = {
+                    'redblind': 'protanopia',
+                    'greenblind': 'deuteranopia',
+                    'blueblind': 'tritanopia',
+                    'highcontrast': 'high-contrast',
+                    'normal': 'default',
+                    'standard': 'default',
+                }
+                slots["mode"] = aliases.get(raw, raw)
+            elif "off" in text or "disable" in text or "reset" in text:
+                slots["mode"] = "default"
+
         elif intent == "set_inputs":
             if match.groups() and match.group(1):
                 raw = match.group(1).strip()
@@ -990,16 +1024,17 @@ class IntentParser:
 
         elif intent == "save_macro":
             if match.groups() and match.group(1):
-                # Sanitize: lowercase, strip, allow only safe chars
+                # Sanitize: lowercase, strip, allow safe chars including
+                # Devanagari (U+0900–U+097F) so Hindi macro names work.
                 name = match.group(1).strip().lower()
-                name = re.sub(r'[^a-z0-9 _-]', '', name)[:64].strip()
+                name = re.sub(r'[^a-z0-9 _\u0900-\u097f-]', '', name)[:64].strip()
                 if name:
                     slots["name"] = name
 
         elif intent == "use_macro":
             if match.groups() and match.group(1):
                 name = match.group(1).strip().lower()
-                name = re.sub(r'[^a-z0-9 _-]', '', name)[:64].strip()
+                name = re.sub(r'[^a-z0-9 _\u0900-\u097f-]', '', name)[:64].strip()
                 if name:
                     slots["name"] = name
 

@@ -20,12 +20,47 @@ let isListening = false;
 let recognition = null;
 let _restartTimer = null;
 // Voice paused state — recognition is still running but commands are dropped
-// until the user says "resume". We need to stay in the recognition session so
-// we can actually hear the resume command.
-let _voicePaused = (function() {
-  try { return localStorage.getItem('codeup_voice_paused') === '1'; }
-  catch (e) { return false; }
-})();
+// until the user says "resume". We do NOT persist this across reloads —
+// a fresh page should always start unpaused.
+let _voicePaused = false;
+try { localStorage.removeItem('codeup_voice_paused'); } catch (e) {}
+
+// Watchdog: track last time recognition was confirmed active. If voice is
+// supposedly listening but we haven't seen activity in a while, the session
+// may have silently died (common during long pauses). The watchdog kicks it
+// back to life.
+let _lastRecognitionActivity = Date.now();
+let _watchdogTimer = null;
+
+function _startRecognitionWatchdog() {
+  if (_watchdogTimer) return;
+  _watchdogTimer = setInterval(() => {
+    if (!isListening) return;  // not running, nothing to watch
+    const idle = Date.now() - _lastRecognitionActivity;
+    // 45s of silence = Chrome has likely auto-stopped. Force a kick.
+    if (idle > 45000) {
+      _debugLog('Watchdog: recognition idle for', idle, 'ms — kicking');
+      _lastRecognitionActivity = Date.now();  // reset to avoid kick loops
+      try {
+        // Stop and restart to force a clean session. onend will trigger
+        // the auto-restart chain.
+        recognition.stop();
+      } catch (e) {
+        // If stop fails, try start directly
+        try { recognition.start(); } catch (e2) {
+          _debugLog('Watchdog kick failed:', e2.message);
+        }
+      }
+    }
+  }, 15000);  // check every 15s
+}
+
+function _stopRecognitionWatchdog() {
+  if (_watchdogTimer) {
+    clearInterval(_watchdogTimer);
+    _watchdogTimer = null;
+  }
+}
 let _voiceStartIsUserInitiated = false;
 let _loadingSnippets = false;
 // Stored on window so the language-change handler in index.html can reset it.
@@ -34,7 +69,8 @@ window._apiKeyPromptShown = false;
 // Pre-flight inputs queue (Mechanism A). Mirrors the inputs the user has
 // declared via voice or the inputs panel. Sent with every /run call.
 let _preflightInputs = [];
-
+// Exposed for inline scripts in index.html that can't see module-scoped `let`.
+window.getPreflightInputs = () => _preflightInputs.slice();
 // Live input mode toggle (Mechanism B). When true, "run" goes to /run-stream
 // instead of /run.
 let _liveInputMode = false;
@@ -184,23 +220,18 @@ const SpeechManager = (function () {
     function cancelAll() {
       queue.length = 0;
       try { window.speechSynthesis.cancel(); } catch (e) {}
-      // Chrome on Android (and occasionally desktop Chrome) leaves
-      // speechSynthesis.speaking === true after cancel(). Retry once after
-      // a tick, then again at 250ms, to clear stuck utterances.
-      setTimeout(() => {
-        try {
-          if (window.speechSynthesis && window.speechSynthesis.speaking) {
-            window.speechSynthesis.cancel();
-          }
-        } catch (e) {}
-      }, 100);
-      setTimeout(() => {
-        try {
-          if (window.speechSynthesis && window.speechSynthesis.speaking) {
-            window.speechSynthesis.cancel();
-          }
-        } catch (e) {}
-      }, 250);
+      // Chrome leaves speechSynthesis.speaking === true after cancel() in many
+      // cases. Hit it with multiple cancels staggered across a wider window
+      // so subsequent enqueue() calls don't see a stale "speaking" state.
+      [50, 150, 300, 500].forEach(delay => {
+        setTimeout(() => {
+          try {
+            if (window.speechSynthesis && window.speechSynthesis.speaking) {
+              window.speechSynthesis.cancel();
+            }
+          } catch (e) {}
+        }, delay);
+      });
       AppState.isSpeaking = false;
       currentUtterance = null;
     }
@@ -981,6 +1012,8 @@ async function runCode() {
         error: data.error || '',
         language: getLanguage(),
       };
+      // Don't let "narrate diff" replay an old comparison after an error run.
+      _lastOutputDiff = null;
       const errLines = (data.error || '').trim().split('\n').filter(Boolean);
       const lastLine = errLines[errLines.length - 1] || 'Unknown error';
       const lineMatch = (data.error || '').match(/line (\d+)/);
@@ -1172,6 +1205,7 @@ async function analyzeDeep() {
   const codeForDeep = window._lastAnalyzeContext.code;
   const currentCode = getCode();
   if (codeForDeep !== currentCode) {
+    SpeechManager.cancelAll();
     speak('Your code has changed since the last analyze. I will analyze the version you originally asked about. Say analyze again to refresh.');
   }
   cueSuccess(); showAI('Going deeper...'); speak('Going line by line.');
@@ -1251,13 +1285,15 @@ async function runDemo(presetId) {
   // Try to match by id first
   let match = presets.find(p => p.id === presetId.toLowerCase().trim());
 
-  // Then by title (fuzzy: contains)
+  // Then by title (fuzzy: contains). We deliberately don't do
+  // needle.includes(p.id) — that over-matches when preset ids are short
+  // (e.g. saying "demo show me primes" would match anything whose id is a
+  // substring of "show me primes").
   if (!match) {
     const needle = presetId.toLowerCase().trim();
     match = presets.find(p =>
       p.title.toLowerCase().includes(needle) ||
-      p.id.toLowerCase().includes(needle) ||
-      needle.includes(p.id.toLowerCase())
+      p.id.toLowerCase().includes(needle)
     );
   }
 
@@ -1785,6 +1821,24 @@ async function handleConfirmedAction(action, payload) {
     s.selectedIndex = (s.selectedIndex + 1) % s.options.length;
     s.dispatchEvent(new Event('change'));
   }
+  else if (action === 'set_color_mode') {
+    const s = document.getElementById('colorVisionMode');
+    if (!s) { speak('Color mode selector not found.'); return; }
+    const mode = (payload && payload.mode) || 'default';
+    // Find the option whose value matches the requested mode
+    let found = false;
+    for (let i = 0; i < s.options.length; i++) {
+      if (s.options[i].value === mode) {
+        s.selectedIndex = i;
+        s.dispatchEvent(new Event('change'));
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      speak(`Color mode "${mode}" not recognized. Try protanopia, deuteranopia, tritanopia, high contrast, or default.`);
+    }
+  }
   else if (action === 'list_variables_voice') await listVariablesWithValues();
   else if (action === 'start_tutorial')     { if (window.TutorialController) window.TutorialController.open(); }
   else if (action === 'skip_tutorial')      { if (window.TutorialController) window.TutorialController.close(); }
@@ -2128,18 +2182,52 @@ function tryResolveConfirmation(txt) {
   if (!pendingConfirm) return false;
   if (pendingConfirm.expiresAt && Date.now() > pendingConfirm.expiresAt) {
     pendingConfirm = null;
-    speak('Confirmation timed out. Please repeat the command if you still want to proceed.');
-    return true;
+    return false;  // let the new command flow through normally
   }
   const options = pendingConfirm.options || [];
-  const lower   = txt.toLowerCase();
-  let chosen    = null;
-  for (const opt of options) { if (lower.includes(opt)) chosen = opt; }
-  if (!chosen) { speak('I did not understand your choice. Please say one of: ' + options.join(' or ')); return true; }
+  const lower   = txt.toLowerCase().trim();
+
+  // 1. Explicit cancel — user wants out
+  const cancelWords = ['cancel', 'no', 'neither', 'nope', 'none', 'forget it',
+                       'never mind', 'nevermind', 'skip',
+                       'नहीं', 'रद्द करो', 'छोड़ो'];
+  if (cancelWords.some(w => lower === w)) {
+    pendingConfirm = null;
+    speak('Cancelled.');
+    return true;
+  }
+
+  // 2. Exact match on one of the offered options — clear yes
+  for (const opt of options) {
+    if (lower === opt || lower === opt.replace(/_/g, ' ')) {
+      pendingConfirm = null;
+      speak('Got it. ' + opt.replace(/_/g, ' ') + '.');
+      handleConfirmedAction(opt, pendingConfirm && pendingConfirm.context || {});
+      return true;
+    }
+  }
+
+  // 3. "First" / "second" / "1" / "2" — positional choice
+  const positionalMap = {
+    'first': 0, '1': 0, 'one': 0, 'option one': 0, 'option 1': 0,
+    'second': 1, '2': 1, 'two': 1, 'option two': 1, 'option 2': 1,
+    'पहला': 0, 'दूसरा': 1, 'एक': 0, 'दो': 1,
+  };
+  if (positionalMap.hasOwnProperty(lower) && positionalMap[lower] < options.length) {
+    const chosen = options[positionalMap[lower]];
+    pendingConfirm = null;
+    speak('Got it. ' + chosen.replace(/_/g, ' ') + '.');
+    handleConfirmedAction(chosen, {});
+    return true;
+  }
+
+  // 4. The user said something NEW that doesn't match the options or cancel.
+  //    Don't trap them — clear the pending confirm and let the new utterance
+  //    flow through as a fresh command. This is the bug fix: previously the
+  //    user was stuck repeating themselves until timeout.
   pendingConfirm = null;
-  speak('Confirmed ' + chosen + '.');
-  handleConfirmedAction(chosen, {});
-  return true;
+  speak('Okay, listening for a new command.');
+  return false;  // signal that the caller should re-route this text
 }
 
 async function handleCommandText(txt) {
@@ -2195,8 +2283,10 @@ async function handleCommandText(txt) {
   }
 
   if (pendingConfirm) {
-    tryResolveConfirmation(txt);
-    return;
+    const handled = tryResolveConfirmation(txt);
+    if (handled) return;
+    // Confirm was abandoned because the user said something unrelated.
+    // Fall through and process txt as a fresh command.
   }
 
   try {
@@ -2219,15 +2309,16 @@ async function handleCommandText(txt) {
     }
 
     if (action === 'confirm') {
+      const opts = data.options || [];
       pendingConfirm = {
-        options:   data.options || [],
+        options:   opts,
         expiresAt: Date.now() + 15000,
         context:   { heard: data.heard || txt, raw: txt },
       };
-      const opts  = (data.options || []).join(' or ');
+      const optsSpoken = opts.map(o => o.replace(/_/g, ' ')).join(' or ');
       const heard = data.heard || txt;
-      speak(`I am not fully sure what you meant. I heard "${heard}". Did you mean ${opts}?`);
-      out(`Command ambiguous.\nHeard: "${heard}"\nPossible actions: ${opts}\nPlease say one option to confirm.`);
+      speak(`Did you mean ${optsSpoken}? Say first or second, or just say a new command.`);
+      out(`Heard: "${heard}"\nDid you mean: ${optsSpoken}?\nSay "first" / "second", a new command, or "cancel".`);
       return;
     }
 
@@ -2248,6 +2339,11 @@ async function submitCommand() {
 
 // ---------- VOICE ----------
 function toggleVoice() {
+  // If paused, treat toggle as "unpause and continue".
+  if (isListening && _voicePaused) {
+    resumeVoiceRecognition();
+    return;
+  }
   if (isListening) stopListening(); else startListening();
 }
 
@@ -2277,6 +2373,8 @@ function startListening() {
     isListening = true;
     AppState.isListening = true;
     recognition._restartAttempts = 0;
+    _lastRecognitionActivity = Date.now();
+    _startRecognitionWatchdog();
 
     // If paused, keep paused UI on session restart and stay silent
     if (_voicePaused) {
@@ -2316,13 +2414,8 @@ function startListening() {
     if (!window._voiceGreetedThisSession) {
       window._voiceGreetedThisSession = true;
       if (lang === 'hi') {
-        speak('Voice control चालू हो गया।');
-        if (hasCode) {
-          speak(`Editor में ${lineCount} लाइन का कोड है।`);
-        } else {
-          speak('Editor खाली है।');
-        }
-        speak('"मदद" कहें commands के लिए।');
+        // Hindi: minimal greeting. Demo testing has been English-only.
+        speak('कोड चलाओ कहें।');
       } else {
         speak('Voice on.');
         if (hasCode) {
@@ -2339,25 +2432,26 @@ function startListening() {
   recognition.onresult = async (event) => {
     const transcript = event.results[event.results.length - 1][0].transcript;
     _debugLog('Voice heard:', transcript);
+    _lastRecognitionActivity = Date.now();  // any input proves recognition is alive
 
     // When paused, only listen for the resume keyword. Drop everything else
     // so the user can keep talking (e.g. during a pitch) without triggering
     // commands or appearing in the UI.
     if (_voicePaused) {
       const lower = transcript.toLowerCase().trim();
-      // Whitelist of resume phrases — kept inline so the check is fast and
-      // doesn't depend on a backend round-trip while paused.
-      const resumePhrases = [
+      // Whitelist of resume phrases. EXACT match only — substring match would
+      // resume on "go back to line 5" or "continue running the tests".
+      const resumePhrases = new Set([
+        'resume', 'resume please',
         'resume voice', 'resume voice recognition', 'resume voice control',
         'resume voice input', 'voice resume',
         'start listening', 'continue listening',
-        'unmute', 'wake up',
-        'are you back', 'are you listening', 'back', 'listening',
+        'unmute', 'wake up', 'come back',
+        'are you listening', 'listening',
         'आवाज़ चालू करो', 'voice चालू करो', 'voice resume करो',
-        'फिर से सुनो', 'सुनो',
-      ];
-      const isResume = resumePhrases.some(p => lower === p || lower.includes(p));
-      if (isResume) {
+        'फिर से सुनो', 'सुनो', 'जागो',
+      ]);
+      if (resumePhrases.has(lower)) {
         resumeVoiceRecognition();
       } else {
         // Silently drop. Do NOT clear voiceText or output — we want zero UI noise.
@@ -2388,14 +2482,53 @@ function startListening() {
       recognition._restartAttempts = 0;
     }
     if (_restartTimer) { clearTimeout(_restartTimer); _restartTimer = null; }
+    // 400ms cooldown — Chrome throws InvalidStateError if start() is called
+    // too soon after onend. 200ms hits the edge case; 400ms is safe.
     _restartTimer = setTimeout(() => {
       _restartTimer = null;
       _voiceStartIsUserInitiated = false;
-      try { if (isListening) recognition.start(); } catch (e) {
-        console.error('Auto-restart failed', e);
-        setTimeout(() => { try { if (isListening) recognition.start(); } catch(e2){} }, 1000);
+      try {
+        if (isListening) recognition.start();
+        // Recognition is alive again — reset the watchdog
+        _lastRecognitionActivity = Date.now();
+      } catch (e) {
+        // Almost always InvalidStateError. Retry with longer waits, and if
+        // both retries fail, reconcile state so the user can recover.
+        _debugLog('Auto-restart deferred:', e.message);
+        setTimeout(() => {
+          try {
+            if (isListening) recognition.start();
+            _lastRecognitionActivity = Date.now();
+          }
+          catch (e2) {
+            _debugLog('Second restart failed:', e2.message);
+            // Third and final attempt
+            setTimeout(() => {
+              try {
+                if (isListening) recognition.start();
+                _lastRecognitionActivity = Date.now();
+              } catch (e3) {
+                // Recognition is dead. Stop lying to the user about state.
+                _debugLog('Recognition session permanently lost. Reconciling.');
+                isListening = false;
+                AppState.isListening = false;
+                _voicePaused = false;
+                const btn = document.getElementById('voiceButton');
+                if (btn) {
+                  btn.textContent = '🎤 Voice (Off)';
+                  btn.setAttribute('aria-pressed', 'false');
+                  btn.classList.remove('cu-button-voice--active');
+                  btn.classList.remove('cu-button-voice--paused');
+                }
+                // Audible cue so the user knows something happened
+                SonificationManager.playTone(300, 0.15, 0.1);
+                speak('Voice recognition stopped unexpectedly. Press the voice button or Control Shift M to restart.');
+              }
+            }, 3000);
+          }
+        }, 1500);
       }
-    }, 200);
+    }, 400);
   };
 
   try {
@@ -2412,6 +2545,7 @@ function startListening() {
 function stopListening() {
   if (!recognition || !isListening) { speak('Voice control is not active.'); return; }
   if (_restartTimer) { clearTimeout(_restartTimer); _restartTimer = null; }
+  _stopRecognitionWatchdog();
   isListening = false;
   AppState.isListening = false;
   // Stopping fully also clears any paused state — next start is a fresh session
@@ -2437,6 +2571,17 @@ function pauseVoiceRecognition() {
   _voicePaused = true;
   try { localStorage.setItem('codeup_voice_paused', '1'); } catch (e) {}
 
+  // Reconcile state: if Chrome's recognition silently died, kick it back to
+  // life. The pause flag will gate everything until resume.
+  if (recognition) {
+    try {
+      // If recognition is in an indeterminate state, restart it. The onend
+      // auto-restart logic will rebuild the session within ~200ms.
+      // We do NOT call recognition.stop() here — that would set isListening
+      // false and break the user model.
+    } catch (e) { /* ignore */ }
+  }
+
   // Visual + ARIA state — the button gets a distinct paused look so a sighted
   // helper can see at a glance that the mic is open but ignoring input.
   const btn = document.getElementById('voiceButton');
@@ -2447,23 +2592,30 @@ function pauseVoiceRecognition() {
     btn.classList.add('cu-button-voice--paused');
   }
 
-  // One-tone audio cue (descending) so the user gets non-verbal confirmation
+  // Two-tone descending cue so the user gets non-verbal confirmation
   // even if their TTS is interrupted or muted.
   SonificationManager.playTone(700, 0.08, 0.1);
   setTimeout(() => SonificationManager.playTone(500, 0.12, 0.1), 100);
 
   const lang = getLanguage();
   if (lang === 'hi') {
-    speak('Voice recognition रुक गया। बात करते रहें — मैं नहीं सुनूंगा। फिर से शुरू करने के लिए "resume voice" कहें।');
+    speak('Voice रुक गया। बात करते रहें — मैं नहीं सुनूंगा। फिर से शुरू करने के लिए "resume" कहें।');
   } else {
-    speak('Voice recognition paused. Talk freely — I will ignore everything until you say "resume voice".');
+    speak('Voice paused. Talk freely — I will ignore everything until you say "resume".');
   }
   srAnnounce('Voice paused');
   _debugLog('Voice: Paused');
 }
 
 function resumeVoiceRecognition() {
-  if (!isListening) { speak('Voice control is not active.'); return; }
+  if (!isListening) {
+    // If voice was off entirely, just turn it on instead of refusing.
+    // Better UX than telling a presenter "voice control is not active".
+    _voicePaused = false;
+    try { localStorage.removeItem('codeup_voice_paused'); } catch (e) {}
+    startListening();
+    return;
+  }
   if (!_voicePaused) { speak('Voice is already listening.'); return; }
   _voicePaused = false;
   try { localStorage.removeItem('codeup_voice_paused'); } catch (e) {}
@@ -2476,15 +2628,29 @@ function resumeVoiceRecognition() {
     btn.classList.add('cu-button-voice--active');
   }
 
+  // Force a fresh recognition session. If the session silently died during
+  // pause (common after >30s of silence), this brings it back. If the session
+  // is still alive, stop() just triggers a clean restart via onend.
+  try {
+    recognition.stop();
+    // onend will fire and auto-restart within 400ms. Reset activity timer
+    // so the watchdog doesn't immediately kick again.
+    _lastRecognitionActivity = Date.now();
+  } catch (e) {
+    _debugLog('Resume: stop failed, trying direct restart', e.message);
+    try { recognition.start(); _lastRecognitionActivity = Date.now(); }
+    catch (e2) { _debugLog('Resume: direct restart also failed', e2.message); }
+  }
+
   // Ascending tones — mirror of the pause cue
   SonificationManager.playTone(500, 0.08, 0.1);
   setTimeout(() => SonificationManager.playTone(700, 0.12, 0.1), 100);
 
   const lang = getLanguage();
   if (lang === 'hi') {
-    speak('Voice recognition फिर से चालू है। मैं सुन रहा हूँ।');
+    speak('Voice फिर से चालू है।');
   } else {
-    speak('Voice recognition is back on. I am listening.');
+    speak('Voice is back on.');
   }
   srAnnounce('Voice resumed');
   _debugLog('Voice: Resumed');
@@ -2496,12 +2662,15 @@ async function handleVoiceCommand(rawText) {
   // "be quiet" / "cancel" client-side BEFORE the /voice-command round trip.
   // Going through the backend takes ~200ms and by then the walkthrough has
   // already moved on to the next line, defeating the whole point of "stop".
+  // Exact match only — substring match would kill the walkthrough whenever
+  // a longer command happens to contain one of these words (e.g. "stop the
+  // explanation" or any Hindi phrase containing "रुक").
   if (_walkActive) {
     const t = rawText.toLowerCase().trim();
     const stopWords = ['stop', 'stop it', 'shut up', 'be quiet', 'silence',
                        'stop talking', 'cancel', 'enough', 'quit',
                        'रुको', 'बंद करो', 'चुप', 'रुक'];
-    if (stopWords.some(w => t === w || t.includes(w))) {
+    if (stopWords.some(w => t === w)) {
       _walkActive = false;
       SpeechManager.cancelAll();
       SonificationManager.clearAll();
@@ -2564,8 +2733,8 @@ async function handleVoiceCommand(rawText) {
   if (pendingConfirm) {
     const handled = tryResolveConfirmation(rawText);
     if (handled) return;
-    speak('Waiting for confirmation. Please respond to the pending question.');
-    return;
+    // Confirm was abandoned. The user said something that wasn't a yes/no
+    // to our question — treat it as a fresh command and fall through.
   }
 
   const cleaned = rawText.toLowerCase().trim()
@@ -2586,15 +2755,16 @@ async function handleVoiceCommand(rawText) {
     // Handle confirm intent before the general success branch so it isn't
     // swallowed by handleConfirmedAction (which has no 'confirm' case)
     if (data.action === 'confirm') {
+      const opts = data.options || [];
       pendingConfirm = {
-        options:   data.options || [],
+        options:   opts,
         expiresAt: Date.now() + 15000,
         context:   { heard: data.heard || rawText, raw: rawText },
       };
-      const opts  = (data.options || []).join(' or ');
+      const optsSpoken = opts.map(o => o.replace(/_/g, ' ')).join(' or ');
       const heard = data.heard || rawText;
-      speak(`I am not fully sure what you meant. I heard "${heard}". Did you mean ${opts}?`);
-      out(`Command ambiguous.\nHeard: "${heard}"\nPossible actions: ${opts}\nPlease say one option to confirm.`);
+      speak(`Did you mean ${optsSpoken}? Say first or second, or just say a new command.`);
+      out(`Heard: "${heard}"\nDid you mean: ${optsSpoken}?\nSay "first" / "second", a new command, or "cancel".`);
       return;
     }
 
@@ -3773,25 +3943,50 @@ async function walkThroughCode() {
 
   _walkActive = true;
   SpeechManager.cancelAll();
-  speak('Walking through your code. Press Escape to stop.');
-  await sleep(2500);
+  await sleep(400);
 
+  // Wait for the speech engine to fully drain before starting
+  let drainAttempts = 0;
+  while (window.speechSynthesis && window.speechSynthesis.speaking && drainAttempts < 20) {
+    await sleep(100);
+    drainAttempts++;
+  }
+
+  // STEP 1: Show the full code in the output box up front so the user
+  // (or a sighted helper) can see/read the whole program before narration.
   const lines = code.split('\n');
+  const fullCodeDisplay = 'WALKING THROUGH YOUR CODE:\n\n' +
+    lines.map((l, i) => `${i + 1}: ${l}`).join('\n') +
+    '\n\n--- NARRATION ---\n';
+  out(fullCodeDisplay);
+
+  speak('Walking through your code. Press Escape to stop at any time.');
+  await sleep(500);
+  drainAttempts = 0;
+  while (window.speechSynthesis && window.speechSynthesis.speaking && drainAttempts < 30) {
+    await sleep(100);
+    drainAttempts++;
+  }
+
+  // STEP 2: Narrate each line. APPEND descriptions to the output box
+  // instead of replacing it, so the full code stays visible.
+  const outputEl = document.getElementById('output');
+  let narrationLog = '';
+
   for (let i = 0; i < lines.length; i++) {
     if (!_walkActive) return;
     const line = lines[i];
     const lineNum = i + 1;
     const trimmed = line.trim();
 
-    // Move cursor to this line so the user can see/hear progress
     try {
       editor.setPosition({ lineNumber: lineNum, column: 1 });
       editor.revealLineInCenter(lineNum);
     } catch (e) {}
 
-    const indent = Math.floor(getIndentLevel(line));  
+    const indent = Math.floor(getIndentLevel(line));
 
-    // Build a description
+    // Build description (same logic as before)
     let desc;
     if (!trimmed) {
       desc = `Line ${lineNum}: blank line.`;
@@ -3831,22 +4026,35 @@ async function walkThroughCode() {
       desc = `Line ${lineNum}: ${trimmed}.`;
     }
 
-    out(desc);
-    // Sonify first
+    // APPEND, don't replace — full code + accumulated narration stays visible
+    narrationLog += desc + '\n';
+    if (outputEl) {
+      outputEl.textContent = fullCodeDisplay + narrationLog;
+    }
+
     sonifyLine(line, indent);
     await sleep(300);
-    if (!_walkActive) return;  // Check after each await so "stop" interrupts cleanly
-    // Then speak and wait until done. enqueue resolves when speech ends OR
-    // when SpeechManager.cancelAll() is called (cancel triggers utterance.onend).
+    if (!_walkActive) return;
+
     await SpeechManager.enqueue(desc);
-    if (!_walkActive) return;  // After speech: stop may have fired during the await
+    if (!_walkActive) return;
+
+    let postSpeakAttempts = 0;
+    while (window.speechSynthesis && window.speechSynthesis.speaking && _walkActive && postSpeakAttempts < 60) {
+      await sleep(100);
+      postSpeakAttempts++;
+    }
+    if (!_walkActive) return;
+
     await sleep(400);
-    if (!_walkActive) return;  // After the inter-line pause too
+    if (!_walkActive) return;
   }
 
   if (_walkActive) {
     _walkActive = false;
     speak('Walkthrough complete.');
-    out('Walkthrough complete.');
+    if (outputEl) {
+      outputEl.textContent = fullCodeDisplay + narrationLog + '\nWalkthrough complete.';
+    }
   }
 }

@@ -495,21 +495,27 @@
         }
         setTimeout(function () {
           if (lang === 'hi') {
-            speak('CodeUp में स्वागत है — एक blind-first Python IDE।');
-            speak('आपके पास तीन आसान शुरुआती रास्ते हैं।');
-            speak('एक: tutorial — मैं आपको Python की बेसिक्स step by step सिखाऊंगा। Tab दबाकर Tutorial button पर पहुंचें और Enter दबाएं।');
-            speak('दो: demo — कुछ उदाहरण programs देखें। "demo चलाओ" कहें।');
-            speak('तीन: voice control — Control Shift M दबाएं। फिर "मदद" कहें सब commands सुनने के लिए।');
-            speak('अगर कुछ भी confuse करे तो "help" कहें। शुरू करते हैं!');
+            // Hindi: keep it short — demo testing has been English-only.
+            speak('CodeUp में स्वागत है। शुरू करने के लिए माइक चालू करें।');
           } else {
-            speak('Welcome to CodeUp — a Python IDE built for blind learners.');
-            speak('You have three easy ways to start.');
-            speak('One: take the tutorial. I will walk you through Python basics, step by step. Press Tab to reach the Tutorial button, then press Enter.');
-            speak('Two: try a demo. Say "run demo" to load an example program.');
-            speak('Three: turn on voice control with Control Shift M. Then say "help" to hear what you can do.');
-            speak('If you ever get stuck, just say "help". Let us begin.');
+            // Combine into a single utterance so Chrome doesn't drop the
+            // first line when queueing multiple speak() calls back-to-back.
+            speak('Welcome to CodeUp, a Python IDE built for blind learners. You have three easy ways to start.');
+            // Stagger the rest so each has time to actually play
+            setTimeout(function () {
+              speak('One: take the tutorial. Press Tab to reach the Tutorial button, then press Enter.');
+            }, 100);
+            setTimeout(function () {
+              speak('Two: try a demo. Say "run demo" to load an example program.');
+            }, 200);
+            setTimeout(function () {
+              speak('Three: turn on voice control with Control Shift M. Then say "help" to hear what you can do.');
+            }, 300);
+            setTimeout(function () {
+              speak('If you ever get stuck, just say "help". Let us begin.');
+            }, 400);
           }
-        }, 400);
+        }, 800);
       }
 
       function setupStartGate() {
@@ -721,12 +727,11 @@
         if (!inputAddField) return;
         var v = inputAddField.value.trim();
         if (!v) return;
-        if (typeof window._preflightInputs === 'undefined') window._preflightInputs = [];
-        // Push to the actual variable in app.js scope by calling the public setter
         if (typeof setPreflightInputs === 'function') {
-          // Read existing list, append, set
-          var existing = (typeof _preflightInputs !== 'undefined' && Array.isArray(_preflightInputs))
-            ? _preflightInputs.slice() : [];
+          // Read existing list via accessor (module-scoped `let` is not on window),
+          // append, set.
+          var existing = (typeof window.getPreflightInputs === 'function')
+            ? window.getPreflightInputs() : [];
           existing.push(v);
           setPreflightInputs(existing);
         }

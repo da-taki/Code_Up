@@ -1974,15 +1974,18 @@ def fix():
 
     if language == "hi":
         system = (
-            "आप एक expert Python debugger हैं।\n"
+            "आप एक expert Python debugger हैं जो blind-first IDE में काम करते हैं।\n"
             "नीचे दिए गए कोड में हर तरह की समस्या ढूंढें और ठीक करें:\n"
             "1. Syntax errors (missing colons, unmatched parentheses, indentation)\n"
             "2. Runtime errors (NameError, TypeError, IndexError, ZeroDivisionError, KeyError)\n"
             "3. Logic bugs (off-by-one, wrong comparison operator, wrong variable used, missing return)\n"
-            "4. CodeUp-specific: input() function काम नहीं करता — इसे hardcoded values से replace करें (e.g. name = 'Alice')\n"
+            "4. CodeUp-specific: input() function BLOCKED है — इसे hardcoded values से replace करें (e.g. name = 'Alice')\n"
             "5. Edge cases (empty list, division by zero, negative numbers जहां positive expected)\n"
             "6. Bad practices (mutable default arguments, comparing with == None instead of is None)\n\n"
-            "हर महत्वपूर्ण fix के ऊपर एक comment add करें जो बताए कि क्या बदला और क्यों।\n"
+            "CRITICAL: केवल actual bugs ठीक करें। नए features या type checks add NA करें।\n"
+            "अगर code पहले से ठीक है तो उसे वैसा ही return करें।\n"
+            "isinstance() या type() जैसी checks केवल तब add करें जब आप 100% sure हैं कि second argument एक valid type है।\n"
+            "हर महत्वपूर्ण fix के ऊपर एक comment add करें।\n"
             "Original intent maintain करें — completely re-write न करें।\n"
             "केवल valid Python code लौटाएं। कोई markdown fences नहीं।"
         )
@@ -2710,6 +2713,8 @@ def voice():
             return _store_and_return({"success": True, "action": "explain_simply", "confidence": confidence})
         if intent == "narrate_diff":
             return _store_and_return({"success": True, "action": "narrate_diff", "confidence": confidence})
+        if intent == "set_color_mode":
+            return _store_and_return({"success": True, "action": "set_color_mode", "mode": slots.get("mode", "default"), "confidence": confidence})
 
     # Fallback: fuzzy matching on COMMANDS
     lower_text = text.lower().strip()
@@ -2718,7 +2723,7 @@ def voice():
     # High-frequency commands skip the confirm prompt even at moderate confidence,
     # because in a noisy classroom getting "did you mean run or fix?" on every
     # command is more frustrating than occasionally running the wrong simple action.
-    HIGH_FREQUENCY_COMMANDS = {"run", "analyze", "fix", "help", "speak", "read_output", "walk_through", "sonify_block", "stop_everything"}
+    HIGH_FREQUENCY_COMMANDS = {"run", "analyze", "fix", "help", "speak", "read_output", "walk_through", "sonify_block", "stop_everything", "pause_voice", "resume_voice"}
 
     if best and bscore >= VOICE_FUZZY_THRESHOLD:
         is_clear_winner = bscore >= 75 and (not second or (bscore - sscore) >= 15)
@@ -2926,6 +2931,7 @@ def _save_macros(macros):
     path = _macros_path()
     dirpath = os.path.dirname(path) or "."
     with _voice_macros_lock:
+        tmp = None
         try:
             os.makedirs(dirpath, exist_ok=True)
             fd, tmp = tempfile.mkstemp(suffix=".json", prefix="macros_", dir=dirpath)
@@ -2939,7 +2945,7 @@ def _save_macros(macros):
             os.replace(tmp, path)
         except Exception:
             try:
-                if os.path.exists(tmp):
+                if tmp and os.path.exists(tmp):
                     os.remove(tmp)
             except Exception:
                 pass
@@ -2968,7 +2974,7 @@ def save_macro():
         return jsonify({"success": False, "error": "Macro name required"}), 400
     if len(code) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": "Code too large"}), 413
-    if not re.match(r'^[a-z0-9 _-]+$', name):
+    if not re.match(r'^[a-z0-9 _\u0900-\u097f-]+$', name):
         return jsonify({"success": False, "error": "Macro name must be letters, numbers, spaces, dash or underscore"}), 400
     macros = _load_macros()
     if len(macros) >= 50 and name not in macros:

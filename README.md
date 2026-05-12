@@ -1,6 +1,6 @@
-# CodeUp — A Blind-First Python IDE
+# CodeUp: A Blind-First Python IDE
 
-CodeUp is a Python IDE designed for blind and visually impaired learners. Unlike traditional IDEs that retrofit accessibility on top of visual workflows, CodeUp treats non-visual interaction as the default. Every core feature — navigation, execution, debugging, code understanding — works through audio, keyboard, and natural language commands.
+CodeUp is a Python IDE designed for blind and visually impaired learners. Unlike traditional IDEs that retrofit accessibility on top of visual workflows, CodeUp treats non-visual interaction as the default. Every core feature  navigation, execution, debugging, code understanding  works through audio, keyboard, and natural language commands.
 
 The project is independently developed and intended for use in schools and accessibility programs.
 
@@ -9,7 +9,7 @@ The project is independently developed and intended for use in schools and acces
 ## What it does
 
 - **Voice commands** in English and Hindi for navigation, execution, and editing
-- **Audio code structure** through sonification — pitch maps to indentation, distinct tones for functions, classes, loops, conditionals
+- **Audio code structure** through sonification  pitch maps to indentation, distinct tones for functions, classes, loops, conditionals
 - **Step-by-step execution traces** with spoken playback and a "story mode" narrative
 - **Sandboxed Python execution** with subprocess isolation, restricted imports, time and memory caps, AST audit, and same-origin enforcement on state-changing requests
 - **Optional AI assistance** (Groq Llama 3.3 70B) for error explanation, code generation, summarization, and a mentor mode with quizzes and bug challenges
@@ -28,15 +28,15 @@ AI assistance is strictly optional. Every core feature works without an API key 
 - Night Mode for low-light environments and users who prefer dark themes
 - Dyslexia-friendly mode with Atkinson Hyperlegible font and increased line spacing
 - Reduced motion support, both via in-app toggle and the OS-level `prefers-reduced-motion` setting
-- Full keyboard navigation — every feature reachable without a mouse
+- Full keyboard navigation  every feature reachable without a mouse
 - Press `Escape` at any time to stop speech mid-sentence
-- No `window.prompt()` — all dialogs use accessible inline modals with focus management
+- No `window.prompt()`  all dialogs use accessible inline modals with focus management
 
 ---
 
 ## Quickstart
 
-Requirements: Python 3.8 or newer. The IDE itself runs offline once installed — Monaco, JetBrains Mono, and Atkinson Hyperlegible are all vendored. The landing page additionally requires a one-time Node build to vendor React and bundle the JSX components (see "Building the landing page" below).
+Requirements: Python 3.8 or newer. The IDE itself runs offline once installed  Monaco, JetBrains Mono, and Atkinson Hyperlegible are all vendored. The landing page additionally requires a one-time Node build to vendor React and bundle the JSX components (see "Building the landing page" below).
 
 Clone and set up a virtualenv:
 
@@ -85,14 +85,14 @@ Run the application:
 
     python app.py
 
-Open `http://127.0.0.1:5000` in Chrome or Edge. (Firefox does not support the Web Speech API for voice input — keyboard and the typed command box still work in any browser.)
+Open `http://127.0.0.1:5000` in Chrome or Edge. (Firefox does not support the Web Speech API for voice input  keyboard and the typed command box still work in any browser.)
 
 Run tests:
 
     pip install -r requirements-dev.txt
     python -m pytest -q
 
-Tests are fully isolated — snippet storage redirects to a temp directory and no real AI calls are made.
+Tests are fully isolated  snippet storage redirects to a temp directory and no real AI calls are made.
 
 ---
 
@@ -111,7 +111,7 @@ This produces:
 - `static/vendor/react/react-dom.production.min.js`
 - `static/landing/dist/bundle.js`
 
-After editing any `static/landing/*.jsx` file, rerun `npm run build`. Node is only required for the landing page — running, deploying, or hacking on the IDE never needs it.
+After editing any `static/landing/*.jsx` file, rerun `npm run build`. Node is only required for the landing page  running, deploying, or hacking on the IDE never needs it.
 
 If you're deploying to a school environment without Node, the three built files above can be committed to the repo so end users skip the build step entirely.
 
@@ -120,11 +120,11 @@ If you're deploying to a school environment without Node, the three built files 
 
 ### Backend (`app.py`)
 
-Flask application handling code execution, AST-based analysis, voice intent parsing, and AI proxying. Each `/run` request spawns a fresh subprocess confined to a per-session workspace directory, with restricted built-ins and (on POSIX systems) `RLIMIT_AS` and `RLIMIT_CPU` enforced via `preexec_fn`. Per-session state — execution traces, snippets, sandboxes — is keyed by signed session cookies.
+Flask application handling code execution, AST-based analysis, voice intent parsing, and AI proxying. Each `/run` request spawns a fresh subprocess confined to a per-session workspace directory, with restricted built-ins and (on POSIX systems) `RLIMIT_AS` and `RLIMIT_CPU` enforced via `preexec_fn`. Per-session state  execution traces, snippets, sandboxes  is keyed by signed session cookies.
 
 ### Frontend
 
-Monaco Editor (vendored locally — no CDN dependency), JavaScript using the Web Speech API for voice recognition and `SpeechSynthesisUtterance` for output, Web Audio API for sonification. Speech recognition language switches automatically between `en-US` and `hi-IN` based on the selected interface language.
+Monaco Editor (vendored locally  no CDN dependency), JavaScript using the Web Speech API for voice recognition and `SpeechSynthesisUtterance` for output, Web Audio API for sonification. Speech recognition language switches automatically between `en-US` and `hi-IN` based on the selected interface language.
 
 ### Supporting modules
 
@@ -141,7 +141,7 @@ Monaco Editor (vendored locally — no CDN dependency), JavaScript using the Web
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `FLASK_SECRET_KEY` | Yes | `dev-secret-key-change-in-production` | Signs session cookies |
-| `GROQ_API_KEY` | No | — | Enables AI features (get free at console.groq.com) |
+| `GROQ_API_KEY` | No |  | Enables AI features (get free at console.groq.com) |
 | `GEMINI_ENABLED` | No | `1` | Set `0` to disable all AI calls (env var name kept for backward compat) |
 | `SESSION_COOKIE_SECURE` | No | `false` | Set `true` behind HTTPS |
 | `DATA_DIR` | No | `.` | Directory for per-session snippet files |
@@ -175,7 +175,7 @@ Monaco Editor (vendored locally — no CDN dependency), JavaScript using the Web
 
 ## Voice Commands
 
-A partial list. Many natural variations work — the intent parser is grammar-based, not exact-match.
+A partial list. Many natural variations work  the intent parser is grammar-based, not exact-match.
 
 | Say | Action |
 |---|---|
@@ -210,8 +210,8 @@ Hindi equivalents work for around 15 core commands including `चलाओ` (run
 
 User code runs in a separate Python subprocess with:
 
-- Restricted imports — only `math`, `random`, `string`, `datetime` allowed
-- Restricted built-ins — `eval`, `exec`, `compile`, `open`, `__import__`, and direct module attribute access blocked
+- Restricted imports  only `math`, `random`, `string`, `datetime` allowed
+- Restricted built-ins  `eval`, `exec`, `compile`, `open`, `__import__`, and direct module attribute access blocked
 - 5-second wall-clock timeout
 - 5,000-event trace cap to prevent runaway memory growth
 - POSIX-only: 512 MB address space cap and 30-second CPU time cap via `setrlimit`
@@ -224,7 +224,7 @@ Per-session rate limit: 10 runs per 60 seconds.
 
 ## Status
 
-v0.8.0 — Deployment ready with full `input()` support, output diff narration, audio heartbeat, voice macros, output bookmarks, code structure breadcrumbs, beginner-mode error explanations, and a coffee-themed UI. Locally tested with the full test suite (200+ passing tests).
+v0.8.0  Deployment ready with full `input()` support, output diff narration, audio heartbeat, voice macros, output bookmarks, code structure breadcrumbs, beginner-mode error explanations, and a coffee-themed UI. Locally tested with the full test suite (200+ passing tests).
 
 ### What's new in 0.8.0
 
@@ -250,7 +250,7 @@ Next:
 
 ## License
 
-MIT — see `LICENSE`.
+MIT  see `LICENSE`.
 
 ---
 

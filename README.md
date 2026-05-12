@@ -1,15 +1,40 @@
 # CodeUp: A Blind-First Python IDE
 
-CodeUp is a Python IDE designed for blind and visually impaired learners. Unlike traditional IDEs that retrofit accessibility on top of visual workflows, CodeUp treats non-visual interaction as the default. Every core feature  navigation, execution, debugging, code understanding  works through audio, keyboard, and natural language commands.
+CodeUp is a Python IDE designed for blind and visually impaired learners. Unlike traditional IDEs that retrofit accessibility on top of visual workflows, CodeUp treats non-visual interaction as the default. Every core feature (navigation, execution, debugging, code understanding) works through audio, keyboard, and natural language commands.
 
 The project is independently developed and intended for use in schools and accessibility programs.
+
+> **Sister project:** CodeUp Web extends the same accessibility model to HTML and CSS. See [Code_Up_Web](https://github.com/da-taki/CodeUp-web) (in active development).
+
+---
+
+## Status and adoption
+
+**v0.8.0**, deployment ready. Locally tested with the full automated suite (200+ passing tests) and validated through a structured pilot with real blind users.
+
+### Pilot results
+
+CodeUp has been piloted with 10 users to date:
+
+- 7 users rated it 10/10
+- 3 users rated it between 7.5/10 and 8.5/10
+
+The project is in active use at the **School for the Blind and Deaf, Patiala**, where it was formally adopted as a teaching tool. Coding sessions are conducted there twice monthly.
+
+### Testing approach
+
+CodeUp is tested across two complementary surfaces.
+
+**Automated tests** cover sandbox security (escape attempts, restricted imports, time and memory caps), voice intent parsing (English and Hindi, including compound number words), trace playback, snippet CRUD, request size limits, per-session isolation, rate limiting, and the sandboxed filesystem. Tests are fully isolated: snippet storage redirects to a temp directory and no real AI calls are made. Run with `python -m pytest -q`.
+
+**User testing** is conducted in person with blind students at the School for the Blind and Deaf, Patiala. Test plans focus on whether each feature is reachable, understandable, and useful without sighted assistance. Iterations from this loop include the move from `window.prompt()` to inline accessible modals, the auto-save behaviour, the audio heartbeat during long runs, and the beginner-mode error explainer.
 
 ---
 
 ## What it does
 
 - **Voice commands** in English and Hindi for navigation, execution, and editing
-- **Audio code structure** through sonification  pitch maps to indentation, distinct tones for functions, classes, loops, conditionals
+- **Audio code structure** through sonification: pitch maps to indentation, distinct tones for functions, classes, loops, and conditionals
 - **Step-by-step execution traces** with spoken playback and a "story mode" narrative
 - **Sandboxed Python execution** with subprocess isolation, restricted imports, time and memory caps, AST audit, and same-origin enforcement on state-changing requests
 - **Optional AI assistance** (Groq Llama 3.3 70B) for error explanation, code generation, summarization, and a mentor mode with quizzes and bug challenges
@@ -28,15 +53,15 @@ AI assistance is strictly optional. Every core feature works without an API key 
 - Night Mode for low-light environments and users who prefer dark themes
 - Dyslexia-friendly mode with Atkinson Hyperlegible font and increased line spacing
 - Reduced motion support, both via in-app toggle and the OS-level `prefers-reduced-motion` setting
-- Full keyboard navigation  every feature reachable without a mouse
+- Full keyboard navigation: every feature reachable without a mouse
 - Press `Escape` at any time to stop speech mid-sentence
-- No `window.prompt()`  all dialogs use accessible inline modals with focus management
+- No `window.prompt()`. All dialogs use accessible inline modals with focus management
 
 ---
 
 ## Quickstart
 
-Requirements: Python 3.8 or newer. The IDE itself runs offline once installed  Monaco, JetBrains Mono, and Atkinson Hyperlegible are all vendored. The landing page additionally requires a one-time Node build to vendor React and bundle the JSX components (see "Building the landing page" below).
+Requirements: Python 3.8 or newer. The IDE itself runs offline once installed. Monaco, JetBrains Mono, and Atkinson Hyperlegible are all vendored. The landing page additionally requires a one-time Node build to vendor React and bundle the JSX components (see "Building the landing page" below).
 
 Clone and set up a virtualenv:
 
@@ -79,26 +104,37 @@ CodeUp can fall back to a locally-running Ollama instance when Groq is unavailab
        OLLAMA_URL=http://localhost:11434
        OLLAMA_MODEL=llama3.2:3b
 
-When enabled, Groq is tried first; on any failure (network, auth, rate-limit), CodeUp transparently routes to Ollama and prefixes responses with `[offline mode]` so the user knows.
+When enabled, Groq is tried first. On any failure (network, auth, rate-limit), CodeUp transparently routes to Ollama and prefixes responses with `[offline mode]` so the user knows.
 
 Run the application:
 
     python app.py
 
-Open `http://127.0.0.1:5000` in Chrome or Edge. (Firefox does not support the Web Speech API for voice input  keyboard and the typed command box still work in any browser.)
+Open `http://127.0.0.1:5000` in Chrome or Edge. (Firefox does not support the Web Speech API for voice input. Keyboard and the typed command box still work in any browser.)
 
 Run tests:
 
     pip install -r requirements-dev.txt
     python -m pytest -q
 
-Tests are fully isolated  snippet storage redirects to a temp directory and no real AI calls are made.
+Tests are fully isolated. Snippet storage redirects to a temp directory and no real AI calls are made.
 
 ---
 
-## Building the landing page
+## Landing page
 
-The IDE at `/ide` works without any Node tooling. The marketing landing page at `/` uses React components that need to be bundled.
+The marketing landing page at `/` is a separate React experience that walks visitors through the core ideas before they reach the IDE itself. It is built around four sections:
+
+1. **Sonification demo** with a 9-tone Web Audio playback of a sample function, showing how pitch maps to indentation and timbre maps to construct
+2. **Voice typewriter** cycling through bilingual command examples (English and Hindi) with live transcription
+3. **IDE preview** showing a working trace stepper, breakpoint glyph, and snippet sidebar
+4. **Features grid + manifesto** covering the sandbox, bilingual voice, accessibility commitments, and zero-CDN dependency posture
+
+The landing page is fully keyboard navigable, respects `prefers-reduced-motion`, ships an aria-labeled skip link past the decorative hero, and uses the same paper-themed design system as the IDE.
+
+The IDE at `/ide` works without any Node tooling. Only the landing page requires a Node build to bundle JSX.
+
+### Building the landing page
 
 First-time setup:
 
@@ -111,20 +147,21 @@ This produces:
 - `static/vendor/react/react-dom.production.min.js`
 - `static/landing/dist/bundle.js`
 
-After editing any `static/landing/*.jsx` file, rerun `npm run build`. Node is only required for the landing page  running, deploying, or hacking on the IDE never needs it.
+After editing any `static/landing/*.jsx` file, rerun `npm run build`. Node is only required for the landing page. Running, deploying, or hacking on the IDE never needs it.
 
 If you're deploying to a school environment without Node, the three built files above can be committed to the repo so end users skip the build step entirely.
 
 ---
+
 ## Architecture
 
 ### Backend (`app.py`)
 
-Flask application handling code execution, AST-based analysis, voice intent parsing, and AI proxying. Each `/run` request spawns a fresh subprocess confined to a per-session workspace directory, with restricted built-ins and (on POSIX systems) `RLIMIT_AS` and `RLIMIT_CPU` enforced via `preexec_fn`. Per-session state  execution traces, snippets, sandboxes  is keyed by signed session cookies.
+Flask application handling code execution, AST-based analysis, voice intent parsing, and AI proxying. Each `/run` request spawns a fresh subprocess confined to a per-session workspace directory, with restricted built-ins and (on POSIX systems) `RLIMIT_AS` and `RLIMIT_CPU` enforced via `preexec_fn`. Per-session state (execution traces, snippets, sandboxes) is keyed by signed session cookies.
 
 ### Frontend
 
-Monaco Editor (vendored locally  no CDN dependency), JavaScript using the Web Speech API for voice recognition and `SpeechSynthesisUtterance` for output, Web Audio API for sonification. Speech recognition language switches automatically between `en-US` and `hi-IN` based on the selected interface language.
+Monaco Editor (vendored locally, no CDN dependency), JavaScript using the Web Speech API for voice recognition and `SpeechSynthesisUtterance` for output, Web Audio API for sonification. Speech recognition language switches automatically between `en-US` and `hi-IN` based on the selected interface language.
 
 ### Supporting modules
 
@@ -175,7 +212,7 @@ Monaco Editor (vendored locally  no CDN dependency), JavaScript using the Web Sp
 
 ## Voice Commands
 
-A partial list. Many natural variations work  the intent parser is grammar-based, not exact-match.
+A partial list. Many natural variations work because the intent parser is grammar-based, not exact-match.
 
 | Say | Action |
 |---|---|
@@ -202,7 +239,7 @@ A partial list. Many natural variations work  the intent parser is grammar-based
 | "suggest next line" then "choose 2" | AI autocomplete |
 | "help" | List all commands |
 
-Hindi equivalents work for around 15 core commands including `चलाओ` (run), `कोड समझाओ` (analyze), `कोड ठीक करो` (fix), `लाइन बीस पर जाओ` (go to line 20), `मदद` (help). Hindi number words 0–50 are recognized in line-navigation commands.
+Hindi equivalents work for around 15 core commands including `चलाओ` (run), `कोड समझाओ` (analyze), `कोड ठीक करो` (fix), `लाइन बीस पर जाओ` (go to line 20), `मदद` (help). Hindi number words 0 to 50 are recognized in line-navigation commands.
 
 ---
 
@@ -210,8 +247,8 @@ Hindi equivalents work for around 15 core commands including `चलाओ` (run
 
 User code runs in a separate Python subprocess with:
 
-- Restricted imports  only `math`, `random`, `string`, `datetime` allowed
-- Restricted built-ins  `eval`, `exec`, `compile`, `open`, `__import__`, and direct module attribute access blocked
+- Restricted imports: only `math`, `random`, `string`, `datetime` allowed
+- Restricted built-ins: `eval`, `exec`, `compile`, `open`, `__import__`, and direct module attribute access blocked
 - 5-second wall-clock timeout
 - 5,000-event trace cap to prevent runaway memory growth
 - POSIX-only: 512 MB address space cap and 30-second CPU time cap via `setrlimit`
@@ -222,35 +259,32 @@ Per-session rate limit: 10 runs per 60 seconds.
 
 ---
 
-## Status
-
-v0.8.0  Deployment ready with full `input()` support, output diff narration, audio heartbeat, voice macros, output bookmarks, code structure breadcrumbs, beginner-mode error explanations, and a coffee-themed UI. Locally tested with the full test suite (200+ passing tests).
-
-### What's new in 0.8.0
+## What's new in 0.8.0
 
 - **`input()` support, two ways**:
   - *Pre-flight* (default, reproducible): declare values ahead with the inputs panel, voice (`set inputs to alice and seventeen`), or a magic comment (`# inputs: alice, 17`)
-  - *Live* (POSIX only): `say live input mode`, then your code pauses at each `input()` and asks you for the value via voice or typing
+  - *Live* (POSIX only): say `live input mode`, then your code pauses at each `input()` and asks you for the value via voice or typing
 - **Output diff narration**: re-run code and hear only what changed, not the whole output again. Voice: `what's different`
 - **Audio heartbeat**: soft tone every 500ms while code runs so you know it's alive
-- **Voice macros**: `remember this as quick sort` saves the editor as a named macro; `use macro quick sort` loads it
+- **Voice macros**: `remember this as quick sort` saves the editor as a named macro. `use macro quick sort` loads it
 - **Output bookmarks**: `bookmark this` mid-output, then `read from bookmark <name>` later
 - **Breadcrumbs**: Alt+B (or `where am i`) reads "function calculate, inside for loop, line 15"
 - **Beginner errors**: after an error, say `explain simply` for a jargon-free, real-life-analogy version
-- **Auto-save**: every 30 seconds, silently. A draft from the previous session is restored automatically on next visit.
+- **Auto-save**: every 30 seconds, silently. A draft from the previous session is restored automatically on next visit
 - **Coffee theme**: replaces the previous teal palette with cream, caramel, and espresso
 
 Next:
 
-- User testing with blind students
+- Continued user testing with blind students at the School for the Blind and Deaf, Patiala
 - Deployment behind HTTPS for non-localhost use
 - Research write-up
+- CodeUp Web (HTML / CSS sister project) reaching feature parity on the accessibility surface
 
 ---
 
 ## License
 
-MIT  see `LICENSE`.
+MIT. See `LICENSE`.
 
 ---
 

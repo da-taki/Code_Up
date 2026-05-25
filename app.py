@@ -7,8 +7,6 @@ from typing import List, Tuple, Optional, Any, Dict
 
 __version__ = "0.8.0"
 from rapidfuzz import fuzz
-from google import genai
-from google.genai import types as genai_types
 from structure_parser import CodeAnalyzer
 from intent_parser import parse_intent
 from sandboxed_fs import get_sandbox
@@ -288,7 +286,8 @@ _ALLOWED_ORIGINS = {
     for o in os.environ.get("ALLOWED_ORIGINS", "").split(",")
     if o.strip()
 }
-_TESTING_MODE = os.environ.get("FLASK_TESTING", "false").lower() == "true"
+def _is_testing_mode():
+    return os.environ.get("FLASK_TESTING", "false").lower() == "true"
 
 
 @app.before_request
@@ -310,7 +309,7 @@ def enforce_same_origin():
 
     # No Origin and no Referer
     if not origin and not referer:
-        if _TESTING_MODE:
+        if _is_testing_mode():
             return None
         return jsonify({"success": False, "error": "Missing Origin/Referer header"}), 403
 
@@ -2777,15 +2776,19 @@ def breadcrumbs():
     trail = []  # list of (kind, name, start_line, end_line)
 
     def end_line(node):
-        return getattr(node, 'end_lineno', None) or max(
-            (getattr(n, 'lineno', 0) for n in ast.walk(node)), default=node.lineno
-        )
+        explicit_end = getattr(node, 'end_lineno', None)
+        if explicit_end is not None:
+            return explicit_end
+        line_numbers = [n.lineno for n in ast.walk(node) if hasattr(n, 'lineno')]
+        return max(line_numbers) if line_numbers else None
 
     def walk(node, depth=0):
         for child in ast.iter_child_nodes(node):
             start = getattr(child, 'lineno', None)
+            if start is None:
+                continue
             stop = end_line(child)
-            if start is None or stop is None:
+            if stop is None:
                 continue
             if not (start <= line <= stop):
                 continue

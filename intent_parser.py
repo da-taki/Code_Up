@@ -293,14 +293,13 @@ class IntentParser:
         r"^(?:फिर\s+से\s+)?सुनो$",
     ]
 
-    # Require an explicit code-generation verb at the start of the utterance and
-    # at least 3 words in the prompt so ambient speech ("code for that exam")
-    # cannot be misrouted to the LLM.
+    # Require an explicit code-generation verb at the start of the utterance so
+    # ambient speech ("code for that exam") cannot be misrouted to the LLM.
     GENERATE_CODE_PATTERNS = [
-        r"^(?:please\s+)?(?:generate|write|create|make|build)\s+(?:a\s+|some\s+)?(?:python\s+)?code\s+(?:that|which|to|for)\s+(\S+(?:\s+\S+){2,})",
-        r"^(?:please\s+)?(?:generate|write|create|make|build)\s+(?:a\s+|some\s+)?(?:python\s+)?(?:program|script|function)\s+(?:that|which|to|for)\s+(\S+(?:\s+\S+){2,})",
-        r"^(?:please\s+)?(?:generate|write|create|make|build)\s+(?:a\s+|some\s+)?(?:python\s+)?code\s+for\s+(\S+(?:\s+\S+){2,})",
-        r"^i\s+want\s+(?:python\s+)?code\s+(?:for|to|that)\s+(\S+(?:\s+\S+){2,})",
+        r"^(?:please\s+)?(?:generate|write|create|make|build)\s+(?:a\s+|some\s+)?(?:python\s+)?code\s+(?:that|which|to|for)\s+(\S+(?:\s+\S+)*)",
+        r"^(?:please\s+)?(?:generate|write|create|make|build)\s+(?:a\s+|some\s+)?(?:python\s+)?(?:program|script|function)\s+(?:that|which|to|for)\s+(\S+(?:\s+\S+)*)",
+        r"^(?:please\s+)?(?:generate|write|create|make|build)\s+(?:a\s+|some\s+)?(?:python\s+)?code\s+for\s+(\S+(?:\s+\S+)*)",
+        r"^i\s+want\s+(?:python\s+)?code\s+(?:for|to|that)\s+(\S+(?:\s+\S+)*)",
         # bare command — no prompt, will ask user
         r"^(?:generate|write|create|make)\s+(?:python\s+)?code$",
         # Hindi: "X के लिए कोड बनाओ" — require at least 2 words before the trigger
@@ -816,7 +815,7 @@ class IntentParser:
     # -----------------------------------------------------------------------
 
     def parse(self, text: str) -> Dict:
-        text = text.strip().lower()
+        text = text.strip()
 
         if not text:
             return {"intent": None, "slots": {}, "confidence": 0.0, "original": text}

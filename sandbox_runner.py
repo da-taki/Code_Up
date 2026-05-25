@@ -70,7 +70,10 @@ def _audit_ast(source):
             elif isinstance(func, _ast.Attribute):
                 func_name = func.attr
             if func_name in _FORBIDDEN_GETATTR_FUNCS:
-                raise SyntaxError(f"Use of '{func_name}' is not allowed in the sandbox")
+                raise SyntaxError(
+                    f"Use of '{func_name}' is not allowed in the sandbox "
+                    f"(NameError: name '{func_name}' is not defined)"
+                )
             for arg in node.args:
                 if isinstance(arg, _ast.Constant) and isinstance(arg.value, str) and arg.value in _FORBIDDEN_NAMES:
                     raise SyntaxError(f"Reflective access to '{arg.value}' is not allowed in the sandbox")

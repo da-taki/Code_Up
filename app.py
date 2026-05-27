@@ -1,6 +1,6 @@
 from dotenv import load_dotenv
 load_dotenv()
-from flask import Flask, render_template, request, jsonify, g
+from flask import Flask, render_template, request, jsonify, g, has_request_context
 import json, os, traceback, io, contextlib, re, ast, sys, time, threading, subprocess, tempfile, uuid, random
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Tuple, Optional, Any, Dict
@@ -40,6 +40,9 @@ _VOICE_TELEMETRY_CAP = 1000
 # Thread-local storage for per-request Gemini API key.
 # (_trace_context was removed along with run_with_trace — session storage handles traces.)
 _api_context = threading.local()
+
+_session_ai_keys: Dict[str, Dict[str, Any]] = {}
+_session_ai_keys_lock = threading.Lock()
 
 # Session-based trace storage (prevents concurrent user interference)
 # Keys: session_id (UUID), Values: {last_trace, current_trace_index, trace_timestamp, trace_duration_ms, last_voice_action}
@@ -231,6 +234,13 @@ def cleanup_old_sessions():
                    if now - data.get('last_accessed', 0) > _session_ttl]
         for sid in expired:
             del _session_traces[sid]
+    with _session_ai_keys_lock:
+        expired_keys = [
+            sid for sid, data in _session_ai_keys.items()
+            if now - data.get('last_accessed', now) > _session_ttl
+        ]
+        for sid in expired_keys:
+            del _session_ai_keys[sid]
 
 
 # ==========================
@@ -464,9 +474,40 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "Insert_API_Key_Here")
 # FIX L-3: Updated deprecated "gemini-pro" model name to a current model identifier.
 GEMINI_MODEL = "llama-3.3-70b-versatile"
 
-# helper to retrieve current API key (session overrides global)
+# helper to retrieve current API key (browser session overrides process env)
 def _current_api_key():
+    if has_request_context():
+        session_id = get_session_id()
+        with _session_ai_keys_lock:
+            record = _session_ai_keys.get(session_id)
+            if record:
+                record['last_accessed'] = time.time()
+                return record.get('key', '')
     return getattr(_api_context, 'gemini_key', GEMINI_API_KEY)
+
+def _configured_cloud_api_key():
+    """Return a usable cloud AI key from session config or environment."""
+    for key in (
+        _current_api_key(),
+        os.environ.get("GROQ_API_KEY", ""),
+        os.environ.get("GEMINI_API_KEY", ""),
+    ):
+        key = str(key or "").strip()
+        if key and key != "Insert_API_Key_Here":
+            return key
+    return ""
+
+def _is_ai_service_message(text: str) -> bool:
+    lower = (text or "").strip().lower()
+    return (
+        lower.startswith("ai service")
+        or lower.startswith("cloud ai")
+        or lower.startswith("the cloud ai")
+        or lower.startswith("no internet connection")
+        or "offline ai is not available" in lower
+        or "not configured" in lower
+        or "authentication failed" in lower
+    )
 
 def _call_ollama(system_prompt, user_prompt, temperature=0.2):
     """Call local Ollama instance. Returns response string or None on failure."""
@@ -518,7 +559,7 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en"):
 
     global _gemini_queued_requests
 
-    key = os.environ.get("GROQ_API_KEY", "")
+    key = _configured_cloud_api_key()
 
     def _try_ollama_fallback():
         """Try the local Ollama fallback. Returns response or None."""
@@ -531,10 +572,7 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en"):
         local = _try_ollama_fallback()
         if local:
             return local
-        return (
-            "AI service not configured. Please ask your teacher to set the GROQ_API_KEY, "
-            "or install Ollama locally for offline AI."
-        )
+        return "AI service not configured. Add a Groq API key in settings, or install Ollama locally for offline AI."
 
     def _do_call():
         global _gemini_active_requests, _gemini_queued_requests
@@ -558,7 +596,7 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en"):
                 max_tokens=1024,
             )
             content = response.choices[0].message.content
-            return content.strip() if content else "No response generated"
+            return content.strip() if content else "AI service returned an empty response. Please try again."
         except Exception as e:
             err_str = str(e).lower()
             # Try Ollama before returning a user-facing error
@@ -757,18 +795,26 @@ def get_demo_preset(preset_id):
 # ==========================
 
 def set_gemini_api_key(key):
-    """Configure the Gemini API key for the current request/session.
+    """Configure the cloud AI key for the current browser session.
 
-    Stores the key in thread-local storage so concurrent sessions can each
-    use a different key without interfering with one another.
+    Stores the key server-side by CodeUp session id so concurrent sessions can
+    each use a different key without exposing the secret in a client cookie.
     Note: genai.configure() call removed here to avoid the global-mutation
     race described in C-2; per-call clients are used in call_gemini() instead.
     """
-    _api_context.gemini_key = key
+    cleaned = str(key or "").strip()
+    _api_context.gemini_key = cleaned
+    if has_request_context():
+        session_id = get_session_id()
+        with _session_ai_keys_lock:
+            if cleaned and cleaned != "Insert_API_Key_Here":
+                _session_ai_keys[session_id] = {"key": cleaned, "last_accessed": time.time()}
+            else:
+                _session_ai_keys.pop(session_id, None)
 
 @app.route("/api-config", methods=["POST"])
 def api_config():
-    """Set the Gemini API key for the session."""
+    """Set the Groq API key for the session."""
     body = safejson()
     api_key = safe(body.get("api_key"), "")
 
@@ -778,11 +824,8 @@ def api_config():
     try:
         set_gemini_api_key(api_key)
         test_response = call_gemini("Say 'OK'", "Test", language="en")
-        if test_response.startswith("AI service error:") or \
-           test_response.startswith("AI service is currently unavailable:") or \
-           test_response == "AI service not configured. Please set GEMINI_API_KEY environment variable or configure via /api-config." or \
-           test_response == "AI service disabled":
-            return jsonify({"success": False, "error": "API key is invalid or Gemini API is unavailable"}), 401
+        if _is_ai_service_message(test_response) or test_response == "AI service disabled":
+            return jsonify({"success": False, "error": "API key is invalid or cloud AI is unavailable"}), 401
         return jsonify({"success": True, "message": "API key configured successfully"})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
@@ -886,6 +929,8 @@ MENTOR_MODES = {
 
 
 def _ai_unavailable(text: str) -> bool:
+    if _is_ai_service_message(text):
+        return True
     lower = (text or "").lower()
     return (
         lower.startswith("ai service")
@@ -2384,7 +2429,7 @@ def fix():
     user = f"Fix this code:\n```python\n{code}\n```"
     raw = call_gemini(system, user, temperature=0.1, language=language)
     fixed = extract_code(raw)
-    if not fixed and raw and not raw.startswith("AI service"):
+    if not fixed and raw and not _is_ai_service_message(raw):
         fixed = raw.strip()
 
     # Reject suspicious "fixes" that bear no resemblance to the original. The LLM
@@ -2396,11 +2441,13 @@ def fix():
         if ratio < 0.3:
             retry_system = system + "\n\nCRITICAL: Your previous answer was rejected because it was too different from the user's original code. Make MINIMAL changes — preserve variable names, structure, and overall approach. Only fix the specific bugs."
             raw_retry = call_gemini(retry_system, user, temperature=0.05, language=language)
-            retry_fixed = extract_code(raw_retry) or (raw_retry.strip() if raw_retry and not raw_retry.startswith("AI service") else "")
+            retry_fixed = extract_code(raw_retry) or (raw_retry.strip() if raw_retry and not _is_ai_service_message(raw_retry) else "")
             if retry_fixed:
                 retry_ratio = difflib.SequenceMatcher(None, code, retry_fixed).ratio()
                 if retry_ratio >= 0.3:
                     fixed = retry_fixed
+    if not fixed and _is_ai_service_message(raw):
+        return jsonify({"success": False, "error": raw.strip(), "code": ""})
     return jsonify({"success": True, "code": fixed})
 
 # ==========================
@@ -2454,10 +2501,11 @@ def generate_code():
     code = extract_code(raw)
     # Llama sometimes returns code without ``` fences. If extract_code came back empty,
     # try using the raw response directly (assuming it's already plain code).
-    if not code and raw and not raw.startswith("AI service"):
+    if not code and raw and not _is_ai_service_message(raw):
         code = raw.strip()
     if not code:
-        return jsonify({"success": False, "error": "AI returned empty response. Try rephrasing.", "code": ""})
+        error = raw.strip() if raw else "AI returned empty response. Try rephrasing."
+        return jsonify({"success": False, "error": error, "code": ""})
 
     # Verify the result actually parses as Python before shipping it to the editor.
     # If the LLM returned an explanation paragraph by mistake, this catches it.
@@ -2467,11 +2515,13 @@ def generate_code():
         # One retry with a stricter system message
         retry_system = system + "\n\nIMPORTANT: Return ONLY syntactically valid Python. No prose. No markdown."
         raw_retry = call_gemini(retry_system, user, temperature=0.1, language=language)
-        retry_code = extract_code(raw_retry) or (raw_retry.strip() if raw_retry and not raw_retry.startswith("AI service") else "")
+        retry_code = extract_code(raw_retry) or (raw_retry.strip() if raw_retry and not _is_ai_service_message(raw_retry) else "")
         try:
             compile(retry_code, "<generated>", "exec")
             code = retry_code
         except SyntaxError:
+            if _is_ai_service_message(raw_retry):
+                return jsonify({"success": False, "error": raw_retry.strip(), "code": ""})
             return jsonify({"success": False, "error": "AI returned invalid Python code. Please try rephrasing your request.", "code": ""})
     return jsonify({"success": True, "code": code})
 
@@ -2849,6 +2899,8 @@ def suggest_next():
 
     try:
         raw = call_gemini(system, user, temperature=0.2, language=language)
+        if _is_ai_service_message(raw):
+            return jsonify({"success": False, "suggestions": [], "error": raw})
         clean = re.sub(r'```(?:json)?\s*|\s*```', '', raw).strip()
         parsed = json.loads(clean)
         suggestions = parsed.get("suggestions", [])[:3]
@@ -4016,7 +4068,7 @@ def mentor_quiz():
     raw = call_gemini(system, user, temperature=0.4, language=language)
 
     # Detect AI-disabled / error responses before attempting JSON parse
-    if raw.startswith("AI service") or "not configured" in raw.lower() or "unavailable" in raw.lower():
+    if _is_ai_service_message(raw):
         return jsonify({
             "success": False,
             "error": "Quiz unavailable: AI not configured. Try the bug challenge or tutorial instead.",
@@ -4073,7 +4125,7 @@ def mentor_explain():
             "success": False,
             "error": "AI returned an incomplete explanation. Try asking again, or try a different concept name."
         })
-    if explanation.startswith("AI service") or "not configured" in explanation.lower():
+    if _is_ai_service_message(explanation):
         return jsonify({
             "success": False,
             "error": explanation,
@@ -4110,7 +4162,7 @@ def explain_diff():
         f"Diff summary: {diff.get('summary', '')}"
     )
     explanation = call_gemini(system, user, temperature=0.2, language=language)
-    if explanation.startswith("AI service") or "not configured" in explanation.lower() or "unavailable" in explanation.lower():
+    if _is_ai_service_message(explanation):
         explanation = (
             f"{diff.get('summary', 'The output changed.')} "
             "Check for changed input values, random numbers, time-based code, or data structures whose order can vary."
@@ -4165,7 +4217,7 @@ def mentor_bug_challenge():
     user = "Generate a bug challenge"
     raw = call_gemini(system, user, temperature=0.5, language=language)
 
-    if raw.startswith("AI service") or "not configured" in raw.lower() or "unavailable" in raw.lower():
+    if _is_ai_service_message(raw):
         return jsonify({
             "success": False,
             "error": "Bug challenge unavailable: AI not configured. Try the tutorial or write your own code instead.",

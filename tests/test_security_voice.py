@@ -10,6 +10,7 @@ import os
 import sys
 import json
 import tempfile
+import types
 import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -63,6 +64,103 @@ def test_gemini_key_not_configured_returns_message(client, monkeypatch):
     data = res.get_json()
     assert "summary" in data
     assert "configured" in data["summary"].lower() or "api" in data["summary"].lower()
+
+
+def test_call_gemini_uses_session_api_config_key(monkeypatch):
+    """Keys entered through /api-config must be honored by AI calls."""
+    monkeypatch.setenv("GEMINI_ENABLED", "1")
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setattr(app_module, "GEMINI_API_KEY", "Insert_API_Key_Here")
+    monkeypatch.setattr(app_module, "_call_ollama", lambda *a, **k: None)
+    app_module.set_gemini_api_key("session-key")
+    seen_keys = []
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            return types.SimpleNamespace(
+                choices=[types.SimpleNamespace(message=types.SimpleNamespace(content="print('ok')"))]
+            )
+
+    class FakeGroq:
+        def __init__(self, api_key):
+            seen_keys.append(api_key)
+            self.chat = types.SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.setitem(sys.modules, "groq", types.SimpleNamespace(Groq=FakeGroq))
+
+    try:
+        result = app_module.call_gemini("Return code", "Task")
+        assert result == "print('ok')"
+        assert seen_keys == ["session-key"]
+    finally:
+        app_module.set_gemini_api_key("Insert_API_Key_Here")
+
+
+def test_api_config_key_persists_to_generate_code(client, monkeypatch):
+    """A key entered through the UI must work on the next request too."""
+    monkeypatch.setenv("GEMINI_ENABLED", "1")
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setattr(app_module, "GEMINI_API_KEY", "Insert_API_Key_Here")
+    monkeypatch.setattr(app_module, "_call_ollama", lambda *a, **k: None)
+    with app_module._session_ai_keys_lock:
+        app_module._session_ai_keys.clear()
+    app_module.set_gemini_api_key("Insert_API_Key_Here")
+    seen_keys = []
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            seen_keys.append(kwargs["messages"][1]["content"])
+            user_prompt = kwargs["messages"][1]["content"]
+            content = "OK" if user_prompt == "Test" else "radius = 5\narea = 3.14159 * radius * radius\nprint(area)"
+            return types.SimpleNamespace(
+                choices=[types.SimpleNamespace(message=types.SimpleNamespace(content=content))]
+            )
+
+    class FakeGroq:
+        def __init__(self, api_key):
+            seen_keys.append(api_key)
+            self.chat = types.SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.setitem(sys.modules, "groq", types.SimpleNamespace(Groq=FakeGroq))
+
+    try:
+        config = client.post("/api-config", json={"api_key": "session-groq-key"})
+        assert config.status_code == 200
+        assert config.get_json()["success"] is True
+
+        generated = client.post("/generate-code", json={"prompt": "find the area of a circle", "language": "en"})
+        data = generated.get_json()
+        assert data["success"] is True
+        assert "area" in data["code"]
+        assert seen_keys.count("session-groq-key") == 2
+    finally:
+        with app_module._session_ai_keys_lock:
+            app_module._session_ai_keys.clear()
+        app_module.set_gemini_api_key("Insert_API_Key_Here")
+
+
+def test_generate_code_surfaces_ai_service_error(client, monkeypatch):
+    monkeypatch.setenv("GEMINI_ENABLED", "1")
+    monkeypatch.setattr(app_module, "call_gemini", lambda *a, **k: "AI service not configured. Add a Groq API key in settings.")
+    res = client.post("/generate-code", json={"prompt": "find the area of a circle", "language": "en"})
+    assert res.status_code == 200
+    data = res.get_json()
+    assert data["success"] is False
+    assert "not configured" in data["error"].lower()
+    assert "empty response" not in data["error"].lower()
+
+
+def test_fix_code_surfaces_ai_service_error(client, monkeypatch):
+    monkeypatch.setenv("GEMINI_ENABLED", "1")
+    monkeypatch.setattr(app_module, "call_gemini", lambda *a, **k: "Cloud AI authentication failed and offline AI is not available.")
+    res = client.post("/fix", json={"code": "print(1)", "language": "en"})
+    assert res.status_code == 200
+    data = res.get_json()
+    assert data["success"] is False
+    assert "authentication failed" in data["error"].lower()
+    assert data["code"] == ""
     
 
 # ===========================================================================

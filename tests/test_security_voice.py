@@ -97,6 +97,34 @@ def test_call_gemini_uses_session_api_config_key(monkeypatch):
         app_module.set_gemini_api_key("Insert_API_Key_Here")
 
 
+def test_call_gemini_whitespace_response_is_not_empty_string(monkeypatch):
+    monkeypatch.setenv("GEMINI_ENABLED", "1")
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setattr(app_module, "GEMINI_API_KEY", "Insert_API_Key_Here")
+    monkeypatch.setattr(app_module, "_call_ollama", lambda *a, **k: None)
+    app_module.set_gemini_api_key("session-key")
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            return types.SimpleNamespace(
+                choices=[types.SimpleNamespace(message=types.SimpleNamespace(content="   \n\t"))]
+            )
+
+    class FakeGroq:
+        def __init__(self, api_key):
+            self.chat = types.SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.setitem(sys.modules, "groq", types.SimpleNamespace(Groq=FakeGroq))
+
+    try:
+        result = app_module.call_gemini("Return code", "Task")
+        assert result
+        assert "empty response" in result.lower()
+    finally:
+        app_module.set_gemini_api_key("Insert_API_Key_Here")
+
+
 def test_api_config_key_persists_to_generate_code(client, monkeypatch):
     """A key entered through the UI must work on the next request too."""
     monkeypatch.setenv("GEMINI_ENABLED", "1")
@@ -150,6 +178,19 @@ def test_generate_code_surfaces_ai_service_error(client, monkeypatch):
     assert data["success"] is False
     assert "not configured" in data["error"].lower()
     assert "empty response" not in data["error"].lower()
+
+
+def test_generate_code_circle_fallback_on_blank_ai(client, monkeypatch):
+    monkeypatch.setenv("GEMINI_ENABLED", "1")
+    monkeypatch.setattr(app_module, "call_gemini", lambda *a, **k: "   ")
+    res = client.post("/generate-code", json={"prompt": "find the area of a circle", "language": "en"})
+    assert res.status_code == 200
+    data = res.get_json()
+    assert data["success"] is True
+    assert data["source"] == "local_fallback"
+    assert "radius" in data["code"]
+    assert "area" in data["code"]
+    compile(data["code"], "<generated>", "exec")
 
 
 def test_fix_code_surfaces_ai_service_error(client, monkeypatch):

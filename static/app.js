@@ -751,8 +751,8 @@ function openApiKeyModal() {
   requestAnimationFrame(() => {
     if (input) input.focus();
   });
-  speak('AI features need a Gemini API key. Get one for free at ai dot google dot dev. Paste it into the field and press Enter, or press Escape to cancel and continue without AI.');
-  srAnnounce('Gemini API key required');
+  speak('AI features need a Groq API key. Get one at console dot groq dot com. Paste it into the field and press Enter, or press Escape to cancel and continue without AI.');
+  srAnnounce('Groq API key required');
 }
 
 function closeApiKeyModal() {

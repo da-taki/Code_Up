@@ -560,6 +560,63 @@ class IntentParser:
         r"^explain\s+(?:the\s+)?output\s+diff(?:erence)?$",
     ]
 
+    MENTOR_CHAT_PATTERNS = [
+        r"^(?:ask\s+mentor|codeup\s+mentor|mentor\s+(?!mode$))\s+(.+)$",
+        r"^why\s+did\s+(?:this|my\s+code|it)\s+fail\??$",
+        r"^what\s+should\s+i\s+do\s+next\??$",
+        r"^check\s+my\s+code$",
+        r"^what\s+does\s+(.+?)\s+do\s+here\??$",
+        r"^explain\s+line\s+([\w\s]+?)\s+again$",
+    ]
+
+    MENTOR_HINT_PATTERNS = [
+        r"^(?:give\s+me\s+)?(?:a\s+)?tiny\s+hint$",
+        r"^don'?t\s+give\s+me\s+the\s+answer$",
+        r"^(?:give\s+me\s+)?(?:a\s+)?bigger\s+hint$",
+        r"^(?:show\s+me\s+)?(?:the\s+)?exact\s+fix$",
+        r"^exact\s+fix$",
+    ]
+
+    MENTOR_WALKTHROUGH_PATTERNS = [
+        r"^slow\s+walkthrough$",
+        r"^walk\s+me\s+through\s+(?:this\s+)?slowly$",
+        r"^explain\s+like\s+i\s+am\s+new$",
+        r"^explain\s+like\s+i'?m\s+new$",
+    ]
+
+    MENTOR_PROGRESS_PATTERNS = [
+        r"^did\s+i\s+fix\s+it\??$",
+        r"^is\s+it\s+better\s+now\??$",
+        r"^what\s+changed$",
+    ]
+
+    MENTOR_TRANSFORM_PATTERNS = [
+        r"^shorter$",
+        r"^say\s+that\s+shorter$",
+        r"^say\s+that\s+simpler$",
+        r"^explain\s+simpler$",
+    ]
+
+    MENTOR_PREFERENCE_PATTERNS = [
+        r"^set\s+me\s+to\s+beginner\s+mode$",
+        r"^beginner\s+mode$",
+        r"^intermediate\s+mode$",
+        r"^don'?t\s+give\s+direct\s+answers$",
+        r"^explain\s+in\s+hinglish$",
+        r"^use\s+shorter\s+answers$",
+    ]
+
+    MENTOR_CODE_MAP_PATTERNS = [
+        r"^(?:give\s+me\s+)?(?:a\s+)?map\s+of\s+my\s+code$",
+        r"^map\s+my\s+code$",
+        r"^summarize\s+my\s+code\s+structure$",
+    ]
+
+    MENTOR_STOP_PATTERNS = [
+        r"^mentor\s+stop$",
+        r"^stop\s+mentor$",
+    ]
+
     # ----- Pre-flight input controls -----
     SET_INPUTS_PATTERNS = [
         r"^set\s+inputs?\s+to\s+(.+)$",
@@ -710,6 +767,16 @@ class IntentParser:
             "sonify_class":   self.SONIFY_CLASS_PATTERNS,
             # Execution and analysis
             "run":            self.RUN_PATTERNS,
+            # Conversational mentor commands must come before older analyze/fix
+            # phrases so questions route to the tutor layer.
+            "mentor_stop":     self.MENTOR_STOP_PATTERNS,
+            "mentor_code_map": self.MENTOR_CODE_MAP_PATTERNS,
+            "mentor_progress": self.MENTOR_PROGRESS_PATTERNS,
+            "mentor_hint":     self.MENTOR_HINT_PATTERNS,
+            "mentor_walkthrough": self.MENTOR_WALKTHROUGH_PATTERNS,
+            "mentor_transform": self.MENTOR_TRANSFORM_PATTERNS,
+            "mentor_preference": self.MENTOR_PREFERENCE_PATTERNS,
+            "mentor_chat":     self.MENTOR_CHAT_PATTERNS,
             "analyze_deep":   self.ANALYZE_DEEP_PATTERNS,
             "analyze":        self.ANALYZE_PATTERNS,
             "fix":            self.FIX_PATTERNS,
@@ -1024,6 +1091,62 @@ class IntentParser:
         elif intent == "explain_concept":
             if match.groups() and match.group(1):
                 slots["concept"] = match.group(1).strip()
+
+        elif intent == "mentor_chat":
+            original = text.strip()
+            message = original
+            if match.groups() and match.group(1):
+                captured = match.group(1).strip()
+                if original.lower().startswith(("ask mentor ", "codeup mentor ", "mentor ")):
+                    message = captured
+                elif original.lower().startswith("what does "):
+                    message = f"What does {captured} do here?"
+                elif original.lower().startswith("explain line "):
+                    message = f"Explain line {captured} again."
+            slots["message"] = message
+            slots["mode"] = "concept" if original.lower().startswith("what does ") else "general"
+
+        elif intent == "mentor_hint":
+            low = text.lower().strip()
+            if "bigger" in low:
+                slots["mode"] = "bigger_hint"
+            elif "exact" in low or "fix" in low:
+                slots["mode"] = "exact_fix"
+            else:
+                slots["mode"] = "tiny_hint"
+            slots["message"] = text.strip()
+
+        elif intent == "mentor_walkthrough":
+            slots["mode"] = "slow_walkthrough"
+            slots["message"] = text.strip()
+
+        elif intent == "mentor_transform":
+            low = text.lower().strip()
+            if "repeat" in low or "again" in low:
+                slots["mode"] = "repeat"
+            elif "simpler" in low:
+                slots["mode"] = "simpler"
+            else:
+                slots["mode"] = "shorter"
+            slots["message"] = text.strip()
+
+        elif intent == "mentor_preference":
+            low = text.lower().strip()
+            if "intermediate" in low:
+                slots["key"] = "level"
+                slots["value"] = "intermediate"
+            elif "beginner" in low:
+                slots["key"] = "level"
+                slots["value"] = "beginner"
+            elif "direct" in low:
+                slots["key"] = "answerStyle"
+                slots["value"] = "hints_first"
+            elif "hinglish" in low:
+                slots["key"] = "languageStyle"
+                slots["value"] = "hinglish"
+            elif "shorter" in low:
+                slots["key"] = "answerStyle"
+                slots["value"] = "hints_first"
 
         elif intent == "demo_run":
             if match.groups() and match.group(1):

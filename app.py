@@ -240,6 +240,8 @@ def cleanup_old_sessions():
 MAX_REQUEST_SIZE = 1_000_000  # 1 MB max request body
 MAX_CODE_SIZE = 100_000       # 100 KB max code
 MAX_GEMINI_TIMEOUT = 30       # 30 second timeout for LLM calls
+MAX_MENTOR_MESSAGE_SIZE = 2_000
+MAX_MENTOR_CONTEXT_SIZE = 4_000
 
 # Per-session rate limiting for /run
 # Allows at most RUN_RATE_LIMIT executions per RUN_RATE_WINDOW seconds per session.
@@ -822,7 +824,8 @@ def explain_error(code: str, err_text: str, language="en", beginner=False) -> st
                 "happened in plain English, like you are talking to a friend.\n"
                 "Use a real-life analogy if it helps. Then tell them which line has the "
                 "problem and exactly what to type to fix it.\n"
-                "Maximum 5 very simple sentences. Be warm and encouraging."
+                "Maximum 5 very simple sentences. Be warm and encouraging.\n"
+                "End with one question: Do you want a tiny hint, the exact fix, or a line-by-line explanation?"
             )
     elif language == "hi":
         system = (
@@ -848,7 +851,8 @@ def explain_error(code: str, err_text: str, language="en", beginner=False) -> st
             "CodeUp uses a pre-flight input queue: declare values with a magic comment "
             "like '# inputs: Alice, 17' at the top, or fill the inputs panel, or "
             "switch to live input mode.\n"
-            "Max 6 short lines. Be direct."
+            "Max 6 short lines. Be direct.\n"
+            "End with one question: Do you want a tiny hint, the exact fix, or a line-by-line explanation?"
         )
     safe_error = sanitize_traceback(err_text)
     user = f"Code:\n```python\n{code}\n```\n\nError:\n```\n{safe_error}\n```"
@@ -869,6 +873,249 @@ def explain_error_beginner():
         return jsonify({"success": False, "error": "No error provided"}), 400
     explanation = explain_error(code, error_text, language=language, beginner=True)
     return jsonify({"success": True, "explanation": explanation})
+
+
+# ==========================
+# CONVERSATIONAL MENTOR
+# ==========================
+
+MENTOR_MODES = {
+    "general", "tiny_hint", "bigger_hint", "exact_fix", "slow_walkthrough",
+    "concept", "shorter", "repeat", "simpler",
+}
+
+
+def _ai_unavailable(text: str) -> bool:
+    lower = (text or "").lower()
+    return (
+        lower.startswith("ai service")
+        or "not configured" in lower
+        or "unavailable" in lower
+        or "offline ai is not available" in lower
+        or "ai service disabled" in lower
+    )
+
+
+def _mentor_clean_text(value: Any, limit: int = 4000) -> str:
+    text = str(safe(value, ""))
+    text = text.replace("\x00", "")
+    return text[:limit]
+
+
+def _mentor_history_text(history: Any, limit: int = 6) -> str:
+    if not isinstance(history, list):
+        return "No recent mentor history."
+    lines = []
+    for item in history[-limit:]:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role", "student")).strip().lower()
+        label = "Mentor" if role == "mentor" else "Student"
+        text = _mentor_clean_text(item.get("text", ""), 500).strip()
+        if text:
+            lines.append(f"{label}: {text}")
+    return "\n".join(lines) if lines else "No recent mentor history."
+
+
+def _mentor_preferences_text(preferences: Any) -> str:
+    if not isinstance(preferences, dict):
+        preferences = {}
+    level = preferences.get("level")
+    answer_style = preferences.get("answerStyle")
+    language_style = preferences.get("languageStyle")
+    if level not in {"beginner", "intermediate"}:
+        level = "beginner"
+    if answer_style not in {"hints_first", "direct"}:
+        answer_style = "hints_first"
+    if language_style not in {"simple", "hinglish", "hindi", "english"}:
+        language_style = "simple"
+    return (
+        f"level={level}; answerStyle={answer_style}; "
+        f"languageStyle={language_style}"
+    )
+
+
+def _line_range_for_node(node: ast.AST) -> Tuple[int, int]:
+    start = getattr(node, "lineno", 1)
+    end = getattr(node, "end_lineno", start)
+    return start, end
+
+
+def build_code_audio_map(code: str) -> str:
+    """Return a short audio-friendly code map without executing user code."""
+    lines = code.splitlines()
+    non_empty = [(idx + 1, line) for idx, line in enumerate(lines) if line.strip()]
+    if not non_empty:
+        return "Your code is empty."
+
+    parts = [f"Your code has {len(lines)} lines, with {len(non_empty)} non-empty lines."]
+    try:
+        tree = ast.parse(code)
+        nodes = []
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                start, end = _line_range_for_node(node)
+                nodes.append((start, f"Lines {start} to {end} define function {node.name}."))
+            elif isinstance(node, ast.ClassDef):
+                start, end = _line_range_for_node(node)
+                nodes.append((start, f"Lines {start} to {end} define class {node.name}."))
+            elif isinstance(node, (ast.For, ast.While)):
+                start, end = _line_range_for_node(node)
+                kind = "for loop" if isinstance(node, ast.For) else "while loop"
+                nodes.append((start, f"Lines {start} to {end} are a {kind}."))
+            elif isinstance(node, ast.If):
+                start, end = _line_range_for_node(node)
+                nodes.append((start, f"Lines {start} to {end} are an if decision."))
+            elif isinstance(node, ast.Try):
+                start, end = _line_range_for_node(node)
+                nodes.append((start, f"Lines {start} to {end} are a try and except block."))
+            elif isinstance(node, ast.Expr) and isinstance(getattr(node, "value", None), ast.Call):
+                call = node.value
+                if isinstance(call.func, ast.Name) and call.func.id == "print":
+                    start, _ = _line_range_for_node(node)
+                    nodes.append((start, f"Line {start} prints output."))
+        for _, summary in sorted(nodes, key=lambda item: item[0])[:12]:
+            parts.append(summary)
+    except SyntaxError:
+        parts.append("I could not parse the full structure because the code has a syntax error, so here is a simple indentation map.")
+
+    for line_no, line in non_empty[:20]:
+        stripped = line.strip()
+        indent = len(line) - len(line.lstrip(" "))
+        if indent > 0:
+            parts.append(f"Line {line_no} is indented by {indent} spaces, so it is inside a block.")
+        if stripped.startswith(("def ", "async def ")):
+            parts.append(f"Line {line_no} starts a function.")
+        elif stripped.startswith(("for ", "while ")):
+            parts.append(f"Line {line_no} starts a loop.")
+        elif stripped.startswith(("if ", "elif ", "else:")):
+            parts.append(f"Line {line_no} is a decision line.")
+        elif stripped.startswith(("try:", "except ", "finally:")):
+            parts.append(f"Line {line_no} is exception-handling structure.")
+        elif stripped.startswith("print"):
+            parts.append(f"Line {line_no} prints something.")
+
+    return " ".join(dict.fromkeys(parts))
+
+
+@app.route("/mentor/code-map", methods=["POST"])
+def mentor_code_map():
+    body = safejson()
+    code = safe(body.get("code"), "")
+    if len(code) > MAX_CODE_SIZE:
+        return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
+    reply = build_code_audio_map(code)
+    return jsonify({"success": True, "reply": reply, "speech": reply, "auto_speak": True})
+
+
+@app.route("/mentor/chat", methods=["POST"])
+def mentor_chat():
+    body = safejson()
+    raw_code = str(safe(body.get("code", ""), ""))
+    raw_message = str(safe(body.get("message", ""), ""))
+    raw_output = str(safe(body.get("output", ""), ""))
+    raw_error = str(safe(body.get("error", ""), ""))
+    if len(raw_code) > MAX_CODE_SIZE:
+        return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
+    if len(raw_message) > MAX_MENTOR_MESSAGE_SIZE:
+        return jsonify({"success": False, "error": f"Message too large (max {MAX_MENTOR_MESSAGE_SIZE} bytes)"}), 413
+    if len(raw_output) > MAX_MENTOR_CONTEXT_SIZE or len(raw_error) > MAX_MENTOR_CONTEXT_SIZE:
+        return jsonify({"success": False, "error": f"Mentor context too large (max {MAX_MENTOR_CONTEXT_SIZE} bytes per field)"}), 413
+    code = _mentor_clean_text(raw_code, MAX_CODE_SIZE)
+    message = _mentor_clean_text(raw_message, MAX_MENTOR_MESSAGE_SIZE).strip()
+    output = _mentor_clean_text(raw_output, MAX_MENTOR_CONTEXT_SIZE)
+    error = sanitize_traceback(_mentor_clean_text(raw_error, MAX_MENTOR_CONTEXT_SIZE))
+    language = _mentor_clean_text(body.get("language", "en"), 20) or "en"
+    mode = _mentor_clean_text(body.get("mode", "general"), 40)
+    mode = mode if mode in MENTOR_MODES else "general"
+
+    if not message and mode not in {"repeat", "shorter", "simpler", "slow_walkthrough"}:
+        return jsonify({"success": False, "error": "Message is required", "reply": "Please ask the mentor a question.", "speech": "Please ask the mentor a question.", "auto_speak": True}), 400
+
+    system = (
+        "You are CodeUp Mentor, a conversational Python tutor inside a blind-first IDE.\n"
+        "Keep replies warm, short, and screen-reader friendly.\n"
+        "Do not dump large code unless mode is exact_fix or the student explicitly asks.\n"
+        "Use line numbers when useful. Explain indentation, nesting, blocks, tracebacks, and visual code shape in audio-friendly language.\n"
+        "Respect a hints-first style unless preferences ask for direct answers.\n"
+        "End with exactly one useful next step or one follow-up choice, not a menu.\n"
+        "No markdown tables. Prefer 2 to 5 short sentences."
+    )
+    if mode == "tiny_hint":
+        system += "\nMode: give only one tiny hint. Do not reveal the full answer."
+    elif mode == "bigger_hint":
+        system += "\nMode: give a bigger hint, but still avoid full corrected code."
+    elif mode == "exact_fix":
+        system += "\nMode: give the exact fix. Keep code minimal and only include changed lines if possible."
+    elif mode == "slow_walkthrough":
+        system += "\nMode: walk through slowly, line by line, with short spoken sentences."
+    elif mode == "concept":
+        system += "\nMode: explain the concept in the current code."
+    elif mode == "shorter":
+        system += "\nMode: rewrite the previous mentor answer shorter."
+    elif mode == "simpler":
+        system += "\nMode: rewrite the previous mentor answer in simpler words."
+    elif mode == "repeat":
+        system += "\nMode: repeat the previous mentor answer clearly."
+
+    user = (
+        f"Student message: {message or '(follow-up transform requested)'}\n"
+        f"Mode: {mode}\n"
+        f"Language: {language}\n"
+        f"Preferences: {_mentor_preferences_text(body.get('preferences'))}\n\n"
+        f"Recent mentor history:\n{_mentor_history_text(body.get('history'))}\n\n"
+        f"Current code:\n```python\n{code[:MAX_CODE_SIZE]}\n```\n\n"
+        f"Latest output:\n{output or '(none)'}\n\n"
+        f"Latest error:\n{error or '(none)'}"
+    )
+    reply = call_gemini(system, user, temperature=0.25, language=language)
+    if _ai_unavailable(reply):
+        fallback = (
+            "The AI mentor is unavailable right now. You can still run the code, ask for a code map, or use explain simply after an error."
+        )
+        return jsonify({"success": False, "error": reply, "reply": fallback, "speech": fallback, "auto_speak": True})
+    return jsonify({"success": True, "reply": reply, "speech": reply, "auto_speak": True})
+
+
+@app.route("/mentor/check-progress", methods=["POST"])
+def mentor_check_progress():
+    body = safejson()
+    raw_previous_code = str(safe(body.get("previousCode", ""), ""))
+    raw_current_code = str(safe(body.get("currentCode", ""), ""))
+    raw_previous_error = str(safe(body.get("previousError", ""), ""))
+    raw_current_output = str(safe(body.get("currentOutput", ""), ""))
+    raw_current_error = str(safe(body.get("currentError", ""), ""))
+    if len(raw_previous_code) > MAX_CODE_SIZE or len(raw_current_code) > MAX_CODE_SIZE:
+        return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
+    if any(len(value) > MAX_MENTOR_CONTEXT_SIZE for value in (raw_previous_error, raw_current_output, raw_current_error)):
+        return jsonify({"success": False, "error": f"Mentor context too large (max {MAX_MENTOR_CONTEXT_SIZE} bytes per field)"}), 413
+    previous_code = _mentor_clean_text(raw_previous_code, MAX_CODE_SIZE)
+    current_code = _mentor_clean_text(raw_current_code, MAX_CODE_SIZE)
+    previous_error = sanitize_traceback(_mentor_clean_text(raw_previous_error, MAX_MENTOR_CONTEXT_SIZE))
+    current_output = _mentor_clean_text(raw_current_output, MAX_MENTOR_CONTEXT_SIZE)
+    current_error = sanitize_traceback(_mentor_clean_text(raw_current_error, MAX_MENTOR_CONTEXT_SIZE))
+    language = _mentor_clean_text(body.get("language", "en"), 20) or "en"
+
+    system = (
+        "You are CodeUp Mentor checking a blind beginner's progress.\n"
+        "Reply in 3 short parts: what improved, whether the original issue seems fixed, and one next step.\n"
+        "Do not overclaim. If current code was not run or still has an error, say that clearly.\n"
+        "Keep it short and spoken-friendly."
+    )
+    user = (
+        f"Preferences: {_mentor_preferences_text(body.get('preferences'))}\n"
+        f"Recent mentor history:\n{_mentor_history_text(body.get('history'))}\n\n"
+        f"Previous code:\n```python\n{previous_code}\n```\n\n"
+        f"Current code:\n```python\n{current_code}\n```\n\n"
+        f"Previous error:\n{previous_error or '(none)'}\n"
+        f"Current output:\n{current_output or '(none)'}\n"
+        f"Current error:\n{current_error or '(none)'}"
+    )
+    reply = call_gemini(system, user, temperature=0.2, language=language)
+    if _ai_unavailable(reply):
+        fallback = "I cannot check with AI right now. If the latest run has no error and shows the expected output, your first issue may be fixed. Run once more and ask for a code map."
+        return jsonify({"success": False, "error": reply, "reply": fallback, "speech": fallback, "auto_speak": True})
+    return jsonify({"success": True, "reply": reply, "speech": reply, "auto_speak": True})
 
 # ==========================
 # RUN CODE (WITH AI ERROR EXPLANATION)
@@ -2734,6 +2981,22 @@ def voice():
             return _store_and_return({"success": True, "action": "show_structure", "confidence": confidence})
         if intent == "run":
             return _store_and_return({"success": True, "action": "run", "confidence": confidence})
+        if intent == "mentor_stop":
+            return _store_and_return({"success": True, "action": "mentor_stop", "confidence": confidence})
+        if intent == "mentor_code_map":
+            return _store_and_return({"success": True, "action": "mentor_code_map", "confidence": confidence})
+        if intent == "mentor_progress":
+            return _store_and_return({"success": True, "action": "mentor_progress", "confidence": confidence})
+        if intent == "mentor_hint":
+            return _store_and_return({"success": True, "action": "mentor_chat", "message": slots.get("message", ""), "mode": slots.get("mode", "tiny_hint"), "confidence": confidence})
+        if intent == "mentor_walkthrough":
+            return _store_and_return({"success": True, "action": "mentor_chat", "message": slots.get("message", ""), "mode": "slow_walkthrough", "confidence": confidence})
+        if intent == "mentor_transform":
+            return _store_and_return({"success": True, "action": "mentor_chat", "message": slots.get("message", ""), "mode": slots.get("mode", "shorter"), "confidence": confidence})
+        if intent == "mentor_preference":
+            return _store_and_return({"success": True, "action": "mentor_preference", "key": slots.get("key"), "value": slots.get("value"), "confidence": confidence})
+        if intent == "mentor_chat":
+            return _store_and_return({"success": True, "action": "mentor_chat", "message": slots.get("message", text), "mode": slots.get("mode", "general"), "confidence": confidence})
         if intent == "analyze_deep":
             return _store_and_return({"success": True, "action": "analyze_deep", "confidence": confidence})
         if intent == "analyze":

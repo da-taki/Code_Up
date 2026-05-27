@@ -62,6 +62,7 @@ CodeUp is tested across two complementary surfaces.
 - **Optional AI assistance** (Groq Llama 3.3 70B) for error explanation, code generation, summarization, and a mentor mode with quizzes and bug challenges
 - **Audio breakpoint debugger** with variable watching
 - **Six-step interactive tutorial** in both English and Hindi covering print, variables, loops, and conditionals
+- **Conversational CodeUp Mentor** for short follow-up questions, hints, progress checks, and audio code maps
 
 AI assistance is strictly optional. Every core feature works without an API key or network connection.
 

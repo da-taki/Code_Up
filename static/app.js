@@ -86,6 +86,20 @@ let _previousOutput = '';
 let _lastOutput = '';
 let _lastOutputDiff = null;
 
+window.mentorHistory = [];
+window.mentorPreferences = {
+  level: 'beginner',
+  answerStyle: 'hints_first',
+  languageStyle: 'simple',
+};
+window.previousCodeSnapshot = '';
+window.previousErrorSnapshot = '';
+window.lastRunOutput = '';
+window.lastRunError = '';
+window.consecutiveErrors = 0;
+window.lastMentorReply = '';
+window._mentorSlowWalkthroughOffered = false;
+
 // Autosave config
 const AUTOSAVE_INTERVAL_MS = 30000;
 let _autosaveTimer = null;
@@ -979,6 +993,10 @@ async function runCode() {
       cueSuccess();
       ErrorBeaconManager.stop();
       _lastErrorContext = null;
+      window.lastRunOutput = data.output || '';
+      window.lastRunError = '';
+      window.consecutiveErrors = 0;
+      window._mentorSlowWalkthroughOffered = false;
 
       // Diff narration: only mention if there were changes from the previous run
       const diff = data.diff;
@@ -1014,6 +1032,11 @@ async function runCode() {
         error: data.error || '',
         language: getLanguage(),
       };
+      window.previousCodeSnapshot = getCode();
+      window.previousErrorSnapshot = data.error || '';
+      window.lastRunError = data.error || '';
+      window.lastRunOutput = '';
+      window.consecutiveErrors = (window.consecutiveErrors || 0) + 1;
       // Don't let "narrate diff" replay an old comparison after an error run.
       _lastOutputDiff = null;
       const errLines = (data.error || '').trim().split('\n').filter(Boolean);
@@ -1028,6 +1051,7 @@ async function runCode() {
       if (data.inputs_hint) {
         speak(data.inputs_hint);
       }
+      maybeOfferSlowWalkthroughAfterErrors();
     }
   } catch (e) {
     out('System error.'); console.error(e); cueError(); speak('System error.');
@@ -1749,11 +1773,16 @@ async function previewSnippetById(id) {
 async function handleConfirmedAction(action, payload) {
   // Most actions should interrupt previous narration, but some need it to finish first.
   // Generate, analyze, walk: they speak feedback BEFORE the long async wait, don't kill it.
-  const _noCancelActions = new Set(['generate_code', 'analyze', 'analyze_deep', 'fix', 'summarize', 'narrate_file', 'walk_through', 'advise', 'story_mode']);
+  const _noCancelActions = new Set(['generate_code', 'analyze', 'analyze_deep', 'fix', 'summarize', 'narrate_file', 'walk_through', 'advise', 'story_mode', 'mentor_chat', 'mentor_progress', 'mentor_code_map']);
   if (!_noCancelActions.has(action)) {
     SpeechManager.cancelAll();
   }
   if (action === 'run')              await runCode();
+  else if (action === 'mentor_stop') { SpeechManager.cancelAll(); speak('Mentor stopped.'); srAnnounce('Mentor stopped'); }
+  else if (action === 'mentor_chat') await talkToMentor(payload && payload.message, payload && payload.mode ? payload.mode : 'general');
+  else if (action === 'mentor_progress') await checkProgressWithMentor();
+  else if (action === 'mentor_code_map') await speakCodeMap();
+  else if (action === 'mentor_preference') setMentorPreference(payload && payload.key, payload && payload.value);
   else if (action === 'analyze')     await analyzeCode();
   else if (action === 'walk_through')       await walkThroughCode();
   else if (action === 'analyze_deep') await analyzeDeep();
@@ -2280,6 +2309,181 @@ async function explainOutputDiff() {
   } finally {
     hideAI();
   }
+}
+
+// ---------- CONVERSATIONAL MENTOR ----------
+function getMentorContext() {
+  return {
+    code: getCode(),
+    output: window.lastRunOutput || _lastOutput || '',
+    error: window.lastRunError || (_lastErrorContext && _lastErrorContext.error) || '',
+    language: getLanguage(),
+    history: (window.mentorHistory || []).slice(-6),
+    preferences: window.mentorPreferences || {},
+  };
+}
+
+function rememberMentorTurn(studentText, mentorText) {
+  window.mentorHistory = window.mentorHistory || [];
+  if (studentText) window.mentorHistory.push({ role: 'student', text: String(studentText) });
+  if (mentorText) window.mentorHistory.push({ role: 'mentor', text: String(mentorText) });
+  if (window.mentorHistory.length > 12) {
+    window.mentorHistory = window.mentorHistory.slice(-12);
+  }
+  window.lastMentorReply = mentorText || window.lastMentorReply || '';
+  renderMentorTranscript();
+}
+
+function renderMentorTranscript() {
+  const log = document.getElementById('mentorTranscript');
+  if (!log) return;
+  log.textContent = '';
+  const turns = (window.mentorHistory || []).slice(-12);
+  if (!turns.length) {
+    const empty = document.createElement('p');
+    empty.className = 'mentor-transcript-empty';
+    empty.textContent = 'Mentor transcript will appear here.';
+    log.appendChild(empty);
+    return;
+  }
+  turns.forEach(turn => {
+    const row = document.createElement('div');
+    row.className = 'mentor-transcript-turn';
+    const speaker = document.createElement('strong');
+    speaker.textContent = turn.role === 'mentor' ? 'Mentor: ' : 'Student: ';
+    const text = document.createElement('span');
+    text.textContent = turn.text || '';
+    row.append(speaker, text);
+    log.appendChild(row);
+  });
+}
+
+function showMentorReply(studentText, reply) {
+  const text = reply || 'The mentor did not return a reply.';
+  out('MENTOR\n\n' + text);
+  showAI('Mentor answered.');
+  speak(text);
+  srAnnounce('Mentor reply ready');
+  rememberMentorTurn(studentText, text);
+  setTimeout(() => hideAI(), 1200);
+}
+
+async function talkToMentor(message, mode = 'general') {
+  if (mode === 'repeat') {
+    if (window.lastMentorReply) {
+      showMentorReply('repeat that', window.lastMentorReply);
+    } else {
+      speak('There is no mentor reply to repeat yet.');
+      srAnnounce('No mentor reply to repeat');
+    }
+    return;
+  }
+  if ((mode === 'shorter' || mode === 'simpler') && !window.lastMentorReply) {
+    speak('There is no mentor reply to revise yet.');
+    srAnnounce('No mentor reply to revise');
+    return;
+  }
+  let msg = message || 'Help me with my code.';
+  if (mode === 'shorter') msg = 'Say your previous mentor reply shorter.';
+  if (mode === 'simpler') msg = 'Say your previous mentor reply simpler.';
+  showAI('Asking CodeUp Mentor...');
+  try {
+    const context = getMentorContext();
+    const res = await fetch('/mentor/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        code: context.code,
+        message: msg,
+        output: context.output,
+        error: context.error,
+        language: context.language,
+        mode,
+        history: context.history,
+        preferences: context.preferences,
+      }),
+    });
+    const data = await res.json();
+    const reply = data.reply || data.error || 'Mentor is not available right now.';
+    showMentorReply(msg, reply);
+    maybePromptForApiKey(reply);
+  } catch (e) {
+    console.error(e);
+    speak('Mentor failed. Please try again.');
+  } finally {
+    setTimeout(() => hideAI(), 1200);
+  }
+}
+
+async function checkProgressWithMentor() {
+  showAI('Checking progress...');
+  try {
+    const res = await fetch('/mentor/check-progress', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        previousCode: window.previousCodeSnapshot || '',
+        currentCode: getCode(),
+        previousError: window.previousErrorSnapshot || '',
+        currentOutput: window.lastRunOutput || '',
+        currentError: window.lastRunError || '',
+        language: getLanguage(),
+        history: (window.mentorHistory || []).slice(-6),
+        preferences: window.mentorPreferences || {},
+      }),
+    });
+    const data = await res.json();
+    const reply = data.reply || data.error || 'Could not check progress.';
+    showMentorReply('Did I fix it?', reply);
+    maybePromptForApiKey(reply);
+  } catch (e) {
+    console.error(e);
+    speak('Progress check failed.');
+  } finally {
+    setTimeout(() => hideAI(), 1200);
+  }
+}
+
+function setMentorPreference(key, value) {
+  window.mentorPreferences = window.mentorPreferences || {};
+  if (!key) return;
+  window.mentorPreferences[key] = value;
+  const label = key === 'level'
+    ? `Mentor level set to ${value}.`
+    : key === 'languageStyle'
+      ? `Mentor language style set to ${value}.`
+      : 'Mentor will keep hints first and avoid direct answers.';
+  speak(label);
+  srAnnounce(label);
+  out(label);
+}
+
+async function speakCodeMap() {
+  showAI('Mapping your code...');
+  try {
+    const res = await fetch('/mentor/code-map', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: getCode(), language: getLanguage() }),
+    });
+    const data = await res.json();
+    const reply = data.reply || data.error || 'Could not map the code.';
+    showMentorReply('Give me a map of my code.', reply);
+  } catch (e) {
+    console.error(e);
+    speak('Code map failed.');
+  } finally {
+    setTimeout(() => hideAI(), 1200);
+  }
+}
+
+function maybeOfferSlowWalkthroughAfterErrors() {
+  if ((window.consecutiveErrors || 0) < 3) return;
+  if (window._mentorSlowWalkthroughOffered) return;
+  window._mentorSlowWalkthroughOffered = true;
+  const msg = 'You have hit a few errors in a row. Want a slow walkthrough? Say: slow walkthrough.';
+  speak(msg);
+  srAnnounce('Slow walkthrough offered');
 }
 
 function tryResolveConfirmation(txt) {

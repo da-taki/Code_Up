@@ -229,6 +229,29 @@ body.theme-night .cu-output { background: #06030a; }
   color: var(--accent);
 }
 
+.mentor-transcript-panel {
+  margin-top: 12px;
+  border-top: 1px solid var(--border-soft);
+  padding-top: 12px;
+}
+.mentor-transcript {
+  max-height: 170px;
+  overflow-y: auto;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--bg-main);
+  color: var(--text-main);
+  padding: 10px 12px;
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+.mentor-transcript:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.mentor-transcript-turn + .mentor-transcript-turn { margin-top: 8px; }
+.mentor-transcript-empty { color: var(--text-dim); margin: 0; }
+
 /* Voice console */
 .cu-voice-console { margin-top: 12px; display: flex; gap: 10px; align-items: center; }
 .cu-voice-input {

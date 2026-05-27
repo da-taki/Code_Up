@@ -1339,6 +1339,94 @@ class TestBeginnerErrorExplanation:
         assert res.status_code == 400
 
 
+class TestConversationalMentor:
+
+    def test_mentor_chat_requires_message(self, client):
+        res = client.post("/mentor/chat", json={"code": "print(1)", "message": ""})
+        assert res.status_code == 400
+        data = res.get_json()
+        assert data["success"] is False
+        assert "message" in data["error"].lower()
+
+    def test_mentor_chat_with_mocked_ai(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "call_gemini", lambda *a, **k: "Line 2 needs indentation. Try adding four spaces.")
+        res = client.post("/mentor/chat", json={
+            "code": "for i in range(3):\nprint(i)",
+            "message": "Why did this fail?",
+            "error": "IndentationError: expected an indented block",
+            "language": "en",
+            "history": [{"role": "student", "text": "I ran it."}],
+            "preferences": {"level": "beginner", "answerStyle": "hints_first"},
+        })
+        assert res.status_code == 200
+        data = res.get_json()
+        assert data["success"] is True
+        assert "indentation" in data["reply"].lower()
+        assert data["auto_speak"] is True
+
+    def test_mentor_check_progress_with_mocked_ai(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "call_gemini", lambda *a, **k: "You added indentation. The original error seems fixed. Run one more test.")
+        res = client.post("/mentor/check-progress", json={
+            "previousCode": "for i in range(3):\nprint(i)",
+            "currentCode": "for i in range(3):\n    print(i)",
+            "previousError": "IndentationError",
+            "currentOutput": "0\n1\n2\n",
+            "currentError": "",
+        })
+        assert res.status_code == 200
+        data = res.get_json()
+        assert data["success"] is True
+        assert "fixed" in data["reply"].lower()
+
+    def test_mentor_code_map_endpoint_basic_output(self, client):
+        res = client.post("/mentor/code-map", json={
+            "code": "total = 0\nfor i in range(3):\n    total += i\nprint(total)"
+        })
+        assert res.status_code == 200
+        data = res.get_json()
+        assert data["success"] is True
+        assert "Your code has" in data["reply"]
+        assert "loop" in data["reply"].lower()
+        assert data["auto_speak"] is True
+
+    def test_code_map_heuristic_does_not_execute_code(self):
+        code = "print('safe')\nraise RuntimeError('would execute')\nfor i in range(2):\n    print(i)"
+        result = app_module.build_code_audio_map(code)
+        assert "Your code has" in result
+        assert "loop" in result.lower()
+        assert "would execute" not in result
+
+    def test_mentor_transcript_renders_text_not_markup(self):
+        js = open(os.path.join(os.path.dirname(__file__), "..", "static", "app.js"), encoding="utf-8").read()
+        assert "function renderMentorTranscript()" in js
+        assert "text.textContent = turn.text || ''" in js
+        assert "mentorTranscript.innerHTML" not in js
+
+    @pytest.mark.parametrize("text, expected_action, expected_mode", [
+        ("give me a tiny hint", "mentor_chat", "tiny_hint"),
+        ("did I fix it", "mentor_progress", None),
+        ("walk me through slowly", "mentor_chat", "slow_walkthrough"),
+        ("say that simpler", "mentor_chat", "simpler"),
+        ("give me a map of my code", "mentor_code_map", None),
+        ("mentor stop", "mentor_stop", None),
+    ])
+    def test_mentor_voice_command_parsing(self, client, text, expected_action, expected_mode):
+        res = client.post("/voice-command", json={"text": text})
+        assert res.status_code == 200
+        data = res.get_json()
+        assert data["success"] is True
+        assert data["action"] == expected_action
+        if expected_mode:
+            assert data["mode"] == expected_mode
+
+    def test_ask_mentor_prefix_is_stripped(self, client):
+        res = client.post("/voice-command", json={"text": "ask mentor why did this fail"})
+        assert res.status_code == 200
+        data = res.get_json()
+        assert data["action"] == "mentor_chat"
+        assert data["message"] == "why did this fail"
+
+
 class TestOutlineAndDiffEndpoints:
 
     def test_structure_outline_endpoint(self, client):

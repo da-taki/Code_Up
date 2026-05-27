@@ -771,6 +771,11 @@
             s._pendingBugChallenge = null;
           }
         } catch (err) {}
+        try {
+          if (window.TutorialController && window.TutorialController.active) {
+            window.TutorialController.render();
+          }
+        } catch (err) {}
         if (typeof isListening !== 'undefined' && isListening) {
           speak('Language changed. Restarting voice recognition.');
           stopListening();

@@ -3971,23 +3971,40 @@ function showInputDialog(promptText, callback) {
   overlay.setAttribute('aria-label', promptText);
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:30000;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);';
 
-  overlay.innerHTML = `
-    <div style="background:var(--bg-panel);border:1px solid var(--border-strong);border-radius:12px;padding:24px;min-width:280px;max-width:400px;width:90%;color:var(--text-main);">
-      <label id="_cuDialogLabel" style="display:block;color:var(--text-main);margin-bottom:12px;font-family:inherit;font-size:0.9rem;">${promptText}</label>
-      <input id="_cuDialogInput" type="text" aria-labelledby="_cuDialogLabel"
-             style="width:100%;padding:8px 12px;border-radius:6px;border:1px solid var(--border-soft);background:var(--bg-soft);color:var(--text-main);font-family:inherit;font-size:1rem;margin-bottom:12px;"
-      />
-      <div style="display:flex;gap:8px;justify-content:flex-end;">
-        <button id="_cuDialogCancel" style="padding:8px 16px;border-radius:6px;border:1px solid var(--border-soft);background:var(--bg-soft);color:var(--text-main);cursor:pointer;font-family:inherit;">Cancel</button>
-        <button id="_cuDialogOk"     style="padding:8px 16px;border-radius:6px;border:none;background:var(--accent);color:#fff;font-weight:600;cursor:pointer;font-family:inherit;">Go</button>
-      </div>
-    </div>
-  `;
+  const dialog = document.createElement('div');
+  dialog.style.cssText = 'background:var(--bg-panel);border:1px solid var(--border-strong);border-radius:12px;padding:24px;min-width:280px;max-width:400px;width:90%;color:var(--text-main);';
+
+  const label = document.createElement('label');
+  label.id = '_cuDialogLabel';
+  label.style.cssText = 'display:block;color:var(--text-main);margin-bottom:12px;font-family:inherit;font-size:0.9rem;';
+  label.textContent = promptText;
+
+  const input = document.createElement('input');
+  input.id = '_cuDialogInput';
+  input.type = 'text';
+  input.setAttribute('aria-labelledby', '_cuDialogLabel');
+  input.style.cssText = 'width:100%;padding:8px 12px;border-radius:6px;border:1px solid var(--border-soft);background:var(--bg-soft);color:var(--text-main);font-family:inherit;font-size:1rem;margin-bottom:12px;';
+
+  const actions = document.createElement('div');
+  actions.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;';
+
+  const cancel = document.createElement('button');
+  cancel.id = '_cuDialogCancel';
+  cancel.type = 'button';
+  cancel.style.cssText = 'padding:8px 16px;border-radius:6px;border:1px solid var(--border-soft);background:var(--bg-soft);color:var(--text-main);cursor:pointer;font-family:inherit;';
+  cancel.textContent = 'Cancel';
+
+  const ok = document.createElement('button');
+  ok.id = '_cuDialogOk';
+  ok.type = 'button';
+  ok.style.cssText = 'padding:8px 16px;border-radius:6px;border:none;background:var(--accent);color:#fff;font-weight:600;cursor:pointer;font-family:inherit;';
+  ok.textContent = 'Go';
+
+  actions.append(cancel, ok);
+  dialog.append(label, input, actions);
+  overlay.appendChild(dialog);
 
   document.body.appendChild(overlay);
-  const input  = document.getElementById('_cuDialogInput');
-  const ok     = document.getElementById('_cuDialogOk');
-  const cancel = document.getElementById('_cuDialogCancel');
 
   function confirm() {
     const val = input.value.trim();

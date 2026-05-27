@@ -1,5 +1,7 @@
 # CodeUp: A Blind-First Python IDE
 
+[![Test](https://github.com/da-taki/Code_Up/actions/workflows/test.yml/badge.svg)](https://github.com/da-taki/Code_Up/actions/workflows/test.yml)
+
 CodeUp is a Python IDE designed for blind and visually impaired learners. Unlike traditional IDEs that retrofit accessibility on top of visual workflows, CodeUp treats non-visual interaction as the default. Every core feature (navigation, execution, debugging, code understanding) works through audio, keyboard, and natural language commands.
 
 The project is independently developed and intended for use in schools and accessibility programs.
@@ -10,7 +12,7 @@ The project is independently developed and intended for use in schools and acces
 
 ## Status and adoption
 
-**v0.8.0**, deployment ready. Locally tested with the full automated suite (200+ passing tests) and validated through a structured pilot with real blind users.
+**v0.8.0**, classroom-pilot ready. Locally tested with the current automated suite in `tests/test_security_voice.py` and validated through a structured pilot with real blind users.
 
 ### Pilot results
 
@@ -18,6 +20,7 @@ CodeUp has been piloted with 10 users to date:
 
 - 7 users rated it 10/10
 - 3 users rated it between 7.5/10 and 8.5/10
+- Full anonymized pilot table: [docs/pilot-results.md](docs/pilot-results.md)
 
 The project is in active use at the **School for the Blind and Deaf, Patiala**, where it was formally adopted as a teaching tool. Coding sessions are conducted there twice monthly.
 
@@ -25,9 +28,28 @@ The project is in active use at the **School for the Blind and Deaf, Patiala**, 
 
 CodeUp is tested across two complementary surfaces.
 
-**Automated tests** cover sandbox security (escape attempts, restricted imports, time and memory caps), voice intent parsing (English and Hindi, including compound number words), trace playback, snippet CRUD, request size limits, per-session isolation, rate limiting, and the sandboxed filesystem. Tests are fully isolated: snippet storage redirects to a temp directory and no real AI calls are made. Run with `python -m pytest -q`.
+**Automated tests** cover sandbox security (escape attempts, restricted imports, time and memory caps), voice intent parsing (English and Hindi, including compound number words), trace playback, snippet CRUD, request size limits, per-session isolation, rate limiting, and the sandboxed filesystem. The current repository keeps these checks in one large pytest file plus shared fixtures. Tests are fully isolated: snippet storage redirects to a temp directory and no real AI calls are made. Run with `python -m pytest -q`.
 
 **User testing** is conducted in person with blind students at the School for the Blind and Deaf, Patiala. Test plans focus on whether each feature is reachable, understandable, and useful without sighted assistance. Iterations from this loop include the move from `window.prompt()` to inline accessible modals, the auto-save behaviour, the audio heartbeat during long runs, and the beginner-mode error explainer.
+
+---
+
+## Screenshots
+
+| Landing page | IDE with spoken debug | Sonification and trace |
+|---|---|---|
+| ![CodeUp landing page](docs/assets/landing-page.png) | ![CodeUp IDE with spoken debug](docs/assets/ide-spoken-debug.png) | ![CodeUp sonification and trace panel](docs/assets/sonification-trace.png) |
+
+---
+
+## Before vs After CodeUp
+
+| Traditional IDE | CodeUp |
+|---|---|
+| `SyntaxError: line 3` | `Line 3 is inside the loop. The indentation dropped. Try adding four spaces before print.` |
+| Error output is mostly visual | Error is spoken, simplified, and tied to code structure |
+| Trace requires reading debugger panes | Trace steps can be heard with `next step` and `previous step` |
+| Indentation is only visual | Indentation can be heard through sonification |
 
 ---
 
@@ -42,6 +64,16 @@ CodeUp is tested across two complementary surfaces.
 - **Six-step interactive tutorial** in both English and Hindi covering print, variables, loops, and conditionals
 
 AI assistance is strictly optional. Every core feature works without an API key or network connection.
+
+---
+
+## Demo and teaching materials
+
+- One-command demo flow: [DEMO_FLOW.md](DEMO_FLOW.md)
+- Accessibility test checklist: [ACCESSIBILITY_TESTING.md](ACCESSIBILITY_TESTING.md)
+- Teacher guide: [docs/teacher-guide.md](docs/teacher-guide.md)
+- Beginner lessons: [lesson 1](lessons/lesson_1_print.md), [lesson 2](lessons/lesson_2_variables.md), [lesson 3](lessons/lesson_3_loops.md)
+- Security model: [SECURITY.md](SECURITY.md)
 
 ---
 
@@ -118,6 +150,20 @@ Run tests:
     python -m pytest -q
 
 Tests are fully isolated. Snippet storage redirects to a temp directory and no real AI calls are made.
+
+---
+
+## Evaluation metrics
+
+The pilot and future classroom tests track:
+
+- Task completion rate
+- Time to fix first error
+- Commands recognized correctly
+- Number of sighted-assistance interventions
+- User confidence rating before and after the session
+
+See [docs/pilot-results.md](docs/pilot-results.md) for the current anonymized table.
 
 ---
 
@@ -258,6 +304,16 @@ User code runs in a separate Python subprocess with:
 The wall-clock timeout stops slow or sleeping programs. The POSIX CPU cap stops tight loops that burn processor time before wall-clock timeout would otherwise fire.
 
 Per-session rate limit: 10 runs per 60 seconds.
+
+---
+
+## Known limitations
+
+- Chrome and Edge are best for speech recognition. Firefox has limited Web Speech API support, so keyboard and typed commands are the fallback there.
+- Live `input()` mode is POSIX-only. The pre-flight input panel works across platforms.
+- POSIX CPU and memory caps are stronger than the Windows fallback.
+- AI help is optional and depends on Groq or Ollama when enabled. Core run, trace, sonification, and navigation features do not require AI.
+- The sandbox is intended for classroom and demo use, not as a public multi-tenant judge service.
 
 ---
 

@@ -23,7 +23,6 @@ let _restartTimer = null;
 // until the user says "resume". We do NOT persist this across reloads —
 // a fresh page should always start unpaused.
 let _voicePaused = false;
-try { localStorage.removeItem('codeup_voice_paused'); } catch (e) {}
 
 // Watchdog: track last time recognition was confirmed active. If voice is
 // supposedly listening but we haven't seen activity in a while, the session
@@ -69,6 +68,7 @@ window._apiKeyPromptShown = false;
 // Pre-flight inputs queue (Mechanism A). Mirrors the inputs the user has
 // declared via voice or the inputs panel. Sent with every /run call.
 let _preflightInputs = [];
+let _preflightInputPlaceholders = [];
 // Exposed for inline scripts in index.html that can't see module-scoped `let`.
 window.getPreflightInputs = () => _preflightInputs.slice();
 // Live input mode toggle (Mechanism B). When true, "run" goes to /run-stream
@@ -82,6 +82,7 @@ let _activeStreamRun = null;  // {runId, eventSource, awaitingPrompt, awaitingRe
 let _heartbeatTimer = null;
 
 // Last output stored for diff narration and bookmarks
+let _previousOutput = '';
 let _lastOutput = '';
 let _lastOutputDiff = null;
 
@@ -982,6 +983,7 @@ async function runCode() {
       // Diff narration: only mention if there were changes from the previous run
       const diff = data.diff;
       _lastOutputDiff = diff;
+      _previousOutput = _lastOutput;
       _lastOutput = data.output || '';
 
       speak('Program output:');
@@ -1498,6 +1500,7 @@ async function generateCode(prompt) {
       // speak() we queue in the same tick. Pass preserveSpeech:true so the
       // user actually hears the success announcement.
       setCode(data.code, { preserveSpeech: true });
+      suggestPreflightInputsFromCode(data.code);
       cueSuccess();
 
       const usesInput = /\binput\s*\(/.test(data.code);
@@ -1792,11 +1795,13 @@ async function handleConfirmedAction(action, payload) {
   else if (action === 'advise')          await adviseCode();
   else if (action === 'read_line_enhanced') await readLineEnhanced(payload && payload.line ? payload.line : (editor && editor.getPosition() ? editor.getPosition().lineNumber : 1));
   else if (action === 'sonify_block')    await sonifyCurrentBlock();
+  else if (action === 'sonify_file')     await sonifyWholeFile();
   else if (action === 'sonify_function') await sonifyFunction(payload && payload.function_name ? payload.function_name : '');
   else if (action === 'sonify_class')    await sonifyClass(payload && payload.class_name ? payload.class_name : '');
   else if (action === 'find_function')   speak('Find function: ' + (payload && payload.function_name ? payload.function_name : ''));
   else if (action === 'find_class')      speak('Find class: ' + (payload && payload.class_name ? payload.class_name : ''));
   else if (action === 'show_structure')  toggleStructurePanel();
+  else if (action === 'read_outline')    await readStructureOutline();
   else if (action === 'list_variables')  await listVariables();
   else if (action === 'find_variable')   await findVariable(payload && payload.variable ? payload.variable : '');
   else if (action === 'check_errors')    await checkSyntaxErrors();
@@ -1874,6 +1879,8 @@ async function handleConfirmedAction(action, payload) {
   else if (action === 'save_macro')         await saveMacro(payload && payload.name);
   else if (action === 'use_macro')          await useMacro(payload && payload.name);
   else if (action === 'list_macros')        await listMacrosVoice();
+  else if (action === 'share_macro')        await shareCurrentMacro(payload && payload.name);
+  else if (action === 'use_shared_macro')   await useSharedMacro(payload && payload.share_code);
   // Output bookmarks
   else if (action === 'bookmark_output')    await bookmarkOutput(payload && payload.label);
   else if (action === 'read_bookmark')      await readBookmark(payload && payload.label);
@@ -1884,6 +1891,7 @@ async function handleConfirmedAction(action, payload) {
   else if (action === 'explain_simply')     await explainErrorSimply();
   // Output diff narration
   else if (action === 'narrate_diff')       narrateOutputDiff();
+  else if (action === 'explain_diff')       await explainOutputDiff();
 }
 
 // ---------- PRE-FLIGHT INPUTS ----------
@@ -1893,6 +1901,7 @@ function setPreflightInputs(values) {
     return;
   }
   _preflightInputs = values.map(v => String(v));
+  _preflightInputPlaceholders = [];
   updateInputsPanel();
   const summary = _preflightInputs.join(', ');
   speak(`${_preflightInputs.length} input${_preflightInputs.length === 1 ? '' : 's'} ready: ${summary}.`);
@@ -1902,6 +1911,7 @@ function setPreflightInputs(values) {
 
 function clearPreflightInputs() {
   _preflightInputs = [];
+  _preflightInputPlaceholders = [];
   updateInputsPanel();
   speak('Pre-flight inputs cleared.');
   out('Pre-flight inputs cleared.');
@@ -1949,12 +1959,38 @@ function updateInputsPanel() {
   const panel = document.getElementById('inputsPanelList');
   if (!panel) return;
   if (_preflightInputs.length === 0) {
+    if (_preflightInputPlaceholders.length > 0) {
+      panel.innerHTML = _preflightInputPlaceholders.map((v, i) =>
+        `<div class="snippet-item" style="font-size:0.8rem;padding:6px 10px;color:var(--text-dim);"><span>${i + 1}. ${escapeHtml(v)}: empty</span></div>`
+      ).join('');
+      return;
+    }
     panel.innerHTML = '<div style="color:var(--text-dim);font-style:italic;padding:6px 0;font-size:0.8rem;">No inputs declared</div>';
     return;
   }
   panel.innerHTML = _preflightInputs.map((v, i) =>
     `<div class="snippet-item" style="font-size:0.8rem;padding:6px 10px;"><span>${i + 1}. ${escapeHtml(v)}</span></div>`
   ).join('');
+}
+
+function detectInputPromptsFromCode(code) {
+  const prompts = [];
+  const re = /\binput\s*\(\s*(?:"([^"]*)"|'([^']*)')?\s*\)/g;
+  let match;
+  while ((match = re.exec(code)) !== null && prompts.length < 50) {
+    prompts.push((match[1] || match[2] || `Input ${prompts.length + 1}`).trim() || `Input ${prompts.length + 1}`);
+  }
+  return prompts;
+}
+
+function suggestPreflightInputsFromCode(code) {
+  if (_preflightInputs.length > 0) return;
+  _preflightInputPlaceholders = detectInputPromptsFromCode(code);
+  updateInputsPanel();
+  if (_preflightInputPlaceholders.length > 0) {
+    out(`INPUTS DETECTED (${_preflightInputPlaceholders.length}):\n${_preflightInputPlaceholders.map((v, i) => `  ${i + 1}. ${v}: empty`).join('\n')}\n\nFill the inputs panel or say "set inputs to" followed by values before running.`);
+    srAnnounce(`${_preflightInputPlaceholders.length} input placeholders detected`);
+  }
 }
 
 // ---------- VOICE MACROS ----------
@@ -2011,6 +2047,46 @@ async function listMacrosVoice() {
     }
   } catch (e) {
     speak('Macro list failed.');
+  }
+}
+
+async function shareCurrentMacro(name) {
+  const code = getCode();
+  if (!code.trim()) { speak('The editor is empty. Nothing to share.'); return; }
+  try {
+    const res = await fetch('/macros/share', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name || 'shared macro', code }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      speak(`Shared macro code ${data.share_code}.`);
+      out(`SHARED MACRO\n\nCode: ${data.share_code}\n\nStudents can say: use shared macro ${data.share_code}`);
+      srAnnounce(`Shared macro code ${data.share_code}`);
+    } else {
+      speak(data.error || 'Could not share macro.');
+    }
+  } catch (e) {
+    speak('Macro sharing failed.');
+  }
+}
+
+async function useSharedMacro(shareCode) {
+  if (!shareCode) { speak('Say use shared macro followed by the four character code.'); return; }
+  try {
+    const res = await fetch(`/macros/shared/${encodeURIComponent(shareCode)}`);
+    const data = await res.json();
+    if (data.success) {
+      setCode(data.code);
+      speak(`Loaded shared macro ${data.share_code}.`);
+      out(`Shared macro "${data.name}" loaded into the editor.`);
+      srAnnounce(`Shared macro ${data.share_code} loaded`);
+    } else {
+      speak(data.error || 'Shared macro not found.');
+    }
+  } catch (e) {
+    speak('Shared macro load failed.');
   }
 }
 
@@ -2178,6 +2254,34 @@ function narrateOutputDiff() {
   });
 }
 
+async function explainOutputDiff() {
+  if (!_previousOutput && !_lastOutput) {
+    speak('No outputs are available yet. Run your code twice, then ask why the output is different.');
+    return;
+  }
+  try {
+    showAI('Explaining output difference...');
+    const res = await fetch('/explain-diff', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        code: getCode(),
+        previous_output: _previousOutput,
+        current_output: _lastOutput,
+        language: getLanguage(),
+      }),
+    });
+    const data = await res.json();
+    const msg = data.success ? data.explanation : (data.error || 'Could not explain the output difference.');
+    out(msg);
+    speak(msg);
+  } catch (e) {
+    speak('Could not explain the output difference.');
+  } finally {
+    hideAI();
+  }
+}
+
 function tryResolveConfirmation(txt) {
   if (!pendingConfirm) return false;
   if (pendingConfirm.expiresAt && Date.now() > pendingConfirm.expiresAt) {
@@ -2236,11 +2340,13 @@ async function handleCommandText(txt) {
 
   // Quiz answer intercept (mirrors handleVoiceCommand) — per-tab state
   const _ts = tabState();
+  if (_ts._pendingQuizAnswer && document.hidden) return false;
   if (_ts._pendingQuizAnswer) {
     if (_ts._pendingQuizAnswer.expiresAt && Date.now() > _ts._pendingQuizAnswer.expiresAt) {
       _ts._pendingQuizAnswer = null;
     }
   }
+  if (_ts._pendingQuizAnswer && document.hidden) return false;
   if (_ts._pendingQuizAnswer) {
     const t = txt.toLowerCase().trim();
     const match = t.match(/(?:answer|option|choose)\s+([abcd])|^([abcd])$/);
@@ -2548,9 +2654,8 @@ function stopListening() {
   _stopRecognitionWatchdog();
   isListening = false;
   AppState.isListening = false;
-  // Stopping fully also clears any paused state — next start is a fresh session
+  // Stopping fully clears paused state for this tab.
   _voicePaused = false;
-  try { localStorage.removeItem('codeup_voice_paused'); } catch (e) {}
   const btn = document.getElementById('voiceButton');
   if (btn) {
     btn.textContent = '🎤 Voice (Off)';
@@ -2569,7 +2674,6 @@ function pauseVoiceRecognition() {
   if (!isListening) { speak('Voice control is not active.'); return; }
   if (_voicePaused) { speak('Voice is already paused.'); return; }
   _voicePaused = true;
-  try { localStorage.setItem('codeup_voice_paused', '1'); } catch (e) {}
 
   // Reconcile state: if Chrome's recognition silently died, kick it back to
   // life. The pause flag will gate everything until resume.
@@ -2612,13 +2716,11 @@ function resumeVoiceRecognition() {
     // If voice was off entirely, just turn it on instead of refusing.
     // Better UX than telling a presenter "voice control is not active".
     _voicePaused = false;
-    try { localStorage.removeItem('codeup_voice_paused'); } catch (e) {}
     startListening();
     return;
   }
   if (!_voicePaused) { speak('Voice is already listening.'); return; }
   _voicePaused = false;
-  try { localStorage.removeItem('codeup_voice_paused'); } catch (e) {}
 
   const btn = document.getElementById('voiceButton');
   if (btn) {
@@ -3169,7 +3271,7 @@ async function sonifyClass(className) {
   await sonifyRange(startLine, endLine, 'class');
 }
 
-async function sonifyRange(startLine, endLine, context = 'block') {
+async function sonifyRange(startLine, endLine, context = 'block', delayMs = 100) {
   const lines = getCode().split('\n');
   const contextFreqs = { function: 900, class: 1000, loop: 400, block: 600 };
   const baseFreq = contextFreqs[context] || 600;
@@ -3178,9 +3280,19 @@ async function sonifyRange(startLine, endLine, context = 'block') {
     const indent = lines[i].search(/\S/);
     // Normalized volume consistent with all other sonification (0.08 not 0.3)
     SonificationManager.playTone(baseFreq + 50 * Math.min(indent / 2, 5), 0.05, 0.08);
-    await sleep(100);
+    await sleep(delayMs);
   }
   speak(`Finished sonifying ${context}.`);
+}
+
+async function sonifyWholeFile() {
+  const lines = getCode().split('\n');
+  if (!getCode().trim()) {
+    speak('The file is empty.');
+    return;
+  }
+  speak(`Sonifying the whole file, ${lines.length} line${lines.length === 1 ? '' : 's'}.`);
+  await sonifyRange(1, lines.length, 'file', 50);
 }
 
 // ---------- ERROR SONIFICATION ----------
@@ -3364,6 +3476,27 @@ function toggleStructurePanel() {
   } else {
     hideEl(panel);
     speak('Structure panel hidden.');
+  }
+}
+
+async function readStructureOutline() {
+  const code = getCode();
+  if (!code.trim()) {
+    speak('The file is empty.');
+    return;
+  }
+  try {
+    const res = await fetch('/structure-outline', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    const data = await res.json();
+    const outline = data.success ? data.outline : (data.error || 'Unable to read the outline.');
+    out(outline);
+    speak(outline);
+  } catch (e) {
+    speak('Unable to read the outline.');
   }
 }
 

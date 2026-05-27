@@ -249,11 +249,13 @@ User code runs in a separate Python subprocess with:
 
 - Restricted imports: only `math`, `random`, `string`, `datetime` allowed
 - Restricted built-ins: `eval`, `exec`, `compile`, `open`, `__import__`, and direct module attribute access blocked
-- 5-second wall-clock timeout
+- 3-second wall-clock timeout
 - 5,000-event trace cap to prevent runaway memory growth
-- POSIX-only: 512 MB address space cap and 30-second CPU time cap via `setrlimit`
+- POSIX-only: 128 MB address space cap and 3-second CPU time cap via `setrlimit`
 - Working directory confined to a per-session temp workspace
 - `input()` blocked with a clear explanation suggesting hardcoded values
+
+The wall-clock timeout stops slow or sleeping programs. The POSIX CPU cap stops tight loops that burn processor time before wall-clock timeout would otherwise fire.
 
 Per-session rate limit: 10 runs per 60 seconds.
 

@@ -537,10 +537,27 @@ class IntentParser:
     ]
 
     BUG_CHALLENGE_PATTERNS = [
-        r"explain\s+(.+?)(?:\s+to\s+me)?\s+(?:like\s+i['\u2019]?m\s+new|for\s+(?:a\s+)?beginner|simply|in\s+simple\s+(?:terms|words))"
         r"^(?:give\s+me\s+)?(?:a\s+)?bug\s+(?:fixing\s+)?challenge$",
         r"^(?:debug\s+)?challenge(?:\s+me)?$",
         r"^(?:एक\s+)?bug\s+(?:challenge|ढूंढो)$",
+    ]
+
+    READ_OUTLINE_PATTERNS = [
+        r"^(?:read|speak|say)\s+(?:the\s+)?(?:outline|structure)$",
+        r"^(?:file|code)\s+outline$",
+        r"^(?:à¤°à¥‚à¤ªà¤°à¥‡à¤–à¤¾|outline)\s+(?:à¤ªà¤¢à¤¼à¥‹|à¤¬à¥‹à¤²à¥‹)$",
+    ]
+
+    SONIFY_FILE_PATTERNS = [
+        r"^sonify\s+(?:the\s+)?(?:whole\s+)?(?:file|code)$",
+        r"^(?:play|hear)\s+(?:the\s+)?(?:whole\s+)?(?:file|code)\s+shape$",
+        r"^sonify\s+(?:the\s+)?indent\s+profile$",
+    ]
+
+    EXPLAIN_DIFF_PATTERNS = [
+        r"^why\s+(?:is|was)\s+(?:the\s+)?output\s+different$",
+        r"^why\s+did\s+this\s+run\s+differently$",
+        r"^explain\s+(?:the\s+)?output\s+diff(?:erence)?$",
     ]
 
     # ----- Pre-flight input controls -----
@@ -594,6 +611,15 @@ class IntentParser:
         r"^macros?\s+(?:की\s+सूची|बताओ)$",
     ]
 
+    SHARE_MACRO_PATTERNS = [
+        r"^share\s+(?:this|current\s+code)(?:\s+as\s+(.+))?$",
+        r"^share\s+macro(?:\s+(.+))?$",
+    ]
+    USE_SHARED_MACRO_PATTERNS = [
+        r"^use\s+shared\s+macro\s+([a-z0-9]{4})$",
+        r"^load\s+shared\s+macro\s+([a-z0-9]{4})$",
+    ]
+
     # ----- Output bookmarks -----
     BOOKMARK_OUTPUT_PATTERNS = [
         r"^bookmark\s+(?:this|here)?(?:\s+as\s+(.+))?$",
@@ -641,6 +667,12 @@ class IntentParser:
         r"^(?:start|open|begin|launch)\s+tutorial$",
         r"^tutorial$",
         r"^tutorial\s+(?:शुरू\s+करो|खोलो)$",
+    ]
+
+    RESTART_TUTORIAL_PATTERNS = [
+        r"^restart\s+tutorial$",
+        r"^tutorial\s+restart$",
+        r"^start\s+tutorial\s+again$",
     ]
 
     SKIP_TUTORIAL_PATTERNS = [
@@ -715,7 +747,9 @@ class IntentParser:
             "read_output":    self.READ_OUTPUT_PATTERNS,
             # Structure and playback
             "show_structure": self.SHOW_STRUCTURE_PATTERNS,
+            "read_outline":   self.READ_OUTLINE_PATTERNS,
             "sonify_block":   self.SONIFY_BLOCK_PATTERNS,
+            "sonify_file":    self.SONIFY_FILE_PATTERNS,
             "locate_error":   self.ERROR_PATTERNS,
             "next_step":      self.NEXT_STEP_PATTERNS,
             "previous_step":  self.PREVIOUS_STEP_PATTERNS,
@@ -734,6 +768,8 @@ class IntentParser:
             "quiz_me":             self.QUIZ_ME_PATTERNS,
             "explain_concept":     self.EXPLAIN_CONCEPT_PATTERNS,
             "bug_challenge":       self.BUG_CHALLENGE_PATTERNS,
+            "explain_diff":        self.EXPLAIN_DIFF_PATTERNS,
+            "restart_tutorial":    self.RESTART_TUTORIAL_PATTERNS,
             "start_tutorial":      self.START_TUTORIAL_PATTERNS,
             "skip_tutorial":       self.SKIP_TUTORIAL_PATTERNS,
             "tutorial_next":       self.TUTORIAL_NEXT_PATTERNS,
@@ -747,6 +783,8 @@ class IntentParser:
             "save_macro":          self.SAVE_MACRO_PATTERNS,
             "use_macro":           self.USE_MACRO_PATTERNS,
             "list_macros":         self.LIST_MACROS_PATTERNS,
+            "share_macro":         self.SHARE_MACRO_PATTERNS,
+            "use_shared_macro":    self.USE_SHARED_MACRO_PATTERNS,
             # Output bookmarks
             "bookmark_output":     self.BOOKMARK_OUTPUT_PATTERNS,
             "read_bookmark":       self.READ_BOOKMARK_PATTERNS,
@@ -1036,6 +1074,17 @@ class IntentParser:
                 name = re.sub(r'[^a-z0-9 _\u0900-\u097f-]', '', name)[:64].strip()
                 if name:
                     slots["name"] = name
+
+        elif intent == "share_macro":
+            if match.groups() and match.group(1):
+                name = match.group(1).strip().lower()
+                name = re.sub(r'[^a-z0-9 _\u0900-\u097f-]', '', name)[:64].strip()
+                if name:
+                    slots["name"] = name
+
+        elif intent == "use_shared_macro":
+            if match.groups() and match.group(1):
+                slots["share_code"] = match.group(1).strip().upper()
 
         elif intent == "bookmark_output":
             if match.groups() and len(match.groups()) >= 1 and match.group(1):

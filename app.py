@@ -33,6 +33,10 @@ _voice_macros_lock = threading.Lock()
 _output_bookmarks = {}  # session_id -> list[dict]
 _output_bookmarks_lock = threading.Lock()
 
+_voice_telemetry_lock = threading.Lock()
+_voice_telemetry: List[Dict[str, Any]] = []
+_VOICE_TELEMETRY_CAP = 1000
+
 # Thread-local storage for per-request Gemini API key.
 # (_trace_context was removed along with run_with_trace — session storage handles traces.)
 _api_context = threading.local()
@@ -117,13 +121,18 @@ _tracer_lock = threading.Lock()
 
 # Subprocess resource limits — POSIX only. Defined at module scope so each
 # subprocess.Popen call doesn't pay the cost of redefining + importing.
+SUBPROCESS_MEMORY_LIMIT_MB = int(os.environ.get("CODEUP_SUBPROCESS_MEMORY_MB", "128"))
+SUBPROCESS_CPU_LIMIT_SECONDS = int(os.environ.get("CODEUP_SUBPROCESS_CPU_SECONDS", "3"))
+SUBPROCESS_WALL_TIMEOUT_SECONDS = int(os.environ.get("CODEUP_SUBPROCESS_WALL_SECONDS", "3"))
+
 if sys.platform != "win32":
     import resource as _resource
 
     def _set_subprocess_limits():
         try:
-            _resource.setrlimit(_resource.RLIMIT_AS, (256 * 1024 * 1024, 256 * 1024 * 1024))
-            _resource.setrlimit(_resource.RLIMIT_CPU, (10, 10))
+            memory_bytes = SUBPROCESS_MEMORY_LIMIT_MB * 1024 * 1024
+            _resource.setrlimit(_resource.RLIMIT_AS, (memory_bytes, memory_bytes))
+            _resource.setrlimit(_resource.RLIMIT_CPU, (SUBPROCESS_CPU_LIMIT_SECONDS, SUBPROCESS_CPU_LIMIT_SECONDS))
             try:
                 _resource.setrlimit(_resource.RLIMIT_NPROC, (64, 64))
             except (ValueError, OSError):
@@ -943,16 +952,37 @@ def _parse_magic_inputs(code: str):
     """Look for `# inputs: a, b, c` near the top of the file (first 5 lines).
 
     Returns a list of input strings, or [] if no magic comment found.
-    Comma-separated; whitespace stripped per item.
+    Comma-separated; whitespace stripped per item. If several magic input
+    comments are present near the top, the last one wins so a student can
+    revise the declaration by adding a newer line.
     """
     head = '\n'.join(code.splitlines()[:5])
-    m = _INPUT_MAGIC_RE.search(head)
-    if not m:
+    matches = _INPUT_MAGIC_RE.findall(head)
+    if not matches:
         return []
-    raw = m.group(1).strip()
+    raw = matches[-1].strip()
     if not raw:
         return []
     return [item.strip() for item in raw.split(',') if item.strip()]
+
+
+def _detect_input_prompts(code: str) -> List[str]:
+    """Return labels for input() calls whose prompt is a string literal."""
+    prompts: List[str] = []
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return prompts
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if not isinstance(node.func, ast.Name) or node.func.id != "input":
+            continue
+        label = ""
+        if node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
+            label = node.args[0].value.strip()
+        prompts.append(label or f"Input {len(prompts) + 1}")
+    return prompts[:50]
 
 
 # Track last output per session so we can narrate diffs on next run
@@ -974,6 +1004,28 @@ def _compute_output_diff(prev: str, curr: str) -> dict:
     import difflib
     prev_lines = prev.splitlines()
     curr_lines = curr.splitlines()
+    if len(curr_lines) > len(prev_lines) and curr_lines[:len(prev_lines)] == prev_lines:
+        added_count = len(curr_lines) - len(prev_lines)
+        start_line = len(prev_lines) + 1
+        changes = [
+            {
+                "line_no": start_line + idx,
+                "before": "",
+                "after": line,
+                "kind": "added",
+            }
+            for idx, line in enumerate(curr_lines[len(prev_lines):len(prev_lines) + 5])
+        ]
+        return {
+            "identical": False,
+            "summary": f"You got {added_count} new line{'s' if added_count != 1 else ''} at the end.",
+            "changed_lines": changes,
+            "total_changes": added_count,
+            "mode": "appended",
+            "prev_line_count": len(prev_lines),
+            "curr_line_count": len(curr_lines),
+            "change_start_line": start_line,
+        }
     matcher = difflib.SequenceMatcher(None, prev_lines, curr_lines)
     changes = []
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
@@ -1025,6 +1077,23 @@ def _compute_output_diff(prev: str, curr: str) -> dict:
                     "kind": "added",
                 })
 
+    if len(changes) > 20:
+        first_change = changes[0]["line_no"] if changes else 1
+        return {
+            "identical": False,
+            "summary": (
+                "Output is mostly different. "
+                f"Last run produced {len(prev_lines)} lines, this one produced {len(curr_lines)}. "
+                f"The change starts at line {first_change}."
+            ),
+            "changed_lines": changes[:5],
+            "total_changes": len(changes),
+            "mode": "summary",
+            "prev_line_count": len(prev_lines),
+            "curr_line_count": len(curr_lines),
+            "change_start_line": first_change,
+        }
+
     # Cap at first 5 changes to avoid speech overload
     capped = changes[:5]
     if len(changes) <= 1:
@@ -1069,7 +1138,8 @@ def run_code():
     # friendly hint up front. The subprocess will still raise the canonical
     # error if it actually hits input() with an empty queue, but this helps
     # catch the common case before the user waits for execution.
-    uses_input = bool(re.search(r'\binput\s*\(', code))
+    input_prompts = _detect_input_prompts(code)
+    uses_input = bool(input_prompts) or bool(re.search(r'\binput\s*\(', code))
     inputs_hint = None
     if uses_input and not inputs:
         inputs_hint = (
@@ -1107,7 +1177,7 @@ def run_code():
                     if_handle.write(item.replace('\n', ' ').replace('\r', ' ') + '\n')
                 inputs_file_path = if_handle.name
 
-        time_limit = 5
+        time_limit = SUBPROCESS_WALL_TIMEOUT_SECONDS
         try:
             env = os.environ.copy()
             env['CODEUP_CODE_FILE'] = code_file_path
@@ -1209,6 +1279,7 @@ def run_code():
                 "error": error,
                 "explanation": explanation,
                 "inputs_hint": inputs_hint,
+                "input_prompts": input_prompts,
             })
 
         return jsonify({
@@ -1220,6 +1291,7 @@ def run_code():
             "inputs_consumed": len(inputs),
             "inputs_provided": len(inputs),
             "inputs_hint": inputs_hint,
+            "input_prompts": input_prompts,
         })
 
     except Exception:
@@ -1230,6 +1302,7 @@ def run_code():
             "error": tb,
             "explanation": explanation,
             "inputs_hint": inputs_hint,
+            "input_prompts": input_prompts,
         })
 
 
@@ -1485,6 +1558,64 @@ def structure():
         return jsonify({"success": False, "error": structure_data["error"]})
 
     return jsonify({"success": True, "structure": structure_data})
+
+
+def _structure_outline_text(structure_data: dict) -> str:
+    imports = structure_data.get("imports", []) or []
+    functions = structure_data.get("functions", []) or []
+    classes = structure_data.get("classes", []) or []
+    loops = structure_data.get("loops", []) or []
+
+    parts = [
+        (
+            f"This file has {len(imports)} import{'s' if len(imports) != 1 else ''}, "
+            f"{len(functions)} function{'s' if len(functions) != 1 else ''}, "
+            f"{len(classes)} class{'es' if len(classes) != 1 else ''}, and "
+            f"{len(loops)} loop{'s' if len(loops) != 1 else ''}."
+        )
+    ]
+    if classes:
+        class_bits = []
+        for cls in classes[:5]:
+            methods = [
+                fn.get("name")
+                for fn in functions
+                if fn.get("parent_class") == cls.get("name") and fn.get("name")
+            ]
+            method_text = f" with methods {', '.join(methods[:5])}" if methods else ""
+            class_bits.append(f"{cls.get('name', 'unnamed')} at line {cls.get('line', '?')}{method_text}")
+        parts.append("Classes: " + "; ".join(class_bits) + ".")
+    top_functions = [fn for fn in functions if not fn.get("parent_class")]
+    if top_functions:
+        func_bits = [
+            f"{fn.get('name', 'unnamed')} at line {fn.get('line', '?')}"
+            for fn in top_functions[:8]
+        ]
+        parts.append("Functions: " + ", ".join(func_bits) + ".")
+    if loops:
+        loop_bits = [
+            f"{loop.get('type', 'loop')} at line {loop.get('line', '?')}"
+            for loop in loops[:8]
+        ]
+        parts.append("Loops: " + ", ".join(loop_bits) + ".")
+    return " ".join(parts)
+
+
+@app.route("/structure-outline", methods=["POST"])
+def structure_outline():
+    body = safejson()
+    code = safe(body.get("code"), "")
+
+    if len(code) > MAX_CODE_SIZE:
+        return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
+    if not code.strip():
+        return jsonify({"success": True, "outline": "This file is empty."})
+
+    analyzer = CodeAnalyzer()
+    structure_data = analyzer.analyze(code)
+    if "error" in structure_data:
+        return jsonify({"success": False, "error": structure_data["error"]})
+    return jsonify({"success": True, "outline": _structure_outline_text(structure_data), "structure": structure_data})
 
 # ==========================
 # READ LINE WITH CONTEXT
@@ -2216,9 +2347,12 @@ COMMANDS = {
     "clear_editor": [
         "clear editor", "clear code", "clear file", "reset code",
         "एडिटर साफ करो", "कोड हटाओ", "कोड मिटाओ",
-    ],    "read_line_enhanced": ["read line with context", "enhanced read line", "describe line position", "where am i", "line context"],
+    ],
+    "read_line_enhanced": ["read line with context", "enhanced read line", "describe line position", "where am i", "line context", "read line", "read current line", "read this line", "what is this line", "describe this line"],
     "sonify_block": ["sonify block", "sonify", "audio structure", "hear structure", "play code structure", "sound out code", "play this", "play code"],
-    "read_line_enhanced": ["read line", "read current line", "read this line", "what is this line", "describe this line"],
+    "sonify_file": ["sonify whole file", "sonify file", "sonify code", "sonify indent profile"],
+    "read_outline": ["read outline", "read structure", "speak outline", "code outline"],
+    "explain_diff": ["why is the output different", "why did this run differently", "explain output diff"],
     "list_variables": ["what variables", "list variables", "show variables", "what variables are available", "variables in scope"],
     "check_errors": ["check for errors", "check syntax", "find errors", "are there errors", "syntax check"],
     "locate_error": ["where is the error", "where is error", "find error", "jump to error", "go to error"],
@@ -2234,6 +2368,7 @@ COMMANDS = {
     "copy_code": ["copy code", "copy to clipboard", "copy this"],
     "paste_code": ["paste code", "paste from clipboard", "paste"],
     "start_tutorial":     ["start tutorial", "open tutorial", "begin tutorial", "tutorial"],
+    "restart_tutorial":  ["restart tutorial", "tutorial restart", "start tutorial again"],
     "skip_tutorial":    ["skip tutorial", "close tutorial", "exit tutorial", "stop tutorial"],
     "toggle_dyslexia":  ["dyslexia mode", "toggle dyslexia", "turn on dyslexia", "turn off dyslexia"],
     "toggle_motion":    ["reduce motion", "reduced motion", "toggle motion", "motion mode"],
@@ -2508,9 +2643,6 @@ def _trace_playback(direction):
 
 # Telemetry: log unrecognized voice commands so we can grow the vocabulary
 # from real usage instead of guessing. Stored per-session, capped, opt-out via env.
-_voice_telemetry_lock = threading.Lock()
-_voice_telemetry: List[Dict[str, Any]] = []
-_VOICE_TELEMETRY_CAP = 1000  # rotate after this many entries
 
 def _log_unrecognized_command(text: str, session_id: str):
     """Record a command that the parser couldn't match. Used to identify
@@ -2674,6 +2806,12 @@ def voice():
             return _store_and_return({"success": True, "action": "explain_concept", "concept": slots.get("concept", "variables"), "confidence": confidence})
         if intent == "bug_challenge":
             return _store_and_return({"success": True, "action": "bug_challenge", "confidence": confidence})
+        if intent == "read_outline":
+            return _store_and_return({"success": True, "action": "read_outline", "confidence": confidence})
+        if intent == "sonify_file":
+            return _store_and_return({"success": True, "action": "sonify_file", "confidence": confidence})
+        if intent == "explain_diff":
+            return _store_and_return({"success": True, "action": "explain_diff", "confidence": confidence})
         if intent == "clear_editor":
             return _store_and_return({"success": True, "action": "clear_editor", "confidence": confidence})
         if intent == "read_output":
@@ -2700,6 +2838,10 @@ def voice():
             return _store_and_return({"success": True, "action": "use_macro", "name": slots.get("name", ""), "confidence": confidence})
         if intent == "list_macros":
             return _store_and_return({"success": True, "action": "list_macros", "confidence": confidence})
+        if intent == "share_macro":
+            return _store_and_return({"success": True, "action": "share_macro", "name": slots.get("name", ""), "confidence": confidence})
+        if intent == "use_shared_macro":
+            return _store_and_return({"success": True, "action": "use_shared_macro", "share_code": slots.get("share_code", ""), "confidence": confidence})
         if intent == "bookmark_output":
             return _store_and_return({"success": True, "action": "bookmark_output", "label": slots.get("label", ""), "confidence": confidence})
         if intent == "read_bookmark":
@@ -2712,6 +2854,8 @@ def voice():
             return _store_and_return({"success": True, "action": "explain_simply", "confidence": confidence})
         if intent == "narrate_diff":
             return _store_and_return({"success": True, "action": "narrate_diff", "confidence": confidence})
+        if intent == "restart_tutorial":
+            return _store_and_return({"success": True, "action": "restart_tutorial", "confidence": confidence})
         if intent == "set_color_mode":
             return _store_and_return({"success": True, "action": "set_color_mode", "mode": slots.get("mode", "default"), "confidence": confidence})
 
@@ -2916,6 +3060,26 @@ def _macros_path(session_id=None):
     return os.path.join(DATA_DIR, f"macros_{safe_id}.json")
 
 
+def _shared_macros_dir():
+    path = os.path.join(DATA_DIR, "shared_macros")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _shared_macro_path(code: str):
+    safe_code = re.sub(r'[^A-Z0-9]', '', code.upper())[:4]
+    return os.path.join(_shared_macros_dir(), f"{safe_code}.json")
+
+
+def _new_share_code():
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    for _ in range(20):
+        code = "".join(random.choice(alphabet) for _ in range(4))
+        if not os.path.exists(_shared_macro_path(code)):
+            return code
+    return uuid.uuid4().hex[:4].upper()
+
+
 def _load_macros():
     path = _macros_path()
     if not os.path.exists(path):
@@ -3005,6 +3169,57 @@ def get_macro(name):
     if name not in macros:
         return jsonify({"success": False, "error": "Macro not found"}), 404
     return jsonify({"success": True, "code": macros[name].get("code", ""), "name": name})
+
+
+@app.route("/macros/share", methods=["POST"])
+def share_macro():
+    body = safejson()
+    name = str(safe(body.get("name"), "")).strip().lower()[:64]
+    code = str(safe(body.get("code"), ""))
+    if not code and name:
+        macros = _load_macros()
+        code = str((macros.get(name) or {}).get("code", ""))
+    if not code.strip():
+        return jsonify({"success": False, "error": "Macro code required"}), 400
+    if len(code) > MAX_CODE_SIZE:
+        return jsonify({"success": False, "error": "Code too large"}), 413
+    share_code = _new_share_code()
+    payload = {
+        "name": name or "shared macro",
+        "code": code,
+        "created_at": time.time(),
+        "expires_at": time.time() + 24 * 60 * 60,
+    }
+    with open(_shared_macro_path(share_code), "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2)
+    return jsonify({"success": True, "share_code": share_code, "speech": f"Shared macro code {share_code}."})
+
+
+@app.route("/macros/shared/<code>", methods=["GET"])
+def get_shared_macro(code):
+    safe_code = re.sub(r'[^A-Z0-9]', '', code.upper())[:4]
+    if len(safe_code) != 4:
+        return jsonify({"success": False, "error": "Invalid share code"}), 400
+    path = _shared_macro_path(safe_code)
+    if not os.path.exists(path):
+        return jsonify({"success": False, "error": "Shared macro not found"}), 404
+    try:
+        with open(path, encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except Exception:
+        return jsonify({"success": False, "error": "Shared macro not readable"}), 404
+    if float(payload.get("expires_at", 0)) < time.time():
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        return jsonify({"success": False, "error": "Shared macro expired"}), 404
+    return jsonify({
+        "success": True,
+        "share_code": safe_code,
+        "name": payload.get("name", "shared macro"),
+        "code": payload.get("code", ""),
+    })
 
 
 # ==========================
@@ -3489,7 +3704,18 @@ def _validate_quiz_response(parsed: dict) -> Optional[str]:
         return "Quiz answer must be A, B, or C"
     if not parsed.get("explanation"):
         return "Quiz missing explanation"
+    normalized = []
+    for idx, option in enumerate(options):
+        if not isinstance(option, str) or not option.strip():
+            return "Quiz option was empty"
+        clean = re.sub(r'^\s*[\(\[]?[A-Da-d][\)\].:]?\s*', '', option).strip()
+        normalized.append(f"{chr(ord('A') + idx)}: {clean}")
+    parsed["options"] = normalized
     return None
+
+
+def _strip_code_fences(text: str) -> str:
+    return re.sub(r'^\s*```(?:python)?\s*|\s*```\s*$', '', text.strip(), flags=re.IGNORECASE | re.MULTILINE).strip()
 
 
 @app.route("/mentor/quiz", methods=["POST"])
@@ -3592,6 +3818,43 @@ def mentor_explain():
     return jsonify({"success": True, "explanation": explanation})
 
 
+@app.route("/explain-diff", methods=["POST"])
+def explain_diff():
+    body = safejson()
+    code = safe(body.get("code"), "")
+    previous_output = str(safe(body.get("previous_output"), ""))
+    current_output = str(safe(body.get("current_output"), ""))
+    language = safe(body.get("language"), "en")
+
+    if len(code) > MAX_CODE_SIZE or len(previous_output) > MAX_CODE_SIZE or len(current_output) > MAX_CODE_SIZE:
+        return jsonify({"success": False, "error": "Request too large"}), 413
+    if not previous_output and not current_output:
+        return jsonify({"success": False, "error": "No outputs to compare"}), 400
+
+    diff = _compute_output_diff(previous_output, current_output)
+    if diff.get("identical"):
+        return jsonify({"success": True, "explanation": "The output did not change.", "diff": diff})
+
+    system = (
+        "You explain Python output differences to a blind beginner. "
+        "Use at most two short sentences. Common causes include random values, "
+        "time-dependent code, dict or set ordering, input values, or file state."
+    )
+    user = (
+        f"Code:\n```python\n{code[:MAX_CODE_SIZE]}\n```\n\n"
+        f"Previous output:\n{previous_output[:4000]}\n\n"
+        f"Current output:\n{current_output[:4000]}\n\n"
+        f"Diff summary: {diff.get('summary', '')}"
+    )
+    explanation = call_gemini(system, user, temperature=0.2, language=language)
+    if explanation.startswith("AI service") or "not configured" in explanation.lower() or "unavailable" in explanation.lower():
+        explanation = (
+            f"{diff.get('summary', 'The output changed.')} "
+            "Check for changed input values, random numbers, time-based code, or data structures whose order can vary."
+        )
+    return jsonify({"success": True, "explanation": explanation, "diff": diff})
+
+
 def _validate_bug_challenge(parsed: dict) -> Optional[str]:
     """Validate a bug challenge dict. Critical: the buggy code must be valid
     enough to load into the editor (even if it doesn't run), and the fixed
@@ -3602,6 +3865,8 @@ def _validate_bug_challenge(parsed: dict) -> Optional[str]:
     for key in ("code", "hint", "bug", "fixed"):
         if not parsed.get(key) or not isinstance(parsed[key], str):
             return f"Challenge missing or invalid field: {key}"
+    parsed["code"] = _strip_code_fences(parsed["code"])
+    parsed["fixed"] = _strip_code_fences(parsed["fixed"])
     # The fixed code must at least parse — otherwise the LLM gave us garbage
     try:
         compile(parsed["fixed"], "<challenge>", "exec")

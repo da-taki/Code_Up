@@ -213,10 +213,6 @@ def test_missing_body_handled(client):
     ("insert a for loop",           "insert_loop",  lambda d: True),
 ])
 def test_voice_intent_parsing(client, voice_input, expected_action, check):
-    if voice_input == "repeat":
-        # Seed a run first so repeat has something to replay
-        client.post("/voice-command", json={"text": "run"})
-
     res = client.post("/voice-command", json={"text": voice_input})
     assert res.status_code == 200
     data = res.get_json()
@@ -1102,6 +1098,15 @@ class TestPreflightInputs:
         assert "hello" in data["output"] and "world" in data["output"]
 
     @pytest.mark.timeout(15)
+    def test_last_magic_comment_inputs_win(self, client):
+        code = "# inputs: old\n# inputs: newer\nname = input()\nprint(name)"
+        res = client.post("/run", json={"code": code})
+        data = res.get_json()
+        assert data["success"] is True
+        assert "newer" in data["output"]
+        assert "old" not in data["output"]
+
+    @pytest.mark.timeout(15)
     def test_body_inputs_override_magic_comment(self, client):
         code = "# inputs: from_magic\nname = input()\nprint(name)"
         res = client.post("/run", json={"code": code, "inputs": ["from_body"]})
@@ -1117,6 +1122,7 @@ class TestPreflightInputs:
         data = res.get_json()
         assert data.get("inputs_hint")
         assert "input" in data["inputs_hint"].lower()
+        assert data["input_prompts"] == ["?"]
 
 
 class TestVoiceSetInputs:
@@ -1186,6 +1192,14 @@ class TestVoiceMacros:
         data = res.get_json()
         assert data["success"] is True
         assert "alpha" in data["names"]
+
+    def test_shared_macro_roundtrip(self, client):
+        shared = client.post("/macros/share", json={"name": "demo", "code": "print('hi')"}).get_json()
+        assert shared["success"] is True
+        assert len(shared["share_code"]) == 4
+        loaded = client.get(f"/macros/shared/{shared['share_code']}").get_json()
+        assert loaded["success"] is True
+        assert loaded["code"] == "print('hi')"
 
 
 # ===========================================================================
@@ -1280,6 +1294,22 @@ class TestOutputDiff:
         assert data["diff"]["identical"] is False
         assert data["diff"]["total_changes"] >= 1
 
+    def test_appended_output_diff_summarized(self):
+        import app as app_module
+
+        diff = app_module._compute_output_diff("0\n1", "0\n1\n2\n3")
+        assert diff["mode"] == "appended"
+        assert "new lines at the end" in diff["summary"]
+
+    def test_large_output_diff_switches_to_summary(self):
+        import app as app_module
+
+        prev = "\n".join(f"old {i}" for i in range(30))
+        curr = "\n".join(f"new {i}" for i in range(30))
+        diff = app_module._compute_output_diff(prev, curr)
+        assert diff["mode"] == "summary"
+        assert "mostly different" in diff["summary"].lower()
+
 
 # ===========================================================================
 # 21. BEGINNER ERROR EXPLANATION
@@ -1309,6 +1339,60 @@ class TestBeginnerErrorExplanation:
         assert res.status_code == 400
 
 
+class TestOutlineAndDiffEndpoints:
+
+    def test_structure_outline_endpoint(self, client):
+        code = "import math\n\nclass Dog:\n    def bark(self):\n        pass\n\ndef greet():\n    pass"
+        res = client.post("/structure-outline", json={"code": code})
+        data = res.get_json()
+        assert res.status_code == 200
+        assert data["success"] is True
+        assert "1 import" in data["outline"]
+        assert "Dog" in data["outline"]
+        assert "greet" in data["outline"]
+
+    def test_explain_diff_fallback(self, client):
+        res = client.post("/explain-diff", json={
+            "code": "import random\nprint(random.randint(1, 10))",
+            "previous_output": "1\n",
+            "current_output": "2\n",
+            "language": "en",
+        })
+        data = res.get_json()
+        assert res.status_code == 200
+        assert data["success"] is True
+        assert "explanation" in data
+        assert data["diff"]["identical"] is False
+
+
+class TestMentorNormalization:
+
+    def test_quiz_options_are_normalized(self):
+        import app as app_module
+
+        parsed = {
+            "question": "What prints?",
+            "options": ["(A) one", "B: two", "C. three"],
+            "answer": "b",
+            "explanation": "Two is correct.",
+        }
+        assert app_module._validate_quiz_response(parsed) is None
+        assert parsed["options"] == ["A: one", "B: two", "C: three"]
+
+    def test_bug_challenge_strips_markdown_fences(self):
+        import app as app_module
+
+        parsed = {
+            "code": "```python\nprint('bad')\n```",
+            "hint": "Look at the string.",
+            "bug": "Wrong text.",
+            "fixed": "```python\nprint('good')\n```",
+        }
+        assert app_module._validate_bug_challenge(parsed) is None
+        assert "```" not in parsed["code"]
+        assert "```" not in parsed["fixed"]
+
+
 # ===========================================================================
 # 22. INTENT PARSER — NEW INTENTS
 # ===========================================================================
@@ -1327,6 +1411,8 @@ class TestNewIntents:
         ("remember this as quick sort", "save_macro", lambda s: s.get("name") == "quick sort"),
         ("use macro quick sort",  "use_macro", lambda s: s.get("name") == "quick sort"),
         ("list macros",           "list_macros", lambda s: True),
+        ("share current code as demo", "share_macro", lambda s: s.get("name") == "demo"),
+        ("use shared macro 7k2p", "use_shared_macro", lambda s: s.get("share_code") == "7K2P"),
         ("bookmark this",         "bookmark_output", lambda s: True),
         ("bookmark this as totals", "bookmark_output", lambda s: s.get("label") == "totals"),
         ("read from bookmark totals", "read_bookmark", lambda s: s.get("label") == "totals"),
@@ -1334,6 +1420,10 @@ class TestNewIntents:
         ("where am i",            "where_am_i", lambda s: True),
         ("explain like i'm five", "explain_simply", lambda s: True),
         ("what's different",      "narrate_diff", lambda s: True),
+        ("read the outline",      "read_outline", lambda s: True),
+        ("sonify the whole file", "sonify_file", lambda s: True),
+        ("why is the output different", "explain_diff", lambda s: True),
+        ("restart tutorial",      "restart_tutorial", lambda s: True),
     ])
     def test_intent(self, text, intent, slot_check):
         result = parse_intent(text)

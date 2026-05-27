@@ -595,8 +595,12 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en"):
                 temperature=temperature,
                 max_tokens=1024,
             )
-            content = response.choices[0].message.content
-            return content.strip() if content else "AI service returned an empty response. Please try again."
+            for choice in getattr(response, "choices", []) or []:
+                message = getattr(choice, "message", None)
+                content = str(getattr(message, "content", "") or "").strip()
+                if content:
+                    return content
+            return "AI service returned an empty response. Please try again."
         except Exception as e:
             err_str = str(e).lower()
             # Try Ollama before returning a user-facing error
@@ -659,6 +663,50 @@ def extract_code(text: str):
             continue
         lines.append(line)
     return "\n".join(lines).strip()
+
+def _local_code_generation_fallback(prompt: str) -> str:
+    """Small deterministic fallback for common beginner prompts when AI is blank."""
+    lower = (prompt or "").lower()
+    if "circle" in lower and "area" in lower:
+        return (
+            "# Sample radius. Change this value to test another circle.\n"
+            "radius = 5\n\n"
+            "# Pi is used in the area formula for a circle.\n"
+            "pi = 3.14159\n\n"
+            "# Area of a circle is pi times radius squared.\n"
+            "area = pi * radius * radius\n\n"
+            "# Show the answer.\n"
+            "print(\"Area of the circle:\", area)\n"
+        )
+    if "rectangle" in lower and "area" in lower:
+        return (
+            "# Sample length and width. Change these values to test another rectangle.\n"
+            "length = 10\n"
+            "width = 5\n\n"
+            "# Area of a rectangle is length times width.\n"
+            "area = length * width\n\n"
+            "# Show the answer.\n"
+            "print(\"Area of the rectangle:\", area)\n"
+        )
+    if "triangle" in lower and "area" in lower:
+        return (
+            "# Sample base and height. Change these values to test another triangle.\n"
+            "base = 8\n"
+            "height = 6\n\n"
+            "# Area of a triangle is one half times base times height.\n"
+            "area = 0.5 * base * height\n\n"
+            "# Show the answer.\n"
+            "print(\"Area of the triangle:\", area)\n"
+        )
+    if "fibonacci" in lower:
+        return DEMO_PRESETS["fibonacci"]["code"]
+    if "prime" in lower:
+        return DEMO_PRESETS["primes"]["code"]
+    return ""
+
+def _should_use_local_generation_fallback(raw: str) -> bool:
+    lower = (raw or "").strip().lower()
+    return not lower or "empty response" in lower
 
 # ==========================
 # MAIN PAGE
@@ -2504,6 +2552,9 @@ def generate_code():
     if not code and raw and not _is_ai_service_message(raw):
         code = raw.strip()
     if not code:
+        fallback = _local_code_generation_fallback(prompt)
+        if fallback and _should_use_local_generation_fallback(raw):
+            return jsonify({"success": True, "code": fallback, "source": "local_fallback"})
         error = raw.strip() if raw else "AI returned empty response. Try rephrasing."
         return jsonify({"success": False, "error": error, "code": ""})
 
@@ -2520,6 +2571,9 @@ def generate_code():
             compile(retry_code, "<generated>", "exec")
             code = retry_code
         except SyntaxError:
+            fallback = _local_code_generation_fallback(prompt)
+            if fallback and _should_use_local_generation_fallback(raw_retry):
+                return jsonify({"success": True, "code": fallback, "source": "local_fallback"})
             if _is_ai_service_message(raw_retry):
                 return jsonify({"success": False, "error": raw_retry.strip(), "code": ""})
             return jsonify({"success": False, "error": "AI returned invalid Python code. Please try rephrasing your request.", "code": ""})

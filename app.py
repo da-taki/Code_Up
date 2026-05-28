@@ -1,5 +1,6 @@
 import ast
 import atexit
+import errno
 import io
 import json
 import os
@@ -14,7 +15,7 @@ import threading
 import time
 import traceback
 import uuid
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from typing import Any, Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
@@ -22,7 +23,7 @@ from flask import Flask, g, has_request_context, jsonify, render_template, reque
 from rapidfuzz import fuzz
 
 from intent_parser import parse_intent
-from sandboxed_fs import get_sandbox
+from sandboxed_fs import cleanup_sandbox, cleanup_stale_sandboxes, get_sandbox
 from structure_parser import CodeAnalyzer
 
 load_dotenv()
@@ -79,7 +80,12 @@ _active_runs_lock = threading.Lock()
 # Voice macros: per-session named code snippets the student can recall by name.
 # Stored on disk alongside snippets but in a separate file so they don't clutter
 # the snippet list. Keyed by sanitized session id.
-_voice_macros_lock = threading.Lock()
+_voice_macros_lock = threading.RLock()
+_shared_macros_lock = threading.Lock()
+_shared_macro_lookup_lock = threading.Lock()
+_shared_macro_lookup_attempts = {}
+_SHARED_MACRO_LOOKUP_LIMIT = 30
+_SHARED_MACRO_LOOKUP_WINDOW = 60
 
 # Output bookmarks: per-session list of {label, position, timestamp, output_id}.
 # In-memory only (cheap, ephemeral, scoped to session).
@@ -242,9 +248,10 @@ _configure_secret_key(app)
 # Session configuration
 SESSION_COOKIE_NAME = 'codeup_session'
 SESSION_COOKIE_MAX_AGE = 3600 * 24 * 7  # 7 days
-# FIX H-4: Drive SESSION_COOKIE_SECURE from environment so TLS deployments are
-# protected without requiring a manual code change.
-SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", "false").lower() == "true"
+if "SESSION_COOKIE_SECURE" in os.environ:
+    SESSION_COOKIE_SECURE = _truthy_env("SESSION_COOKIE_SECURE")
+else:
+    SESSION_COOKIE_SECURE = not _is_dev_or_testing_mode()
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = None if os.environ.get("FLASK_TESTING", "false").lower() == "true" else 'Lax'
 
@@ -324,12 +331,16 @@ def get_trace_storage():
 def cleanup_old_sessions():
     """Clean up sessions that have been idle longer than _session_ttl."""
     now = time.time()
+    expired = []
     with _session_traces_lock:
         # FIX H-2 (continued): expire based on last_accessed, not created_at.
         expired = [sid for sid, data in _session_traces.items()
                    if now - data.get('last_accessed', 0) > _session_ttl]
         for sid in expired:
             del _session_traces[sid]
+    for sid in expired:
+        cleanup_sandbox(sid)
+    cleanup_stale_sandboxes()
     with _session_ai_keys_lock:
         expired_keys = [
             sid for sid, data in _session_ai_keys.items()
@@ -582,7 +593,7 @@ def load_snippets() -> dict:
         _debug_log(f"Could not load snippets from {path!r}: {e}")
     return {"snippets": []}
 
-_snippets_lock = threading.Lock()
+_snippets_lock = threading.RLock()
 
 def save_snippets(d: dict) -> None:
     """Save snippets atomically using temp-then-move to prevent corruption.
@@ -823,6 +834,16 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en", max_
     with _gemini_active_lock:
         _gemini_queued_requests += 1
 
+    def _cancel_future_if_pending(future):
+        global _gemini_queued_requests
+        try:
+            cancelled = future.cancel()
+        except Exception:
+            cancelled = False
+        if cancelled:
+            with _gemini_active_lock:
+                _gemini_queued_requests = max(0, _gemini_queued_requests - 1)
+
     try:
         future = _get_gemini_executor().submit(_do_call)
     except Exception as e:
@@ -835,7 +856,14 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en", max_
 
     try:
         return future.result(timeout=MAX_GEMINI_TIMEOUT + 1)
+    except FutureTimeoutError:
+        _cancel_future_if_pending(future)
+        local = _try_ollama_fallback()
+        if local:
+            return f"[offline mode] {local}"
+        return "AI service took too long to respond and offline AI is not available. Try a shorter request."
     except Exception as e:
+        _cancel_future_if_pending(future)
         local = _try_ollama_fallback()
         if local:
             return f"[offline mode] {local}"
@@ -2842,7 +2870,6 @@ def snippets():
         data["speech"] = speech_text
         return jsonify(data)
 
-    data = load_snippets()
     body = safejson()
 
     name = _safe_text(body.get("name"), "Untitled", limit=257).strip()
@@ -2861,54 +2888,58 @@ def snippets():
         return jsonify({"success": False, "error": "Name too long (max 256 chars)"}), 400
 
     new_id = str(uuid.uuid4())
-    data["snippets"].append({"id": new_id, "name": name, "code": code})
-    save_snippets(data)
+    with _snippets_lock:
+        data = load_snippets()
+        data["snippets"].append({"id": new_id, "name": name, "code": code})
+        save_snippets(data)
     return jsonify({"success": True, "id": new_id, "speech": f"Saved snippet: {name}"})
 
 @app.route("/snippets/<sid>", methods=["PUT", "DELETE"])
 def snippet_detail(sid):
-    data = load_snippets()
-
     if request.method == "DELETE":
-        deleted_name = None
-        for s in data["snippets"]:
-            if str(s["id"]) == str(sid):
-                deleted_name = s.get("name", f"Snippet {sid}")
-                break
+        with _snippets_lock:
+            data = load_snippets()
+            deleted_name = None
+            for s in data["snippets"]:
+                if str(s["id"]) == str(sid):
+                    deleted_name = s.get("name", f"Snippet {sid}")
+                    break
 
-        data["snippets"] = [s for s in data["snippets"] if str(s["id"]) != str(sid)]
-        save_snippets(data)
+            data["snippets"] = [s for s in data["snippets"] if str(s["id"]) != str(sid)]
+            save_snippets(data)
         speech = f"Deleted snippet: {deleted_name}." if deleted_name else "Snippet deleted."
         return jsonify({"success": True, "speech": speech})
 
     body = safejson()
-    found = False
-    snippet_name = None
-    for s in data["snippets"]:
-        if str(s["id"]) == str(sid):
-            found = True
-            snippet_name = s.get("name", "Snippet")
-            if "name" in body:
-                new_name = _safe_text(body["name"], limit=257).strip()
-                if not new_name:
-                    return jsonify({"success": False, "error": "Name is required"}), 400
-                if len(new_name) > 256:
-                    return jsonify({"success": False, "error": "Name too long (max 256 chars)"}), 400
-                s["name"] = new_name
-                snippet_name = new_name
-            if "code" in body:
-                new_code = _safe_text(body["code"])
-                if not new_code.strip():
-                    return jsonify({"success": False, "error": "Code is required"}), 400
-                if len(new_code) > MAX_CODE_SIZE:
-                    return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
-                blocked = _reject_non_python_response(new_code)
-                if blocked:
-                    return blocked
-                s["code"] = new_code
-    if not found:
-        return jsonify({"success": False, "error": "Snippet not found"}), 404
-    save_snippets(data)
+    with _snippets_lock:
+        data = load_snippets()
+        found = False
+        snippet_name = None
+        for s in data["snippets"]:
+            if str(s["id"]) == str(sid):
+                found = True
+                snippet_name = s.get("name", "Snippet")
+                if "name" in body:
+                    new_name = _safe_text(body["name"], limit=257).strip()
+                    if not new_name:
+                        return jsonify({"success": False, "error": "Name is required"}), 400
+                    if len(new_name) > 256:
+                        return jsonify({"success": False, "error": "Name too long (max 256 chars)"}), 400
+                    s["name"] = new_name
+                    snippet_name = new_name
+                if "code" in body:
+                    new_code = _safe_text(body["code"])
+                    if not new_code.strip():
+                        return jsonify({"success": False, "error": "Code is required"}), 400
+                    if len(new_code) > MAX_CODE_SIZE:
+                        return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
+                    blocked = _reject_non_python_response(new_code)
+                    if blocked:
+                        return blocked
+                    s["code"] = new_code
+        if not found:
+            return jsonify({"success": False, "error": "Snippet not found"}), 404
+        save_snippets(data)
     speech = f"Updated snippet: {snippet_name}." if snippet_name else "Snippet updated."
     return jsonify({"success": True, "speech": speech})
 
@@ -3709,18 +3740,41 @@ def _shared_macros_dir():
     return path
 
 
+def _normalize_share_code(code: str) -> str:
+    return re.sub(r'[^A-Za-z0-9_-]', '', str(code or ''))[:64]
+
+
 def _shared_macro_path(code: str):
-    safe_code = re.sub(r'[^A-Z0-9]', '', code.upper())[:4]
+    safe_code = _normalize_share_code(code)
     return os.path.join(_shared_macros_dir(), f"{safe_code}.json")
 
 
 def _new_share_code():
-    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
     for _ in range(20):
-        code = "".join(random.choice(alphabet) for _ in range(4))
+        code = secrets.token_urlsafe(16)
         if not os.path.exists(_shared_macro_path(code)):
             return code
-    return uuid.uuid4().hex[:4].upper()
+    return secrets.token_hex(16)
+
+
+def _shared_macro_lookup_key():
+    return f"{request.remote_addr or 'unknown'}:{get_session_id()}"
+
+
+def _check_shared_macro_lookup_limit():
+    now = time.time()
+    key = _shared_macro_lookup_key()
+    with _shared_macro_lookup_lock:
+        attempts = [
+            ts for ts in _shared_macro_lookup_attempts.get(key, [])
+            if now - ts < _SHARED_MACRO_LOOKUP_WINDOW
+        ]
+        if len(attempts) >= _SHARED_MACRO_LOOKUP_LIMIT:
+            _shared_macro_lookup_attempts[key] = attempts
+            return False
+        attempts.append(now)
+        _shared_macro_lookup_attempts[key] = attempts
+        return True
 
 
 def _load_macros():
@@ -3804,22 +3858,24 @@ def save_macro():
         return blocked
     if not re.match(r'^[a-z0-9 _\u0900-\u097f-]+$', name):
         return jsonify({"success": False, "error": "Macro name must be letters, numbers, spaces, dash or underscore"}), 400
-    macros = _load_macros()
-    if len(macros) >= 50 and name not in macros:
-        return jsonify({"success": False, "error": "Macro limit reached (50)"}), 400
-    macros[name] = {"code": code, "saved_at": time.time()}
-    _save_macros(macros)
+    with _voice_macros_lock:
+        macros = _load_macros()
+        if len(macros) >= 50 and name not in macros:
+            return jsonify({"success": False, "error": "Macro limit reached (50)"}), 400
+        macros[name] = {"code": code, "saved_at": time.time()}
+        _save_macros(macros)
     return jsonify({"success": True, "speech": f"Macro {name} saved."})
 
 
 @app.route("/macros/<name>", methods=["DELETE"])
 def delete_macro(name):
     name = name.strip().lower()
-    macros = _load_macros()
-    if name not in macros:
-        return jsonify({"success": False, "error": "Macro not found"}), 404
-    del macros[name]
-    _save_macros(macros)
+    with _voice_macros_lock:
+        macros = _load_macros()
+        if name not in macros:
+            return jsonify({"success": False, "error": "Macro not found"}), 404
+        del macros[name]
+        _save_macros(macros)
     return jsonify({"success": True, "speech": f"Macro {name} deleted."})
 
 
@@ -3838,8 +3894,9 @@ def share_macro():
     name = str(safe(body.get("name"), "")).strip().lower()[:64]
     code = str(safe(body.get("code"), ""))
     if not code and name:
-        macros = _load_macros()
-        code = str((macros.get(name) or {}).get("code", ""))
+        with _voice_macros_lock:
+            macros = _load_macros()
+            code = str((macros.get(name) or {}).get("code", ""))
     if not code.strip():
         return jsonify({"success": False, "error": "Macro code required"}), 400
     if len(code) > MAX_CODE_SIZE:
@@ -3847,23 +3904,33 @@ def share_macro():
     blocked = _reject_non_python_response(code)
     if blocked:
         return blocked
-    share_code = _new_share_code()
     payload = {
         "name": name or "shared macro",
         "code": code,
         "created_at": time.time(),
         "expires_at": time.time() + 24 * 60 * 60,
     }
-    with open(_shared_macro_path(share_code), "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2)
+    with _shared_macros_lock:
+        for _ in range(20):
+            share_code = _new_share_code()
+            try:
+                with open(_shared_macro_path(share_code), "x", encoding="utf-8") as handle:
+                    json.dump(payload, handle, indent=2)
+                break
+            except FileExistsError:
+                continue
+        else:
+            return jsonify({"success": False, "error": "Could not create share code"}), 500
     return jsonify({"success": True, "share_code": share_code, "speech": f"Shared macro code {share_code}."})
 
 
 @app.route("/macros/shared/<code>", methods=["GET"])
 def get_shared_macro(code):
-    safe_code = re.sub(r'[^A-Z0-9]', '', code.upper())[:4]
-    if len(safe_code) != 4:
+    safe_code = _normalize_share_code(code)
+    if len(safe_code) < 16:
         return jsonify({"success": False, "error": "Invalid share code"}), 400
+    if not _check_shared_macro_lookup_limit():
+        return jsonify({"success": False, "error": "Too many shared macro attempts"}), 429
     path = _shared_macro_path(safe_code)
     if not os.path.exists(path):
         return jsonify({"success": False, "error": "Shared macro not found"}), 404
@@ -3904,6 +3971,32 @@ def get_shared_macro(code):
 # INTERACTIVE RUN (Mechanism B) — SSE streaming with input pipe
 # ==========================
 
+def _terminate_process_group(proc):
+    if not proc or proc.poll() is not None:
+        return
+    if sys.platform != "win32":
+        import signal as _signal
+        try:
+            os.killpg(os.getpgid(proc.pid), _signal.SIGKILL)
+        except (ProcessLookupError, OSError):
+            pass
+    else:
+        proc.kill()
+
+
+def _wait_for_process_exit(proc, timeout=2):
+    if not proc:
+        return None
+    try:
+        return proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _terminate_process_group(proc)
+        try:
+            return proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return proc.poll()
+
+
 def _cleanup_run(run_id):
     """Tear down a run's resources. Idempotent."""
     with _active_runs_lock:
@@ -3913,15 +4006,8 @@ def _cleanup_run(run_id):
     proc = state.get("proc")
     if proc:
         try:
-            if proc.poll() is None:
-                if sys.platform != "win32":
-                    import signal as _signal
-                    try:
-                        os.killpg(os.getpgid(proc.pid), _signal.SIGKILL)
-                    except (ProcessLookupError, OSError):
-                        pass
-                else:
-                    proc.kill()
+            _terminate_process_group(proc)
+            _wait_for_process_exit(proc)
         except (OSError, RuntimeError) as e:
             _debug_log(f"Could not terminate run {run_id}: {e}")
     fifo = state.get("fifo")
@@ -4079,14 +4165,13 @@ def run_stream_start():
             time.sleep(0.2)
         if proc.poll() is None:
             try:
-                if sys.platform != "win32":
-                    import signal as _signal
-                    os.killpg(os.getpgid(proc.pid), _signal.SIGKILL)
-                else:
-                    proc.kill()
-            except Exception:
-                pass
+                _terminate_process_group(proc)
+            except (OSError, RuntimeError) as e:
+                _debug_log(f"Could not terminate timed-out interactive run {run_id}: {e}")
+            _wait_for_process_exit(proc)
             output_queue.put({"type": "stderr", "text": "\nExecution timed out after 60 seconds.\n"})
+        else:
+            _wait_for_process_exit(proc, timeout=0)
         output_queue.put({"type": "done", "exit_code": proc.returncode})
 
     threading.Thread(target=_stdout_reader, daemon=True).start()
@@ -4120,6 +4205,7 @@ def run_stream(run_id):
                     # Check if run is dead but no 'done' was emitted
                     proc = state.get("proc")
                     if proc and proc.poll() is not None:
+                        _wait_for_process_exit(proc, timeout=0)
                         yield f"data: {json.dumps({'type': 'done', 'exit_code': proc.returncode})}\n\n"
                         break
                     continue
@@ -4151,18 +4237,25 @@ def run_stream_input(run_id):
         return jsonify({"success": False, "error": "Forbidden"}), 403
     body = safejson()
     value = str(safe(body.get("value"), ""))[:1000]
+    with state["awaiting_input_lock"]:
+        if not state.get("awaiting_input", False):
+            return jsonify({"success": False, "error": "Run is not awaiting input"}), 409
+    proc = state.get("proc")
+    if not proc or proc.poll() is not None:
+        return jsonify({"success": False, "error": "Run is not active"}), 410
     fifo = state.get("fifo")
     if not fifo or not os.path.exists(fifo):
         return jsonify({"success": False, "error": "Input pipe not available"}), 410
     try:
-        # Open + write + close. The subprocess opens the FIFO inside a `with`
-        # block per call, which means we can open ours each time too.
-        with open(fifo, 'w', encoding='utf-8') as f:
+        fd = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
             f.write(value + '\n')
         with state["awaiting_input_lock"]:
             state["awaiting_input"] = False
         return jsonify({"success": True})
     except OSError as e:
+        if e.errno in (errno.ENXIO, errno.EAGAIN, errno.EWOULDBLOCK):
+            return jsonify({"success": False, "error": "Input reader is not ready"}), 409
         return jsonify({"success": False, "error": str(e)}), 500
 
 

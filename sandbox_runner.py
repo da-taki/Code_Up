@@ -140,6 +140,7 @@ def _strict_import(name, globals_arg=None, locals_arg=None, fromlist=(), level=0
 # ---------------------------------------------------------------------------
 _INPUT_QUEUE = []
 _INPUT_INDEX = [0]
+_INPUT_LOAD_ERROR = [None]
 _INTERACTIVE = os.environ.get('CODEUP_INTERACTIVE', '0') == '1'
 _INPUT_FIFO = os.environ.get('CODEUP_INPUT_FIFO', '')
 
@@ -248,6 +249,8 @@ SAFE_GLOBALS = {
         'KeyError': KeyError, 'ZeroDivisionError': ZeroDivisionError,
         'OverflowError': OverflowError, 'MemoryError': MemoryError,
         'NotImplemented': NotImplemented,
+        'object': object, 'super': super,
+        'staticmethod': staticmethod, 'classmethod': classmethod, 'property': property,
         '__build_class__': _builtins.__build_class__,
         '__import__': _strict_import,
     },
@@ -289,7 +292,8 @@ def _load_input_queue():
             for line in f:
                 _INPUT_QUEUE.append(line.rstrip('\n').rstrip('\r'))
     except (OSError, UnicodeDecodeError) as e:
-        print(f"Could not load pre-flight inputs: {e}", file=sys.stderr)
+        _INPUT_LOAD_ERROR[0] = f"Could not load pre-flight inputs: {e}"
+        print(_INPUT_LOAD_ERROR[0], file=sys.stderr)
 
 
 def main():
@@ -361,6 +365,8 @@ def main():
         return tracer
 
     try:
+        if _INPUT_LOAD_ERROR[0]:
+            raise RuntimeError(_INPUT_LOAD_ERROR[0])
         _audit_ast(code)
         compiled = compile(code, '<user>', 'exec')
         sys.settrace(tracer)

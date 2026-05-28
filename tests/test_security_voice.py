@@ -178,6 +178,40 @@ def test_gemini_executor_is_singleton_and_shutdown_is_idempotent(monkeypatch):
     ]
 
 
+def test_call_gemini_cancels_pending_future_on_timeout(monkeypatch):
+    monkeypatch.setenv("GEMINI_ENABLED", "1")
+    monkeypatch.setattr(app_module, "GEMINI_API_KEY", "session-key")
+    monkeypatch.setattr(app_module, "_call_ollama", lambda *a, **k: None)
+    monkeypatch.setattr(app_module, "MAX_GEMINI_TIMEOUT", 0)
+    with app_module._gemini_active_lock:
+        app_module._gemini_queued_requests = 0
+        app_module._gemini_active_requests = 0
+
+    class TimeoutFuture:
+        def __init__(self):
+            self.cancelled = False
+
+        def result(self, timeout=None):
+            raise app_module.FutureTimeoutError()
+
+        def cancel(self):
+            self.cancelled = True
+            return True
+
+    future = TimeoutFuture()
+
+    class FakeExecutor:
+        def submit(self, func):
+            return future
+
+    monkeypatch.setattr(app_module, "_gemini_executor", FakeExecutor())
+    result = app_module.call_gemini("system", "user")
+
+    assert future.cancelled is True
+    assert "too long" in result.lower()
+    assert app_module._gemini_queued_requests == 0
+
+
 def test_production_import_requires_secret_key():
     env = os.environ.copy()
     env.pop("FLASK_SECRET_KEY", None)
@@ -195,6 +229,48 @@ def test_production_import_requires_secret_key():
     )
     assert result.returncode != 0
     assert "FLASK_SECRET_KEY" in result.stderr
+
+
+def test_dev_testing_secret_is_ephemeral():
+    root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    env = os.environ.copy()
+    env["FLASK_TESTING"] = "true"
+    env.pop("FLASK_SECRET_KEY", None)
+    keys = []
+    for _ in range(2):
+        result = subprocess.run(
+            [sys.executable, "-c", "import app; print(app.app.secret_key)"],
+            cwd=root,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.returncode == 0, result.stderr
+        keys.append(result.stdout.strip())
+
+    assert keys[0] and keys[1]
+    assert keys[0] != "dev-secret-key-change-in-production"
+    assert keys[0] != keys[1]
+
+
+def test_production_session_cookie_secure_by_default():
+    env = os.environ.copy()
+    env["FLASK_SECRET_KEY"] = "prod-secret"
+    env.pop("FLASK_TESTING", None)
+    env["CODEUP_ENV"] = "production"
+    env["FLASK_ENV"] = "production"
+    env.pop("SESSION_COOKIE_SECURE", None)
+    result = subprocess.run(
+        [sys.executable, "-c", "import app; print(app.SESSION_COOKIE_SECURE)"],
+        cwd=os.path.abspath(os.path.join(os.path.dirname(__file__), "..")),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "True"
 
 
 def test_gemini_key_not_configured_returns_message(client, monkeypatch):
@@ -516,6 +592,28 @@ def test_sandbox_simple_class_definition_runs(client):
 
 
 @pytest.mark.timeout(15)
+def test_sandbox_common_class_patterns_work(client):
+    code = (
+        "class Animal(object):\n"
+        "    def __init__(self, name):\n"
+        "        self.name = name\n"
+        "    @property\n"
+        "    def label(self):\n"
+        "        return self.name\n"
+        "    @staticmethod\n"
+        "    def kind():\n"
+        "        return 'animal'\n"
+        "class Dog(Animal):\n"
+        "    def __init__(self, name):\n"
+        "        super().__init__(name)\n"
+        "print(Dog.kind(), Dog('Ada').label)"
+    )
+    data = client.post("/run", json={"code": code}).get_json()
+    assert data["success"] is True, data.get("error")
+    assert "animal Ada" in data.get("output", "")
+
+
+@pytest.mark.timeout(15)
 def test_sandbox_name_is_main(client):
     res = client.post("/run", json={"code": "if __name__ == '__main__':\n    print('main block')"})
     data = res.get_json()
@@ -551,6 +649,30 @@ def test_sandbox_date_is_not_top_level_module(client):
     data = res.get_json()
     assert data["success"] is False
     assert "not allowed" in data.get("error", "").lower()
+
+
+def test_sandbox_bad_inputs_file_reports_clear_failure(tmp_path):
+    code_file = tmp_path / "code.py"
+    trace_file = tmp_path / "trace.json"
+    inputs_file = tmp_path / "inputs.txt"
+    code_file.write_text("print('should not run')", encoding="utf-8")
+    inputs_file.write_bytes(b"\xff\xfe\xff")
+    env = os.environ.copy()
+    env["CODEUP_CODE_FILE"] = str(code_file)
+    env["CODEUP_TRACE_FILE"] = str(trace_file)
+    env["CODEUP_INPUTS_FILE"] = str(inputs_file)
+
+    result = subprocess.run(
+        [sys.executable, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "sandbox_runner.py"))],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert result.returncode == 0
+    assert "Could not load pre-flight inputs" in result.stderr
+    assert "should not run" not in result.stdout
 
 
 def test_sandbox_normal_execution(client):
@@ -861,6 +983,68 @@ def test_custom_session_cookie_is_single_and_reused(client):
     assert followup_cookies == []
 
 
+def test_run_stream_input_rejects_when_not_awaiting_without_opening_fifo(client, tmp_path):
+    client.get("/execution-trace")
+    session_id = _client_session_id(client)
+    run_id = "notwaiting"
+
+    class FakeProc:
+        returncode = None
+
+        def poll(self):
+            return None
+
+    state = {
+        "proc": FakeProc(),
+        "fifo": str(tmp_path / "missing.fifo"),
+        "session_id": session_id,
+        "awaiting_input": False,
+        "awaiting_input_lock": threading.Lock(),
+    }
+    with app_module._active_runs_lock:
+        app_module._active_runs[run_id] = state
+    try:
+        res = client.post(f"/run-stream/{run_id}/input", json={"value": "hello"})
+        assert res.status_code == 409
+        assert "not awaiting input" in res.get_json()["error"].lower()
+    finally:
+        with app_module._active_runs_lock:
+            app_module._active_runs.pop(run_id, None)
+
+
+def test_cleanup_run_reaps_child_process(monkeypatch):
+    monkeypatch.setattr(app_module.sys, "platform", "win32")
+
+    class FakeProc:
+        def __init__(self):
+            self.returncode = None
+            self.kill_called = False
+            self.wait_calls = 0
+
+        def poll(self):
+            return self.returncode
+
+        def kill(self):
+            self.kill_called = True
+            self.returncode = -9
+
+        def wait(self, timeout=None):
+            self.wait_calls += 1
+            return self.returncode
+
+    proc = FakeProc()
+    run_id = "cleanup-test"
+    with app_module._active_runs_lock:
+        app_module._active_runs[run_id] = {"proc": proc}
+
+    app_module._cleanup_run(run_id)
+
+    assert proc.kill_called is True
+    assert proc.wait_calls >= 1
+    assert proc.returncode == -9
+    assert run_id not in app_module._active_runs
+
+
 # ===========================================================================
 # 6. SYNTAX CHECKING
 # ===========================================================================
@@ -1061,6 +1245,34 @@ def test_snippet_speech_multiple(client):
     assert "2 snippets" in speech
 
 
+def test_concurrent_snippet_saves_do_not_lose_updates(client):
+    client.get("/snippets")
+    session_id = _client_session_id(client)
+    barrier = threading.Barrier(8)
+    errors = []
+
+    def save_one(i):
+        try:
+            with app.test_client() as c:
+                c.set_cookie(app_module.SESSION_COOKIE_NAME, session_id)
+                barrier.wait(timeout=5)
+                res = c.post("/snippets", json={"name": f"s{i}", "code": f"print({i})"})
+                assert res.status_code == 200
+                assert res.get_json()["success"] is True
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=save_one, args=(i,)) for i in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert errors == []
+    names = {s["name"] for s in client.get("/snippets").get_json()["snippets"]}
+    assert {f"s{i}" for i in range(8)} <= names
+
+
 # ===========================================================================
 # 10. LINE READING & DESCRIBE
 # ===========================================================================
@@ -1144,18 +1356,36 @@ def test_sandbox_invalid_size_env_falls_back(monkeypatch):
     assert sandboxed_fs_module._max_file_size() == 5_000_000
 
 
-def test_sandbox_read_rejects_oversized_existing_file(tmp_path):
+def test_sandbox_read_uses_default_size_when_env_unset(tmp_path):
     fs = SandboxedFileSystem(str(tmp_path))
     big = tmp_path / "big.txt"
     big.write_text("x" * 20, encoding="utf-8")
-    old_limit = fs.MAX_FILE_SIZE
-    fs.MAX_FILE_SIZE = 10
-    try:
-        data = fs.read("big.txt")
-    finally:
-        fs.MAX_FILE_SIZE = old_limit
+    data = fs.read("big.txt")
+    assert data["success"] is True
+
+
+def test_sandbox_file_size_env_is_read_at_runtime(tmp_path, monkeypatch):
+    fs = SandboxedFileSystem(str(tmp_path))
+    big = tmp_path / "big.txt"
+    big.write_text("x" * 20, encoding="utf-8")
+    monkeypatch.setenv("SANDBOX_MAX_FILE_SIZE", "10")
+    data = fs.read("big.txt")
     assert data["success"] is False
     assert "maximum size" in data["error"].lower()
+
+
+def test_stale_sandbox_cleanup_removes_workspace(tmp_path):
+    workspace = tmp_path / "old_workspace"
+    fs = SandboxedFileSystem(str(workspace))
+    fs.last_accessed = 100
+    with sandboxed_fs_module._sandboxes_lock:
+        sandboxed_fs_module._sandboxes["old-session"] = fs
+
+    removed = sandboxed_fs_module.cleanup_stale_sandboxes(now=1000, max_age=60)
+
+    assert removed == 1
+    assert "old-session" not in sandboxed_fs_module._sandboxes
+    assert not workspace.exists()
 
 
 # ===========================================================================
@@ -1747,13 +1977,46 @@ class TestVoiceMacros:
         assert data["success"] is True
         assert "alpha" in data["names"]
 
+    def test_concurrent_macro_saves_do_not_lose_updates(self, client):
+        client.get("/macros")
+        session_id = _client_session_id(client)
+        barrier = threading.Barrier(8)
+        errors = []
+
+        def save_one(i):
+            try:
+                with app.test_client() as c:
+                    c.set_cookie(app_module.SESSION_COOKIE_NAME, session_id)
+                    barrier.wait(timeout=5)
+                    res = c.post("/macros", json={"name": f"m{i}", "code": f"print({i})"})
+                    assert res.status_code == 200
+                    assert res.get_json()["success"] is True
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=save_one, args=(i,)) for i in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+
+        assert errors == []
+        names = set(client.get("/macros").get_json()["names"])
+        assert {f"m{i}" for i in range(8)} <= names
+
     def test_shared_macro_roundtrip(self, client):
         shared = client.post("/macros/share", json={"name": "demo", "code": "print('hi')"}).get_json()
         assert shared["success"] is True
-        assert len(shared["share_code"]) == 4
+        assert len(shared["share_code"]) >= 16
         loaded = client.get(f"/macros/shared/{shared['share_code']}").get_json()
         assert loaded["success"] is True
         assert loaded["code"] == "print('hi')"
+
+    def test_share_code_uses_secure_high_entropy_token(self, client, monkeypatch):
+        monkeypatch.setattr(app_module.secrets, "token_urlsafe", lambda n: "SecureToken_123456789")
+        shared = client.post("/macros/share", json={"name": "secure", "code": "print(1)"}).get_json()
+        assert shared["success"] is True
+        assert shared["share_code"] == "SecureToken_123456789"
 
     def test_macro_file_normalizes_bad_records(self, client):
         client.get("/macros")
@@ -1772,7 +2035,7 @@ class TestVoiceMacros:
         assert client.get("/macros/get/legacy").get_json()["code"] == "print(3)"
 
     def test_shared_macro_bad_expiry_does_not_500(self, client):
-        code = "ABCD"
+        code = "BadExpiryToken12345"
         path = app_module._shared_macro_path(code)
         with open(path, "w", encoding="utf-8") as handle:
             json.dump({"name": "bad", "code": "print(1)", "expires_at": "not-a-float"}, handle)
@@ -1782,7 +2045,7 @@ class TestVoiceMacros:
         assert res.get_json()["success"] is False
 
     def test_shared_macro_non_python_is_rejected_and_removed(self, client):
-        code = "EFGH"
+        code = "BadPythonToken12345"
         path = app_module._shared_macro_path(code)
         with open(path, "w", encoding="utf-8") as handle:
             json.dump({"name": "bad", "code": HTML_DOCUMENT, "expires_at": time.time() + 3600}, handle)
@@ -1791,6 +2054,17 @@ class TestVoiceMacros:
         assert res.status_code == 400
         assert "python-only" in res.get_json()["error"].lower()
         assert not os.path.exists(path)
+
+    def test_shared_macro_lookup_rate_limit(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "_SHARED_MACRO_LOOKUP_LIMIT", 2)
+        with app_module._shared_macro_lookup_lock:
+            app_module._shared_macro_lookup_attempts.clear()
+
+        code = "MissingToken123456"
+        assert client.get(f"/macros/shared/{code}").status_code == 404
+        assert client.get(f"/macros/shared/{code}").status_code == 404
+        limited = client.get(f"/macros/shared/{code}")
+        assert limited.status_code == 429
 
 
 # ===========================================================================

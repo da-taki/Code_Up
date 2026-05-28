@@ -11,6 +11,8 @@ import sys
 import json
 import types
 import time
+import subprocess
+import threading
 import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -69,6 +71,130 @@ def test_gemini_disabled_returns_message(client):
     data = res.get_json()
     assert "analysis" in data
     assert "disabled" in data["analysis"].lower() or "service" in data["analysis"].lower()
+
+
+def test_app_import_does_not_start_background_services():
+    env = os.environ.copy()
+    env["FLASK_TESTING"] = "true"
+    env.pop("FLASK_SECRET_KEY", None)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import app; print(app._cleanup_thread is None, app._gemini_executor is None)",
+        ],
+        cwd=os.path.abspath(os.path.join(os.path.dirname(__file__), "..")),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "True True" in result.stdout
+
+
+def test_start_background_services_is_idempotent_under_concurrent_calls(monkeypatch):
+    real_thread = threading.Thread
+    created = []
+
+    class FakeThread:
+        def __init__(self, *args, **kwargs):
+            self.started = False
+            created.append(self)
+
+        def start(self):
+            self.started = True
+
+        def is_alive(self):
+            return self.started
+
+    monkeypatch.setattr(app_module, "_cleanup_thread", None)
+    monkeypatch.setattr(app_module.threading, "Thread", FakeThread)
+
+    barrier = threading.Barrier(8)
+    results = []
+    errors = []
+
+    def call_start():
+        try:
+            barrier.wait(timeout=5)
+            results.append(app_module.start_background_services())
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [real_thread(target=call_start) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert errors == []
+    assert len(created) == 1
+    assert len({id(result) for result in results}) == 1
+
+
+def test_gemini_executor_is_singleton_and_shutdown_is_idempotent(monkeypatch):
+    real_thread = threading.Thread
+
+    class FakeExecutor:
+        instances = []
+
+        def __init__(self, *args, **kwargs):
+            self.shutdown_calls = []
+            FakeExecutor.instances.append(self)
+
+        def shutdown(self, **kwargs):
+            self.shutdown_calls.append(kwargs)
+
+    monkeypatch.setattr(app_module, "_gemini_executor", None)
+    monkeypatch.setattr(app_module, "ThreadPoolExecutor", FakeExecutor)
+
+    barrier = threading.Barrier(8)
+    results = []
+    errors = []
+
+    def get_executor():
+        try:
+            barrier.wait(timeout=5)
+            results.append(app_module._get_gemini_executor())
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [real_thread(target=get_executor) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert errors == []
+    assert len(FakeExecutor.instances) == 1
+    assert len({id(result) for result in results}) == 1
+
+    app_module.shutdown_background_services()
+    app_module.shutdown_background_services()
+    assert app_module._gemini_executor is None
+    assert FakeExecutor.instances[0].shutdown_calls == [
+        {"wait": False, "cancel_futures": True}
+    ]
+
+
+def test_production_import_requires_secret_key():
+    env = os.environ.copy()
+    env.pop("FLASK_SECRET_KEY", None)
+    env.pop("FLASK_TESTING", None)
+    env["CODEUP_ENV"] = "production"
+    env["FLASK_ENV"] = "production"
+    env["FLASK_DEBUG"] = "0"
+    result = subprocess.run(
+        [sys.executable, "-c", "import app"],
+        cwd=os.path.abspath(os.path.join(os.path.dirname(__file__), "..")),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode != 0
+    assert "FLASK_SECRET_KEY" in result.stderr
 
 
 def test_gemini_key_not_configured_returns_message(client, monkeypatch):
@@ -277,7 +403,35 @@ def test_fix_code_surfaces_ai_service_error(client, monkeypatch):
 @pytest.mark.parametrize("code, expected_fragments", [
     (
         "import os\nprint(os.getcwd())",
-        ["not allowed", "import"],
+        ["not allowed", "os"],
+    ),
+    (
+        "import sys\nprint(sys.version)",
+        ["not allowed", "sys"],
+    ),
+    (
+        "import subprocess\nprint(subprocess)",
+        ["not allowed", "subprocess"],
+    ),
+    (
+        "import pathlib\nprint(pathlib.Path('.'))",
+        ["not allowed", "pathlib"],
+    ),
+    (
+        "import importlib\nprint(importlib)",
+        ["not allowed", "importlib"],
+    ),
+    (
+        "from os import path\nprint(path)",
+        ["not allowed", "os"],
+    ),
+    (
+        "import _strptime\nprint(_strptime)",
+        ["not allowed", "_strptime"],
+    ),
+    (
+        "from datetime import _strptime\nprint(_strptime)",
+        ["not allowed", "_strptime"],
     ),
     (
         "print(object.__subclasses__())",
@@ -334,6 +488,69 @@ def test_sandbox_allowed_modules(client):
     data = res.get_json()
     assert data["success"] is True, f"math import failed: {data.get('error')}"
     assert "3" in data.get("output", "")
+
+
+@pytest.mark.timeout(15)
+def test_sandbox_function_reads_module_global_without_false_scope_loss(client):
+    code = "answer = 42\n\ndef show():\n    print(answer)\n\nshow()"
+    res = client.post("/run", json={"code": code})
+    assert res.status_code == 200
+    data = res.get_json()
+    assert data["success"] is True, data.get("error")
+    assert "42" in data.get("output", "")
+    changes = [
+        change
+        for event in data.get("trace", [])
+        for change in event.get("changes", [])
+    ]
+    assert "answer went out of scope" not in changes
+
+
+@pytest.mark.timeout(15)
+def test_sandbox_simple_class_definition_runs(client):
+    code = "class Dog:\n    def speak(self):\n        return 'woof'\n\nprint(Dog().speak())"
+    res = client.post("/run", json={"code": code})
+    data = res.get_json()
+    assert data["success"] is True, data.get("error")
+    assert "woof" in data.get("output", "")
+
+
+@pytest.mark.timeout(15)
+def test_sandbox_name_is_main(client):
+    res = client.post("/run", json={"code": "if __name__ == '__main__':\n    print('main block')"})
+    data = res.get_json()
+    assert data["success"] is True, data.get("error")
+    assert "main block" in data.get("output", "")
+
+
+@pytest.mark.timeout(15)
+def test_sandbox_datetime_imports(client):
+    code = (
+        "import datetime\n"
+        "from datetime import date\n"
+        "print(datetime.date(2026, 5, 28).isoformat())\n"
+        "print(date(2026, 5, 28).isoformat())\n"
+        "print(datetime.datetime.strptime('2026-05-28', '%Y-%m-%d').date().isoformat())"
+    )
+    res = client.post("/run", json={"code": code})
+    data = res.get_json()
+    assert data["success"] is True, data.get("error")
+    assert data.get("output", "").count("2026-05-28") == 3
+
+
+def test_sandbox_module_allowlist_and_preload_are_consistent():
+    import sandbox_runner
+
+    assert "date" not in sandbox_runner.ALLOWED_MODULES
+    assert set(sandbox_runner._PRELOADED) == set(sandbox_runner.ALLOWED_MODULES)
+
+
+@pytest.mark.timeout(15)
+def test_sandbox_date_is_not_top_level_module(client):
+    res = client.post("/run", json={"code": "import date"})
+    data = res.get_json()
+    assert data["success"] is False
+    assert "not allowed" in data.get("error", "").lower()
 
 
 def test_sandbox_normal_execution(client):
@@ -622,6 +839,26 @@ def test_trace_endpoint_returns_structure(client):
     assert "trace" in data
     assert "current_index" in data
     assert "duration_ms" in data
+
+
+@pytest.mark.timeout(15)
+def test_custom_session_cookie_is_single_and_reused(client):
+    run = client.post("/run", json={"code": "x = 1\nprint(x)"})
+    assert run.status_code == 200
+    session_cookies = [
+        value for value in run.headers.getlist("Set-Cookie")
+        if value.startswith(app_module.SESSION_COOKIE_NAME + "=")
+    ]
+    assert len(session_cookies) == 1
+    session_id = _client_session_id(client)
+    assert session_id in app_module._session_traces
+
+    followup = client.get("/execution-trace")
+    followup_cookies = [
+        value for value in followup.headers.getlist("Set-Cookie")
+        if value.startswith(app_module.SESSION_COOKIE_NAME + "=")
+    ]
+    assert followup_cookies == []
 
 
 # ===========================================================================
@@ -1770,6 +2007,25 @@ class TestConversationalMentor:
         assert "function renderMentorTranscript()" in js
         assert "text.textContent = turn.text || ''" in js
         assert "mentorTranscript.innerHTML" not in js
+
+    def test_input_dialog_exists_in_template_and_js_opens_it(self):
+        root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        html = open(os.path.join(root, "templates", "index.html"), encoding="utf-8").read()
+        js = open(os.path.join(root, "static", "app.js"), encoding="utf-8").read()
+        body_start = js.index("function showInputDialog")
+        body_end = js.index("// ---------- LIST VARIABLES", body_start)
+        dialog_body = js[body_start:body_end]
+
+        assert 'id="_cuInputDialog"' in html
+        assert 'tabindex="-1"' in html
+        assert "const inputDialog = document.getElementById('_cuInputDialog')" in js
+        assert "overlay.hidden = false" in dialog_body
+        assert "overlay.hidden = true" in dialog_body
+        assert "input.focus()" in dialog_body
+        assert "e.key === 'Escape'" in dialog_body
+        assert "overlay._cuClose" in dialog_body
+        assert "document.createElement" not in dialog_body
+        assert "overlay.remove()" not in dialog_body
 
     @pytest.mark.parametrize("text, expected_action, expected_mode", [
         ("give me a tiny hint", "mentor_chat", "tiny_hint"),

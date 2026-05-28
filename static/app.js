@@ -3317,7 +3317,8 @@ window.addEventListener('DOMContentLoaded', () => {
     if (e.key === 'Escape') {
       const paletteOverlay = document.getElementById('commandPaletteOverlay');
       const paletteOpen = paletteOverlay && !paletteOverlay.hasAttribute('hidden');
-      const dialogOpen  = !!document.getElementById('_cuInputDialog');
+      const inputDialog = document.getElementById('_cuInputDialog');
+      const dialogOpen  = !!(inputDialog && !inputDialog.hidden);
       if (paletteOpen || dialogOpen) return;
       if (AppState.isSpeaking || (window.speechSynthesis && window.speechSynthesis.speaking) || _walkActive) {
         _walkActive = false;
@@ -4464,71 +4465,56 @@ function restartTutorial() {
 }
 
 function showInputDialog(promptText, callback) {
-  // window.prompt is inaccessible to screen readers — use an inline modal instead
-  const existing = document.getElementById('_cuInputDialog');
-  if (existing) existing.remove();
+  // window.prompt is inaccessible to screen readers; use the template modal.
+  const overlay = document.getElementById('_cuInputDialog');
+  const label = document.getElementById('_cuDialogLabel');
+  const input = document.getElementById('_cuDialogInput');
+  const ok = document.getElementById('_cuDialogOk');
+  const cancel = document.getElementById('_cuDialogCancel');
+  if (!overlay || !label || !input || !ok || !cancel) return;
+  if (typeof overlay._cuClose === 'function') overlay._cuClose();
 
-  const overlay = document.createElement('div');
-  overlay.id = '_cuInputDialog';
-  overlay.setAttribute('role', 'dialog');
-  overlay.setAttribute('aria-modal', 'true');
-  overlay.setAttribute('aria-label', promptText);
-  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:30000;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);';
-
-  const dialog = document.createElement('div');
-  dialog.style.cssText = 'background:var(--bg-panel);border:1px solid var(--border-strong);border-radius:12px;padding:24px;min-width:280px;max-width:400px;width:90%;color:var(--text-main);';
-
-  const label = document.createElement('label');
-  label.id = '_cuDialogLabel';
-  label.style.cssText = 'display:block;color:var(--text-main);margin-bottom:12px;font-family:inherit;font-size:0.9rem;';
   label.textContent = promptText;
-
-  const input = document.createElement('input');
-  input.id = '_cuDialogInput';
-  input.type = 'text';
-  input.setAttribute('aria-labelledby', '_cuDialogLabel');
-  input.style.cssText = 'width:100%;padding:8px 12px;border-radius:6px;border:1px solid var(--border-soft);background:var(--bg-soft);color:var(--text-main);font-family:inherit;font-size:1rem;margin-bottom:12px;';
-
-  const actions = document.createElement('div');
-  actions.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;';
-
-  const cancel = document.createElement('button');
-  cancel.id = '_cuDialogCancel';
-  cancel.type = 'button';
-  cancel.style.cssText = 'padding:8px 16px;border-radius:6px;border:1px solid var(--border-soft);background:var(--bg-soft);color:var(--text-main);cursor:pointer;font-family:inherit;';
-  cancel.textContent = 'Cancel';
-
-  const ok = document.createElement('button');
-  ok.id = '_cuDialogOk';
-  ok.type = 'button';
-  ok.style.cssText = 'padding:8px 16px;border-radius:6px;border:none;background:var(--accent);color:#fff;font-weight:600;cursor:pointer;font-family:inherit;';
-  ok.textContent = 'Go';
-
-  actions.append(cancel, ok);
-  dialog.append(label, input, actions);
-  overlay.appendChild(dialog);
-
-  document.body.appendChild(overlay);
+  overlay.setAttribute('aria-label', promptText);
+  input.value = '';
+  overlay.hidden = false;
 
   function confirm() {
     const val = input.value.trim();
-    overlay.remove();
+    close();
     if (editor) editor.focus();
     if (val) callback(parseInt(val, 10) || 1);
   }
   function dismiss() {
-    overlay.remove();
+    close();
     if (editor) editor.focus();
     speak('Cancelled.');
+  }
+  function close() {
+    overlay.hidden = true;
+    ok.removeEventListener('click', confirm);
+    cancel.removeEventListener('click', dismiss);
+    input.removeEventListener('keydown', onInputKeydown);
+    overlay.removeEventListener('click', onOverlayClick);
+    overlay.removeEventListener('keydown', onDialogKeydown);
+    delete overlay._cuClose;
+  }
+  function onInputKeydown(e) {
+    if (e.key === 'Enter')  { e.preventDefault(); confirm(); }
+  }
+  function onDialogKeydown(e) {
+    if (e.key === 'Escape') { e.preventDefault(); dismiss(); }
+  }
+  function onOverlayClick(e) {
+    if (e.target === overlay) dismiss();
   }
 
   ok.addEventListener('click', confirm);
   cancel.addEventListener('click', dismiss);
-  input.addEventListener('keydown', e => {
-    if (e.key === 'Enter')  { e.preventDefault(); confirm(); }
-    if (e.key === 'Escape') { e.preventDefault(); dismiss(); }
-  });
-  overlay.addEventListener('click', e => { if (e.target === overlay) dismiss(); });
+  input.addEventListener('keydown', onInputKeydown);
+  overlay.addEventListener('click', onOverlayClick);
+  overlay.addEventListener('keydown', onDialogKeydown);
+  overlay._cuClose = close;
 
   requestAnimationFrame(() => {
     input.focus();

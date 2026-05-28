@@ -1,10 +1,12 @@
 import ast
+import atexit
 import io
 import json
 import os
 import queue as _queue_mod
 import random
 import re
+import secrets
 import subprocess
 import sys
 import tempfile
@@ -26,6 +28,43 @@ from structure_parser import CodeAnalyzer
 load_dotenv()
 
 __version__ = "0.8.0"
+
+
+def _debug_log(message: str):
+    print(f"[CodeUp] {message}", file=sys.stderr)
+
+
+def _truthy_env(name: str) -> bool:
+    return os.environ.get(name, "").lower() in {"1", "true", "yes", "on"}
+
+
+def _is_testing_mode():
+    return _truthy_env("FLASK_TESTING")
+
+
+def _is_dev_or_testing_mode():
+    codeup_env = os.environ.get("CODEUP_ENV", "").lower()
+    flask_env = os.environ.get("FLASK_ENV", "").lower()
+    return (
+        _is_testing_mode()
+        or __name__ == "__main__"
+        or codeup_env in {"dev", "development", "test", "testing"}
+        or flask_env in {"dev", "development"}
+        or _truthy_env("FLASK_DEBUG")
+    )
+
+
+def _configure_secret_key(flask_app: Flask):
+    secret = os.environ.get("FLASK_SECRET_KEY")
+    if secret:
+        flask_app.secret_key = secret
+        return
+    if _is_dev_or_testing_mode():
+        flask_app.secret_key = secrets.token_urlsafe(32)
+        return
+    raise RuntimeError(
+        "FLASK_SECRET_KEY must be set outside testing/development modes."
+    )
 
 # ---------------------------------------------------------------------------
 # Interactive run (Mechanism B) state
@@ -102,8 +141,8 @@ def cleanup_stale_runs():
     for run_id in stale_ids:
         try:
             _cleanup_run(run_id)
-        except Exception:
-            pass
+        except (OSError, RuntimeError) as e:
+            _debug_log(f"Could not clean up stale run {run_id}: {e}")
 
 
 def cleanup_orphan_bookmarks_and_telemetry():
@@ -120,12 +159,49 @@ def cleanup_orphan_bookmarks_and_telemetry():
     with _voice_telemetry_lock:
         if len(_voice_telemetry) > _VOICE_TELEMETRY_CAP:
             del _voice_telemetry[:len(_voice_telemetry) - _VOICE_TELEMETRY_CAP]
-_cleanup_thread = threading.Thread(target=_session_cleanup_worker, daemon=True)
-_cleanup_thread.start()
+_cleanup_thread = None
+_cleanup_thread_lock = threading.Lock()
+
+
+def start_background_services():
+    """Start process-local background maintenance once the app is running."""
+    global _cleanup_thread
+    with _cleanup_thread_lock:
+        if _cleanup_thread and _cleanup_thread.is_alive():
+            return _cleanup_thread
+        _cleanup_thread = threading.Thread(
+            target=_session_cleanup_worker,
+            name="codeup-session-cleanup",
+            daemon=True,
+        )
+        _cleanup_thread.start()
+        return _cleanup_thread
 
 # Bounded ThreadPoolExecutor for Gemini API calls (prevents resource exhaustion)
 # Max 3 concurrent requests with queue size limit
-_gemini_executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="gemini")
+_gemini_executor = None
+_gemini_executor_lock = threading.Lock()
+
+
+def _get_gemini_executor():
+    global _gemini_executor
+    with _gemini_executor_lock:
+        if _gemini_executor is None:
+            _gemini_executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="gemini")
+        return _gemini_executor
+
+
+def shutdown_background_services():
+    """Release lazy process-local resources during interpreter shutdown."""
+    global _gemini_executor
+    with _gemini_executor_lock:
+        executor = _gemini_executor
+        _gemini_executor = None
+    if executor is not None:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+
+atexit.register(shutdown_background_services)
 
 # FIX H-1: Track active+queued requests with a thread-safe counter instead of
 # accessing private ThreadPoolExecutor internals (_threads, _work_queue).
@@ -154,14 +230,14 @@ if sys.platform != "win32":
                 _resource.setrlimit(_resource.RLIMIT_NPROC, (64, 64))
             except (ValueError, OSError):
                 pass
-        except Exception:
-            pass
+        except (ValueError, OSError) as e:
+            _debug_log(f"Could not apply subprocess resource limits: {e}")
 else:
     def _set_subprocess_limits():
         pass
 
 app = Flask(__name__)
-app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'dev-secret-key-change-in-production')
+_configure_secret_key(app)
 
 # Session configuration
 SESSION_COOKIE_NAME = 'codeup_session'
@@ -171,6 +247,12 @@ SESSION_COOKIE_MAX_AGE = 3600 * 24 * 7  # 7 days
 SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", "false").lower() == "true"
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = None if os.environ.get("FLASK_TESTING", "false").lower() == "true" else 'Lax'
+
+
+@app.before_request
+def ensure_background_services_started():
+    if not _is_testing_mode():
+        start_background_services()
 
 # FIX C-1: Register ONE module-level after_request handler instead of
 # registering a new permanent handler on every new-session request.
@@ -329,8 +411,6 @@ _ALLOWED_ORIGINS = {
     for o in os.environ.get("ALLOWED_ORIGINS", "").split(",")
     if o.strip()
 }
-def _is_testing_mode():
-    return os.environ.get("FLASK_TESTING", "false").lower() == "true"
 
 
 @app.before_request
@@ -377,8 +457,8 @@ def enforce_same_origin():
                 return None
             if referer_origin in _ALLOWED_ORIGINS:
                 return None
-        except Exception:
-            pass
+        except ValueError as e:
+            _debug_log(f"Could not parse Referer header: {e}")
         return jsonify({"success": False, "error": "Cross-origin request blocked"}), 403
 
     return None
@@ -395,8 +475,8 @@ def _snippets_path(session_id: str = None) -> str:
     """
     try:
         os.makedirs(DATA_DIR, exist_ok=True)
-    except Exception:
-        pass
+    except OSError as e:
+        _debug_log(f"Could not create data directory {DATA_DIR!r}: {e}")
 
     if session_id is None:
         session_id = get_session_id()
@@ -498,8 +578,8 @@ def load_snippets() -> dict:
                     code = _safe_text(item.get("code") or "")
                     normalized.append({"id": sid, "name": name, "code": code})
                 return {"snippets": normalized}
-    except Exception:
-        pass
+    except (OSError, json.JSONDecodeError) as e:
+        _debug_log(f"Could not load snippets from {path!r}: {e}")
     return {"snippets": []}
 
 _snippets_lock = threading.Lock()
@@ -744,7 +824,7 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en", max_
         _gemini_queued_requests += 1
 
     try:
-        future = _gemini_executor.submit(_do_call)
+        future = _get_gemini_executor().submit(_do_call)
     except Exception as e:
         with _gemini_active_lock:
             _gemini_queued_requests = max(0, _gemini_queued_requests - 1)
@@ -1682,12 +1762,12 @@ def run_code():
                         os.killpg(os.getpgid(proc_handle.pid), _signal.SIGKILL)
                     else:
                         proc_handle.kill()
-                except Exception:
-                    pass
+                except (OSError, ProcessLookupError) as e:
+                    _debug_log(f"Could not terminate timed-out run: {e}")
                 try:
                     proc_handle.communicate(timeout=2)
-                except Exception:
-                    pass
+                except subprocess.TimeoutExpired as e:
+                    _debug_log(f"Timed-out run did not exit after kill: {e}")
                 stderr_buf.write(f"Execution timed out after {time_limit}s (subprocess)")
         finally:
             for _tmp in (code_file_path, inputs_file_path):
@@ -1708,7 +1788,7 @@ def run_code():
                 trace_error = 'Trace file not found in workspace'
         except json.JSONDecodeError:
             trace_error = 'Trace data was corrupted or incomplete'
-        except Exception as e:
+        except OSError as e:
             trace_error = f'Error reading trace: {str(e)}'
         finally:
             try:
@@ -3842,8 +3922,8 @@ def _cleanup_run(run_id):
                         pass
                 else:
                     proc.kill()
-        except Exception:
-            pass
+        except (OSError, RuntimeError) as e:
+            _debug_log(f"Could not terminate run {run_id}: {e}")
     fifo = state.get("fifo")
     if fifo and os.path.exists(fifo):
         try:
@@ -4570,4 +4650,5 @@ def mentor_bug_challenge():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5000"))
     host = os.environ.get("HOST", "127.0.0.1")
+    start_background_services()
     app.run(debug=False, host=host, port=port)

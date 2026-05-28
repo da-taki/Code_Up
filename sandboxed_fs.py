@@ -7,8 +7,10 @@ All file operations are restricted to /workspace folder.
 
 import atexit
 import os
+import shutil
 import tempfile
 import threading
+import time
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -40,6 +42,14 @@ class SandboxedFileSystem:
         
         # Ensure workspace path is absolute and normalized
         self.workspace_dir = os.path.abspath(self.workspace_dir)
+        self.created_at = time.time()
+        self.last_accessed = self.created_at
+
+    def touch(self) -> None:
+        self.last_accessed = time.time()
+
+    def max_file_size(self) -> int:
+        return _max_file_size()
     
     def _validate_path(self, filepath: str) -> str:
         """
@@ -65,9 +75,6 @@ class SandboxedFileSystem:
             raise ValueError(f"Path '{filepath}' is outside workspace")
         return str(resolved)
     
-    # Configurable via SANDBOX_MAX_FILE_SIZE env var. Default 5 MB.
-    MAX_FILE_SIZE = _max_file_size()
-
     def write(self, filepath: str, content: str, encoding: str = "utf-8") -> Dict:
         """
         Write file to workspace.
@@ -81,9 +88,11 @@ class SandboxedFileSystem:
             {"success": bool, "path": str, "size": int, "error": str}
         """
         try:
+            self.touch()
+            limit = self.max_file_size()
             # enforce size limit before writing to avoid resource exhaustion
-            if len(content.encode(encoding)) > self.MAX_FILE_SIZE:
-                raise ValueError(f"File exceeds maximum size of {self.MAX_FILE_SIZE} bytes")
+            if len(content.encode(encoding)) > limit:
+                raise ValueError(f"File exceeds maximum size of {limit} bytes")
 
             abs_path = self._validate_path(filepath)
             
@@ -119,6 +128,7 @@ class SandboxedFileSystem:
             {"success": bool, "content": str, "size": int, "error": str}
         """
         try:
+            self.touch()
             abs_path = self._validate_path(filepath)
             
             if not os.path.exists(abs_path):
@@ -136,11 +146,12 @@ class SandboxedFileSystem:
                 }
 
             size = os.path.getsize(abs_path)
-            if size > self.MAX_FILE_SIZE:
+            limit = self.max_file_size()
+            if size > limit:
                 return {
                     "success": False,
                     "path": filepath,
-                    "error": f"File exceeds maximum size of {self.MAX_FILE_SIZE} bytes"
+                    "error": f"File exceeds maximum size of {limit} bytes"
                 }
             
             with open(abs_path, "r", encoding=encoding) as f:
@@ -170,6 +181,7 @@ class SandboxedFileSystem:
             {"success": bool, "path": str, "error": str}
         """
         try:
+            self.touch()
             abs_path = self._validate_path(filepath)
             
             if not os.path.exists(abs_path):
@@ -210,6 +222,7 @@ class SandboxedFileSystem:
             {"success": bool, "files": list, "dirs": list, "error": str}
         """
         try:
+            self.touch()
             abs_path = self._validate_path(dirpath)
             
             if not os.path.exists(abs_path):
@@ -257,6 +270,7 @@ class SandboxedFileSystem:
     def get_workspace_info(self) -> Dict:
         """Get information about the workspace."""
         try:
+            self.touch()
             total_files = 0
             total_size = 0
             
@@ -282,7 +296,6 @@ class SandboxedFileSystem:
         """Remove the entire workspace directory (use with caution)."""
         try:
             if os.path.exists(self.workspace_dir):
-                import shutil
                 shutil.rmtree(self.workspace_dir)
                 return {"success": True}
         except Exception as e:
@@ -293,6 +306,38 @@ class SandboxedFileSystem:
 # Per-session sandbox storage (thread-safe dict keyed by session id)
 _sandboxes: dict = {}
 _sandboxes_lock = threading.Lock()
+SANDBOX_WORKSPACE_TTL_SECONDS = int(os.environ.get("SANDBOX_WORKSPACE_TTL_SECONDS", "3600"))
+
+
+def _workspace_ttl_seconds() -> int:
+    try:
+        value = int(os.environ.get("SANDBOX_WORKSPACE_TTL_SECONDS", str(SANDBOX_WORKSPACE_TTL_SECONDS)))
+    except (TypeError, ValueError):
+        value = 3600
+    return max(60, value)
+
+
+def cleanup_sandbox(session_id: str) -> bool:
+    with _sandboxes_lock:
+        sb = _sandboxes.pop(session_id, None)
+    if not sb:
+        return False
+    sb.cleanup()
+    return True
+
+
+def cleanup_stale_sandboxes(now: Optional[float] = None, max_age: Optional[int] = None) -> int:
+    now = time.time() if now is None else now
+    max_age = _workspace_ttl_seconds() if max_age is None else max_age
+    expired = []
+    with _sandboxes_lock:
+        for sid, sb in list(_sandboxes.items()):
+            if now - getattr(sb, "last_accessed", now) > max_age:
+                expired.append((sid, sb))
+                del _sandboxes[sid]
+    for _, sb in expired:
+        sb.cleanup()
+    return len(expired)
 
 @atexit.register
 def _cleanup_all_sandboxes_on_exit():
@@ -312,6 +357,17 @@ def get_sandbox(session_id: str = "default") -> "SandboxedFileSystem":
     never share each other's workspace.
     """
     with _sandboxes_lock:
+        now = time.time()
+        max_age = _workspace_ttl_seconds()
+        expired = []
+        for sid, sb in list(_sandboxes.items()):
+            if sid != session_id and now - getattr(sb, "last_accessed", now) > max_age:
+                expired.append(sb)
+                del _sandboxes[sid]
         if session_id not in _sandboxes:
             _sandboxes[session_id] = SandboxedFileSystem()
-        return _sandboxes[session_id]
+        sandbox = _sandboxes[session_id]
+        sandbox.touch()
+    for sb in expired:
+        sb.cleanup()
+    return sandbox

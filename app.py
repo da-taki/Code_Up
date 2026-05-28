@@ -264,6 +264,9 @@ def cleanup_old_sessions():
 MAX_REQUEST_SIZE = 1_000_000  # 1 MB max request body
 MAX_CODE_SIZE = 100_000       # 100 KB max code
 MAX_GEMINI_TIMEOUT = 30       # 30 second timeout for LLM calls
+MAX_API_KEY_SIZE = 8_000
+MAX_VOICE_TEXT_SIZE = 2_000
+MAX_LEARNING_TOPIC_SIZE = 500
 try:
     DEFAULT_AI_MAX_TOKENS = int(os.environ.get("GROQ_MAX_TOKENS", "2048"))
 except (TypeError, ValueError):
@@ -421,6 +424,12 @@ def safe(v: Any, d: Any = "") -> Any:
     """Return `v` when not None, otherwise return default `d`."""
     return v if v is not None else d
 
+def _safe_text(value: Any, default: str = "", limit: Optional[int] = None) -> str:
+    text = str(default if value is None else value)
+    if limit is not None:
+        return text[:limit]
+    return text
+
 def _looks_like_non_python_code(code: str) -> bool:
     """Reject whole-document HTML/CSS/JS accidentally pasted into the Python IDE."""
     text = str(code or "").lstrip("\ufeff \t\r\n")
@@ -479,8 +488,16 @@ def load_snippets() -> dict:
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
-            if isinstance(data, dict) and "snippets" in data:
-                return data
+            if isinstance(data, dict):
+                normalized = []
+                for item in data.get("snippets", []):
+                    if not isinstance(item, dict):
+                        continue
+                    sid = _safe_text(item.get("id") or uuid.uuid4())
+                    name = _safe_text(item.get("name") or "Untitled", limit=256).strip() or "Untitled"
+                    code = _safe_text(item.get("code") or "")
+                    normalized.append({"id": sid, "name": name, "code": code})
+                return {"snippets": normalized}
     except Exception:
         pass
     return {"snippets": []}
@@ -957,10 +974,12 @@ def set_gemini_api_key(key):
 def api_config():
     """Set the Groq API key for the session."""
     body = safejson()
-    api_key = safe(body.get("api_key"), "")
+    api_key = _safe_text(body.get("api_key"), limit=MAX_API_KEY_SIZE).strip()
 
     if not api_key or api_key == "Insert_API_Key_Here":
         return jsonify({"success": False, "error": "Invalid API key"}), 400
+    if len(api_key) >= MAX_API_KEY_SIZE:
+        return jsonify({"success": False, "error": "API key is too long"}), 413
 
     try:
         set_gemini_api_key(api_key)
@@ -2746,9 +2765,13 @@ def snippets():
     data = load_snippets()
     body = safejson()
 
-    name = str(safe(body.get("name"), "Untitled"))
-    code = str(safe(body.get("code"), ""))
+    name = _safe_text(body.get("name"), "Untitled", limit=257).strip()
+    code = _safe_text(body.get("code"), "")
 
+    if not name:
+        return jsonify({"success": False, "error": "Name is required"}), 400
+    if not code.strip():
+        return jsonify({"success": False, "error": "Code is required"}), 400
     if len(code) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
     blocked = _reject_non_python_response(code)
@@ -2786,15 +2809,22 @@ def snippet_detail(sid):
             found = True
             snippet_name = s.get("name", "Snippet")
             if "name" in body:
-                new_name = str(body["name"])
+                new_name = _safe_text(body["name"], limit=257).strip()
+                if not new_name:
+                    return jsonify({"success": False, "error": "Name is required"}), 400
                 if len(new_name) > 256:
                     return jsonify({"success": False, "error": "Name too long (max 256 chars)"}), 400
                 s["name"] = new_name
                 snippet_name = new_name
             if "code" in body:
-                new_code = str(body["code"])
+                new_code = _safe_text(body["code"])
+                if not new_code.strip():
+                    return jsonify({"success": False, "error": "Code is required"}), 400
                 if len(new_code) > MAX_CODE_SIZE:
                     return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
+                blocked = _reject_non_python_response(new_code)
+                if blocked:
+                    return blocked
                 s["code"] = new_code
     if not found:
         return jsonify({"success": False, "error": "Snippet not found"}), 404
@@ -3195,7 +3225,9 @@ def get_voice_telemetry():
 
 @app.route("/voice-command", methods=["POST"])
 def voice():
-    text = safe(safejson().get("text"), "")
+    text = _safe_text(safejson().get("text"), limit=MAX_VOICE_TEXT_SIZE + 1).strip()
+    if len(text) > MAX_VOICE_TEXT_SIZE:
+        return jsonify({"success": False, "action": "unknown", "error": "Voice command is too long"}), 413
     parsed = parse_intent(text)
     intent = parsed.get("intent")
     slots = parsed.get("slots", {})
@@ -3398,7 +3430,7 @@ def voice():
         is_high_freq = best in HIGH_FREQUENCY_COMMANDS and bscore >= 65
 
         if is_clear_winner or is_high_freq:
-            return jsonify({"success": True, "action": best, "confidence": bscore / 100.0})
+            return _store_and_return({"success": True, "action": best, "confidence": bscore / 100.0})
 
         options = [best, second] if second else [best]
         return jsonify({
@@ -3531,6 +3563,7 @@ def bookmarks():
         position = int(body.get("position", 0))
     except (ValueError, TypeError):
         position = 0
+    position = max(0, position)
     if not label:
         # Auto-name based on count
         with _output_bookmarks_lock:
@@ -3555,7 +3588,9 @@ def read_from_bookmark():
     """Return the slice of output starting from a named bookmark."""
     body = safejson()
     label = str(safe(body.get("label"), "")).strip().lower()
-    full_output = str(safe(body.get("output"), ""))
+    full_output = _safe_text(body.get("output"), "", limit=MAX_REQUEST_SIZE + 1)
+    if len(full_output) > MAX_REQUEST_SIZE:
+        return jsonify({"success": False, "error": "Output too large"}), 413
     session_id = get_session_id()
 
     with _output_bookmarks_lock:
@@ -3616,7 +3651,20 @@ def _load_macros():
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
             if isinstance(data, dict):
-                return data
+                cleaned = {}
+                for name, value in data.items():
+                    safe_name = _safe_text(name, limit=64).strip().lower()
+                    if not safe_name or not re.match(r'^[a-z0-9 _\u0900-\u097f-]+$', safe_name):
+                        continue
+                    if isinstance(value, dict):
+                        code = _safe_text(value.get("code"), "")
+                        saved_at = value.get("saved_at", 0)
+                    else:
+                        code = _safe_text(value, "")
+                        saved_at = 0
+                    if code.strip():
+                        cleaned[safe_name] = {"code": code, "saved_at": saved_at}
+                return cleaned
     except Exception:
         pass
     return {}
@@ -3744,17 +3792,31 @@ def get_shared_macro(code):
             payload = json.load(handle)
     except Exception:
         return jsonify({"success": False, "error": "Shared macro not readable"}), 404
-    if float(payload.get("expires_at", 0)) < time.time():
+    if not isinstance(payload, dict):
+        return jsonify({"success": False, "error": "Shared macro not readable"}), 404
+    try:
+        expires_at = float(payload.get("expires_at", 0))
+    except (TypeError, ValueError):
+        expires_at = 0
+    if expires_at < time.time():
         try:
             os.remove(path)
         except OSError:
             pass
         return jsonify({"success": False, "error": "Shared macro expired"}), 404
+    code_value = _safe_text(payload.get("code"), "")
+    blocked = _reject_non_python_response(code_value)
+    if blocked:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        return blocked
     return jsonify({
         "success": True,
         "share_code": safe_code,
         "name": payload.get("name", "shared macro"),
-        "code": payload.get("code", ""),
+        "code": code_value,
     })
 
 
@@ -4254,8 +4316,10 @@ def _validate_quiz_response(parsed: dict) -> Optional[str]:
     answer = parsed.get("answer", "")
     if not isinstance(answer, str) or answer.upper() not in ("A", "B", "C"):
         return "Quiz answer must be A, B, or C"
-    if not parsed.get("explanation"):
+    if not parsed.get("explanation") or not isinstance(parsed.get("explanation"), str):
         return "Quiz missing explanation"
+    parsed["question"] = parsed["question"].strip()
+    parsed["explanation"] = parsed["explanation"].strip()
     normalized = []
     for idx, option in enumerate(options):
         if not isinstance(option, str) or not option.strip():
@@ -4273,7 +4337,9 @@ def _strip_code_fences(text: str) -> str:
 @app.route("/mentor/quiz", methods=["POST"])
 def mentor_quiz():
     body = safejson()
-    topic = safe(body.get("topic"), "Python basics")
+    topic = _safe_text(body.get("topic"), "Python basics", limit=MAX_LEARNING_TOPIC_SIZE + 1).strip() or "Python basics"
+    if len(topic) > MAX_LEARNING_TOPIC_SIZE:
+        return jsonify({"success": False, "error": "Quiz topic is too long"}), 413
     language = safe(body.get("language"), "en")
 
     if language == "hi":
@@ -4335,7 +4401,9 @@ def mentor_quiz():
 @app.route("/mentor/explain", methods=["POST"])
 def mentor_explain():
     body = safejson()
-    concept = safe(body.get("concept"), "variables")
+    concept = _safe_text(body.get("concept"), "variables", limit=MAX_LEARNING_TOPIC_SIZE + 1).strip() or "variables"
+    if len(concept) > MAX_LEARNING_TOPIC_SIZE:
+        return jsonify({"success": False, "error": "Concept is too long"}), 413
     language = safe(body.get("language"), "en")
 
     if language == "hi":
@@ -4420,8 +4488,12 @@ def _validate_bug_challenge(parsed: dict) -> Optional[str]:
     for key in ("code", "hint", "bug", "fixed"):
         if not parsed.get(key) or not isinstance(parsed[key], str):
             return f"Challenge missing or invalid field: {key}"
+        if len(parsed[key]) > MAX_CODE_SIZE:
+            return f"Challenge field too large: {key}"
     parsed["code"] = _strip_code_fences(parsed["code"])
     parsed["fixed"] = _strip_code_fences(parsed["fixed"])
+    if _looks_like_non_python_code(parsed["code"]) or _looks_like_non_python_code(parsed["fixed"]):
+        return "Challenge included non-Python code"
     # The fixed code must at least parse — otherwise the LLM gave us garbage
     try:
         compile(parsed["fixed"], "<challenge>", "exec")

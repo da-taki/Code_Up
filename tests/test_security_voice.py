@@ -10,6 +10,7 @@ import os
 import sys
 import json
 import types
+import time
 import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -17,6 +18,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 import app as app_module
 from app import app
 from intent_parser import parse_intent
+import sandboxed_fs as sandboxed_fs_module
+from sandboxed_fs import SandboxedFileSystem
 
 
 # ---------------------------------------------------------------------------
@@ -26,11 +29,20 @@ from intent_parser import parse_intent
 @pytest.fixture
 def tmp_snippets(tmp_path, monkeypatch):
     """Redirect snippet storage to a temp file — never touches real snippets.json."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
     tmp_file = tmp_path / "snippets.json"
     tmp_file.write_text(json.dumps({"snippets": []}))
+    monkeypatch.setenv("DATA_DIR", str(data_dir))
     monkeypatch.setenv("SNIPPETS_FILE", str(tmp_file))
+    monkeypatch.setattr(app_module, "DATA_DIR", str(data_dir))
     monkeypatch.setattr(app_module, "SNIPPETS_FILE", str(tmp_file))
     return tmp_file
+
+
+def _client_session_id(client):
+    cookie = client.get_cookie(app_module.SESSION_COOKIE_NAME)
+    return getattr(cookie, "value", cookie)
 
 
 @pytest.fixture
@@ -415,6 +427,51 @@ def test_python_string_containing_html_is_allowed(client):
     data = run.get_json()
     assert data["success"] is True
     assert "<html><body>ok</body></html>" in data["output"]
+
+
+def test_snippet_create_rejects_blank_name_or_code(client):
+    blank_name = client.post("/snippets", json={"name": "  ", "code": "print(1)"})
+    assert blank_name.status_code == 400
+
+    blank_code = client.post("/snippets", json={"name": "empty", "code": "   "})
+    assert blank_code.status_code == 400
+
+
+def test_snippet_update_rejects_non_python_document(client):
+    saved = client.post("/snippets", json={"name": "safe", "code": "print('safe')"})
+    sid = saved.get_json()["id"]
+    updated = client.put(f"/snippets/{sid}", json={"code": HTML_DOCUMENT})
+    assert updated.status_code == 400
+    assert "python-only" in updated.get_json()["error"].lower()
+
+
+def test_corrupt_snippet_file_is_normalized(client):
+    client.get("/snippets")
+    path = app_module._snippets_path(_client_session_id(client))
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump({"snippets": [None, "bad", {"id": "ok", "name": "", "code": "print(1)"}]}, handle)
+
+    data = client.get("/snippets").get_json()
+    assert data["snippets"] == [{"id": "ok", "name": "Untitled", "code": "print(1)"}]
+
+
+def test_voice_command_non_string_and_too_long_payloads(client):
+    numeric = client.post("/voice-command", json={"text": 123})
+    assert numeric.status_code == 200
+    assert numeric.get_json()["success"] is True
+
+    too_long = client.post("/voice-command", json={"text": "x" * (app_module.MAX_VOICE_TEXT_SIZE + 1)})
+    assert too_long.status_code == 413
+
+
+def test_repeat_preserves_fuzzy_fallback_actions(client):
+    first = client.post("/voice-command", json={"text": "copy code"})
+    assert first.status_code == 200
+    assert first.get_json()["action"] == "copy_code"
+
+    repeated = client.post("/voice-command", json={"text": "repeat"})
+    assert repeated.status_code == 200
+    assert repeated.get_json()["action"] == "copy_code"
 
 
 def test_missing_body_handled(client):
@@ -843,6 +900,25 @@ def test_fs_info(client):
     data = res.get_json()
     assert "workspace" in data
     assert "total_files" in data
+
+
+def test_sandbox_invalid_size_env_falls_back(monkeypatch):
+    monkeypatch.setenv("SANDBOX_MAX_FILE_SIZE", "not-a-number")
+    assert sandboxed_fs_module._max_file_size() == 5_000_000
+
+
+def test_sandbox_read_rejects_oversized_existing_file(tmp_path):
+    fs = SandboxedFileSystem(str(tmp_path))
+    big = tmp_path / "big.txt"
+    big.write_text("x" * 20, encoding="utf-8")
+    old_limit = fs.MAX_FILE_SIZE
+    fs.MAX_FILE_SIZE = 10
+    try:
+        data = fs.read("big.txt")
+    finally:
+        fs.MAX_FILE_SIZE = old_limit
+    assert data["success"] is False
+    assert "maximum size" in data["error"].lower()
 
 
 # ===========================================================================
@@ -1442,6 +1518,43 @@ class TestVoiceMacros:
         assert loaded["success"] is True
         assert loaded["code"] == "print('hi')"
 
+    def test_macro_file_normalizes_bad_records(self, client):
+        client.get("/macros")
+        path = app_module._macros_path(_client_session_id(client))
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump({
+                "good": {"code": "print(1)", "saved_at": "x"},
+                "bad/name": {"code": "print(2)"},
+                "empty": {"code": ""},
+                "legacy": "print(3)",
+            }, handle)
+
+        data = client.get("/macros").get_json()
+        assert data["success"] is True
+        assert data["names"] == ["good", "legacy"]
+        assert client.get("/macros/get/legacy").get_json()["code"] == "print(3)"
+
+    def test_shared_macro_bad_expiry_does_not_500(self, client):
+        code = "ABCD"
+        path = app_module._shared_macro_path(code)
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump({"name": "bad", "code": "print(1)", "expires_at": "not-a-float"}, handle)
+
+        res = client.get(f"/macros/shared/{code}")
+        assert res.status_code == 404
+        assert res.get_json()["success"] is False
+
+    def test_shared_macro_non_python_is_rejected_and_removed(self, client):
+        code = "EFGH"
+        path = app_module._shared_macro_path(code)
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump({"name": "bad", "code": HTML_DOCUMENT, "expires_at": time.time() + 3600}, handle)
+
+        res = client.get(f"/macros/shared/{code}")
+        assert res.status_code == 400
+        assert "python-only" in res.get_json()["error"].lower()
+        assert not os.path.exists(path)
+
 
 # ===========================================================================
 # 18. OUTPUT BOOKMARKS
@@ -1473,6 +1586,21 @@ class TestOutputBookmarks:
         data = res.get_json()
         assert data["success"] is True
         assert data["slice"] == "_END"
+
+    def test_negative_bookmark_position_is_clamped(self, client):
+        client.post("/bookmarks", json={"label": "neg", "position": -50})
+        res = client.post("/bookmarks/read", json={"label": "neg", "output": "abcdef"})
+        data = res.get_json()
+        assert data["success"] is True
+        assert data["slice"] == "abcdef"
+
+    def test_bookmark_read_rejects_huge_output(self, client):
+        client.post("/bookmarks", json={"label": "big", "position": 0})
+        res = client.post(
+            "/bookmarks/read",
+            json={"label": "big", "output": "x" * (app_module.MAX_REQUEST_SIZE + 1)},
+        )
+        assert res.status_code == 413
 
 
 # ===========================================================================
@@ -1720,6 +1848,32 @@ class TestMentorNormalization:
         assert app_module._validate_bug_challenge(parsed) is None
         assert "```" not in parsed["code"]
         assert "```" not in parsed["fixed"]
+
+    def test_quiz_explanation_must_be_string(self):
+        parsed = {
+            "question": "What prints?",
+            "options": ["A", "B", "C"],
+            "answer": "A",
+            "explanation": {"bad": "type"},
+        }
+        assert "explanation" in app_module._validate_quiz_response(parsed).lower()
+
+    def test_bug_challenge_rejects_non_python_code(self):
+        parsed = {
+            "code": HTML_DOCUMENT,
+            "hint": "Look for markup.",
+            "bug": "It is not Python.",
+            "fixed": "print('ok')",
+        }
+        assert "non-python" in app_module._validate_bug_challenge(parsed).lower()
+
+    def test_mentor_quiz_topic_too_large(self, client):
+        res = client.post("/mentor/quiz", json={"topic": "x" * (app_module.MAX_LEARNING_TOPIC_SIZE + 1)})
+        assert res.status_code == 413
+
+    def test_mentor_explain_concept_too_large(self, client):
+        res = client.post("/mentor/explain", json={"concept": "x" * (app_module.MAX_LEARNING_TOPIC_SIZE + 1)})
+        assert res.status_code == 413
 
 
 # ===========================================================================

@@ -1776,6 +1776,8 @@ function clearEditor() {
   // Full reset including navigation history on explicit user clear
   navigationHistory = [];
   historyIndex = -1;
+  try { localStorage.removeItem(AUTOSAVE_KEY); } catch (e) {}
+  _autosaveLastCode = '';
   setCode('');
   out('Editor cleared.');
   speak('Editor cleared. Previous code erased.');
@@ -1819,20 +1821,42 @@ async function saveSnippet() {
 async function saveSnippetAccessible(voiceName) {
   const input = document.getElementById('snippetNameInput');
   const name  = voiceName || (input && input.value.trim()) || 'Untitled';
-  await saveSnippetWithName(name);
-  if (input) input.value = '';
-  srAnnounce('Snippet saved: ' + name);
+  const saved = await saveSnippetWithName(name);
+  if (saved) {
+    if (input) input.value = '';
+    srAnnounce('Snippet saved: ' + name);
+  }
 }
 
 async function saveSnippetWithName(name) {
   if (!ensurePythonEditorContent('save snippet')) return;
-  await fetch('/snippets', {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ name, code: getCode() }),
-  });
-  await loadSnippets();
-  speak(`Snippet saved as ${name}.`);
+  const code = getCode();
+  if (!code.trim()) {
+    const msg = 'The editor is empty. Nothing to save as a snippet.';
+    out(msg); speak(msg);
+    return false;
+  }
+  try {
+    const res = await fetch('/snippets', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ name, code }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      const msg = data.error || 'Snippet was not saved.';
+      out(msg); speak(msg);
+      return false;
+    }
+    await loadSnippets();
+    speak(data.speech || `Snippet saved as ${name}.`);
+    return true;
+  } catch (e) {
+    console.error('Snippet save failed:', e);
+    out('Snippet save failed.');
+    speak('Snippet save failed.');
+    return false;
+  }
 }
 
 let _loadSnippetsQueued = false;
@@ -1866,6 +1890,9 @@ async function loadSnippets() {
 
     list.innerHTML = '';
     list.appendChild(fragment);
+  } catch (e) {
+    console.error('Snippet load failed:', e);
+    out('Could not load snippets.');
   } finally {
     _loadingSnippets = false;
     if (_loadSnippetsQueued) {
@@ -1877,25 +1904,53 @@ async function loadSnippets() {
 }
 
 async function loadSnippetById(id) {
-  const sn = snippetsCache.find(s => String(s.id) === String(id));
+  const needle = String(id || '').toLowerCase();
+  const sn = snippetsCache.find(s => String(s.id) === String(id) ||
+                                    (s.name && String(s.name).toLowerCase() === needle));
   if (!sn) { speak(`Snippet ${id} not found.`); out(`Snippet ${id} not found.`); return; }
-  setCode(sn.code); speak(`Loaded snippet ${id}: ${sn.name}.`); out(`Loaded snippet ${id}: ${sn.name}.`);
+  if (!setCode(sn.code, { source: `snippet ${sn.name || id}` })) return;
+  speak(`Loaded snippet ${sn.name || id}.`); out(`Loaded snippet ${sn.name || id}.`);
 }
 
 async function deleteSnippetById(id) {
-  await fetch(`/snippets/${id}`, { method: 'DELETE' });
-  await loadSnippets();
-  speak(`Deleted snippet ${id}.`); out(`Deleted snippet ${id}.`);
+  if (!id) { speak('Please specify which snippet to delete.'); return; }
+  try {
+    const res = await fetch(`/snippets/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      const msg = data.error || `Could not delete snippet ${id}.`;
+      out(msg); speak(msg);
+      return;
+    }
+    await loadSnippets();
+    speak(data.speech || `Deleted snippet ${id}.`); out(data.speech || `Deleted snippet ${id}.`);
+  } catch (e) {
+    console.error('Snippet delete failed:', e);
+    speak('Snippet delete failed.');
+  }
 }
 
 async function renameSnippetById(id, newName) {
-  await fetch(`/snippets/${id}`, {
-    method:  'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ name: newName }),
-  });
-  await loadSnippets();
-  speak(`Renamed snippet ${id} to ${newName}.`); out(`Renamed snippet ${id} to ${newName}.`);
+  if (!id) { speak('Please specify which snippet to rename.'); return; }
+  if (!String(newName || '').trim()) { speak('Please give the snippet a new name.'); return; }
+  try {
+    const res = await fetch(`/snippets/${encodeURIComponent(id)}`, {
+      method:  'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ name: newName }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      const msg = data.error || `Could not rename snippet ${id}.`;
+      out(msg); speak(msg);
+      return;
+    }
+    await loadSnippets();
+    speak(data.speech || `Renamed snippet ${id} to ${newName}.`); out(data.speech || `Renamed snippet ${id} to ${newName}.`);
+  } catch (e) {
+    console.error('Snippet rename failed:', e);
+    speak('Snippet rename failed.');
+  }
 }
 
 async function previewSnippetById(id) {
@@ -1962,6 +2017,7 @@ async function handleConfirmedAction(action, payload) {
   else if (action === 'prev_line')       prevLine();
   else if (action === 'clear_editor')    clearEditor();
   else if (action === 'delete_line')     deleteLine(payload && payload.line ? payload.line : 1);
+  else if (action === 'read_function')   readFunction(payload && payload.function_name ? payload.function_name : '');
   else if (action === 'summarize')       await summarizeFile();
   else if (action === 'narrate_file')    await narrateFile();
   else if (action === 'demo_list')       await listDemos();
@@ -1974,8 +2030,8 @@ async function handleConfirmedAction(action, payload) {
   else if (action === 'sonify_file')     await sonifyWholeFile();
   else if (action === 'sonify_function') await sonifyFunction(payload && payload.function_name ? payload.function_name : '');
   else if (action === 'sonify_class')    await sonifyClass(payload && payload.class_name ? payload.class_name : '');
-  else if (action === 'find_function')   speak('Find function: ' + (payload && payload.function_name ? payload.function_name : ''));
-  else if (action === 'find_class')      speak('Find class: ' + (payload && payload.class_name ? payload.class_name : ''));
+  else if (action === 'find_function')   findFunction(payload && payload.function_name ? payload.function_name : '');
+  else if (action === 'find_class')      findClass(payload && payload.class_name ? payload.class_name : '');
   else if (action === 'show_structure')  toggleStructurePanel();
   else if (action === 'read_outline')    await readStructureOutline();
   else if (action === 'list_variables')  await listVariables();
@@ -3677,6 +3733,65 @@ async function sonifyWholeFile() {
   }
   speak(`Sonifying the whole file, ${lines.length} line${lines.length === 1 ? '' : 's'}.`);
   await sonifyRange(1, lines.length, 'file', 50);
+}
+
+function findFunctionLine(functionName) {
+  if (!functionName) return null;
+  const pattern = new RegExp(`^\\s*def\\s+${escapeRegex(functionName)}\\s*\\(`, 'i');
+  const lines = getCode().split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    if (pattern.test(lines[i])) return i + 1;
+  }
+  return null;
+}
+
+function findClassLine(className) {
+  if (!className) return null;
+  const pattern = new RegExp(`^\\s*class\\s+${escapeRegex(className)}\\s*[:\\(]`, 'i');
+  const lines = getCode().split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    if (pattern.test(lines[i])) return i + 1;
+  }
+  return null;
+}
+
+function findFunction(functionName) {
+  if (!functionName) { speak('Please specify a function name.'); return; }
+  if (!ensurePythonEditorContent('find function')) return;
+  const line = findFunctionLine(functionName);
+  if (!line) { speak(`Function ${functionName} not found.`); out(`Function ${functionName} not found.`); return; }
+  gotoLine(line, false);
+  speak(`Function ${functionName} starts on line ${line}.`);
+}
+
+function findClass(className) {
+  if (!className) { speak('Please specify a class name.'); return; }
+  if (!ensurePythonEditorContent('find class')) return;
+  const line = findClassLine(className);
+  if (!line) { speak(`Class ${className} not found.`); out(`Class ${className} not found.`); return; }
+  gotoLine(line, false);
+  speak(`Class ${className} starts on line ${line}.`);
+}
+
+function readFunction(functionName) {
+  if (!functionName) { speak('Please specify a function name.'); return; }
+  if (!ensurePythonEditorContent('read function')) return;
+  const startLine = findFunctionLine(functionName);
+  if (!startLine) { speak(`Function ${functionName} not found.`); out(`Function ${functionName} not found.`); return; }
+  const lines = getCode().split('\n');
+  const baseIndent = lines[startLine - 1].search(/\S/);
+  let endLine = lines.length;
+  for (let i = startLine; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim() && line.search(/\S/) <= baseIndent) {
+      endLine = i;
+      break;
+    }
+  }
+  const body = lines.slice(startLine - 1, endLine).join('\n');
+  out(`Function ${functionName}, lines ${startLine} to ${endLine}:\n\n${body}`);
+  speak(`Function ${functionName} starts on line ${startLine} and ends on line ${endLine}.`);
+  body.split('\n').slice(0, 12).forEach((line, idx) => speak(`Line ${startLine + idx}: ${line || 'empty line'}`));
 }
 
 // ---------- ERROR SONIFICATION ----------

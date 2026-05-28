@@ -86,6 +86,7 @@ _shared_macro_lookup_lock = threading.Lock()
 _shared_macro_lookup_attempts = {}
 _SHARED_MACRO_LOOKUP_LIMIT = 30
 _SHARED_MACRO_LOOKUP_WINDOW = 60
+_SHARED_MACRO_LOOKUP_MAX_KEYS = 1000
 
 # Output bookmarks: per-session list of {label, position, timestamp, output_id}.
 # In-memory only (cheap, ephemeral, scoped to session).
@@ -116,20 +117,19 @@ _session_ttl = SESSION_TTL_SECONDS  # back-compat alias
 def _session_cleanup_worker():
     """Background thread that periodically cleans up expired sessions and
     bounded structures that would otherwise leak in long-running deployments."""
-    while True:
-        time.sleep(300)  # Run cleanup every 5 minutes
+    while not _cleanup_stop_event.wait(300):  # Run cleanup every 5 minutes
         try:
             cleanup_old_sessions()
         except Exception as e:
-            print(f"Session cleanup error: {e}", file=sys.stderr)
+            _debug_log(f"Session cleanup error: {e}")
         try:
             cleanup_stale_runs()
         except Exception as e:
-            print(f"Stale runs cleanup error: {e}", file=sys.stderr)
+            _debug_log(f"Stale runs cleanup error: {e}")
         try:
             cleanup_orphan_bookmarks_and_telemetry()
         except Exception as e:
-            print(f"Bookmark/telemetry cleanup error: {e}", file=sys.stderr)
+            _debug_log(f"Bookmark/telemetry cleanup error: {e}")
 
 
 def cleanup_stale_runs():
@@ -167,6 +167,7 @@ def cleanup_orphan_bookmarks_and_telemetry():
             del _voice_telemetry[:len(_voice_telemetry) - _VOICE_TELEMETRY_CAP]
 _cleanup_thread = None
 _cleanup_thread_lock = threading.Lock()
+_cleanup_stop_event = threading.Event()
 
 
 def start_background_services():
@@ -175,6 +176,7 @@ def start_background_services():
     with _cleanup_thread_lock:
         if _cleanup_thread and _cleanup_thread.is_alive():
             return _cleanup_thread
+        _cleanup_stop_event.clear()
         _cleanup_thread = threading.Thread(
             target=_session_cleanup_worker,
             name="codeup-session-cleanup",
@@ -199,12 +201,20 @@ def _get_gemini_executor():
 
 def shutdown_background_services():
     """Release lazy process-local resources during interpreter shutdown."""
-    global _gemini_executor
+    global _cleanup_thread, _gemini_executor
+    with _cleanup_thread_lock:
+        _cleanup_stop_event.set()
+        cleanup_thread = _cleanup_thread
+        if cleanup_thread and cleanup_thread.is_alive() and cleanup_thread is not threading.current_thread():
+            cleanup_thread.join(timeout=2)
+        if not cleanup_thread or not cleanup_thread.is_alive():
+            _cleanup_thread = None
+
     with _gemini_executor_lock:
         executor = _gemini_executor
         _gemini_executor = None
-    if executor is not None:
-        executor.shutdown(wait=False, cancel_futures=True)
+        if executor is not None:
+            executor.shutdown(wait=False, cancel_futures=True)
 
 
 atexit.register(shutdown_background_services)
@@ -613,7 +623,7 @@ def save_snippets(d: dict) -> None:
                         os.fsync(f.fileno())
                     except OSError:
                         pass
-            except:
+            except (OSError, TypeError, ValueError):
                 try:
                     os.close(fd)
                 except OSError:
@@ -630,11 +640,11 @@ def save_snippets(d: dict) -> None:
                         os.close(dir_fd)
                 except OSError:
                     pass
-        except Exception:
+        except (OSError, TypeError, ValueError):
             try:
                 if temp_path and os.path.exists(temp_path):
                     os.remove(temp_path)
-            except Exception:
+            except OSError:
                 pass
             raise
 
@@ -838,11 +848,28 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en", max_
         global _gemini_queued_requests
         try:
             cancelled = future.cancel()
-        except Exception:
+        except RuntimeError:
             cancelled = False
         if cancelled:
             with _gemini_active_lock:
                 _gemini_queued_requests = max(0, _gemini_queued_requests - 1)
+        return cancelled
+
+    def _log_timed_out_future(future):
+        if getattr(future, "cancelled", lambda: False)():
+            return
+        try:
+            future.result()
+        except FutureTimeoutError:
+            _debug_log("Timed-out AI task remained incomplete after caller returned.")
+        except Exception as e:
+            _debug_log(f"Timed-out AI task finished with an error: {e}")
+
+    def _track_timed_out_future(future):
+        try:
+            future.add_done_callback(_log_timed_out_future)
+        except AttributeError:
+            _debug_log("Timed-out AI future could not be tracked for late completion.")
 
     try:
         future = _get_gemini_executor().submit(_do_call)
@@ -857,7 +884,8 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en", max_
     try:
         return future.result(timeout=MAX_GEMINI_TIMEOUT + 1)
     except FutureTimeoutError:
-        _cancel_future_if_pending(future)
+        if not _cancel_future_if_pending(future):
+            _track_timed_out_future(future)
         local = _try_ollama_fallback()
         if local:
             return f"[offline mode] {local}"
@@ -3765,6 +3793,27 @@ def _check_shared_macro_lookup_limit():
     now = time.time()
     key = _shared_macro_lookup_key()
     with _shared_macro_lookup_lock:
+        for lookup_key in list(_shared_macro_lookup_attempts.keys()):
+            attempts = [
+                ts for ts in _shared_macro_lookup_attempts.get(lookup_key, [])
+                if now - ts < _SHARED_MACRO_LOOKUP_WINDOW
+            ]
+            if attempts:
+                _shared_macro_lookup_attempts[lookup_key] = attempts
+            else:
+                del _shared_macro_lookup_attempts[lookup_key]
+
+        max_keys = max(1, int(_SHARED_MACRO_LOOKUP_MAX_KEYS))
+        while key not in _shared_macro_lookup_attempts and len(_shared_macro_lookup_attempts) >= max_keys:
+            oldest_key = min(
+                _shared_macro_lookup_attempts,
+                key=lambda lookup_key: (
+                    _shared_macro_lookup_attempts[lookup_key][-1],
+                    lookup_key,
+                ),
+            )
+            del _shared_macro_lookup_attempts[oldest_key]
+
         attempts = [
             ts for ts in _shared_macro_lookup_attempts.get(key, [])
             if now - ts < _SHARED_MACRO_LOOKUP_WINDOW
@@ -3799,8 +3848,8 @@ def _load_macros():
                     if code.strip():
                         cleaned[safe_name] = {"code": code, "saved_at": saved_at}
                 return cleaned
-    except Exception:
-        pass
+    except (OSError, json.JSONDecodeError, TypeError) as e:
+        _debug_log(f"Could not load macros from {path}: {e}")
     return {}
 
 
@@ -3815,18 +3864,18 @@ def _save_macros(macros):
             try:
                 with os.fdopen(fd, 'w', encoding='utf-8') as f:
                     json.dump(macros, f, indent=2)
-            except Exception:
+            except (OSError, TypeError, ValueError):
                 try:
                     os.close(fd)
                 except OSError:
                     pass
                 raise
             os.replace(tmp, path)
-        except Exception:
+        except (OSError, TypeError, ValueError):
             try:
                 if tmp and os.path.exists(tmp):
                     os.remove(tmp)
-            except Exception:
+            except OSError:
                 pass
             raise
 
@@ -3937,10 +3986,20 @@ def get_shared_macro(code):
     try:
         with open(path, encoding="utf-8") as handle:
             payload = json.load(handle)
-    except Exception:
-        return jsonify({"success": False, "error": "Shared macro not readable"}), 404
+    except FileNotFoundError:
+        return jsonify({"success": False, "error": "Shared macro not found"}), 404
+    except PermissionError as e:
+        _debug_log(f"Shared macro {safe_code} is not readable: {e}")
+        return jsonify({"success": False, "error": "Shared macro not readable"}), 403
+    except json.JSONDecodeError as e:
+        _debug_log(f"Shared macro {safe_code} is corrupted: {e}")
+        return jsonify({"success": False, "error": "Shared macro data is corrupted"}), 500
+    except OSError as e:
+        _debug_log(f"Shared macro {safe_code} read failed: {e}")
+        return jsonify({"success": False, "error": "Shared macro read failed"}), 500
     if not isinstance(payload, dict):
-        return jsonify({"success": False, "error": "Shared macro not readable"}), 404
+        _debug_log(f"Shared macro {safe_code} has invalid payload type.")
+        return jsonify({"success": False, "error": "Shared macro data is corrupted"}), 500
     try:
         expires_at = float(payload.get("expires_at", 0))
     except (TypeError, ValueError):
@@ -4094,7 +4153,7 @@ def run_stream_start():
 
     try:
         proc = subprocess.Popen([sys.executable, runner_path], **popen_kwargs)
-    except Exception as e:
+    except (OSError, ValueError) as e:
         try:
             os.unlink(fifo_path)
         except OSError:
@@ -4135,12 +4194,12 @@ def run_stream_start():
                     output_queue.put({"type": "input_request", "prompt": prompt})
                 else:
                     output_queue.put({"type": "stdout", "text": line})
-        except Exception as e:
+        except (OSError, ValueError) as e:
             output_queue.put({"type": "error", "text": f"stdout reader error: {e}"})
         finally:
             try:
                 proc.stdout.close()
-            except Exception:
+            except (AttributeError, OSError, ValueError):
                 pass
 
     def _stderr_reader():
@@ -4149,12 +4208,12 @@ def run_stream_start():
                 if not line:
                     break
                 output_queue.put({"type": "stderr", "text": line})
-        except Exception as e:
+        except (OSError, ValueError) as e:
             output_queue.put({"type": "error", "text": f"stderr reader error: {e}"})
         finally:
             try:
                 proc.stderr.close()
-            except Exception:
+            except (AttributeError, OSError, ValueError):
                 pass
 
     def _waiter():

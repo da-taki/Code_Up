@@ -133,6 +133,38 @@ def test_start_background_services_is_idempotent_under_concurrent_calls(monkeypa
     assert len({id(result) for result in results}) == 1
 
 
+def test_shutdown_background_services_stops_cleanup_thread_idempotently(monkeypatch):
+    class FakeThread:
+        def __init__(self, *args, **kwargs):
+            self.started = False
+            self.join_calls = []
+
+        def start(self):
+            self.started = True
+
+        def is_alive(self):
+            return self.started
+
+        def join(self, timeout=None):
+            self.join_calls.append(timeout)
+            self.started = False
+
+    monkeypatch.setattr(app_module, "_cleanup_thread", None)
+    monkeypatch.setattr(app_module.threading, "Thread", FakeThread)
+    app_module._cleanup_stop_event.set()
+
+    thread = app_module.start_background_services()
+    assert thread.started is True
+    assert not app_module._cleanup_stop_event.is_set()
+
+    app_module.shutdown_background_services()
+    app_module.shutdown_background_services()
+
+    assert app_module._cleanup_stop_event.is_set()
+    assert app_module._cleanup_thread is None
+    assert thread.join_calls == [2]
+
+
 def test_gemini_executor_is_singleton_and_shutdown_is_idempotent(monkeypatch):
     real_thread = threading.Thread
 
@@ -210,6 +242,61 @@ def test_call_gemini_cancels_pending_future_on_timeout(monkeypatch):
     assert future.cancelled is True
     assert "too long" in result.lower()
     assert app_module._gemini_queued_requests == 0
+
+
+def test_call_gemini_tracks_running_future_after_timeout(monkeypatch):
+    monkeypatch.setenv("GEMINI_ENABLED", "1")
+    monkeypatch.setattr(app_module, "GEMINI_API_KEY", "session-key")
+    monkeypatch.setattr(app_module, "_call_ollama", lambda *a, **k: None)
+    monkeypatch.setattr(app_module, "MAX_GEMINI_TIMEOUT", 0)
+    logs = []
+    monkeypatch.setattr(app_module, "_debug_log", logs.append)
+    with app_module._gemini_active_lock:
+        app_module._gemini_queued_requests = 0
+        app_module._gemini_active_requests = 0
+
+    class RunningFuture:
+        def __init__(self):
+            self.callbacks = []
+            self.cancel_calls = 0
+
+        def result(self, timeout=None):
+            if timeout is not None:
+                raise app_module.FutureTimeoutError()
+            raise RuntimeError("late failure")
+
+        def cancel(self):
+            self.cancel_calls += 1
+            return False
+
+        def cancelled(self):
+            return False
+
+        def add_done_callback(self, callback):
+            self.callbacks.append(callback)
+
+    future = RunningFuture()
+
+    class FakeExecutor:
+        def submit(self, func):
+            with app_module._gemini_active_lock:
+                app_module._gemini_queued_requests = max(0, app_module._gemini_queued_requests - 1)
+                app_module._gemini_active_requests += 1
+            return future
+
+    monkeypatch.setattr(app_module, "_gemini_executor", FakeExecutor())
+    try:
+        result = app_module.call_gemini("system", "user")
+        assert "too long" in result.lower()
+        assert future.cancel_calls == 1
+        assert len(future.callbacks) == 1
+        assert app_module._gemini_queued_requests == 0
+        future.callbacks[0](future)
+        assert any("Timed-out AI task finished with an error" in msg for msg in logs)
+    finally:
+        with app_module._gemini_active_lock:
+            app_module._gemini_queued_requests = 0
+            app_module._gemini_active_requests = 0
 
 
 def test_production_import_requires_secret_key():
@@ -983,7 +1070,23 @@ def test_custom_session_cookie_is_single_and_reused(client):
     assert followup_cookies == []
 
 
+@pytest.mark.timeout(15)
+def test_testing_session_cookie_is_local_workable(client):
+    res = client.get("/execution-trace")
+    session_cookies = [
+        value for value in res.headers.getlist("Set-Cookie")
+        if value.startswith(app_module.SESSION_COOKIE_NAME + "=")
+    ]
+    assert len(session_cookies) == 1
+    cookie = session_cookies[0]
+    assert "HttpOnly" in cookie
+    assert "Secure" not in cookie
+    assert "SameSite" not in cookie
+
+
 def test_run_stream_input_rejects_when_not_awaiting_without_opening_fifo(client, tmp_path):
+    # Windows cannot exercise the POSIX FIFO end-to-end path; this validates
+    # the non-blocking state gate before any FIFO open is attempted.
     client.get("/execution-trace")
     session_id = _client_session_id(client)
     run_id = "notwaiting"
@@ -1043,6 +1146,38 @@ def test_cleanup_run_reaps_child_process(monkeypatch):
     assert proc.wait_calls >= 1
     assert proc.returncode == -9
     assert run_id not in app_module._active_runs
+
+
+def test_interactive_wait_unit_reports_concrete_exit_code_after_timeout(monkeypatch):
+    # Unit-level coverage for Windows: the true POSIX FIFO/SSE E2E path cannot
+    # run here, but final exit-code stabilization is still deterministic.
+    monkeypatch.setattr(app_module.sys, "platform", "win32")
+
+    class FakeProc:
+        def __init__(self):
+            self.returncode = None
+            self.kill_called = False
+            self.wait_calls = 0
+
+        def poll(self):
+            return self.returncode
+
+        def kill(self):
+            self.kill_called = True
+            self.returncode = -9
+
+        def wait(self, timeout=None):
+            self.wait_calls += 1
+            if self.wait_calls == 1:
+                raise subprocess.TimeoutExpired(cmd="fake", timeout=timeout)
+            return self.returncode
+
+    proc = FakeProc()
+    exit_code = app_module._wait_for_process_exit(proc, timeout=0)
+
+    assert proc.kill_called is True
+    assert exit_code == -9
+    assert proc.returncode == -9
 
 
 # ===========================================================================
@@ -2066,6 +2201,73 @@ class TestVoiceMacros:
         limited = client.get(f"/macros/shared/{code}")
         assert limited.status_code == 429
 
+    def test_shared_macro_lookup_limiter_prunes_stale_and_caps_keys(self, monkeypatch):
+        base = 1000.0
+        monkeypatch.setattr(app_module.time, "time", lambda: base)
+        monkeypatch.setattr(app_module, "_SHARED_MACRO_LOOKUP_WINDOW", 10)
+        monkeypatch.setattr(app_module, "_SHARED_MACRO_LOOKUP_MAX_KEYS", 2)
+        with app_module._shared_macro_lookup_lock:
+            app_module._shared_macro_lookup_attempts.clear()
+            app_module._shared_macro_lookup_attempts.update({
+                "stale-key": [base - 20],
+                "old-key": [base - 5],
+                "new-key": [base - 1],
+            })
+
+        with app.test_request_context(
+            "/macros/shared/MissingToken123456",
+            headers={"Cookie": f"{app_module.SESSION_COOKIE_NAME}=fresh-session"},
+        ):
+            assert app_module._check_shared_macro_lookup_limit() is True
+
+        with app_module._shared_macro_lookup_lock:
+            assert "stale-key" not in app_module._shared_macro_lookup_attempts
+            assert "old-key" not in app_module._shared_macro_lookup_attempts
+            assert "new-key" in app_module._shared_macro_lookup_attempts
+            assert any(
+                key.endswith(":fresh-session")
+                for key in app_module._shared_macro_lookup_attempts
+            )
+            assert len(app_module._shared_macro_lookup_attempts) == 2
+
+    def test_shared_macro_corrupt_data_returns_operational_error(self, client):
+        code = "CorruptToken12345"
+        path = app_module._shared_macro_path(code)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("{not-json")
+
+        res = client.get(f"/macros/shared/{code}")
+        assert res.status_code == 500
+        assert "corrupted" in res.get_json()["error"].lower()
+
+    def test_shared_macro_unreadable_data_returns_forbidden(self, client, monkeypatch):
+        code = "UnreadableToken123"
+        path = app_module._shared_macro_path(code)
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump({"name": "locked", "code": "print(1)", "expires_at": time.time() + 3600}, handle)
+
+        real_open = open
+
+        def fake_open(file_path, *args, **kwargs):
+            if os.fspath(file_path) == path:
+                raise PermissionError("denied")
+            return real_open(file_path, *args, **kwargs)
+
+        monkeypatch.setattr(app_module, "open", fake_open, raising=False)
+        res = client.get(f"/macros/shared/{code}")
+
+        assert res.status_code == 403
+        assert "not readable" in res.get_json()["error"].lower()
+
+    def test_shared_macro_invalid_code_and_missing_code_are_distinct(self, client):
+        invalid = client.get("/macros/shared/not-valid")
+        missing = client.get("/macros/shared/MissingToken123456")
+
+        assert invalid.status_code == 400
+        assert "invalid" in invalid.get_json()["error"].lower()
+        assert missing.status_code == 404
+        assert "not found" in missing.get_json()["error"].lower()
+
 
 # ===========================================================================
 # 18. OUTPUT BOOKMARKS
@@ -2298,6 +2500,8 @@ class TestConversationalMentor:
         assert "input.focus()" in dialog_body
         assert "e.key === 'Escape'" in dialog_body
         assert "overlay._cuClose" in dialog_body
+        assert "if (typeof overlay._cuClose === 'function') overlay._cuClose();" in dialog_body
+        assert dialog_body.count("addEventListener") == dialog_body.count("removeEventListener")
         assert "document.createElement" not in dialog_body
         assert "overlay.remove()" not in dialog_body
 

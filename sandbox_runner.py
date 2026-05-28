@@ -18,6 +18,7 @@ Never imported by the parent app — only ever executed via
 `python sandbox_runner.py`.
 """
 import ast as _ast
+import builtins as _builtins
 import datetime as _datetime
 import json
 import math as _math
@@ -28,9 +29,15 @@ import sys
 import time
 import traceback
 
-ALLOWED_MODULES = {'math', 'random', 'string', 'datetime', 'date'}
-
-_PRELOADED = {'math': _math, 'random': _random, 'string': _string, 'datetime': _datetime}
+_MODULE_OBJECTS = {
+    'math': _math,
+    'random': _random,
+    'string': _string,
+    'datetime': _datetime,
+}
+ALLOWED_MODULES = frozenset(_MODULE_OBJECTS)
+_PRELOADED = dict(_MODULE_OBJECTS)
+_ALLOWED_RUNTIME_IMPORTS = {'_strptime'}
 
 
 class SafeFunction:
@@ -62,6 +69,20 @@ def _audit_ast(source):
     except SyntaxError:
         return
     for node in _ast.walk(tree):
+        if isinstance(node, _ast.Import):
+            for alias in node.names:
+                top_level = _top_level_module(alias.name)
+                if top_level not in ALLOWED_MODULES:
+                    raise SyntaxError(f"Module '{alias.name}' is not allowed in the sandbox")
+        if isinstance(node, _ast.ImportFrom):
+            if node.level:
+                raise SyntaxError("Relative imports are not allowed in the sandbox")
+            top_level = _top_level_module(node.module or '')
+            if top_level not in ALLOWED_MODULES:
+                raise SyntaxError(f"Module '{node.module}' is not allowed in the sandbox")
+            for alias in node.names:
+                if alias.name.startswith('_') or alias.name in _FORBIDDEN_NAMES:
+                    raise SyntaxError(f"Import of '{alias.name}' is not allowed in the sandbox")
         if isinstance(node, _ast.Attribute) and node.attr in _FORBIDDEN_NAMES:
             raise SyntaxError(f"Access to '{node.attr}' is not allowed in the sandbox")
         if isinstance(node, _ast.Name) and node.id in _FORBIDDEN_NAMES:
@@ -83,24 +104,35 @@ def _audit_ast(source):
                     raise SyntaxError(f"Reflective access to '{arg.value}' is not allowed in the sandbox")
 
 
+def _top_level_module(name):
+    return str(name).split('.', 1)[0]
+
+
 def restricted_import(name, *args, **kwargs):
-    if name not in ALLOWED_MODULES:
+    top_level = _top_level_module(name)
+    if top_level not in ALLOWED_MODULES:
         raise ImportError(f"Module '{name}' is not allowed.")
-    if name in _PRELOADED:
-        return _PRELOADED[name]
-    return __import__(name, *args, **kwargs)
+    if top_level in _PRELOADED:
+        return _PRELOADED[top_level]
+    return _builtins.__import__(name, *args, **kwargs)
 
 
 def _strict_import(name, globals_arg=None, locals_arg=None, fromlist=(), level=0):
-    if name not in ALLOWED_MODULES:
-        raise ImportError(f"Module '{name}' is not allowed.")
     if level != 0:
         raise ImportError("Relative imports are not allowed in the sandbox.")
+    top_level = _top_level_module(name)
     if fromlist:
         for item in fromlist:
             if not isinstance(item, str) or item.startswith('_') or item in _FORBIDDEN_NAMES:
                 raise ImportError(f"Import of '{item}' is not allowed in the sandbox.")
-    return restricted_import(name)
+
+    if top_level in ALLOWED_MODULES:
+        return restricted_import(name, globals_arg, locals_arg, fromlist, level)
+
+    if top_level in _ALLOWED_RUNTIME_IMPORTS:
+        return _builtins.__import__(name, globals_arg, locals_arg, fromlist, level)
+
+    raise ImportError(f"Module '{name}' is not allowed.")
 
 
 # ---------------------------------------------------------------------------
@@ -216,6 +248,7 @@ SAFE_GLOBALS = {
         'KeyError': KeyError, 'ZeroDivisionError': ZeroDivisionError,
         'OverflowError': OverflowError, 'MemoryError': MemoryError,
         'NotImplemented': NotImplemented,
+        '__build_class__': _builtins.__build_class__,
         '__import__': _strict_import,
     },
     '__import__': _strict_import,
@@ -225,6 +258,13 @@ SAFE_GLOBALS = {
     'string': _string,
     'datetime': _datetime,
 }
+
+
+def _make_execution_namespace():
+    namespace = dict(SAFE_GLOBALS)
+    namespace['__builtins__'] = dict(SAFE_GLOBALS['__builtins__'])
+    namespace['__name__'] = '__main__'
+    return namespace
 
 
 def _safe_repr(v):
@@ -248,8 +288,8 @@ def _load_input_queue():
         with open(inputs_file, encoding='utf-8') as f:
             for line in f:
                 _INPUT_QUEUE.append(line.rstrip('\n').rstrip('\r'))
-    except Exception:
-        pass
+    except (OSError, UnicodeDecodeError) as e:
+        print(f"Could not load pre-flight inputs: {e}", file=sys.stderr)
 
 
 def main():
@@ -263,13 +303,25 @@ def main():
     _load_input_queue()
 
     trace = []
-    last_locals = {}
+    last_locals_by_frame = {}
     start = time.time()
     MAX_TRACE_EVENTS = 5000
     overflow_logged = [False]
+    execution_namespace = _make_execution_namespace()
+    initial_names = set(execution_namespace)
+
+    def _traceable_locals(frame):
+        current = {}
+        is_module_frame = frame.f_code.co_name == '<module>'
+        for k, v in frame.f_locals.items():
+            if is_module_frame and k in initial_names:
+                continue
+            if k.startswith('__') and k.endswith('__'):
+                continue
+            current[k] = _safe_repr(v)
+        return current
 
     def tracer(frame, event, arg):
-        nonlocal last_locals
         if frame.f_code.co_filename != '<user>':
             return tracer
 
@@ -282,7 +334,9 @@ def main():
         if event == 'line':
             line = frame.f_lineno
             trace.append({'type': 'line_exec', 'line': line})
-            current = {k: _safe_repr(v) for k, v in frame.f_locals.items()}
+            frame_key = id(frame)
+            last_locals = last_locals_by_frame.get(frame_key, {})
+            current = _traceable_locals(frame)
             changes = []
             for k, v_repr in current.items():
                 if k not in last_locals:
@@ -298,18 +352,19 @@ def main():
                     changes.append(k + " went out of scope")
             if changes:
                 trace.append({'type': 'state_change', 'line': line, 'changes': changes})
-            last_locals = current
+            last_locals_by_frame[frame_key] = current
         elif event == 'call':
             trace.append({'type': 'call', 'function': frame.f_code.co_name, 'line': frame.f_lineno})
         elif event == 'return':
             trace.append({'type': 'return', 'value': _safe_repr(arg)})
+            last_locals_by_frame.pop(id(frame), None)
         return tracer
 
     try:
         _audit_ast(code)
         compiled = compile(code, '<user>', 'exec')
         sys.settrace(tracer)
-        exec(compiled, SAFE_GLOBALS, {})
+        exec(compiled, execution_namespace, execution_namespace)
     except Exception:
         traceback.print_exc(file=sys.stderr)
     finally:
@@ -323,8 +378,8 @@ def main():
                         'duration_ms': int((time.time() - start) * 1000),
                         'inputs_consumed': _INPUT_INDEX[0],
                     }, f)
-            except Exception:
-                pass
+            except (OSError, TypeError) as e:
+                print(f"Could not write trace file: {e}", file=sys.stderr)
 
 
 if __name__ == '__main__':

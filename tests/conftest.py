@@ -1,5 +1,9 @@
 # tests/conftest.py
+import os
+
 import pytest
+
+os.environ.setdefault("FLASK_TESTING", "true")
 
 
 @pytest.fixture(autouse=True)

@@ -230,6 +230,30 @@
     </div>
   </div>
 
+  <div
+    id="_cuInputDialog"
+    class="modal"
+    hidden
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="_cuDialogLabel"
+    tabindex="-1"
+  >
+    <div class="modal-content">
+      <label id="_cuDialogLabel" for="_cuDialogInput">Enter value:</label>
+      <input
+        id="_cuDialogInput"
+        type="text"
+        class="api-key-input"
+        autocomplete="off"
+      />
+      <div class="modal-buttons">
+        <button class="cu-button cu-button-primary" id="_cuDialogOk" type="button">Go</button>
+        <button class="cu-button" id="_cuDialogCancel" type="button">Cancel</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Combined gate: language pick + audio unlock in one step.
        First-time users see two buttons; returning users see one Begin button. -->
   <div id="startGate" role="dialog" aria-modal="true" aria-labelledby="startGateTitle"

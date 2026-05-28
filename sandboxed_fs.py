@@ -5,11 +5,12 @@ Provides safe file operations within a confined workspace directory.
 All file operations are restricted to /workspace folder.
 """
 
+import atexit
 import os
-import json
 import tempfile
+import threading
 from pathlib import Path
-from typing import Optional, Dict, List
+from typing import Dict, Optional
 
 
 class SandboxedFileSystem:
@@ -274,11 +275,8 @@ class SandboxedFileSystem:
 
 
 # Per-session sandbox storage (thread-safe dict keyed by session id)
-import threading
 _sandboxes: dict = {}
 _sandboxes_lock = threading.Lock()
-
-import atexit
 
 @atexit.register
 def _cleanup_all_sandboxes_on_exit():

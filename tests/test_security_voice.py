@@ -9,7 +9,6 @@ Covers: sandbox security, voice intent parsing, trace playback,
 import os
 import sys
 import json
-import tempfile
 import types
 import pytest
 
@@ -17,6 +16,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 import app as app_module
 from app import app
+from intent_parser import parse_intent
 
 
 # ---------------------------------------------------------------------------
@@ -34,12 +34,16 @@ def tmp_snippets(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def client(tmp_snippets):
+def client(tmp_snippets, monkeypatch):
     """Flask test client with isolated snippet storage and AI disabled."""
-    os.environ["GEMINI_ENABLED"] = "0"
+    monkeypatch.setenv("GEMINI_ENABLED", "0")
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("CODEUP_AI_ENABLED", raising=False)
+    monkeypatch.delenv("AI_ENABLED", raising=False)
+    monkeypatch.delenv("GROQ_ENABLED", raising=False)
     with app.test_client() as c:
         yield c
-    os.environ["GEMINI_ENABLED"] = "1"
 
 
 # ===========================================================================
@@ -93,6 +97,56 @@ def test_call_gemini_uses_session_api_config_key(monkeypatch):
         result = app_module.call_gemini("Return code", "Task")
         assert result == "print('ok')"
         assert seen_keys == ["session-key"]
+    finally:
+        app_module.set_gemini_api_key("Insert_API_Key_Here")
+
+
+def test_legacy_gemini_disabled_does_not_block_configured_key(monkeypatch):
+    """A stale GEMINI_ENABLED=0 must not kill Groq when a key is configured."""
+    monkeypatch.setenv("GEMINI_ENABLED", "0")
+    monkeypatch.delenv("CODEUP_AI_ENABLED", raising=False)
+    monkeypatch.delenv("AI_ENABLED", raising=False)
+    monkeypatch.delenv("GROQ_ENABLED", raising=False)
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setattr(app_module, "GEMINI_API_KEY", "Insert_API_Key_Here")
+    monkeypatch.setattr(app_module, "_call_ollama", lambda *a, **k: None)
+    app_module.set_gemini_api_key("session-key")
+    seen = {"keys": [], "max_tokens": []}
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            seen["max_tokens"].append(kwargs["max_tokens"])
+            return types.SimpleNamespace(
+                choices=[types.SimpleNamespace(message=types.SimpleNamespace(content="AI online"))]
+            )
+
+    class FakeGroq:
+        def __init__(self, api_key):
+            seen["keys"].append(api_key)
+            self.chat = types.SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.setitem(sys.modules, "groq", types.SimpleNamespace(Groq=FakeGroq))
+
+    try:
+        result = app_module.call_gemini("Return a status", "Test", max_tokens=4096)
+        assert result == "AI online"
+        assert seen["keys"] == ["session-key"]
+        assert seen["max_tokens"] == [4096]
+    finally:
+        app_module.set_gemini_api_key("Insert_API_Key_Here")
+
+
+def test_codeup_ai_enabled_zero_is_hard_disable(monkeypatch):
+    """Use CODEUP_AI_ENABLED=0 for an intentional full AI disable."""
+    monkeypatch.setenv("CODEUP_AI_ENABLED", "0")
+    monkeypatch.setenv("GEMINI_ENABLED", "1")
+    monkeypatch.setattr(app_module, "_call_ollama", lambda *a, **k: None)
+    app_module.set_gemini_api_key("session-key")
+
+    try:
+        result = app_module.call_gemini("Return a status", "Test")
+        assert "disabled" in result.lower()
     finally:
         app_module.set_gemini_api_key("Insert_API_Key_Here")
 
@@ -311,6 +365,56 @@ def test_empty_code_rejected(client):
     """Empty code must return 400 from /run."""
     res = client.post("/run", json={"code": "   "})
     assert res.status_code == 400
+
+
+HTML_DOCUMENT = """<!doctype html>
+<html>
+<head><title>Not Python</title></head>
+<body><script>console.log("nope")</script></body>
+</html>
+"""
+
+
+@pytest.mark.parametrize("path,payload", [
+    ("/run", {"code": HTML_DOCUMENT}),
+    ("/analyze", {"code": HTML_DOCUMENT, "language": "en"}),
+    ("/summarize", {"code": HTML_DOCUMENT, "language": "en"}),
+    ("/check-syntax", {"code": HTML_DOCUMENT}),
+    ("/structure", {"code": HTML_DOCUMENT}),
+    ("/structure-outline", {"code": HTML_DOCUMENT}),
+    ("/suggest-next", {"code": HTML_DOCUMENT, "line": 1, "language": "en"}),
+    ("/narrate-file", {"code": HTML_DOCUMENT, "language": "en"}),
+    ("/snippets", {"name": "html_doc", "code": HTML_DOCUMENT}),
+    ("/diff-explain", {"before": "print('ok')", "after": HTML_DOCUMENT, "language": "en"}),
+])
+def test_non_python_documents_rejected_by_python_endpoints(client, path, payload):
+    """The Python IDE must reject whole-document HTML/CSS/JS before processing."""
+    res = client.post(path, json=payload)
+    assert res.status_code == 400
+    data = res.get_json()
+    assert "python-only" in (data.get("error") or "").lower()
+
+
+def test_stale_mixed_html_autosave_shape_rejected(client):
+    """Regression test for a Python line accidentally prepended to an HTML draft."""
+    code = "print('browser smoke ok')<!doctype html>\n<html>\n<body>bad</body>\n</html>"
+    res = client.post("/check-syntax", json={"code": code})
+    assert res.status_code == 400
+    assert "python-only" in res.get_json()["error"].lower()
+
+
+def test_python_string_containing_html_is_allowed(client):
+    """Python code can still contain HTML-looking text inside ordinary strings."""
+    code = "page = '<html><body>ok</body></html>'\nprint(page)"
+    syntax = client.post("/check-syntax", json={"code": code})
+    assert syntax.status_code == 200
+    assert syntax.get_json()["has_errors"] is False
+
+    run = client.post("/run", json={"code": code})
+    assert run.status_code == 200
+    data = run.get_json()
+    assert data["success"] is True
+    assert "<html><body>ok</body></html>" in data["output"]
 
 
 def test_missing_body_handled(client):
@@ -777,8 +881,6 @@ def test_semantic_issues_in_response(client):
 # ===========================================================================
 # 14. INTENT PARSER UNIT TESTS (direct, no HTTP)
 # ===========================================================================
-
-from intent_parser import parse_intent
 
 @pytest.mark.parametrize("text, expected_intent, slot_check", [
     ("go to line twenty five",      "goto_line",    lambda s: s.get("line_number") == 25),

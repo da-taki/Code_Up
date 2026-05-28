@@ -16,7 +16,7 @@ two-word compounds such as "twenty five" (→ 25), "forty two" (→ 42).
 
 import re
 import threading
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 
 # ---------------------------------------------------------------------------

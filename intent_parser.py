@@ -1253,4 +1253,4 @@ def get_parser() -> IntentParser:
 
 def parse_intent(text: str) -> Dict:
     """Convenience function: parse a voice command string into intent + slots."""
-    return get_parser().parse(text)
+    return get_parser().parse("" if text is None else str(text))

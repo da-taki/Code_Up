@@ -13,6 +13,14 @@ from pathlib import Path
 from typing import Dict, Optional
 
 
+def _max_file_size() -> int:
+    try:
+        value = int(os.environ.get("SANDBOX_MAX_FILE_SIZE", "5000000"))
+    except (TypeError, ValueError):
+        value = 5_000_000
+    return max(1, min(value, 50_000_000))
+
+
 class SandboxedFileSystem:
     """Manages file operations within a sandboxed workspace."""
     
@@ -58,7 +66,7 @@ class SandboxedFileSystem:
         return str(resolved)
     
     # Configurable via SANDBOX_MAX_FILE_SIZE env var. Default 5 MB.
-    MAX_FILE_SIZE = int(os.environ.get("SANDBOX_MAX_FILE_SIZE", "5000000"))
+    MAX_FILE_SIZE = _max_file_size()
 
     def write(self, filepath: str, content: str, encoding: str = "utf-8") -> Dict:
         """
@@ -126,6 +134,14 @@ class SandboxedFileSystem:
                     "path": filepath,
                     "error": "Path is not a file"
                 }
+
+            size = os.path.getsize(abs_path)
+            if size > self.MAX_FILE_SIZE:
+                return {
+                    "success": False,
+                    "path": filepath,
+                    "error": f"File exceeds maximum size of {self.MAX_FILE_SIZE} bytes"
+                }
             
             with open(abs_path, "r", encoding=encoding) as f:
                 content = f.read()
@@ -134,7 +150,7 @@ class SandboxedFileSystem:
                 "success": True,
                 "path": filepath,
                 "content": content,
-                "size": len(content)
+                "size": size
             }
         except Exception as e:
             return {

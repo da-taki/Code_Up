@@ -17,14 +17,19 @@ Mechanism B (interactive streaming):
 Never imported by the parent app — only ever executed via
 `python sandbox_runner.py`.
 """
-import sys, time, json, traceback, os
+import ast as _ast
+import datetime as _datetime
+import json
+import math as _math
+import os
+import random as _random
+import string as _string
+import sys
+import time
+import traceback
 
 ALLOWED_MODULES = {'math', 'random', 'string', 'datetime', 'date'}
 
-import math as _math
-import random as _random
-import string as _string
-import datetime as _datetime
 _PRELOADED = {'math': _math, 'random': _random, 'string': _string, 'datetime': _datetime}
 
 
@@ -39,7 +44,6 @@ class SafeFunction:
         raise AttributeError(f'Access to {name} is blocked')
 
 
-import ast as _ast
 _FORBIDDEN_NAMES = {
     '__subclasses__', '__bases__', '__mro__', '__class__', '__globals__',
     '__builtins__', '__import__', '__loader__', '__spec__', '__getattribute__',

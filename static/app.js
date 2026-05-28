@@ -105,6 +105,8 @@ const AUTOSAVE_INTERVAL_MS = 30000;
 let _autosaveTimer = null;
 let _autosaveLastCode = '';
 const AUTOSAVE_KEY = 'codeup_autosave_draft';
+const DEFAULT_PYTHON_STARTER = 'print("Hello CodeUp!")';
+const PYTHON_ONLY_MESSAGE = 'CodeUp is Python-only. Remove HTML, CSS, or JavaScript and use valid Python code.';
 
 // Set window.CODEUP_DEBUG = true in the browser console to see debug logs.
 // Off by default so deployments don't spam the console.
@@ -154,6 +156,52 @@ const SpeechManager = (function () {
     const queue = [];
     let currentUtterance = null;
     let _lastSynthKick = 0;
+    const MAX_CHARS_PER_UTTERANCE = 260;
+    const START_TIMEOUT_MS = 8000;
+    const MAX_UTTERANCE_MS = 90000;
+
+    function splitSpeechText(text) {
+      const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+      if (!normalized) return [];
+      if (normalized.length <= MAX_CHARS_PER_UTTERANCE) return [normalized];
+
+      const chunks = [];
+      let remaining = normalized;
+      while (remaining.length > MAX_CHARS_PER_UTTERANCE) {
+        const windowText = remaining.slice(0, MAX_CHARS_PER_UTTERANCE + 1);
+        let boundary = Math.max(
+          windowText.lastIndexOf('. '),
+          windowText.lastIndexOf('? '),
+          windowText.lastIndexOf('! '),
+          windowText.lastIndexOf('; '),
+          windowText.lastIndexOf(': ')
+        );
+        if (boundary >= 80) {
+          boundary += 1;
+        } else {
+          const softerBoundary = Math.max(
+            windowText.lastIndexOf(', '),
+            windowText.lastIndexOf(' - ')
+          );
+          if (softerBoundary >= 120) {
+            boundary = softerBoundary + 1;
+          } else {
+            const spaceBoundary = windowText.lastIndexOf(' ');
+            boundary = spaceBoundary >= 80 ? spaceBoundary : MAX_CHARS_PER_UTTERANCE;
+          }
+        }
+        chunks.push(remaining.slice(0, boundary).trim());
+        remaining = remaining.slice(boundary).trim();
+      }
+      if (remaining) chunks.push(remaining);
+      return chunks.filter(Boolean);
+    }
+
+    function estimateUtteranceMs(text, rate) {
+      const speed = Math.max(0.5, Number(rate) || 1);
+      const estimated = Math.ceil(String(text || '').length * 75 / speed) + 6000;
+      return Math.max(15000, Math.min(MAX_UTTERANCE_MS, estimated));
+    }
 
     function dequeue() {
       // Gate on the actual synthesis state, not just our local pointer.
@@ -193,26 +241,38 @@ const SpeechManager = (function () {
 
       let finished = false;
       let started = false;
+      let startTimeoutId = null;
+      let maxTimeoutId = null;
       const cleanup = () => {
         if (finished) return;
         finished = true;
         AppState.isSpeaking = false;
         currentUtterance = null;
-        if (item.timeoutId) clearTimeout(item.timeoutId);
+        if (startTimeoutId) clearTimeout(startTimeoutId);
+        if (maxTimeoutId) clearTimeout(maxTimeoutId);
         if (item.resolve) item.resolve();
         dequeue();
       };
 
       currentUtterance.onstart = () => {
         started = true;
+        if (startTimeoutId) {
+          clearTimeout(startTimeoutId);
+          startTimeoutId = null;
+        }
+        maxTimeoutId = setTimeout(() => {
+          if (finished) return;
+          try {
+            window.speechSynthesis.cancel();
+          } catch (e) {}
+          cleanup();
+        }, estimateUtteranceMs(item.text, item.rate));
       };
 
       currentUtterance.onend = cleanup;
       currentUtterance.onerror = cleanup;
 
-      item.timeoutId = setTimeout(cleanup, 30000);
-
-      setTimeout(() => {
+      startTimeoutId = setTimeout(() => {
         if (!started && !finished) {
           try {
             window.speechSynthesis.cancel();
@@ -220,14 +280,24 @@ const SpeechManager = (function () {
 
           cleanup();
         }
-      }, 1200);
+      }, START_TIMEOUT_MS);
 
       window.speechSynthesis.speak(currentUtterance);
     }
 
     function enqueue(text, opts = {}) {
       return new Promise(resolve => {
-        queue.push({ text, ...opts, resolve });
+        const chunks = splitSpeechText(text);
+        if (!chunks.length) {
+          resolve();
+          return;
+        }
+        let remaining = chunks.length;
+        const resolveChunk = () => {
+          remaining -= 1;
+          if (remaining <= 0) resolve();
+        };
+        chunks.forEach(chunk => queue.push({ text: chunk, ...opts, resolve: resolveChunk }));
         dequeue();
       });
     }
@@ -374,6 +444,7 @@ async function readLineEnhanced(line) {
 async function sonifyCurrentBlock() {
   const model = getModel();
   if (!model) return;
+  if (!ensurePythonEditorContent('sonify block')) return;
   const pos         = editor.getPosition() || { lineNumber: 1 };
   const currentLine = pos.lineNumber;
   const lines       = getCode().split('\n');
@@ -450,6 +521,7 @@ function showNavigationHistory() {
 // ---------- VARIABLE TRACKING ----------
 async function listVariables() {
   if (!ensureNotExecuting(() => listVariables(), 'list variables')) return;
+  if (!ensurePythonEditorContent('list variables')) return;
   const model = getModel();
   if (!model) return;
   const pos = editor.getPosition() || { lineNumber: 1 };
@@ -499,6 +571,7 @@ async function listVariables() {
 
 async function findVariable(varName) {
   if (!varName) { speak('Please specify a variable name.'); return; }
+  if (!ensurePythonEditorContent('find variable')) return;
   showAI(`Finding variable ${varName}...`);
   speak(`Finding all uses of ${varName}.`);
   try {
@@ -529,6 +602,7 @@ async function findVariable(varName) {
 async function checkSyntaxErrors() {
   // Cancel any prior speech so "checking..." is heard immediately.
   SpeechManager.cancelAll();
+  if (!ensurePythonEditorContent('check syntax')) return;
   showAI('Checking for errors...');
   speak('Checking code for errors.');
   try {
@@ -703,7 +777,8 @@ function copyCode() {
 function pasteCode() {
   if (!ensureNotExecuting(() => pasteCode(), 'paste code')) return;
   navigator.clipboard.readText().then(text => {
-    setCode(text); speak('Code pasted from clipboard.'); out('Code pasted from clipboard.');
+    if (!setCode(text, { source: 'clipboard' })) return;
+    speak('Code pasted from clipboard.'); out('Code pasted from clipboard.');
   }).catch(() => speak('Failed to paste code.'));
 }
 
@@ -877,8 +952,65 @@ function getModel() { return editor && editor.getModel(); }
 function getCode()  { return (editor && editor.getValue()) || ''; }
 function getLanguage() { return (document.getElementById('languageSelector') || {}).value || 'en'; }
 
+function looksLikeNonPythonCode(value) {
+  const text = String(value || '').trimStart();
+  if (!text) return false;
+
+  const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  const first = (lines[0] || '').toLowerCase();
+  const head = lines.slice(0, 30).join('\n').toLowerCase();
+  const headWithoutStrings = head.replace(/("""[\s\S]*?"""|'''[\s\S]*?'''|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')/g, '');
+
+  if (/^(<!doctype\s+html|<html\b|<head\b|<body\b|<script\b|<style\b|<\/html\b|<\/body\b|<div\b|<section\b|<main\b)/i.test(first)) {
+    return true;
+  }
+
+  const tagMatches = headWithoutStrings.match(/<\/?[a-z][a-z0-9-]*(?:\s|>|\/>)/g) || [];
+  if (tagMatches.length >= 4 && (headWithoutStrings.includes('<html') || headWithoutStrings.includes('<body') || headWithoutStrings.includes('</'))) {
+    return true;
+  }
+
+  if (/^\s*(body|html|header|main|section|div|p|h[1-6]|[.#][\w-]+)\s*\{/mi.test(headWithoutStrings) && headWithoutStrings.includes('}') && headWithoutStrings.includes(':')) {
+    return true;
+  }
+
+  return /^\s*(const|let|var)\s+\w+\s*=/m.test(headWithoutStrings)
+    || /^\s*function\s+\w+\s*\(/m.test(headWithoutStrings)
+    || /=>\s*\{/.test(headWithoutStrings)
+    || /\bdocument\.(getElementById|querySelector|addEventListener)\b/.test(headWithoutStrings);
+}
+
+function rejectNonPythonCode(source) {
+  const suffix = source ? ` Rejected ${source}.` : '';
+  const msg = `${PYTHON_ONLY_MESSAGE}${suffix}`;
+  out(msg);
+  speak(msg);
+  srAnnounce('Python-only code required');
+}
+
+function ensurePythonEditorContent(action) {
+  if (looksLikeNonPythonCode(getCode())) {
+    rejectNonPythonCode(action || 'this action');
+    return false;
+  }
+  return true;
+}
+
+function resetPythonStarter() {
+  setCode(DEFAULT_PYTHON_STARTER, { preserveSpeech: true });
+  out('Python starter loaded.');
+  speak('Python starter loaded.');
+  srAnnounce('Python starter loaded');
+}
+
 function setCode(v, opts) {
   opts = opts || {};
+  if (!opts.allowNonPython && looksLikeNonPythonCode(v)) {
+    rejectNonPythonCode(opts.source || 'non-Python code');
+    try { localStorage.removeItem(AUTOSAVE_KEY); } catch (e) {}
+    _autosaveLastCode = '';
+    return false;
+  }
   if (typeof ErrorBeaconManager !== 'undefined') ErrorBeaconManager.stop();
   if (!opts.preserveSpeech) SpeechManager.cancelAll();
   lastSpokenText = null;
@@ -899,6 +1031,7 @@ function setCode(v, opts) {
     }
   }
   if (editor) editor.setValue(v);
+  return true;
 }
 
 function out(t) { document.getElementById('output').textContent = t; }
@@ -956,6 +1089,7 @@ async function runCode() {
   SpeechManager.cancelAll();
 
   const codeToCheck = getCode();
+  if (!ensurePythonEditorContent('run')) return;
   const usesInput = /\binput\s*\(/.test(codeToCheck);
   if (usesInput && _preflightInputs.length === 0) {
     speak('Heads up: your code uses input, but you have not declared any pre-flight inputs. The first input call will fail with a friendly error. To fix: say "set inputs to" followed by your values, or add a magic comment like "hash inputs colon Alice comma 17" at the top of your code, or say "live input mode" to switch to interactive mode.');
@@ -1066,6 +1200,7 @@ async function runCode() {
 // ---------- STREAMING RUN (Mechanism B — live interactive input) ----------
 async function runCodeStreaming() {
   SpeechManager.cancelAll();
+  if (!ensurePythonEditorContent('live run')) return;
   AppState.isExecuting = true;
   cueSuccess();
   startHeartbeat();
@@ -1193,6 +1328,7 @@ async function sendStreamingInput(value) {
 
 // ---------- ANALYZE ----------
 async function analyzeCode() {
+  if (!ensurePythonEditorContent('analyze')) return;
   cueSuccess(); out('Analyzing...'); showAI('Analyzing code with AI...'); speak('Analyzing code.');
   try {
     const res  = await fetch('/analyze', {
@@ -1229,6 +1365,11 @@ async function analyzeDeep() {
   // Use the SAME code that was analyzed briefly. If the user edited since then,
   // the deep analysis should match the brief one — not silently re-analyze new code.
   const codeForDeep = window._lastAnalyzeContext.code;
+  if (looksLikeNonPythonCode(codeForDeep)) {
+    rejectNonPythonCode('deep analysis');
+    window._lastAnalyzeContext = null;
+    return;
+  }
   const currentCode = getCode();
   if (codeForDeep !== currentCode) {
     SpeechManager.cancelAll();
@@ -1363,6 +1504,7 @@ async function narrateFile() {
     speak('The editor is empty. There is nothing to narrate.');
     return;
   }
+  if (!ensurePythonEditorContent('narrate file')) return;
   cueSuccess();
   out('Narrating file...');
   showAI('Narrating the entire file...');
@@ -1405,6 +1547,7 @@ async function narrateFile() {
 
 // ---------- SUMMARIZE ----------
 async function summarizeFile() {
+  if (!ensurePythonEditorContent('summarize')) return;
   cueSuccess(); out('Summarizing file...'); showAI('Summarizing this file...'); speak('Summarizing this file.');
   try {
     const res  = await fetch('/summarize', {
@@ -1424,6 +1567,7 @@ async function summarizeFile() {
 
 // ---------- ADVISE ----------
 async function adviseCode() {
+  if (!ensurePythonEditorContent('advise')) return;
   cueSuccess(); out('Advising on your code...'); showAI('Generating improvement suggestions...'); speak('Advising on your code.');
   try {
     const res  = await fetch('/advise', {
@@ -1444,6 +1588,7 @@ async function adviseCode() {
 // ---------- FIX ----------
 async function fixCode() {
   const before = getCode();
+  if (!ensurePythonEditorContent('fix')) return;
   cueSuccess(); out('Fixing...'); showAI('Fixing code with AI...'); speak('Fixing code.');
   try {
     const res  = await fetch('/fix', {
@@ -1474,6 +1619,7 @@ async function fixCode() {
 
 // ---------- DESCRIBE LINE ----------
 async function describeLine(line) {
+  if (!ensurePythonEditorContent('describe line')) return;
   showAI('Describing line ' + line); speak('Describing line ' + line);
   try {
     const res  = await fetch('/describe', {
@@ -1679,6 +1825,7 @@ async function saveSnippetAccessible(voiceName) {
 }
 
 async function saveSnippetWithName(name) {
+  if (!ensurePythonEditorContent('save snippet')) return;
   await fetch('/snippets', {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -2027,6 +2174,7 @@ async function saveMacro(name) {
   if (!name) { speak('Please give the macro a name. Say "remember this as" followed by a name.'); return; }
   const code = getCode();
   if (!code.trim()) { speak('The editor is empty. Nothing to save as a macro.'); return; }
+  if (!ensurePythonEditorContent('save macro')) return;
   try {
     const res = await fetch('/macros', {
       method: 'POST',
@@ -2051,7 +2199,7 @@ async function useMacro(name) {
     const res = await fetch(`/macros/get/${encodeURIComponent(name)}`);
     const data = await res.json();
     if (data.success) {
-      setCode(data.code);
+      if (!setCode(data.code, { source: `macro ${name}` })) return;
       speak(`Loaded macro ${name}.`);
       out(`Macro "${name}" loaded into the editor.`);
       srAnnounce(`Macro ${name} loaded`);
@@ -2082,6 +2230,7 @@ async function listMacrosVoice() {
 async function shareCurrentMacro(name) {
   const code = getCode();
   if (!code.trim()) { speak('The editor is empty. Nothing to share.'); return; }
+  if (!ensurePythonEditorContent('share macro')) return;
   try {
     const res = await fetch('/macros/share', {
       method: 'POST',
@@ -2107,7 +2256,7 @@ async function useSharedMacro(shareCode) {
     const res = await fetch(`/macros/shared/${encodeURIComponent(shareCode)}`);
     const data = await res.json();
     if (data.success) {
-      setCode(data.code);
+      if (!setCode(data.code, { source: `shared macro ${shareCode}` })) return;
       speak(`Loaded shared macro ${data.share_code}.`);
       out(`Shared macro "${data.name}" loaded into the editor.`);
       srAnnounce(`Shared macro ${data.share_code} loaded`);
@@ -2213,6 +2362,7 @@ async function reportPosition() {
 async function readBreadcrumb() {
   const model = getModel();
   if (!model) { speak('Editor not ready.'); return; }
+  if (!ensurePythonEditorContent('read position')) return;
   const pos = editor.getPosition() || { lineNumber: 1 };
   try {
     const res = await fetch('/breadcrumbs', {
@@ -2236,6 +2386,11 @@ async function readBreadcrumb() {
 async function explainErrorSimply() {
   if (!_lastErrorContext) {
     speak('There is no recent error to explain. Run your code first.');
+    return;
+  }
+  if (looksLikeNonPythonCode(_lastErrorContext.code || '')) {
+    rejectNonPythonCode('error explanation');
+    _lastErrorContext = null;
     return;
   }
   showAI('Explaining in simpler terms...');
@@ -2288,6 +2443,7 @@ async function explainOutputDiff() {
     speak('No outputs are available yet. Run your code twice, then ask why the output is different.');
     return;
   }
+  if (!ensurePythonEditorContent('explain output difference')) return;
   try {
     showAI('Explaining output difference...');
     const res = await fetch('/explain-diff', {
@@ -2386,6 +2542,7 @@ async function talkToMentor(message, mode = 'general') {
   let msg = message || 'Help me with my code.';
   if (mode === 'shorter') msg = 'Say your previous mentor reply shorter.';
   if (mode === 'simpler') msg = 'Say your previous mentor reply simpler.';
+  if (!ensurePythonEditorContent('ask mentor')) return;
   showAI('Asking CodeUp Mentor...');
   try {
     const context = getMentorContext();
@@ -2416,6 +2573,7 @@ async function talkToMentor(message, mode = 'general') {
 }
 
 async function checkProgressWithMentor() {
+  if (!ensurePythonEditorContent('check progress')) return;
   showAI('Checking progress...');
   try {
     const res = await fetch('/mentor/check-progress', {
@@ -2459,6 +2617,7 @@ function setMentorPreference(key, value) {
 }
 
 async function speakCodeMap() {
+  if (!ensurePythonEditorContent('code map')) return;
   showAI('Mapping your code...');
   try {
     const res = await fetch('/mentor/code-map', {
@@ -3218,9 +3377,16 @@ function startAutosave() {
       const code = getCode();
       if (code === _autosaveLastCode) return;  // no-op if nothing changed
       if (!code.trim()) return;                 // don't autosave empty
+      if (looksLikeNonPythonCode(code)) {
+        localStorage.removeItem(AUTOSAVE_KEY);
+        _autosaveLastCode = '';
+        return;
+      }
       localStorage.setItem(AUTOSAVE_KEY, JSON.stringify({
         code,
         timestamp: Date.now(),
+        language: 'python',
+        app: 'codeup-python',
       }));
       _autosaveLastCode = code;
     } catch (e) { /* localStorage full or disabled — silent fail */ }
@@ -3233,9 +3399,15 @@ function recoverAutosaveDraft() {
     if (!raw) return;
     const draft = JSON.parse(raw);
     if (!draft || !draft.code) return;
+    if ((draft.language && draft.language !== 'python') || looksLikeNonPythonCode(draft.code)) {
+      localStorage.removeItem(AUTOSAVE_KEY);
+      out('Removed a stale non-Python draft. CodeUp now keeps this editor Python-only.');
+      srAnnounce('Stale non-Python draft removed');
+      return;
+    }
     // Only restore if the editor is empty/default — don't clobber an active session
     const current = getCode().trim();
-    const isDefault = !current || current === 'print("Hello CodeUp!")';
+    const isDefault = !current || current === DEFAULT_PYTHON_STARTER;
     if (!isDefault) return;
     // Only restore drafts from within the last 7 days — older is probably stale
     const ageMs = Date.now() - (draft.timestamp || 0);
@@ -3243,7 +3415,7 @@ function recoverAutosaveDraft() {
       localStorage.removeItem(AUTOSAVE_KEY);
       return;
     }
-    setCode(draft.code);
+    if (!setCode(draft.code, { source: 'autosaved draft' })) return;
     speak('A draft from your previous session has been restored. Press Control Z to undo if you did not want this.');
     srAnnounce('Previous draft restored');
   } catch (e) { /* corrupted or missing — silent fail */ }
@@ -3262,6 +3434,11 @@ async function updateStructurePanel() {
   const panel   = document.getElementById('structurePanel');
   const content = document.getElementById('structureContent');
   if (!code.trim()) { hideEl(panel); return; }
+  if (looksLikeNonPythonCode(code)) {
+    content.innerHTML = '<p class="structure-info">CodeUp is Python-only. Remove HTML, CSS, or JavaScript.</p>';
+    showEl(panel);
+    return;
+  }
 
   try {
     const res  = await fetch('/structure', {
@@ -3428,6 +3605,7 @@ function registerPythonAutocomplete() {
 // ---------- FUNCTION / CLASS SONIFICATION ----------
 async function sonifyFunction(functionName) {
   if (!functionName) { speak('Please specify a function name.'); return; }
+  if (!ensurePythonEditorContent('sonify function')) return;
   const lines = getCode().split('\n');
   // Escape regex metacharacters in the function name before building the pattern
   const pattern = new RegExp(`^\\s*def\\s+${escapeRegex(functionName)}\\s*\\(`, 'i');
@@ -3453,6 +3631,7 @@ async function sonifyFunction(functionName) {
 
 async function sonifyClass(className) {
   if (!className) { speak('Please specify a class name.'); return; }
+  if (!ensurePythonEditorContent('sonify class')) return;
   const lines   = getCode().split('\n');
   const pattern = new RegExp(`^\\s*class\\s+${escapeRegex(className)}\\s*[:\\(]`, 'i');
 
@@ -3490,6 +3669,7 @@ async function sonifyRange(startLine, endLine, context = 'block', delayMs = 100)
 }
 
 async function sonifyWholeFile() {
+  if (!ensurePythonEditorContent('sonify file')) return;
   const lines = getCode().split('\n');
   if (!getCode().trim()) {
     speak('The file is empty.');
@@ -3559,6 +3739,7 @@ async function sonifyCodeIssues() {
 async function getDebugSuggestions() {
   const code = getCode();
   if (!code.trim()) { speak('Code is empty.'); return; }
+  if (!ensurePythonEditorContent('debug suggestions')) return;
   speak('Analyzing code for improvement suggestions...');
   try {
     const res  = await fetch('/debug-suggestions', {
@@ -3586,6 +3767,7 @@ const COMMAND_PALETTE_COMMANDS = [
   { id: 'analyze',          title: 'Analyze Code',        desc: 'AI analysis of code',               icon: '🔍', keys: 'Ctrl+Alt+A',   action: () => analyzeCode() },
   { id: 'fix',              title: 'Fix Code',            desc: 'Automatically fix errors',          icon: '🔧', keys: 'Ctrl+Alt+F',   action: () => fixCode() },
   { id: 'advise',           title: 'Get Advice',          desc: 'Suggestions for improvements',      icon: '💡', keys: 'Ctrl+Alt+I',   action: () => adviseCode() },
+  { id: 'python_starter',   title: 'Python Starter',      desc: 'Load a clean Python starter',       icon: 'Py', keys: '',             action: () => resetPythonStarter() },
   { id: 'goto_line',        title: 'Go to Line',          desc: 'Jump to specific line',             icon: '➡️', keys: 'Ctrl+G',       action: () => showInputDialog('Enter line number:', gotoLine) },
   { id: 'read_line',        title: 'Read Line',           desc: 'Read current line with context',    icon: '📖', keys: '',             action: () => readCurrentLine() },
   { id: 'next_line',        title: 'Next Line',           desc: 'Move to next line',                 icon: '↓',  keys: 'Down',         action: () => nextLine() },
@@ -3689,6 +3871,7 @@ async function readStructureOutline() {
     speak('The file is empty.');
     return;
   }
+  if (!ensurePythonEditorContent('read structure')) return;
   try {
     const res = await fetch('/structure-outline', {
       method: 'POST',
@@ -3838,6 +4021,7 @@ let _suggestionsLang = 'en';
 async function suggestNextLine() {
   const model = getModel();
   if (!model) { speak('Editor not ready.'); return; }
+  if (!ensurePythonEditorContent('suggest next line')) return;
   const pos  = editor.getPosition() || { lineNumber: model.getLineCount() };
   showAI('Thinking of next lines...');
   speak('Analyzing context. Suggesting next lines.');
@@ -3906,6 +4090,7 @@ function chooseSuggestion(choice) {
 
 async function tellExecutionStory() {
   SpeechManager.cancelAll();
+  if (!ensurePythonEditorContent('execution story')) return;
   showAI('Narrating your execution...');
   speak('Narrating what happened when your code ran.');
   try {
@@ -4294,6 +4479,7 @@ async function walkThroughCode() {
   if (!model) { speak('Editor not ready.'); return; }
   const code = getCode();
   if (!code.trim()) { speak('The editor is empty. Write some code first.'); return; }
+  if (!ensurePythonEditorContent('walk through')) return;
 
   _walkActive = true;
   SpeechManager.cancelAll();

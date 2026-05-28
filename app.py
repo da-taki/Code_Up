@@ -1,15 +1,31 @@
-from dotenv import load_dotenv
-load_dotenv()
-from flask import Flask, render_template, request, jsonify, g, has_request_context
-import json, os, traceback, io, contextlib, re, ast, sys, time, threading, subprocess, tempfile, uuid, random
+import ast
+import io
+import json
+import os
+import queue as _queue_mod
+import random
+import re
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import traceback
+import uuid
 from concurrent.futures import ThreadPoolExecutor
-from typing import List, Tuple, Optional, Any, Dict
+from typing import Any, Dict, List, Optional, Tuple
 
-__version__ = "0.8.0"
+from dotenv import load_dotenv
+from flask import Flask, g, has_request_context, jsonify, render_template, request
 from rapidfuzz import fuzz
-from structure_parser import CodeAnalyzer
+
 from intent_parser import parse_intent
 from sandboxed_fs import get_sandbox
+from structure_parser import CodeAnalyzer
+
+load_dotenv()
+
+__version__ = "0.8.0"
 
 # ---------------------------------------------------------------------------
 # Interactive run (Mechanism B) state
@@ -18,8 +34,6 @@ from sandboxed_fs import get_sandbox
 # FIFO path, output buffer, completion flag, and a queue.Queue that the SSE
 # generator reads chunks from. Cleanup happens on subprocess exit OR when
 # the SSE client disconnects (whichever comes first).
-import queue as _queue_mod
-
 _active_runs = {}  # run_id -> dict
 _active_runs_lock = threading.Lock()
 
@@ -250,6 +264,11 @@ def cleanup_old_sessions():
 MAX_REQUEST_SIZE = 1_000_000  # 1 MB max request body
 MAX_CODE_SIZE = 100_000       # 100 KB max code
 MAX_GEMINI_TIMEOUT = 30       # 30 second timeout for LLM calls
+try:
+    DEFAULT_AI_MAX_TOKENS = int(os.environ.get("GROQ_MAX_TOKENS", "2048"))
+except (TypeError, ValueError):
+    DEFAULT_AI_MAX_TOKENS = 2048
+DEFAULT_AI_MAX_TOKENS = max(256, min(DEFAULT_AI_MAX_TOKENS, 8192))
 MAX_MENTOR_MESSAGE_SIZE = 2_000
 MAX_MENTOR_CONTEXT_SIZE = 4_000
 
@@ -402,6 +421,56 @@ def safe(v: Any, d: Any = "") -> Any:
     """Return `v` when not None, otherwise return default `d`."""
     return v if v is not None else d
 
+def _looks_like_non_python_code(code: str) -> bool:
+    """Reject whole-document HTML/CSS/JS accidentally pasted into the Python IDE."""
+    text = str(code or "").lstrip("\ufeff \t\r\n")
+    if not text:
+        return False
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    first = lines[0].lower() if lines else ""
+    head = "\n".join(lines[:30]).lower()
+
+    html_starts = (
+        "<!doctype html", "<html", "<head", "<body", "<script", "<style",
+        "</html", "</head", "</body", "<div", "<section", "<main",
+    )
+    if first.startswith(html_starts):
+        return True
+
+    python_parse_failed = False
+    try:
+        ast.parse(str(code or ""))
+    except SyntaxError:
+        python_parse_failed = True
+
+    tag_count = len(re.findall(r"</?[a-z][a-z0-9-]*(?:\s|>|/>)", head))
+    if python_parse_failed and tag_count >= 4 and ("<html" in head or "<body" in head or "</" in head):
+        return True
+
+    css_block = re.search(r"(?m)^\s*(body|html|header|main|section|div|p|h[1-6]|[.#][\w-]+)\s*\{", head)
+    if python_parse_failed and css_block and "}" in head and ":" in head:
+        return True
+
+    js_patterns = (
+        r"(?m)^\s*(const|let|var)\s+\w+\s*=",
+        r"(?m)^\s*function\s+\w+\s*\(",
+        r"=>\s*\{",
+        r"\bdocument\.(getElementById|querySelector|addEventListener)\b",
+    )
+    return python_parse_failed and any(re.search(pattern, head) for pattern in js_patterns)
+
+def _python_only_error() -> str:
+    return (
+        "CodeUp is Python-only. Remove HTML, CSS, or JavaScript and enter valid "
+        "Python code, for example: print('Hello CodeUp!')."
+    )
+
+def _reject_non_python_response(code: str):
+    if _looks_like_non_python_code(code):
+        return jsonify({"success": False, "error": _python_only_error()}), 400
+    return None
+
 def load_snippets() -> dict:
     """Load snippets from disk and return a dict with key `snippets`."""
     path = _snippets_path()
@@ -497,6 +566,33 @@ def _configured_cloud_api_key():
             return key
     return ""
 
+def _env_flag_disabled(name: str) -> bool:
+    return str(os.environ.get(name, "")).strip().lower() in {"0", "false", "no", "off", "disabled"}
+
+def _cloud_ai_disabled_for_request(key: str) -> bool:
+    """Return True only when AI is explicitly disabled for this request.
+
+    GEMINI_ENABLED is kept as a legacy offline/test switch. If a real Groq key
+    is configured, do not let that stale flag kill every AI feature.
+    Use CODEUP_AI_ENABLED=0 or GROQ_ENABLED=0 for a deliberate hard disable.
+    """
+    if _env_flag_disabled("CODEUP_AI_ENABLED") or _env_flag_disabled("AI_ENABLED"):
+        return True
+    if _env_flag_disabled("GROQ_ENABLED"):
+        return True
+    if _env_flag_disabled("GEMINI_ENABLED") and not key:
+        return True
+    return False
+
+def _normalize_ai_max_tokens(max_tokens: Optional[int]) -> int:
+    if max_tokens is None:
+        return DEFAULT_AI_MAX_TOKENS
+    try:
+        value = int(max_tokens)
+    except (TypeError, ValueError):
+        return DEFAULT_AI_MAX_TOKENS
+    return max(256, min(value, 8192))
+
 def _is_ai_service_message(text: str) -> bool:
     lower = (text or "").strip().lower()
     return (
@@ -509,7 +605,7 @@ def _is_ai_service_message(text: str) -> bool:
         or "authentication failed" in lower
     )
 
-def _call_ollama(system_prompt, user_prompt, temperature=0.2):
+def _call_ollama(system_prompt, user_prompt, temperature=0.2, max_tokens=None):
     """Call local Ollama instance. Returns response string or None on failure."""
     if os.environ.get("OLLAMA_ENABLED", "0") != "1":
         return None
@@ -525,7 +621,7 @@ def _call_ollama(system_prompt, user_prompt, temperature=0.2):
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                "options": {"temperature": temperature, "num_predict": 1024},
+                "options": {"temperature": temperature, "num_predict": _normalize_ai_max_tokens(max_tokens)},
                 "stream": False,
             },
             timeout=MAX_GEMINI_TIMEOUT,
@@ -541,24 +637,13 @@ def _call_ollama(system_prompt, user_prompt, temperature=0.2):
         return None
 
 
-def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en"):
+def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en", max_tokens=None):
     """Call Groq API with hard timeout, falling back to local Ollama if Groq fails.
 
     Function name kept as call_gemini for backward compat with all callers.
     Order: Groq cloud → Ollama local → friendly error message.
     """
-    if os.environ.get("GEMINI_ENABLED", "1") != "1":
-        # Cloud disabled — try Ollama directly
-        sp = system_prompt
-        if language == "hi":
-            sp = f"आप एक सहायक हैं जो हिंदी में सहायता प्रदान करते हैं। {system_prompt}"
-        local = _call_ollama(sp, user_prompt, temperature)
-        if local:
-            return local
-        return "AI service disabled"
-
-    global _gemini_queued_requests
-
+    max_tokens = _normalize_ai_max_tokens(max_tokens)
     key = _configured_cloud_api_key()
 
     def _try_ollama_fallback():
@@ -566,7 +651,15 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en"):
         sp = system_prompt
         if language == "hi":
             sp = f"आप एक सहायक हैं जो हिंदी में सहायता प्रदान करते हैं। {system_prompt}"
-        return _call_ollama(sp, user_prompt, temperature)
+        return _call_ollama(sp, user_prompt, temperature, max_tokens=max_tokens)
+
+    if _cloud_ai_disabled_for_request(key):
+        local = _try_ollama_fallback()
+        if local:
+            return local
+        return "AI service disabled by server configuration."
+
+    global _gemini_queued_requests
 
     if not key:
         local = _try_ollama_fallback()
@@ -593,7 +686,7 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en"):
                     {"role": "user", "content": user_prompt},
                 ],
                 temperature=temperature,
-                max_tokens=1024,
+                max_tokens=max_tokens,
             )
             for choice in getattr(response, "choices", []) or []:
                 message = getattr(choice, "message", None)
@@ -959,7 +1052,10 @@ def explain_error_beginner():
     error_text = safe(body.get("error"), "")
     language = safe(body.get("language"), "en")
     if len(code) > MAX_CODE_SIZE:
-        return jsonify({"success": False, "error": f"Code too large"}), 413
+        return jsonify({"success": False, "error": "Code too large"}), 413
+    blocked = _reject_non_python_response(code)
+    if blocked:
+        return blocked
     if not error_text.strip():
         return jsonify({"success": False, "error": "No error provided"}), 400
     explanation = explain_error(code, error_text, language=language, beginner=True)
@@ -1097,6 +1193,9 @@ def mentor_code_map():
     code = safe(body.get("code"), "")
     if len(code) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
+    blocked = _reject_non_python_response(code)
+    if blocked:
+        return blocked
     reply = build_code_audio_map(code)
     return jsonify({"success": True, "reply": reply, "speech": reply, "auto_speak": True})
 
@@ -1110,6 +1209,9 @@ def mentor_chat():
     raw_error = str(safe(body.get("error", ""), ""))
     if len(raw_code) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
+    blocked = _reject_non_python_response(raw_code)
+    if blocked:
+        return blocked
     if len(raw_message) > MAX_MENTOR_MESSAGE_SIZE:
         return jsonify({"success": False, "error": f"Message too large (max {MAX_MENTOR_MESSAGE_SIZE} bytes)"}), 413
     if len(raw_output) > MAX_MENTOR_CONTEXT_SIZE or len(raw_error) > MAX_MENTOR_CONTEXT_SIZE:
@@ -1180,6 +1282,9 @@ def mentor_check_progress():
     raw_current_error = str(safe(body.get("currentError", ""), ""))
     if len(raw_previous_code) > MAX_CODE_SIZE or len(raw_current_code) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
+    blocked = _reject_non_python_response(raw_previous_code) or _reject_non_python_response(raw_current_code)
+    if blocked:
+        return blocked
     if any(len(value) > MAX_MENTOR_CONTEXT_SIZE for value in (raw_previous_error, raw_current_output, raw_current_error)):
         return jsonify({"success": False, "error": f"Mentor context too large (max {MAX_MENTOR_CONTEXT_SIZE} bytes per field)"}), 413
     previous_code = _mentor_clean_text(raw_previous_code, MAX_CODE_SIZE)
@@ -1473,6 +1578,9 @@ def run_code():
 
     if not code.strip():
         return jsonify({"success": False, "error": "Code cannot be empty"}), 400
+    blocked = _reject_non_python_response(code)
+    if blocked:
+        return blocked
 
     # Heuristic: detect input() use without provided inputs and surface a
     # friendly hint up front. The subprocess will still raise the canonical
@@ -1660,6 +1768,9 @@ def analyze():
         return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
     if not code.strip():
         return jsonify({"success": False, "error": "Code cannot be empty"}), 400
+    blocked = _reject_non_python_response(code)
+    if blocked:
+        return blocked
 
     if language == "hi":
         system = (
@@ -1719,6 +1830,9 @@ def analyze_deep():
         return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
     if not code.strip():
         return jsonify({"success": False, "error": "Code cannot be empty"}), 400
+    blocked = _reject_non_python_response(code)
+    if blocked:
+        return blocked
 
     if language == "hi":
         system = (
@@ -1740,7 +1854,7 @@ def analyze_deep():
         )
 
     user = f"Python code:\n```python\n{code}\n```"
-    analysis = call_gemini(system, user, language=language)
+    analysis = call_gemini(system, user, language=language, max_tokens=4096)
     return jsonify({"analysis": analysis, "speech": analysis, "auto_speak": True})
 
 # ==========================
@@ -1757,6 +1871,9 @@ def advise():
         return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
     if not code.strip():
         return jsonify({"success": False, "error": "Code cannot be empty"}), 400
+    blocked = _reject_non_python_response(code)
+    if blocked:
+        return blocked
 
     if language == "hi":
         system = (
@@ -1795,6 +1912,9 @@ def debug_suggestions():
         return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
     if not code.strip():
         return jsonify({"success": True, "suggestions": []})
+    blocked = _reject_non_python_response(code)
+    if blocked:
+        return blocked
 
     if language == "hi":
         system = (
@@ -1842,6 +1962,9 @@ def describe():
     # FIX M-2: Added MAX_CODE_SIZE check (was missing from this endpoint).
     if len(code) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
+    blocked = _reject_non_python_response(code)
+    if blocked:
+        return blocked
 
     # FIX C-4: Wrap int() cast in try/except so non-numeric "line" values
     # return a 400 instead of an unhandled 500 ValueError/TypeError.
@@ -1890,6 +2013,9 @@ def structure():
         return jsonify({"success": True, "structure": {
             "imports": [], "functions": [], "classes": [], "loops": []
         }})
+    blocked = _reject_non_python_response(code)
+    if blocked:
+        return blocked
 
     analyzer = CodeAnalyzer()
     structure_data = analyzer.analyze(code)
@@ -1950,6 +2076,9 @@ def structure_outline():
         return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
     if not code.strip():
         return jsonify({"success": True, "outline": "This file is empty."})
+    blocked = _reject_non_python_response(code)
+    if blocked:
+        return blocked
 
     analyzer = CodeAnalyzer()
     structure_data = analyzer.analyze(code)
@@ -1969,6 +2098,9 @@ def read_line_context():
     # FIX M-2: Added MAX_CODE_SIZE check (was missing from this endpoint).
     if len(code) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
+    blocked = _reject_non_python_response(code)
+    if blocked:
+        return blocked
 
     # FIX C-4: Wrap int() cast to return 400 on bad input.
     try:
@@ -2047,6 +2179,9 @@ def track_variables():
     # FIX M-2: Added MAX_CODE_SIZE check (was missing from this endpoint).
     if len(code) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
+    blocked = _reject_non_python_response(code)
+    if blocked:
+        return blocked
 
     # FIX C-4: Wrap int() cast to return 400 on bad input.
     try:
@@ -2260,6 +2395,9 @@ def find_variable_usage():
     # FIX M-2: Added MAX_CODE_SIZE check (was missing from this endpoint).
     if len(code) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
+    blocked = _reject_non_python_response(code)
+    if blocked:
+        return blocked
 
     var_name = safe(body.get("variable"), "")
     if not var_name:
@@ -2321,6 +2459,9 @@ def check_syntax():
 
     if not code.strip():
         return jsonify({"success": True, "has_errors": False, "message": "Code is empty."})
+    blocked = _reject_non_python_response(code)
+    if blocked:
+        return blocked
 
     errors = []
 
@@ -2610,6 +2751,9 @@ def snippets():
 
     if len(code) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
+    blocked = _reject_non_python_response(code)
+    if blocked:
+        return blocked
     if len(name) > 256:
         return jsonify({"success": False, "error": "Name too long (max 256 chars)"}), 400
 
@@ -2787,6 +2931,9 @@ def narrate_file():
         return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
     if not code.strip():
         return jsonify({"success": False, "error": "Code is empty"}), 400
+    blocked = _reject_non_python_response(code)
+    if blocked:
+        return blocked
 
     # Cap at 5KB OR 50 lines, whichever comes first, to keep LLM input in budget.
     NARRATE_CHAR_CAP = 5000
@@ -2823,7 +2970,7 @@ def narrate_file():
         )
 
     user = f"Narrate this code:\n```python\n{code_to_narrate}\n```"
-    narration = call_gemini(system, user, temperature=0.2, language=language)
+    narration = call_gemini(system, user, temperature=0.2, language=language, max_tokens=4096)
 
     line_count = len(code_lines_full)
 
@@ -2846,6 +2993,9 @@ def summarize():
     # FIX M-2: Added MAX_CODE_SIZE check (was missing from this endpoint).
     if len(code) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
+    blocked = _reject_non_python_response(code)
+    if blocked:
+        return blocked
 
     language = safe(body.get("language"), "en")
 
@@ -2889,6 +3039,9 @@ def diff_explain():
     # FIX M-2: Added MAX_CODE_SIZE check (was missing from this endpoint).
     if len(before) > MAX_CODE_SIZE or len(after) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
+    blocked = _reject_non_python_response(before) or _reject_non_python_response(after)
+    if blocked:
+        return blocked
 
     language = safe(body.get("language"), "en")
 
@@ -2926,11 +3079,14 @@ def suggest_next():
         return jsonify({"success": False, "error": "Code too large"}), 413
     if not code.strip():
         return jsonify({"success": False, "suggestions": [], "error": "Code is empty"})
+    blocked = _reject_non_python_response(code)
+    if blocked:
+        return blocked
 
     lines = code.splitlines()
     current_line = lines[min(int(line) - 1, len(lines) - 1)] if lines else ""
     context_start = max(0, int(line) - 5)
-    context = "\n".join(f"{i+1}: {l}" for i, l in enumerate(lines[context_start:int(line)]))
+    context = "\n".join(f"{i+1}: {line_text}" for i, line_text in enumerate(lines[context_start:int(line)]))
 
     if language == "hi":
         system = (
@@ -3273,6 +3429,9 @@ def breadcrumbs():
     code = safe(body.get("code"), "")
     if len(code) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": "Code too large"}), 413
+    blocked = _reject_non_python_response(code)
+    if blocked:
+        return blocked
     try:
         line = int(body.get("line", 1))
     except (ValueError, TypeError):
@@ -3475,8 +3634,10 @@ def _save_macros(macros):
                 with os.fdopen(fd, 'w', encoding='utf-8') as f:
                     json.dump(macros, f, indent=2)
             except Exception:
-                try: os.close(fd)
-                except OSError: pass
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
                 raise
             os.replace(tmp, path)
         except Exception:
@@ -3510,6 +3671,9 @@ def save_macro():
         return jsonify({"success": False, "error": "Macro name required"}), 400
     if len(code) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": "Code too large"}), 413
+    blocked = _reject_non_python_response(code)
+    if blocked:
+        return blocked
     if not re.match(r'^[a-z0-9 _\u0900-\u097f-]+$', name):
         return jsonify({"success": False, "error": "Macro name must be letters, numbers, spaces, dash or underscore"}), 400
     macros = _load_macros()
@@ -3552,6 +3716,9 @@ def share_macro():
         return jsonify({"success": False, "error": "Macro code required"}), 400
     if len(code) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": "Code too large"}), 413
+    blocked = _reject_non_python_response(code)
+    if blocked:
+        return blocked
     share_code = _new_share_code()
     payload = {
         "name": name or "shared macro",
@@ -3650,6 +3817,9 @@ def run_stream_start():
         return jsonify({"success": False, "error": "Code too large"}), 413
     if not code.strip():
         return jsonify({"success": False, "error": "Code cannot be empty"}), 400
+    blocked = _reject_non_python_response(code)
+    if blocked:
+        return blocked
     if not _check_run_rate_limit(get_session_id()):
         return jsonify({"success": False, "error": "Rate limit exceeded"}), 429
 
@@ -3697,10 +3867,14 @@ def run_stream_start():
     try:
         proc = subprocess.Popen([sys.executable, runner_path], **popen_kwargs)
     except Exception as e:
-        try: os.unlink(fifo_path)
-        except OSError: pass
-        try: os.unlink(code_file_path)
-        except OSError: pass
+        try:
+            os.unlink(fifo_path)
+        except OSError:
+            pass
+        try:
+            os.unlink(code_file_path)
+        except OSError:
+            pass
         return jsonify({"success": False, "error": f"Could not start run: {e}"}), 500
 
     state = {
@@ -3736,8 +3910,10 @@ def run_stream_start():
         except Exception as e:
             output_queue.put({"type": "error", "text": f"stdout reader error: {e}"})
         finally:
-            try: proc.stdout.close()
-            except Exception: pass
+            try:
+                proc.stdout.close()
+            except Exception:
+                pass
 
     def _stderr_reader():
         try:
@@ -3748,8 +3924,10 @@ def run_stream_start():
         except Exception as e:
             output_queue.put({"type": "error", "text": f"stderr reader error: {e}"})
         finally:
-            try: proc.stderr.close()
-            except Exception: pass
+            try:
+                proc.stderr.close()
+            except Exception:
+                pass
 
     def _waiter():
         # Hard 60-second cap on interactive runs (longer than batch /run because
@@ -4004,6 +4182,11 @@ def execution_story():
     body = safejson()
     code = safe(body.get("code"), "")
     language = safe(body.get("language"), "en")
+    if len(code) > MAX_CODE_SIZE:
+        return jsonify({"success": False, "error": "Code too large"}), 413
+    blocked = _reject_non_python_response(code)
+    if blocked:
+        return blocked
 
     storage = get_trace_storage()
     trace = storage.get('last_trace', []) or []
@@ -4197,6 +4380,9 @@ def explain_diff():
 
     if len(code) > MAX_CODE_SIZE or len(previous_output) > MAX_CODE_SIZE or len(current_output) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": "Request too large"}), 413
+    blocked = _reject_non_python_response(code)
+    if blocked:
+        return blocked
     if not previous_output and not current_output:
         return jsonify({"success": False, "error": "No outputs to compare"}), 400
 

@@ -304,21 +304,23 @@ const SpeechManager = (function () {
 
     function cancelAll() {
       queue.length = 0;
-      try { window.speechSynthesis.cancel(); } catch (e) {}
-      [50, 150, 300, 500].forEach(delay => {
-        setTimeout(() => {
-          try {
-            if (window.speechSynthesis && window.speechSynthesis.speaking) {
-              window.speechSynthesis.cancel();
-            }
-          } catch (e) {}
-        }, delay);
-      });
       AppState.isSpeaking = false;
       currentUtterance = null;
-      // Also cancel VoiceEngine narration
+      // Delegate to VoiceEngine if available (it handles speechSynthesis.cancel internally)
       if (typeof VoiceEngine !== 'undefined' && VoiceEngine.cancelSpeech) {
         VoiceEngine.cancelSpeech();
+      } else {
+        // Legacy path: direct speechSynthesis cancel
+        try { window.speechSynthesis.cancel(); } catch (e) {}
+        [50, 150, 300, 500].forEach(delay => {
+          setTimeout(() => {
+            try {
+              if (window.speechSynthesis && window.speechSynthesis.speaking) {
+                window.speechSynthesis.cancel();
+              }
+            } catch (e) {}
+          }, delay);
+        });
       }
     }
 
@@ -2897,6 +2899,15 @@ function toggleVoice() {
       isListening = true;
       AppState.isListening = true;
       _voicePaused = false;
+      // Provide audio feedback
+      if (typeof cueSuccess === 'function') cueSuccess();
+      const code = getCode();
+      const hasCode = code.trim().length > 0;
+      speak('Voice on.');
+      if (hasCode) {
+        speak(`${code.split('\n').length} lines in the editor.`);
+      }
+      speak("Say help for commands.");
     }
     return;
   }
@@ -3215,12 +3226,11 @@ function resumeVoiceRecognition() {
 
 // ---------- VOICE COMMAND HANDLER ----------
 async function handleVoiceCommand(rawText) {
-  // BARGE-IN: if VoiceEngine is speaking or responding, interrupt immediately
+  // BARGE-IN: cancel any ongoing legacy speech (VoiceEngine handles its own
+  // barge-in in _handleInput before calling this function, so we only need
+  // to cancel the legacy SpeechManager here)
   if (typeof VoiceEngine !== 'undefined') {
-    const veState = VoiceEngine.getState();
-    if (veState === VoiceEngine.States.SPEAKING || veState === VoiceEngine.States.RESPONDING) {
-      VoiceEngine.interrupt();
-    }
+    SpeechManager.cancelAll();
   }
 
   // FAST PATH: if a walkthrough is running, intercept "stop" / "shut up" /
@@ -4747,11 +4757,6 @@ async function walkThroughCode() {
   // Set command handler: when VoiceEngine receives voice input, route to handleVoiceCommand
   VoiceEngine.setCommandHandler(async function (transcript) {
     await handleVoiceCommand(transcript);
-    // After command completes, resume listening state
-    if (VoiceEngine.VoiceInput.isActive() &&
-        VoiceEngine.getState() !== VoiceEngine.States.SPEAKING) {
-      VoiceEngine.setState(VoiceEngine.States.LISTENING);
-    }
   });
 
   // Set streaming UI callback: update output panel as chunks arrive
@@ -4796,22 +4801,47 @@ async function talkToMentorStreaming(message, mode) {
     return talkToMentor(message, mode);
   }
 
+  // Handle special modes that don't need a server round-trip
+  if (mode === 'repeat') {
+    if (window.lastMentorReply) {
+      showMentorReply('repeat that', window.lastMentorReply);
+    } else {
+      speak('There is no mentor reply to repeat yet.');
+      srAnnounce('No mentor reply to repeat');
+    }
+    return;
+  }
+  if ((mode === 'shorter' || mode === 'simpler') && !window.lastMentorReply) {
+    speak('There is no mentor reply to revise yet.');
+    srAnnounce('No mentor reply to revise');
+    return;
+  }
+
+  let msg = message || 'Help me with my code.';
+  if (mode === 'shorter') msg = 'Say your previous mentor reply shorter.';
+  if (mode === 'simpler') msg = 'Say your previous mentor reply simpler.';
+
+  if (!ensurePythonEditorContent('ask mentor')) return;
+
   showAI('Thinking...');
   const outputEl = document.getElementById('output');
   if (outputEl) outputEl.textContent = '';
 
+  const context = getMentorContext();
   const result = await VoiceEngine.streamingRequest('/mentor/chat-stream', {
-    code: getCode(),
-    message: message || '',
-    output: window.lastRunOutput || '',
-    error: window.lastRunError || '',
-    language: getLanguage(),
+    code: context.code,
+    message: msg,
+    output: context.output,
+    error: context.error,
+    language: context.language,
     mode: mode || 'general',
-    history: window.mentorHistory || [],
-    preferences: window.mentorPreferences || {},
+    history: context.history,
+    preferences: context.preferences,
   });
 
   hideAI();
+
+  if (result.aborted) return;
 
   if (result.error) {
     out('Mentor error: ' + result.error);
@@ -4821,5 +4851,6 @@ async function talkToMentorStreaming(message, mode) {
     window.mentorHistory.push({ role: 'assistant', content: result.fullText });
     if (window.mentorHistory.length > 20) window.mentorHistory.shift();
     window.lastMentorReply = result.fullText;
+    maybePromptForApiKey(result.fullText);
   }
 }

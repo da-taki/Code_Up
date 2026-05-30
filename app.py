@@ -1472,6 +1472,14 @@ def mentor_chat_stream():
         system += "\nMode: give the exact fix. Keep code minimal and only include changed lines if possible."
     elif mode == "slow_walkthrough":
         system += "\nMode: walk through slowly, line by line, with short spoken sentences."
+    elif mode == "concept":
+        system += "\nMode: explain the concept in the current code."
+    elif mode == "shorter":
+        system += "\nMode: rewrite the previous mentor answer shorter."
+    elif mode == "simpler":
+        system += "\nMode: rewrite the previous mentor answer in simpler words."
+    elif mode == "repeat":
+        system += "\nMode: repeat the previous mentor answer clearly."
 
     user = (
         f"Student message: {message or '(follow-up transform requested)'}\n"
@@ -1520,9 +1528,14 @@ def mentor_chat_stream():
                         yield f"data: {json.dumps({'chunk': content})}\n\n"
 
             yield "data: [DONE]\n\n"
+        except GeneratorExit:
+            return
         except Exception as e:
-            # On error, send full non-streaming fallback
-            reply = call_gemini(system, user, temperature=0.25, language=language)
+            # On error, try non-streaming fallback; if that also fails, send error message
+            try:
+                reply = call_gemini(system, user, temperature=0.25, language=language)
+            except Exception:
+                reply = "Sorry, the AI mentor is temporarily unavailable. Please try again."
             yield f"data: {json.dumps({'chunk': reply})}\n\n"
             yield "data: [DONE]\n\n"
 

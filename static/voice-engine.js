@@ -61,7 +61,7 @@ const VoiceEngine = (function () {
     }
   }
 
-  // ─���─ DEBUG ───────────────────────────────────────────────────────────────────
+  // ─── DEBUG ──────────────────────────────────────────────────────────────────
   function _debug(...args) {
     if (typeof window !== 'undefined' && window.CODEUP_DEBUG) {
       console.log('[VoiceEngine]', ...args);
@@ -172,7 +172,13 @@ const VoiceEngine = (function () {
     if (!text || !Config.voiceEnabled) return Promise.resolve();
     if (!('speechSynthesis' in window)) return Promise.resolve();
 
+    // If an interrupt happened very recently (<100ms ago), drop this speak call
+    // to avoid stale callbacks from cancelled async flows
+    if (_narrationAborted && (Date.now() - _interruptTimestamp) < 100) {
+      return Promise.resolve();
+    }
     _narrationAborted = false;
+
     const chunks = _microChunk(text);
     if (!chunks.length) return Promise.resolve();
 
@@ -229,12 +235,14 @@ const VoiceEngine = (function () {
       return;
     }
 
-    const item = _narrationQueue.shift();
-    if (!item || !item.text) {
-      if (item && item.resolve) item.resolve();
-      _dequeueNarration();
-      return;
+    // Skip empty items without recursion (prevent stack overflow)
+    let item = _narrationQueue.shift();
+    while (item && !item.text) {
+      if (item.resolve) try { item.resolve(); } catch (e) {}
+      if (!_narrationQueue.length) return;
+      item = _narrationQueue.shift();
     }
+    if (!item || !item.text) return;
 
     _isSpeaking = true;
     _currentUtterance = new SpeechSynthesisUtterance(item.text);
@@ -280,7 +288,9 @@ const VoiceEngine = (function () {
 
   function cancelSpeech() {
     _narrationAborted = true;
-    _narrationQueue.length = 0;
+    // Resolve all pending queue items to prevent promise leaks
+    const pending = _narrationQueue.splice(0);
+    pending.forEach(item => { if (item.resolve) try { item.resolve(); } catch (e) {} });
     _currentUtterance = null;
     _isSpeaking = false;
     try { window.speechSynthesis.cancel(); } catch (e) {}
@@ -328,7 +338,10 @@ const VoiceEngine = (function () {
     // 3. Clear streaming state
     StreamHandler.abort();
 
-    // 4. Reset to LISTENING
+    // 4. Release request lock so new commands can proceed
+    _requestLocked = false;
+
+    // 5. Reset to LISTENING
     if (VoiceInput.isActive()) {
       _state = States.LISTENING; // Force — bypass validation for interrupt
       _updateUIState(States.LISTENING);
@@ -732,7 +745,7 @@ const VoiceEngine = (function () {
     if (!cleaned) return;
 
     // Barge-in: if currently speaking or responding, interrupt
-    if (_state === States.SPEAKING || _state === States.RESPONDING) {
+    if (_state === States.SPEAKING || _state === States.RESPONDING || _state === States.PROCESSING) {
       interrupt();
       // Small delay to let cancellation complete
       await new Promise(r => setTimeout(r, 50));
@@ -750,8 +763,20 @@ const VoiceEngine = (function () {
       if (_onCommand) {
         await _onCommand(cleaned);
       }
+    } catch (e) {
+      _debug('Command handler error:', e);
     } finally {
       _releaseRequestLock();
+      // If we're still in PROCESSING after the command, transition back
+      if (_state === States.PROCESSING) {
+        if (VoiceInput.isActive()) {
+          _state = States.LISTENING;
+          _updateUIState(States.LISTENING);
+        } else {
+          _state = States.IDLE;
+          _updateUIState(States.IDLE);
+        }
+      }
     }
   }
 
@@ -765,7 +790,6 @@ const VoiceEngine = (function () {
 
   async function streamingRequest(url, body, opts = {}) {
     const epoch = ++_requestEpoch;
-    _activeAbortController = new AbortController();
     _streamBuffer = '';
 
     if (!setState(States.RESPONDING)) {
@@ -812,7 +836,6 @@ const VoiceEngine = (function () {
           }
 
           if (error) {
-            _releaseRequestLock();
             if (VoiceInput.isActive()) setState(States.LISTENING);
             else setState(States.IDLE);
             resolve({ error, fullText });
@@ -820,10 +843,17 @@ const VoiceEngine = (function () {
             // After narration completes, resume listening
             if (opts.narrate !== false && fullText) {
               setState(States.SPEAKING);
-              // Wait for speech queue to drain, then resume
+              // Wait for speech queue to drain, then resume (with safety timeout)
+              let checkCount = 0;
               const checkDone = setInterval(() => {
+                checkCount++;
                 if (!_isSpeaking && _narrationQueue.length === 0) {
                   clearInterval(checkDone);
+                  _resumeListeningAfterSpeech();
+                } else if (checkCount > 150) {
+                  // Safety: 30s max wait, then force resume
+                  clearInterval(checkDone);
+                  cancelSpeech();
                   _resumeListeningAfterSpeech();
                 }
               }, 200);

@@ -183,3 +183,45 @@
 /* ------- Output diff highlights (existing classes from app.js) ------- */
 .diff-add { background: rgba(74, 99, 33, 0.18); color: var(--success); }
 .diff-rem { background: rgba(139, 26, 5, 0.18); color: var(--danger); text-decoration: line-through; }
+
+/* ------- Voice state indicator ------- */
+.voice-state-indicator {
+  display: inline-block;
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 4px;
+  min-width: 0;
+  transition: opacity 0.2s, background 0.2s;
+  vertical-align: middle;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.voice-state-indicator:empty { display: none; }
+.voice-state-listening {
+  background: rgba(74, 99, 33, 0.2);
+  color: var(--success, #4a6321);
+  animation: voice-pulse 1.5s ease-in-out infinite;
+}
+.voice-state-processing {
+  background: rgba(180, 130, 40, 0.2);
+  color: var(--warning, #b48228);
+  animation: voice-pulse 0.8s ease-in-out infinite;
+}
+.voice-state-responding {
+  background: rgba(50, 120, 180, 0.2);
+  color: var(--info, #3278b4);
+}
+.voice-state-speaking {
+  background: rgba(120, 60, 180, 0.2);
+  color: var(--accent, #783cb4);
+}
+@keyframes voice-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* Voice language selector */
+#voiceLangSelector {
+  font-size: 0.8rem;
+  padding: 4px 8px;
+}

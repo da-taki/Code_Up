@@ -19,7 +19,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from typing import Any, Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
-from flask import Flask, g, has_request_context, jsonify, render_template, request
+from flask import Flask, Response, g, has_request_context, jsonify, render_template, request, stream_with_context
 from rapidfuzz import fuzz
 
 from intent_parser import parse_intent
@@ -1425,6 +1425,116 @@ def mentor_chat():
         )
         return jsonify({"success": False, "error": reply, "reply": fallback, "speech": fallback, "auto_speak": True})
     return jsonify({"success": True, "reply": reply, "speech": reply, "auto_speak": True})
+
+
+@app.route("/mentor/chat-stream", methods=["POST"])
+def mentor_chat_stream():
+    """Streaming version of /mentor/chat. Sends SSE events with incremental chunks."""
+    body = safejson()
+    raw_code = str(safe(body.get("code", ""), ""))
+    raw_message = str(safe(body.get("message", ""), ""))
+    raw_output = str(safe(body.get("output", ""), ""))
+    raw_error = str(safe(body.get("error", ""), ""))
+    if len(raw_code) > MAX_CODE_SIZE:
+        return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
+    blocked = _reject_non_python_response(raw_code)
+    if blocked:
+        return blocked
+    if len(raw_message) > MAX_MENTOR_MESSAGE_SIZE:
+        return jsonify({"success": False, "error": f"Message too large (max {MAX_MENTOR_MESSAGE_SIZE} bytes)"}), 413
+    if len(raw_output) > MAX_MENTOR_CONTEXT_SIZE or len(raw_error) > MAX_MENTOR_CONTEXT_SIZE:
+        return jsonify({"success": False, "error": f"Mentor context too large (max {MAX_MENTOR_CONTEXT_SIZE} bytes per field)"}), 413
+    code = _mentor_clean_text(raw_code, MAX_CODE_SIZE)
+    message = _mentor_clean_text(raw_message, MAX_MENTOR_MESSAGE_SIZE).strip()
+    output = _mentor_clean_text(raw_output, MAX_MENTOR_CONTEXT_SIZE)
+    error = sanitize_traceback(_mentor_clean_text(raw_error, MAX_MENTOR_CONTEXT_SIZE))
+    language = _mentor_clean_text(body.get("language", "en"), 20) or "en"
+    mode = _mentor_clean_text(body.get("mode", "general"), 40)
+    mode = mode if mode in MENTOR_MODES else "general"
+
+    if not message and mode not in {"repeat", "shorter", "simpler", "slow_walkthrough"}:
+        return jsonify({"success": False, "error": "Message is required"}), 400
+
+    system = (
+        "You are CodeUp Mentor, a conversational Python tutor inside a blind-first IDE.\n"
+        "Keep replies warm, short, and screen-reader friendly.\n"
+        "Do not dump large code unless mode is exact_fix or the student explicitly asks.\n"
+        "Use line numbers when useful. Explain indentation, nesting, blocks, tracebacks, and visual code shape in audio-friendly language.\n"
+        "Respect a hints-first style unless preferences ask for direct answers.\n"
+        "End with exactly one useful next step or one follow-up choice, not a menu.\n"
+        "No markdown tables. Prefer 2 to 5 short sentences."
+    )
+    if mode == "tiny_hint":
+        system += "\nMode: give only one tiny hint. Do not reveal the full answer."
+    elif mode == "bigger_hint":
+        system += "\nMode: give a bigger hint, but still avoid full corrected code."
+    elif mode == "exact_fix":
+        system += "\nMode: give the exact fix. Keep code minimal and only include changed lines if possible."
+    elif mode == "slow_walkthrough":
+        system += "\nMode: walk through slowly, line by line, with short spoken sentences."
+
+    user = (
+        f"Student message: {message or '(follow-up transform requested)'}\n"
+        f"Mode: {mode}\n"
+        f"Language: {language}\n"
+        f"Preferences: {_mentor_preferences_text(body.get('preferences'))}\n\n"
+        f"Recent mentor history:\n{_mentor_history_text(body.get('history'))}\n\n"
+        f"Current code:\n```python\n{code[:MAX_CODE_SIZE]}\n```\n\n"
+        f"Latest output:\n{output or '(none)'}\n\n"
+        f"Latest error:\n{error or '(none)'}"
+    )
+
+    key = _configured_cloud_api_key()
+
+    def generate():
+        try:
+            if _cloud_ai_disabled_for_request(key) or not key:
+                # Fallback: non-streaming response as single chunk
+                reply = call_gemini(system, user, temperature=0.25, language=language)
+                yield f"data: {json.dumps({'chunk': reply})}\n\n"
+                yield "data: [DONE]\n\n"
+                return
+
+            sp = system
+            if language == "hi":
+                sp = f"आप एक सहायक हैं जो हिंदी में सहायता प्रदान करते हैं। {system}"
+
+            from groq import Groq
+            client = Groq(api_key=key)
+            stream = client.chat.completions.create(
+                model=GEMINI_MODEL,
+                messages=[
+                    {"role": "system", "content": sp},
+                    {"role": "user", "content": user},
+                ],
+                temperature=0.25,
+                max_tokens=_normalize_ai_max_tokens(None),
+                stream=True,
+            )
+
+            for chunk in stream:
+                for choice in getattr(chunk, "choices", []) or []:
+                    delta = getattr(choice, "delta", None)
+                    content = getattr(delta, "content", None)
+                    if content:
+                        yield f"data: {json.dumps({'chunk': content})}\n\n"
+
+            yield "data: [DONE]\n\n"
+        except Exception as e:
+            # On error, send full non-streaming fallback
+            reply = call_gemini(system, user, temperature=0.25, language=language)
+            yield f"data: {json.dumps({'chunk': reply})}\n\n"
+            yield "data: [DONE]\n\n"
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 @app.route("/mentor/check-progress", methods=["POST"])

@@ -305,9 +305,6 @@ const SpeechManager = (function () {
     function cancelAll() {
       queue.length = 0;
       try { window.speechSynthesis.cancel(); } catch (e) {}
-      // Chrome leaves speechSynthesis.speaking === true after cancel() in many
-      // cases. Hit it with multiple cancels staggered across a wider window
-      // so subsequent enqueue() calls don't see a stale "speaking" state.
       [50, 150, 300, 500].forEach(delay => {
         setTimeout(() => {
           try {
@@ -319,6 +316,10 @@ const SpeechManager = (function () {
       });
       AppState.isSpeaking = false;
       currentUtterance = null;
+      // Also cancel VoiceEngine narration
+      if (typeof VoiceEngine !== 'undefined' && VoiceEngine.cancelSpeech) {
+        VoiceEngine.cancelSpeech();
+      }
     }
 
     return { enqueue, cancelAll };
@@ -786,7 +787,12 @@ function pasteCode() {
 function speak(text, opts = {}) {
   if (!text) return;
   lastSpokenText = text;
-  SpeechManager.enqueue(text, opts).catch(() => {});
+  // Delegate to VoiceEngine if available for micro-chunk narration
+  if (typeof VoiceEngine !== 'undefined' && VoiceEngine.speak) {
+    VoiceEngine.speak(text, opts).catch(() => {});
+  } else {
+    SpeechManager.enqueue(text, opts).catch(() => {});
+  }
 }
 function speakOutput() {
   if (!ensureNotExecuting(() => speakOutput(), 'speak output')) return;
@@ -1981,7 +1987,14 @@ async function handleConfirmedAction(action, payload) {
   }
   if (action === 'run')              await runCode();
   else if (action === 'mentor_stop') { SpeechManager.cancelAll(); speak('Mentor stopped.'); srAnnounce('Mentor stopped'); }
-  else if (action === 'mentor_chat') await talkToMentor(payload && payload.message, payload && payload.mode ? payload.mode : 'general');
+  else if (action === 'mentor_chat') {
+    // Use streaming version when VoiceEngine is available for real-time narration
+    if (typeof VoiceEngine !== 'undefined' && typeof talkToMentorStreaming === 'function') {
+      await talkToMentorStreaming(payload && payload.message, payload && payload.mode ? payload.mode : 'general');
+    } else {
+      await talkToMentor(payload && payload.message, payload && payload.mode ? payload.mode : 'general');
+    }
+  }
   else if (action === 'mentor_progress') await checkProgressWithMentor();
   else if (action === 'mentor_code_map') await speakCodeMap();
   else if (action === 'mentor_preference') setMentorPreference(payload && payload.key, payload && payload.value);
@@ -2864,7 +2877,30 @@ async function submitCommand() {
 
 // ---------- VOICE ----------
 function toggleVoice() {
-  // If paused, treat toggle as "unpause and continue".
+  // Use VoiceEngine if available
+  if (typeof VoiceEngine !== 'undefined' && VoiceEngine.VoiceInput) {
+    if (VoiceEngine.VoiceInput.isPaused()) {
+      VoiceEngine.VoiceInput.unpause();
+      isListening = true;
+      AppState.isListening = true;
+      _voicePaused = false;
+      speak('Voice is back on.');
+      return;
+    }
+    if (VoiceEngine.VoiceInput.isActive()) {
+      VoiceEngine.VoiceInput.stop();
+      isListening = false;
+      AppState.isListening = false;
+      speak('Voice control deactivated.');
+    } else {
+      VoiceEngine.VoiceInput.start(true);
+      isListening = true;
+      AppState.isListening = true;
+      _voicePaused = false;
+    }
+    return;
+  }
+  // Legacy fallback
   if (isListening && _voicePaused) {
     resumeVoiceRecognition();
     return;
@@ -3179,13 +3215,16 @@ function resumeVoiceRecognition() {
 
 // ---------- VOICE COMMAND HANDLER ----------
 async function handleVoiceCommand(rawText) {
+  // BARGE-IN: if VoiceEngine is speaking or responding, interrupt immediately
+  if (typeof VoiceEngine !== 'undefined') {
+    const veState = VoiceEngine.getState();
+    if (veState === VoiceEngine.States.SPEAKING || veState === VoiceEngine.States.RESPONDING) {
+      VoiceEngine.interrupt();
+    }
+  }
+
   // FAST PATH: if a walkthrough is running, intercept "stop" / "shut up" /
   // "be quiet" / "cancel" client-side BEFORE the /voice-command round trip.
-  // Going through the backend takes ~200ms and by then the walkthrough has
-  // already moved on to the next line, defeating the whole point of "stop".
-  // Exact match only — substring match would kill the walkthrough whenever
-  // a longer command happens to contain one of these words (e.g. "stop the
-  // explanation" or any Hindi phrase containing "रुक").
   if (_walkActive) {
     const t = rawText.toLowerCase().trim();
     const stopWords = ['stop', 'stop it', 'shut up', 'be quiet', 'silence',
@@ -4697,5 +4736,90 @@ async function walkThroughCode() {
     if (outputEl) {
       outputEl.textContent = fullCodeDisplay + narrationLog + '\nWalkthrough complete.';
     }
+  }
+}
+
+// ─── VOICE ENGINE INTEGRATION ──────────────────────────────────────────────
+// Wire VoiceEngine into the existing app flow when available
+(function _initVoiceEngineIntegration() {
+  if (typeof VoiceEngine === 'undefined') return;
+
+  // Set command handler: when VoiceEngine receives voice input, route to handleVoiceCommand
+  VoiceEngine.setCommandHandler(async function (transcript) {
+    await handleVoiceCommand(transcript);
+    // After command completes, resume listening state
+    if (VoiceEngine.VoiceInput.isActive() &&
+        VoiceEngine.getState() !== VoiceEngine.States.SPEAKING) {
+      VoiceEngine.setState(VoiceEngine.States.LISTENING);
+    }
+  });
+
+  // Set streaming UI callback: update output panel as chunks arrive
+  VoiceEngine.setStreamUICallback(function (fullText, chunk) {
+    const outputEl = document.getElementById('output');
+    if (outputEl) {
+      outputEl.textContent = fullText;
+    }
+  });
+
+  // Voice language selector handler
+  const voiceLangSelect = document.getElementById('voiceLangSelector');
+  if (voiceLangSelect) {
+    // Restore saved preference
+    const saved = VoiceEngine.Config.language || 'auto';
+    voiceLangSelect.value = saved;
+
+    voiceLangSelect.addEventListener('change', function () {
+      const lang = this.value;
+      VoiceEngine.configure({ language: lang });
+      VoiceEngine.VoiceInput.setLanguage(lang === 'auto' ? 'en' : lang);
+    });
+  }
+
+  // Sync language selector with VoiceEngine
+  const langSelector = document.getElementById('languageSelector');
+  if (langSelector) {
+    langSelector.addEventListener('change', function () {
+      const lang = this.value;
+      if (VoiceEngine.Config.language === 'auto') {
+        VoiceEngine.VoiceInput.setLanguage(lang);
+      }
+    });
+  }
+
+  _debugLog('VoiceEngine integration initialized');
+})();
+
+// Streaming mentor chat — used when VoiceEngine is present
+async function talkToMentorStreaming(message, mode) {
+  if (typeof VoiceEngine === 'undefined') {
+    return talkToMentor(message, mode);
+  }
+
+  showAI('Thinking...');
+  const outputEl = document.getElementById('output');
+  if (outputEl) outputEl.textContent = '';
+
+  const result = await VoiceEngine.streamingRequest('/mentor/chat-stream', {
+    code: getCode(),
+    message: message || '',
+    output: window.lastRunOutput || '',
+    error: window.lastRunError || '',
+    language: getLanguage(),
+    mode: mode || 'general',
+    history: window.mentorHistory || [],
+    preferences: window.mentorPreferences || {},
+  });
+
+  hideAI();
+
+  if (result.error) {
+    out('Mentor error: ' + result.error);
+    speak('Sorry, I could not reach the mentor right now.');
+  } else if (result.fullText) {
+    // Store in mentor history
+    window.mentorHistory.push({ role: 'assistant', content: result.fullText });
+    if (window.mentorHistory.length > 20) window.mentorHistory.shift();
+    window.lastMentorReply = result.fullText;
   }
 }

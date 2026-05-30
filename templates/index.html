@@ -122,10 +122,16 @@
         <button class="cu-button cu-button-voice" id="voiceButton" aria-label="Toggle voice control" aria-pressed="false">
           🎤 Voice (Off)
         </button>
+        <span id="voiceStateIndicator" class="voice-state-indicator" aria-live="polite" aria-atomic="true"></span>
         <button class="cu-button cu-button-secondary" id="saveBtn" aria-label="Save current code as snippet">💾 Save</button>
         <select id="languageSelector" class="cu-language-selector" aria-label="Select language for AI responses">
           <option value="en">English</option>
           <option value="hi">हिंदी (Hindi)</option>
+        </select>
+        <select id="voiceLangSelector" class="cu-language-selector" aria-label="Voice recognition language">
+          <option value="auto">Auto</option>
+          <option value="en">English</option>
+          <option value="hi">Hindi</option>
         </select>
       </div>
 
@@ -845,6 +851,7 @@
   </script>
 
   <script src="/static/vendor/monaco/min/vs/loader.js"></script>
+  <script src="/static/voice-engine.js"></script>
   <script src="/static/app.js"></script>
 
 </body>

@@ -47,6 +47,21 @@ def _client_session_id(client):
     return getattr(cookie, "value", cookie)
 
 
+def _subprocess_env_without_dotenv():
+    env = os.environ.copy()
+    env["PYTHON_DOTENV_DISABLED"] = "1"
+    return env
+
+
+def _app_import_without_dotenv(extra=""):
+    return (
+        "import dotenv; "
+        "dotenv.load_dotenv = lambda *args, **kwargs: False; "
+        "import app; "
+        + extra
+    )
+
+
 @pytest.fixture
 def client(tmp_snippets, monkeypatch):
     """Flask test client with isolated snippet storage and AI disabled."""
@@ -74,14 +89,14 @@ def test_gemini_disabled_returns_message(client):
 
 
 def test_app_import_does_not_start_background_services():
-    env = os.environ.copy()
+    env = _subprocess_env_without_dotenv()
     env["FLASK_TESTING"] = "true"
     env.pop("FLASK_SECRET_KEY", None)
     result = subprocess.run(
         [
             sys.executable,
             "-c",
-            "import app; print(app._cleanup_thread is None, app._gemini_executor is None)",
+            _app_import_without_dotenv("print(app._cleanup_thread is None, app._gemini_executor is None)"),
         ],
         cwd=os.path.abspath(os.path.join(os.path.dirname(__file__), "..")),
         env=env,
@@ -300,14 +315,14 @@ def test_call_gemini_tracks_running_future_after_timeout(monkeypatch):
 
 
 def test_production_import_requires_secret_key():
-    env = os.environ.copy()
+    env = _subprocess_env_without_dotenv()
     env.pop("FLASK_SECRET_KEY", None)
     env.pop("FLASK_TESTING", None)
     env["CODEUP_ENV"] = "production"
     env["FLASK_ENV"] = "production"
     env["FLASK_DEBUG"] = "0"
     result = subprocess.run(
-        [sys.executable, "-c", "import app"],
+        [sys.executable, "-c", _app_import_without_dotenv()],
         cwd=os.path.abspath(os.path.join(os.path.dirname(__file__), "..")),
         env=env,
         capture_output=True,
@@ -320,13 +335,13 @@ def test_production_import_requires_secret_key():
 
 def test_dev_testing_secret_is_ephemeral():
     root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    env = os.environ.copy()
+    env = _subprocess_env_without_dotenv()
     env["FLASK_TESTING"] = "true"
     env.pop("FLASK_SECRET_KEY", None)
     keys = []
     for _ in range(2):
         result = subprocess.run(
-            [sys.executable, "-c", "import app; print(app.app.secret_key)"],
+            [sys.executable, "-c", _app_import_without_dotenv("print(app.app.secret_key)")],
             cwd=root,
             env=env,
             capture_output=True,
@@ -342,14 +357,14 @@ def test_dev_testing_secret_is_ephemeral():
 
 
 def test_production_session_cookie_secure_by_default():
-    env = os.environ.copy()
+    env = _subprocess_env_without_dotenv()
     env["FLASK_SECRET_KEY"] = "prod-secret"
     env.pop("FLASK_TESTING", None)
     env["CODEUP_ENV"] = "production"
     env["FLASK_ENV"] = "production"
     env.pop("SESSION_COOKIE_SECURE", None)
     result = subprocess.run(
-        [sys.executable, "-c", "import app; print(app.SESSION_COOKIE_SECURE)"],
+        [sys.executable, "-c", _app_import_without_dotenv("print(app.SESSION_COOKIE_SECURE)")],
         cwd=os.path.abspath(os.path.join(os.path.dirname(__file__), "..")),
         env=env,
         capture_output=True,
@@ -1926,9 +1941,15 @@ class TestRunRateLimit:
     @pytest.mark.timeout(30)
     def test_rate_limit_blocks_after_threshold(self, client):
         limit = app_module.RUN_RATE_LIMIT
+        session_id = "rate-limit-threshold-session"
+        with app_module._run_rate_lock:
+            app_module._run_timestamps.pop(session_id, None)
+        client.set_cookie(app_module.SESSION_COOKIE_NAME, session_id)
         results = [client.post("/run", json={"code": "print(1)"}).status_code
                    for _ in range(limit + 1)]
         assert 429 in results, f"Expected 429 after {limit} runs. Got: {results}"
+        with app_module._run_rate_lock:
+            app_module._run_timestamps.pop(session_id, None)
 
     @pytest.mark.timeout(30)
     def test_rate_limit_allows_up_to_threshold(self, client):

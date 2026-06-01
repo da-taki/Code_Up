@@ -5,9 +5,9 @@ Use this script when showing CodeUp to a teacher, competition judge, or admissio
 ## Start
 
 ```powershell
-python -m venv .venv
+py -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 python app.py
 ```
 

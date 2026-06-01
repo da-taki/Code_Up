@@ -781,6 +781,56 @@ def test_sandbox_loop_output(client):
     assert "0" in output and "1" in output and "2" in output
 
 
+def test_broken_loop_error_is_safe_and_beginner_friendly(client):
+    """The external-demo indentation failure must not expose host paths."""
+    code = "for i in range(3):\nprint(i)"
+    res = client.post("/run", json={"code": code, "language": "en"})
+    assert res.status_code == 200
+    data = res.get_json()
+
+    assert data["success"] is False
+    error = data.get("error", "")
+    explanation = data.get("explanation", "")
+    combined = f"{error}\n{explanation}"
+
+    assert "Traceback" not in combined
+    assert "sandbox_runner.py" not in combined
+    assert os.getcwd() not in combined
+    assert "C:\\" not in combined
+    assert "Line 2" in error
+    assert "IndentationError" in error
+    assert "line after the loop" in combined.lower()
+    assert "four spaces" in combined.lower()
+
+
+def test_traceback_sanitizer_redacts_paths_and_api_keys():
+    raw = (
+        'Traceback (most recent call last):\n'
+        '  File "C:\\Users\\Teacher\\CodeUp\\sandbox_runner.py", line 99, in main\n'
+        'gsk_fakeSecretValue1234567890'
+    )
+    safe = app_module.sanitize_traceback(raw)
+    assert "C:\\" not in safe
+    assert "Users\\Teacher" not in safe
+    assert "gsk_fakeSecretValue1234567890" not in safe
+    assert "<redacted-api-key>" in safe
+
+
+def test_corrected_loop_demo_flow_returns_expected_trace_and_structure(client):
+    """The documented corrected loop prints the running total and exposes loop structure."""
+    code = "total = 0\nfor i in range(3):\n    total = total + i\n    print(total)"
+    run = client.post("/run", json={"code": code, "language": "en"})
+    assert run.status_code == 200
+    run_data = run.get_json()
+    assert run_data["success"] is True
+    assert run_data["output"].strip().splitlines() == ["0", "1", "3"]
+    assert len(run_data.get("trace", [])) > 0
+
+    structure = client.post("/structure", json={"code": code}).get_json()
+    assert structure["success"] is True
+    assert structure["structure"]["loops"] == [{"type": "for", "line": 2}]
+
+
 # ===========================================================================
 # 3. REQUEST SIZE LIMITS
 # ===========================================================================
@@ -1048,6 +1098,23 @@ def test_trace_endpoint_returns_structure(client):
     assert "trace" in data
     assert "current_index" in data
     assert "duration_ms" in data
+
+
+@pytest.mark.timeout(15)
+def test_execution_story_has_local_fallback_when_ai_disabled(client):
+    """Story mode must remain useful when no AI key is configured."""
+    code = "total = 0\nfor i in range(3):\n    total = total + i\n    print(total)"
+    run = client.post("/run", json={"code": code})
+    assert run.get_json()["success"] is True
+
+    story = client.post("/execution-story", json={"code": code, "language": "en"})
+    assert story.status_code == 200
+    data = story.get_json()
+    assert data["success"] is True
+    text = data.get("story", "")
+    assert "AI service" not in text
+    assert "tracer" in text
+    assert "next step" in text.lower()
 
 
 @pytest.mark.timeout(15)
@@ -1484,6 +1551,9 @@ def test_fs_info(client):
     data = res.get_json()
     assert "workspace" in data
     assert "total_files" in data
+    assert data["workspace"] == "session workspace"
+    assert os.getcwd() not in json.dumps(data)
+    assert "C:\\" not in json.dumps(data)
 
 
 def test_sandbox_invalid_size_env_falls_back(monkeypatch):
@@ -1688,6 +1758,15 @@ def test_hindi_run_via_http(client):
     assert res.status_code == 200
     data = res.get_json()
     assert data["action"] == "run"
+
+
+def test_hindi_help_via_http(client):
+    """Hindi help should not fall through to English-only fuzzy matching."""
+    hindi_help = "".join(chr(cp) for cp in (0x092e, 0x0926, 0x0926))
+    res = client.post("/voice-command", json={"text": hindi_help})
+    assert res.status_code == 200
+    data = res.get_json()
+    assert data["action"] == "help"
 
 class TestPerSessionSandbox:
 

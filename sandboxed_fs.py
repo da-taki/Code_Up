@@ -110,10 +110,11 @@ class SandboxedFileSystem:
                 "size": size,
             }
         except Exception as e:
+            error = str(e) if isinstance(e, ValueError) else "Could not write file"
             return {
                 "success": False,
                 "path": filepath,
-                "error": str(e)
+                "error": error
             }
     
     def read(self, filepath: str, encoding: str = "utf-8") -> Dict:
@@ -164,10 +165,11 @@ class SandboxedFileSystem:
                 "size": size
             }
         except Exception as e:
+            error = str(e) if isinstance(e, ValueError) else "Could not read file"
             return {
                 "success": False,
                 "path": filepath,
-                "error": str(e)
+                "error": error
             }
     
     def delete(self, filepath: str) -> Dict:
@@ -205,10 +207,11 @@ class SandboxedFileSystem:
                 "path": filepath
             }
         except Exception as e:
+            error = str(e) if isinstance(e, ValueError) else "Could not delete file"
             return {
                 "success": False,
                 "path": filepath,
-                "error": str(e)
+                "error": error
             }
     
     def list_files(self, dirpath: str = ".") -> Dict:
@@ -260,9 +263,10 @@ class SandboxedFileSystem:
                 "dirs": sorted(dirs)
             }
         except Exception as e:
+            error = str(e) if isinstance(e, ValueError) else "Could not list files"
             return {
                 "success": False,
-                "error": str(e),
+                "error": error,
                 "files": [],
                 "dirs": []
             }
@@ -281,15 +285,15 @@ class SandboxedFileSystem:
             
             return {
                 "success": True,
-                "workspace": self.workspace_dir,
+                "workspace": "session workspace",
                 "total_files": total_files,
                 "total_size": total_size,
                 "available": True
             }
-        except Exception as e:
+        except Exception:
             return {
                 "success": False,
-                "error": str(e)
+                "error": "Could not read workspace information"
             }
 
     def cleanup(self):

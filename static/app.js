@@ -3555,7 +3555,10 @@ async function updateStructurePanel() {
     const data = await res.json();
 
     if (!data.success || !data.structure) {
-      content.innerHTML = '<p class="structure-info">Unable to parse structure.</p>';
+      const detail = data.error
+        ? escapeHtml(data.error)
+        : 'Unable to parse structure. Check for a missing colon, bracket, quote, or indentation before using the structure map.';
+      content.innerHTML = `<p class="structure-info">${detail}</p>`;
       showEl(panel);
       return;
     }

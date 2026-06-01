@@ -1983,7 +1983,7 @@ async function previewSnippetById(id) {
 async function handleConfirmedAction(action, payload) {
   // Most actions should interrupt previous narration, but some need it to finish first.
   // Generate, analyze, walk: they speak feedback BEFORE the long async wait, don't kill it.
-  const _noCancelActions = new Set(['generate_code', 'analyze', 'analyze_deep', 'fix', 'summarize', 'narrate_file', 'walk_through', 'advise', 'story_mode', 'mentor_chat', 'mentor_progress', 'mentor_code_map']);
+  const _noCancelActions = new Set(['generate_code', 'analyze', 'analyze_deep', 'fix', 'summarize', 'narrate_file', 'walk_through', 'advise', 'story_mode', 'mentor_chat', 'mentor_progress', 'mentor_code_map', 'code_map', 'step_narration', 'compare_before_after', 'replay_mistake', 'why_fixed_works']);
   if (!_noCancelActions.has(action)) {
     SpeechManager.cancelAll();
   }
@@ -2108,7 +2108,7 @@ async function handleConfirmedAction(action, payload) {
   else if (action === 'story_mode')         await tellExecutionStory();
   else if (action === 'set_breakpoint')     setBreakpoint(payload && payload.line_number);
   else if (action === 'clear_breakpoints')  clearBreakpoints();
-  else if (action === 'watch_variable')     watchVariable(payload && payload.variable);
+  else if (action === 'watch_variable')     await requestWatchVariable(payload && payload.variable, 'add');
   else if (action === 'debug_continue')     debugContinue();
   else if (action === 'debug_step_in')      speak('Step in is not yet supported in sandbox mode.');
   else if (action === 'debug_step_out')     speak('Step out is not yet supported in sandbox mode.');
@@ -2139,6 +2139,24 @@ async function handleConfirmedAction(action, payload) {
   // Output diff narration
   else if (action === 'narrate_diff')       narrateOutputDiff();
   else if (action === 'explain_diff')       await explainOutputDiff();
+  // Audio Code Map
+  else if (action === 'code_map')           await requestCodeMap(payload && payload.query);
+  // Variable Watch / Step Narration
+  else if (action === 'watch_var')          await requestWatchVariable(payload && payload.variable, 'add');
+  else if (action === 'stop_watching')      await requestWatchVariable(payload && payload.variable, 'remove');
+  else if (action === 'clear_watched')      await requestWatchVariable('', 'clear');
+  else if (action === 'step_narration')     await requestStepNarration();
+  else if (action === 'read_var_values')    await requestStepNarration();
+  else if (action === 'what_changed_step') {
+    const text = (payload && (payload.speech || payload.message)) || 'No trace event available.';
+    out(text); speak(text);
+  }
+  else if (action === 'only_announce_changes') { speak('I will only announce variable changes during step narration.'); }
+  // Mistake Replay
+  else if (action === 'compare_before_after') await requestMistakeReplay('compare');
+  else if (action === 'replay_mistake')       await requestMistakeReplay('replay');
+  else if (action === 'why_fixed_works')      await requestMistakeReplay('why');
+  else if (action === 'show_changed_lines')   await requestMistakeReplay('changed lines');
 }
 
 // ---------- PRE-FLIGHT INPUTS ----------
@@ -2702,6 +2720,94 @@ async function speakCodeMap() {
   } catch (e) {
     console.error(e);
     speak('Code map failed.');
+  } finally {
+    setTimeout(() => hideAI(), 1200);
+  }
+}
+
+// ---------- AUDIO CODE MAP ----------
+async function requestCodeMap(query) {
+  if (!ensurePythonEditorContent('code map')) return;
+  showAI('Mapping your code...');
+  try {
+    const res = await fetch('/audio-code-map', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: getCode(), query: query || '', language: getLanguage() }),
+    });
+    const data = await res.json();
+    const reply = data.reply || data.speech || data.error || 'Could not map the code.';
+    out(reply);
+    speak(reply);
+    srAnnounce('Code map ready');
+  } catch (e) {
+    console.error(e);
+    speak('Code map failed.');
+  } finally {
+    setTimeout(() => hideAI(), 1200);
+  }
+}
+
+// ---------- VARIABLE WATCH ----------
+async function requestWatchVariable(variable, action) {
+  try {
+    const res = await fetch('/watch-variable', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ variable: variable || '', action: action || 'add' }),
+    });
+    const data = await res.json();
+    const msg = data.speech || data.error || 'Done.';
+    out(msg);
+    speak(msg);
+    srAnnounce(msg);
+  } catch (e) {
+    console.error(e);
+    speak('Could not update watch list.');
+  }
+}
+
+// ---------- STEP NARRATION ----------
+async function requestStepNarration() {
+  if (!ensurePythonEditorContent('step narration')) return;
+  showAI('Running with step narration...');
+  try {
+    const res = await fetch('/step-narration', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: getCode(), language: getLanguage() }),
+    });
+    const data = await res.json();
+    if (data.output) { out(data.output); }
+    const narration = data.narration_text || data.speech || (data.narration || []).join(' ') || data.error || 'No narration available.';
+    out(narration);
+    speak(narration);
+    srAnnounce('Step narration complete');
+  } catch (e) {
+    console.error(e);
+    speak('Step narration failed.');
+  } finally {
+    setTimeout(() => hideAI(), 1200);
+  }
+}
+
+// ---------- MISTAKE REPLAY ----------
+async function requestMistakeReplay(query) {
+  showAI('Comparing versions...');
+  try {
+    const res = await fetch('/mistake-replay', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: getCode(), query: query || 'compare', language: getLanguage() }),
+    });
+    const data = await res.json();
+    const reply = data.reply || data.speech || data.error || 'No comparison available.';
+    out(reply);
+    speak(reply);
+    srAnnounce('Mistake replay ready');
+  } catch (e) {
+    console.error(e);
+    speak('Mistake replay failed.');
   } finally {
     setTimeout(() => hideAI(), 1200);
   }

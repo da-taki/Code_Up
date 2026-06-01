@@ -1440,6 +1440,732 @@ def build_code_audio_map(code: str) -> str:
     return " ".join(dict.fromkeys(parts))
 
 
+def _ast_block_children(node):
+    """Return immediate child body nodes of a block statement."""
+    children = []
+    for field_name in ('body', 'orelse', 'handlers', 'finalbody'):
+        field = getattr(node, field_name, None)
+        if isinstance(field, list):
+            children.extend(field)
+    return children
+
+
+def _deepest_nesting(code: str) -> int:
+    """Compute the deepest nesting level of control flow in code."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        lines = code.splitlines()
+        max_indent = 0
+        for line in lines:
+            stripped = line.lstrip(' ')
+            if stripped:
+                indent = len(line) - len(stripped)
+                max_indent = max(max_indent, indent // 4)
+        return max_indent
+
+    def _depth(node, current=0):
+        best = current
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.For, ast.While, ast.If, ast.With, ast.Try)):
+                best = max(best, _depth(child, current + 1))
+            elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                best = max(best, _depth(child, current + 1))
+            else:
+                best = max(best, _depth(child, current))
+        return best
+
+    return _depth(tree)
+
+
+def _enhanced_code_map(code: str) -> dict:
+    """Return structured code map data for the Audio Code Map feature.
+
+    Returns a dict with keys: summary (str), blocks (list), functions (list),
+    loops (list), conditions (list), assignments (list), prints (list),
+    nesting_depth (int), line_count (int), error (str or None).
+    """
+    lines = code.splitlines()
+    result = {
+        "summary": "",
+        "blocks": [],
+        "functions": [],
+        "loops": [],
+        "conditions": [],
+        "assignments": [],
+        "prints": [],
+        "nesting_depth": 0,
+        "line_count": len(lines),
+        "error": None,
+    }
+
+    if not code.strip():
+        result["summary"] = "Your code is empty."
+        return result
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError as e:
+        result["error"] = str(e)
+        result["nesting_depth"] = _deepest_nesting(code)
+        indent_map = []
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped:
+                indent = len(line) - len(line.lstrip(' '))
+                indent_map.append({"line": i + 1, "indent": indent, "text": stripped[:80]})
+        result["summary"] = (
+            f"Your code has a syntax error: {e.msg} near line {e.lineno or '?'}. "
+            f"I can see {len(lines)} lines. "
+            f"Here is what I can tell from indentation alone."
+        )
+        result["blocks"] = indent_map[:20]
+        return result
+
+    result["nesting_depth"] = _deepest_nesting(code)
+
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            params = [a.arg for a in node.args.args]
+            result["functions"].append({
+                "name": node.name,
+                "start": node.lineno,
+                "end": getattr(node, 'end_lineno', node.lineno),
+                "params": params,
+                "is_async": isinstance(node, ast.AsyncFunctionDef),
+            })
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.For, ast.While)):
+            kind = "for" if isinstance(node, ast.For) else "while"
+            body_summary = []
+            for child in _ast_block_children(node):
+                if isinstance(child, ast.If):
+                    body_summary.append("a condition")
+                elif isinstance(child, (ast.For, ast.While)):
+                    body_summary.append("a nested loop")
+                elif isinstance(child, ast.Assign):
+                    body_summary.append("an assignment")
+                elif isinstance(child, ast.Expr) and isinstance(getattr(child, 'value', None), ast.Call):
+                    call = child.value
+                    if isinstance(call.func, ast.Name) and call.func.id == 'print':
+                        body_summary.append("a print statement")
+            result["loops"].append({
+                "kind": kind,
+                "start": node.lineno,
+                "end": getattr(node, 'end_lineno', node.lineno),
+                "body_summary": body_summary,
+            })
+        elif isinstance(node, ast.If) and not isinstance(getattr(node, '_parent', None), ast.If):
+            result["conditions"].append({
+                "start": node.lineno,
+                "end": getattr(node, 'end_lineno', node.lineno),
+            })
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    result["assignments"].append({
+                        "name": target.id,
+                        "line": node.lineno,
+                    })
+        elif isinstance(node, ast.Expr) and isinstance(getattr(node, 'value', None), ast.Call):
+            call = node.value
+            if isinstance(call.func, ast.Name) and call.func.id == 'print':
+                result["prints"].append({"line": node.lineno})
+
+    parts = []
+    total_non_empty = sum(1 for ln in lines if ln.strip())
+    parts.append(f"Your program has {total_non_empty} lines of code.")
+
+    if result["functions"]:
+        names = [f["name"] for f in result["functions"]]
+        parts.append(f"It defines {len(names)} function{'s' if len(names) != 1 else ''}: {', '.join(names)}.")
+
+    assigns_before_loops = [a for a in result["assignments"]
+                            if not result["loops"] or a["line"] < result["loops"][0]["start"]]
+    if assigns_before_loops:
+        names = list(dict.fromkeys(a["name"] for a in assigns_before_loops))
+        parts.append(f"First, {'variable' if len(names) == 1 else 'variables'} {', '.join(names[:5])} {'is' if len(names) == 1 else 'are'} set up.")
+
+    for loop in result["loops"]:
+        inside = ", ".join(loop["body_summary"][:4]) if loop["body_summary"] else "some statements"
+        parts.append(
+            f"There is a {loop['kind']} loop from line {loop['start']} to {loop['end']}. "
+            f"Inside it: {inside}."
+        )
+
+    after_loop_lines = []
+    if result["loops"]:
+        last_loop_end = max(lp["end"] for lp in result["loops"])
+        for node in ast.iter_child_nodes(tree):
+            if hasattr(node, 'lineno') and node.lineno > last_loop_end:
+                if isinstance(node, ast.Expr) and isinstance(getattr(node, 'value', None), ast.Call):
+                    call = node.value
+                    if isinstance(call.func, ast.Name) and call.func.id == 'print':
+                        after_loop_lines.append(f"line {node.lineno} prints output")
+                elif isinstance(node, ast.Assign):
+                    after_loop_lines.append(f"line {node.lineno} is an assignment")
+        if after_loop_lines:
+            parts.append(f"After the loop: {', '.join(after_loop_lines[:3])}.")
+
+    if result["prints"] and not after_loop_lines:
+        parts.append(f"The program has {len(result['prints'])} print statement{'s' if len(result['prints']) != 1 else ''}.")
+
+    if result["nesting_depth"] > 0:
+        parts.append(f"Your deepest nesting level is {result['nesting_depth']}.")
+
+    result["summary"] = " ".join(parts)
+    return result
+
+
+def _inside_loop_summary(code: str) -> str:
+    """Describe what is inside the first loop found in code."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return "I cannot parse the code due to a syntax error."
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.For, ast.While)):
+            kind = "for" if isinstance(node, ast.For) else "while"
+            body_parts = []
+            for child in node.body:
+                if isinstance(child, ast.If):
+                    body_parts.append(f"a condition on line {child.lineno}")
+                elif isinstance(child, (ast.For, ast.While)):
+                    body_parts.append(f"a nested loop on line {child.lineno}")
+                elif isinstance(child, ast.Assign):
+                    targets = [t.id for t in child.targets if isinstance(t, ast.Name)]
+                    body_parts.append(f"an assignment to {', '.join(targets) or 'a variable'} on line {child.lineno}")
+                elif isinstance(child, ast.Expr) and isinstance(getattr(child, 'value', None), ast.Call):
+                    call = child.value
+                    if isinstance(call.func, ast.Name) and call.func.id == 'print':
+                        body_parts.append(f"a print on line {child.lineno}")
+                    else:
+                        body_parts.append(f"a function call on line {child.lineno}")
+                elif isinstance(child, ast.Return):
+                    body_parts.append(f"a return on line {child.lineno}")
+            if body_parts:
+                return f"Inside the {kind} loop (lines {node.lineno} to {getattr(node, 'end_lineno', '?')}): {'; '.join(body_parts)}."
+            return f"The {kind} loop from line {node.lineno} to {getattr(node, 'end_lineno', '?')} has an empty body."
+    return "I did not find a loop in your code."
+
+
+def _after_loop_summary(code: str) -> str:
+    """Describe what comes after the last loop in code."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return "I cannot parse the code due to a syntax error."
+    loops = [(n.lineno, getattr(n, 'end_lineno', n.lineno))
+             for n in ast.walk(tree) if isinstance(n, (ast.For, ast.While))]
+    if not loops:
+        return "There is no loop in your code."
+    last_end = max(end for _, end in loops)
+    after = []
+    for node in ast.iter_child_nodes(tree):
+        if hasattr(node, 'lineno') and node.lineno > last_end:
+            if isinstance(node, ast.Expr) and isinstance(getattr(node, 'value', None), ast.Call):
+                call = node.value
+                if isinstance(call.func, ast.Name):
+                    after.append(f"a call to {call.func.id} on line {node.lineno}")
+            elif isinstance(node, ast.Assign):
+                after.append(f"an assignment on line {node.lineno}")
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                after.append(f"function {node.name} on line {node.lineno}")
+    if not after:
+        return f"Nothing comes after the loop ending at line {last_end}. The loop is the last thing in your program."
+    return f"After the loop: {'; '.join(after[:5])}."
+
+
+def _list_functions_summary(code: str) -> str:
+    """List all functions defined in code."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return "I cannot parse the code due to a syntax error."
+    funcs = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            params = [a.arg for a in node.args.args]
+            param_str = f" taking {', '.join(params)}" if params else " with no parameters"
+            funcs.append(f"{node.name} on line {node.lineno}{param_str}")
+    if not funcs:
+        return "Your code has no function definitions."
+    return f"Your code defines {len(funcs)} function{'s' if len(funcs) != 1 else ''}: {'; '.join(funcs)}."
+
+
+@app.route("/audio-code-map", methods=["POST"])
+def audio_code_map():
+    """Enhanced Audio Code Map endpoint returning structured + spoken summary."""
+    body = safejson()
+    code = safe(body.get("code"), "")
+    query = safe(body.get("query"), "")
+    language = safe(body.get("language"), "en")
+
+    if len(code) > MAX_CODE_SIZE:
+        return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
+    blocked = _reject_non_python_response(code)
+    if blocked:
+        return blocked
+
+    if not code.strip():
+        msg = "Your code is empty. Write some Python and ask for a code map."
+        return jsonify({"success": True, "reply": msg, "speech": msg, "auto_speak": True})
+
+    # Dispatch sub-queries
+    query_lower = query.lower().strip()
+    if "inside" in query_lower and "loop" in query_lower:
+        reply = _inside_loop_summary(code)
+    elif "after" in query_lower and "loop" in query_lower:
+        reply = _after_loop_summary(code)
+    elif "nest" in query_lower or "depth" in query_lower or "deep" in query_lower:
+        depth = _deepest_nesting(code)
+        reply = f"Your deepest nesting level is {depth}." if depth > 0 else "Your code has no nesting."
+    elif "function" in query_lower:
+        reply = _list_functions_summary(code)
+    elif "where" in query_lower and "program" in query_lower:
+        reply = build_code_audio_map(code)
+    else:
+        map_data = _enhanced_code_map(code)
+        deterministic_summary = map_data["summary"]
+
+        # Optionally use AI to make it friendlier
+        key = _configured_cloud_api_key()
+        if key and not _cloud_ai_disabled_for_request(key):
+            system = (
+                "You are a friendly coding tutor for a blind student. "
+                "Given the following verified structural facts about their Python program, "
+                "rephrase them into a warm, concise spoken summary suitable for audio. "
+                "Do NOT invent any structural facts. Keep it under 6 sentences. "
+                "Do not use markdown."
+            )
+            user = f"Structural facts:\n{deterministic_summary}"
+            ai_reply = call_gemini(system, user, temperature=0.2, language=language)
+            if not _ai_unavailable(ai_reply):
+                reply = ai_reply
+            else:
+                reply = deterministic_summary
+        else:
+            reply = deterministic_summary
+
+    return jsonify({"success": True, "reply": reply, "speech": reply, "auto_speak": True})
+
+
+# ==========================
+# VARIABLE WATCH / STEP NARRATION
+# ==========================
+
+def _run_with_trace_for_narration(code: str, watched_vars: set, session_id: str) -> dict:
+    """Run code in sandbox and return structured narration trace.
+
+    Returns dict with keys: success, narration (list of str), output (str),
+    error (str), steps (list of dict), raw_trace (list).
+    """
+    sandbox = get_sandbox(session_id)
+    workspace_dir = sandbox.workspace_dir
+    trace_file = os.path.join(workspace_dir, f"trace_{uuid.uuid4().hex}.json")
+    runner_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sandbox_runner.py')
+
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False,
+                                      encoding='utf-8', dir=workspace_dir) as code_file:
+        code_file.write(code)
+        code_file_path = code_file.name
+
+    env = os.environ.copy()
+    env['CODEUP_CODE_FILE'] = code_file_path
+    env['CODEUP_TRACE_FILE'] = trace_file
+    env.pop('CODEUP_INTERACTIVE', None)
+    env.pop('CODEUP_INPUT_FIFO', None)
+    env.pop('CODEUP_EXEC_CODE', None)
+
+    popen_kwargs = dict(
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+        cwd=workspace_dir,
+        text=True,
+    )
+    if sys.platform != "win32":
+        popen_kwargs["preexec_fn"] = _set_subprocess_limits
+        popen_kwargs["start_new_session"] = True
+
+    try:
+        proc = subprocess.Popen([sys.executable, runner_path], **popen_kwargs)
+        try:
+            stdout, stderr = proc.communicate(timeout=SUBPROCESS_WALL_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            try:
+                proc.kill()
+            except (OSError, ProcessLookupError):
+                pass
+            try:
+                proc.communicate(timeout=2)
+            except subprocess.TimeoutExpired:
+                pass
+            return {"success": False, "narration": ["Execution timed out."],
+                    "output": "", "error": "Timeout", "steps": [], "raw_trace": []}
+    finally:
+        try:
+            os.unlink(code_file_path)
+        except OSError:
+            pass
+
+    trace = []
+    try:
+        if os.path.exists(trace_file):
+            with open(trace_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                trace = data.get('trace', [])
+    except (json.JSONDecodeError, OSError):
+        pass
+    finally:
+        try:
+            if os.path.exists(trace_file):
+                os.unlink(trace_file)
+        except OSError:
+            pass
+
+    # Build narration from trace events
+    narration = []
+    steps = []
+    error_text = stderr.strip() if stderr else ""
+    output_text = stdout.strip() if stdout else ""
+
+    if error_text:
+        narration.append("Starting execution.")
+        narration.append(f"The program encountered an error: {user_facing_error(error_text)}")
+        return {"success": False, "narration": narration, "output": output_text,
+                "error": error_text, "steps": steps, "raw_trace": trace}
+
+    narration.append("Starting execution.")
+    step_count = 0
+    MAX_NARRATION_STEPS = 200
+
+    for event in trace:
+        if step_count >= MAX_NARRATION_STEPS:
+            narration.append(f"Narration capped at {MAX_NARRATION_STEPS} steps. The program continued beyond this point.")
+            break
+
+        etype = event.get('type')
+
+        if etype == 'state_change':
+            line = event.get('line')
+            changes = event.get('changes', [])
+            for change_str in changes:
+                parts = change_str.split(' ', 1)
+                var_name = parts[0] if parts else ''
+                if watched_vars and var_name not in watched_vars:
+                    continue
+                step = {"line": line, "description": change_str}
+                steps.append(step)
+                # Make it friendlier
+                if 'initialized to' in change_str:
+                    narration.append(f"{var_name} becomes {change_str.split('initialized to ')[-1]}.")
+                elif 'changed from' in change_str:
+                    old_new = change_str.split('changed from ')[-1]
+                    narration.append(f"{var_name} changes to {old_new.split(' to ')[-1] if ' to ' in old_new else old_new}.")
+                elif 'remains' in change_str:
+                    narration.append(f"{var_name} remains the same.")
+                else:
+                    narration.append(change_str + ".")
+                step_count += 1
+
+        elif etype == 'call':
+            func = event.get('function', '?')
+            if func != '<module>':
+                narration.append(f"Entering function {func}.")
+                steps.append({"line": event.get('line'), "description": f"call {func}"})
+                step_count += 1
+
+        elif etype == 'return':
+            val = event.get('value', '')
+            if val and val != 'None':
+                narration.append(f"Returned {val}.")
+                steps.append({"line": 0, "description": f"return {val}"})
+                step_count += 1
+
+        elif etype == 'overflow':
+            narration.append("Trace limit reached. The program may have more steps.")
+            break
+
+    if output_text:
+        narration.append(f"Output: {output_text[:500]}")
+
+    narration.append("Execution complete.")
+
+    return {"success": True, "narration": narration, "output": output_text,
+            "error": "", "steps": steps, "raw_trace": trace}
+
+
+@app.route("/step-narration", methods=["POST"])
+def step_narration():
+    """Run code with step narration, reporting variable changes."""
+    body = safejson()
+    code = safe(body.get("code"), "")
+    language = safe(body.get("language"), "en")
+
+    if len(code) > MAX_CODE_SIZE:
+        return jsonify({"success": False, "error": "Code too large"}), 413
+    if not code.strip():
+        return jsonify({"success": False, "error": "Code is empty"}), 400
+    blocked = _reject_non_python_response(code)
+    if blocked:
+        return blocked
+
+    try:
+        compile(code, "<user>", "exec")
+    except SyntaxError as e:
+        msg = _syntax_error_message(e, code)
+        return jsonify({"success": False, "error": msg, "narration": [msg]})
+
+    if not _check_run_rate_limit(get_session_id()):
+        return jsonify({"success": False, "error": "Rate limit exceeded"}), 429
+
+    session_id = get_session_id()
+    with _watched_vars_lock:
+        watched = set(_watched_vars.get(session_id, set()))
+
+    result = _run_with_trace_for_narration(code, watched, session_id)
+
+    # Save trace for step navigation
+    if result.get("raw_trace"):
+        save_execution_trace(result["raw_trace"])
+
+    # Build spoken narration
+    narration_text = " ".join(result["narration"][:50])
+
+    # Optionally enhance with AI
+    if result["success"]:
+        key = _configured_cloud_api_key()
+        if key and not _cloud_ai_disabled_for_request(key) and len(result["narration"]) > 2:
+            system = (
+                "You are a friendly coding tutor narrating program execution for a blind student. "
+                "Given these verified execution events, rephrase them into a warm, clear spoken narration. "
+                "Do NOT invent variable values or execution steps. Keep the same order. "
+                "Mention loop iterations when relevant. Under 10 sentences. No markdown."
+            )
+            user = f"Code:\n```python\n{code}\n```\n\nExecution events:\n" + "\n".join(result["narration"])
+            ai_text = call_gemini(system, user, temperature=0.2, language=language)
+            if not _ai_unavailable(ai_text):
+                narration_text = ai_text
+
+    return jsonify({
+        "success": result["success"],
+        "narration": result["narration"],
+        "narration_text": narration_text,
+        "output": result.get("output", ""),
+        "error": result.get("error", ""),
+        "step_count": len(result.get("steps", [])),
+        "speech": narration_text,
+        "auto_speak": True,
+    })
+
+
+@app.route("/watch-variable", methods=["POST"])
+def watch_variable_route():
+    """Add or remove a variable from the watch list."""
+    body = safejson()
+    action = safe(body.get("action"), "add")
+    variable = safe(body.get("variable"), "").strip()
+    session_id = get_session_id()
+
+    if action == "clear":
+        with _watched_vars_lock:
+            _watched_vars.pop(session_id, None)
+        msg = "Cleared all watched variables."
+        return jsonify({"success": True, "watched": [], "speech": msg, "auto_speak": True})
+
+    if action == "remove" and variable:
+        with _watched_vars_lock:
+            s = _watched_vars.get(session_id, set())
+            s.discard(variable)
+            _watched_vars[session_id] = s
+            watched = list(s)
+        msg = f"Stopped watching {variable}." if variable else "No variable specified."
+        if watched:
+            msg += f" Still watching: {', '.join(watched)}."
+        return jsonify({"success": True, "watched": watched, "speech": msg, "auto_speak": True})
+
+    if not variable:
+        return jsonify({"success": False, "error": "No variable name provided."}), 400
+    if not re.match(r'^[a-zA-Z_]\w*$', variable):
+        return jsonify({"success": False, "error": f"'{variable}' is not a valid Python variable name."}), 400
+
+    with _watched_vars_lock:
+        s = _watched_vars.get(session_id, set())
+        s.add(variable)
+        _watched_vars[session_id] = s
+        watched = list(s)
+
+    msg = f"Now watching {variable}."
+    if len(watched) > 1:
+        msg += f" Watched variables: {', '.join(watched)}."
+    return jsonify({"success": True, "watched": watched, "speech": msg, "auto_speak": True})
+
+
+# ==========================
+# MISTAKE REPLAY / BEFORE-VS-AFTER
+# ==========================
+
+def _save_mistake_snapshot(session_id: str, code: str, error: str, success: bool, output: str = ""):
+    """Record code snapshots for mistake replay. Called from /run."""
+    with _mistake_snapshots_lock:
+        snap = _mistake_snapshots.get(session_id, {})
+        if not success and error:
+            snap["error_code"] = code
+            snap["error_msg"] = error
+            snap["error_timestamp"] = time.time()
+        elif success:
+            if snap.get("error_code"):
+                snap["success_code"] = code
+                snap["success_output"] = output
+                snap["success_timestamp"] = time.time()
+        _mistake_snapshots[session_id] = snap
+
+
+def _compute_code_diff(before: str, after: str) -> dict:
+    """Compute structural and textual diff between before and after code."""
+    import difflib
+
+    before_lines = before.splitlines()
+    after_lines = after.splitlines()
+
+    # Textual diff
+    changes = []
+    matcher = difflib.SequenceMatcher(None, before_lines, after_lines)
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == 'equal':
+            continue
+        if tag == 'replace':
+            for k in range(min(i2 - i1, j2 - j1)):
+                changes.append({
+                    "line": j1 + k + 1,
+                    "before": before_lines[i1 + k],
+                    "after": after_lines[j1 + k],
+                    "kind": "changed",
+                })
+        elif tag == 'delete':
+            for k in range(i1, i2):
+                changes.append({"line": k + 1, "before": before_lines[k], "after": "", "kind": "removed"})
+        elif tag == 'insert':
+            for k in range(j1, j2):
+                changes.append({"line": k + 1, "before": "", "after": after_lines[k], "kind": "added"})
+
+    # AST-level structural analysis
+    structural_changes = []
+    try:
+        ast.parse(before)
+        ast.parse(after)
+
+        # Check if indentation changed scope
+        for ch in changes:
+            if ch["kind"] == "changed":
+                before_indent = len(ch["before"]) - len(ch["before"].lstrip(' '))
+                after_indent = len(ch["after"]) - len(ch["after"].lstrip(' '))
+                if before_indent != after_indent:
+                    direction = "indented" if after_indent > before_indent else "unindented"
+                    structural_changes.append(
+                        f"Line {ch['line']} was {direction} (from {before_indent} to {after_indent} spaces), "
+                        f"which changes what block it belongs to."
+                    )
+    except SyntaxError:
+        pass
+
+    return {
+        "changes": changes[:20],
+        "total_changes": len(changes),
+        "structural_changes": structural_changes,
+    }
+
+
+def _deterministic_mistake_explanation(before: str, after: str, diff: dict) -> str:
+    """Build a deterministic spoken explanation of what changed between versions."""
+    if not diff["changes"]:
+        return "I see no differences between the two versions."
+
+    parts = [f"There {'is' if diff['total_changes'] == 1 else 'are'} {diff['total_changes']} line{'s' if diff['total_changes'] != 1 else ''} changed."]
+
+    for sc in diff.get("structural_changes", [])[:3]:
+        parts.append(sc)
+
+    for ch in diff["changes"][:5]:
+        if ch["kind"] == "changed":
+            parts.append(f"Line {ch['line']} changed from \"{ch['before'].strip()}\" to \"{ch['after'].strip()}\".")
+        elif ch["kind"] == "added":
+            parts.append(f"Line {ch['line']} was added: \"{ch['after'].strip()}\".")
+        elif ch["kind"] == "removed":
+            parts.append(f"A line was removed: \"{ch['before'].strip()}\".")
+
+    return " ".join(parts)
+
+
+@app.route("/mistake-replay", methods=["POST"])
+def mistake_replay():
+    """Compare before (error) and after (fix) versions of code."""
+    body = safejson()
+    language = safe(body.get("language"), "en")
+    query = safe(body.get("query"), "compare")
+    current_code = safe(body.get("code"), "")
+
+    session_id = get_session_id()
+    with _mistake_snapshots_lock:
+        snap = dict(_mistake_snapshots.get(session_id, {}))
+
+    error_code = snap.get("error_code", "")
+    success_code = snap.get("success_code", current_code)
+
+    if not error_code:
+        msg = "I do not have a recent corrected mistake to compare yet. Try running code with an error, correcting it, and running again."
+        return jsonify({"success": False, "reply": msg, "speech": msg, "auto_speak": True})
+
+    if not success_code:
+        success_code = current_code
+    if not success_code:
+        msg = "I have the errored version but no corrected version yet. Fix the code and run it successfully first."
+        return jsonify({"success": False, "reply": msg, "speech": msg, "auto_speak": True})
+
+    diff = _compute_code_diff(error_code, success_code)
+    deterministic = _deterministic_mistake_explanation(error_code, success_code, diff)
+
+    query_lower = query.lower()
+    if "changed lines" in query_lower or "show" in query_lower:
+        reply = deterministic
+    else:
+        # Try AI enhancement
+        key = _configured_cloud_api_key()
+        if key and not _cloud_ai_disabled_for_request(key):
+            error_msg = snap.get("error_msg", "")
+            system = (
+                "You are a friendly coding tutor explaining to a blind student what changed between "
+                "their broken and fixed code. You are given verified structural facts about the diff. "
+                "Explain clearly WHY the fix works, relating the code change to the error. "
+                "Do NOT invent changes. Under 5 sentences. No markdown."
+            )
+            user = (
+                f"Previous error: {error_msg}\n\n"
+                f"Diff facts:\n{deterministic}\n\n"
+                f"Before code:\n```python\n{error_code}\n```\n\n"
+                f"After code:\n```python\n{success_code}\n```"
+            )
+            ai_reply = call_gemini(system, user, temperature=0.2, language=language)
+            if not _ai_unavailable(ai_reply):
+                reply = ai_reply
+            else:
+                reply = deterministic
+        else:
+            reply = deterministic
+
+    return jsonify({
+        "success": True,
+        "reply": reply,
+        "speech": reply,
+        "auto_speak": True,
+        "diff": diff,
+        "error_code": error_code,
+        "success_code": success_code,
+    })
+
+
 @app.route("/mentor/code-map", methods=["POST"])
 def mentor_code_map():
     body = safejson()
@@ -1810,6 +2536,14 @@ def _detect_input_prompts(code: str) -> List[str]:
 _last_outputs = {}  # session_id -> {"output": str, "timestamp": float}
 _last_outputs_lock = threading.Lock()
 
+# Per-session watched variables for Variable Watch mode
+_watched_vars = {}  # session_id -> set[str]
+_watched_vars_lock = threading.Lock()
+
+# Per-session mistake replay state (before/after code snapshots)
+_mistake_snapshots = {}  # session_id -> {"error_code": str, "error_msg": str, "success_code": str, "success_output": str, "timestamp": float}
+_mistake_snapshots_lock = threading.Lock()
+
 
 def _compute_output_diff(prev: str, curr: str) -> dict:
     """Return a structured diff between two outputs suitable for narration.
@@ -1956,6 +2690,7 @@ def run_code():
         compile(code, "<user>", "exec")
     except SyntaxError as e:
         safe_error = _syntax_error_message(e, code)
+        _save_mistake_snapshot(get_session_id(), code, safe_error, success=False)
         explanation = _local_error_explanation(code, safe_error, language=safe(body.get("language"), "en"), beginner=True)
         return jsonify({
             "success": False,
@@ -2112,6 +2847,7 @@ def run_code():
             diff_info = _compute_output_diff(prev_output, output)
 
         if error.strip():
+            _save_mistake_snapshot(get_session_id(), code, error, success=False)
             explanation = explain_error(code, error, language=safe(body.get("language"), "en"))
             return jsonify({
                 "success": False,
@@ -2120,6 +2856,8 @@ def run_code():
                 "inputs_hint": inputs_hint,
                 "input_prompts": input_prompts,
             })
+
+        _save_mistake_snapshot(get_session_id(), code, "", success=True, output=output)
 
         return jsonify({
             "success": True,
@@ -3790,6 +4528,43 @@ def voice():
             return _store_and_return({"success": True, "action": "explain_simply", "confidence": confidence})
         if intent == "narrate_diff":
             return _store_and_return({"success": True, "action": "narrate_diff", "confidence": confidence})
+        # Audio Code Map intents
+        if intent == "code_map":
+            return _store_and_return({"success": True, "action": "code_map", "confidence": confidence})
+        if intent == "inside_loop":
+            return _store_and_return({"success": True, "action": "code_map", "query": "inside loop", "confidence": confidence})
+        if intent == "after_loop":
+            return _store_and_return({"success": True, "action": "code_map", "query": "after loop", "confidence": confidence})
+        if intent == "nesting_depth":
+            return _store_and_return({"success": True, "action": "code_map", "query": "nesting depth", "confidence": confidence})
+        if intent == "list_functions":
+            return _store_and_return({"success": True, "action": "code_map", "query": "list functions", "confidence": confidence})
+        if intent == "where_in_program":
+            return _store_and_return({"success": True, "action": "code_map", "query": "where in program", "confidence": confidence})
+        # Variable Watch / Step Narration intents
+        if intent == "watch_var":
+            return _store_and_return({"success": True, "action": "watch_var", "variable": slots.get("variable", ""), "confidence": confidence})
+        if intent == "stop_watching":
+            return _store_and_return({"success": True, "action": "stop_watching", "variable": slots.get("variable", ""), "confidence": confidence})
+        if intent == "clear_watched":
+            return _store_and_return({"success": True, "action": "clear_watched", "confidence": confidence})
+        if intent == "step_narration":
+            return _store_and_return({"success": True, "action": "step_narration", "confidence": confidence})
+        if intent == "read_var_values":
+            return _store_and_return({"success": True, "action": "read_var_values", "confidence": confidence})
+        if intent == "what_changed_step":
+            return _store_and_return({"success": True, "action": "what_changed_step", "speech": _trace_playback("current_change"), "confidence": confidence})
+        if intent == "only_announce_changes":
+            return _store_and_return({"success": True, "action": "only_announce_changes", "confidence": confidence})
+        # Mistake Replay intents
+        if intent == "compare_before_after":
+            return _store_and_return({"success": True, "action": "compare_before_after", "confidence": confidence})
+        if intent == "replay_mistake":
+            return _store_and_return({"success": True, "action": "replay_mistake", "confidence": confidence})
+        if intent == "why_fixed_works":
+            return _store_and_return({"success": True, "action": "why_fixed_works", "confidence": confidence})
+        if intent == "show_changed_lines":
+            return _store_and_return({"success": True, "action": "show_changed_lines", "confidence": confidence})
         if intent == "restart_tutorial":
             return _store_and_return({"success": True, "action": "restart_tutorial", "confidence": confidence})
         if intent == "set_color_mode":

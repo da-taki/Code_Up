@@ -227,6 +227,7 @@ def test_gemini_executor_is_singleton_and_shutdown_is_idempotent(monkeypatch):
 
 def test_call_gemini_cancels_pending_future_on_timeout(monkeypatch):
     monkeypatch.setenv("GEMINI_ENABLED", "1")
+    monkeypatch.delenv("CODEUP_AI_ENABLED", raising=False)
     monkeypatch.setattr(app_module, "GEMINI_API_KEY", "session-key")
     monkeypatch.setattr(app_module, "_call_ollama", lambda *a, **k: None)
     monkeypatch.setattr(app_module, "MAX_GEMINI_TIMEOUT", 0)
@@ -261,6 +262,7 @@ def test_call_gemini_cancels_pending_future_on_timeout(monkeypatch):
 
 def test_call_gemini_tracks_running_future_after_timeout(monkeypatch):
     monkeypatch.setenv("GEMINI_ENABLED", "1")
+    monkeypatch.delenv("CODEUP_AI_ENABLED", raising=False)
     monkeypatch.setattr(app_module, "GEMINI_API_KEY", "session-key")
     monkeypatch.setattr(app_module, "_call_ollama", lambda *a, **k: None)
     monkeypatch.setattr(app_module, "MAX_GEMINI_TIMEOUT", 0)
@@ -389,6 +391,7 @@ def test_gemini_key_not_configured_returns_message(client, monkeypatch):
 def test_call_gemini_uses_session_api_config_key(monkeypatch):
     """Keys entered through /api-config must be honored by AI calls."""
     monkeypatch.setenv("GEMINI_ENABLED", "1")
+    monkeypatch.delenv("CODEUP_AI_ENABLED", raising=False)
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.setattr(app_module, "GEMINI_API_KEY", "Insert_API_Key_Here")
@@ -469,6 +472,7 @@ def test_codeup_ai_enabled_zero_is_hard_disable(monkeypatch):
 
 def test_call_gemini_whitespace_response_is_not_empty_string(monkeypatch):
     monkeypatch.setenv("GEMINI_ENABLED", "1")
+    monkeypatch.delenv("CODEUP_AI_ENABLED", raising=False)
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.setattr(app_module, "GEMINI_API_KEY", "Insert_API_Key_Here")
@@ -1939,7 +1943,8 @@ class TestRunRateLimit:
         assert throttled.status_code == 429
 
     @pytest.mark.timeout(30)
-    def test_rate_limit_blocks_after_threshold(self, client):
+    def test_rate_limit_blocks_after_threshold(self, client, monkeypatch):
+        monkeypatch.setattr(app_module, "RUN_RATE_LIMIT", 5)
         limit = app_module.RUN_RATE_LIMIT
         session_id = "rate-limit-threshold-session"
         with app_module._run_rate_lock:

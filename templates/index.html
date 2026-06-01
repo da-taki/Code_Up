@@ -123,6 +123,9 @@
           🎤 Voice (Off)
         </button>
         <span id="voiceStateIndicator" class="voice-state-indicator" aria-live="polite" aria-atomic="true"></span>
+        <button class="cu-button" id="codeMapBtn" aria-label="Audio code map - hear program structure">🗺 Code Map</button>
+        <button class="cu-button" id="stepNarrationBtn" aria-label="Run with step narration">📖 Step Narration</button>
+        <button class="cu-button" id="mistakeReplayBtn" aria-label="Compare before and after mistake">🔄 Mistake Replay</button>
         <button class="cu-button cu-button-secondary" id="saveBtn" aria-label="Save current code as snippet">💾 Save</button>
         <select id="languageSelector" class="cu-language-selector" aria-label="Select language for AI responses">
           <option value="en">English</option>
@@ -762,6 +765,9 @@
       document.getElementById('runBtn').addEventListener('click', function () { if (typeof runCode === 'function') runCode(); });
       document.getElementById('analyzeBtn').addEventListener('click', function () { if (typeof analyzeCode === 'function') analyzeCode(); });
       document.getElementById('fixBtn').addEventListener('click', function () { if (typeof fixCode === 'function') fixCode(); });
+      document.getElementById('codeMapBtn').addEventListener('click', function () { if (typeof requestCodeMap === 'function') requestCodeMap(); });
+      document.getElementById('stepNarrationBtn').addEventListener('click', function () { if (typeof requestStepNarration === 'function') requestStepNarration(); });
+      document.getElementById('mistakeReplayBtn').addEventListener('click', function () { if (typeof requestMistakeReplay === 'function') requestMistakeReplay(); });
       document.getElementById('saveBtn').addEventListener('click', function () { if (typeof saveSnippetAccessible === 'function') saveSnippetAccessible(); });
       document.getElementById('snippetSaveBtn').addEventListener('click', function () { if (typeof saveSnippetAccessible === 'function') saveSnippetAccessible(); });
       document.getElementById('snippetNameInput').addEventListener('keydown', function (e) {

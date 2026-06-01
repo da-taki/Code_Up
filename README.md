@@ -56,6 +56,9 @@ CodeUp is tested across two complementary surfaces.
 ## What it does
 
 - **Voice commands** in English and Hindi for navigation, execution, and editing
+- **Audio Code Map**: hear program structure, nesting, block relationships, and function lists without reading every line. Commands: `code map`, `what is inside the loop`, `what comes after the loop`, `how deeply nested am i`, `list my functions`
+- **Variable Watch and Step Narration**: narrates verified runtime value changes during controlled execution. Commands: `watch total`, `track i`, `run with step narration`, `clear watched variables`
+- **Mistake Replay**: explains how a corrected version differs from the previous failed attempt and why behaviour changes. Commands: `compare before and after`, `replay my mistake`, `why does the fixed version work`
 - **Audio code structure** through sonification: pitch maps to indentation, distinct tones for functions, classes, loops, and conditionals
 - **Step-by-step execution traces** with spoken playback and a "story mode" narrative
 - **Sandboxed Python execution** with subprocess isolation, restricted imports, time and memory caps, AST audit, and same-origin enforcement on state-changing requests
@@ -64,7 +67,16 @@ CodeUp is tested across two complementary surfaces.
 - **Six-step interactive tutorial** in both English and Hindi covering print, variables, loops, and conditionals
 - **Conversational CodeUp Mentor** for short follow-up questions, hints, progress checks, and audio code maps
 
-AI assistance is strictly optional. Every core feature works without an API key or network connection.
+Program structure and runtime state are derived deterministically from Python AST parsing and sandboxed execution traces. AI is used only to rephrase verified facts into spoken-friendly coaching. Every core feature works without an API key or network connection.
+
+### Flagship demo sequence
+
+1. Load the broken example: `total = 0` / `for i in range(3):` / `total = total + i` (not indented) / `print(total)`
+2. Run it — CodeUp explains the indentation error
+3. Say `code map` — CodeUp describes the attempted structure
+4. Fix the indentation
+5. Say `watch total`, then `run with step narration` — CodeUp narrates actual value changes
+6. Say `compare before and after` — CodeUp explains why the fix works
 
 ---
 

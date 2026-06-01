@@ -614,6 +614,122 @@ class IntentParser:
         r"^summarize\s+my\s+code\s+structure$",
     ]
 
+    # -----------------------------------------------------------------------
+    # Audio Code Map (enhanced structural queries)
+    # -----------------------------------------------------------------------
+
+    CODE_MAP_PATTERNS = [
+        r"^(?:give\s+me\s+)?(?:a\s+)?code\s+map$",
+        r"^code\s+map$",
+        r"^read\s+(?:the\s+)?structure$",
+        r"^what\s+is\s+(?:the\s+)?structure$",
+        r"^(?:show|describe)\s+(?:the\s+)?(?:code\s+)?structure$",
+        r"^(?:audio\s+)?code\s+map$",
+        r"^map\s+(?:the\s+)?code$",
+    ]
+
+    INSIDE_LOOP_PATTERNS = [
+        r"^what\s+is\s+inside\s+(?:the\s+)?loop$",
+        r"^what'?s?\s+inside\s+(?:the\s+)?loop$",
+        r"^inside\s+(?:the\s+)?loop$",
+    ]
+
+    AFTER_LOOP_PATTERNS = [
+        r"^what\s+comes?\s+after\s+(?:the\s+)?loop$",
+        r"^what'?s?\s+after\s+(?:the\s+)?loop$",
+        r"^after\s+(?:the\s+)?loop$",
+    ]
+
+    NESTING_DEPTH_PATTERNS = [
+        r"^how\s+(?:deeply\s+)?nested\s+am\s+i$",
+        r"^(?:what\s+is\s+)?(?:the\s+)?(?:deepest\s+)?nesting\s+(?:depth|level)$",
+        r"^how\s+deep\s+(?:is\s+(?:the\s+)?(?:nesting|code))$",
+    ]
+
+    LIST_FUNCTIONS_PATTERNS = [
+        r"^list\s+(?:my\s+)?functions$",
+        r"^what\s+functions\s+(?:do\s+i\s+have|are\s+(?:there|defined))$",
+        r"^show\s+(?:my\s+)?functions$",
+    ]
+
+    WHERE_IN_PROGRAM_PATTERNS = [
+        r"^where\s+am\s+i\s+in\s+(?:the\s+)?program$",
+        r"^what\s+part\s+(?:of\s+(?:the\s+)?program\s+)?am\s+i\s+(?:in|at)$",
+    ]
+
+    # -----------------------------------------------------------------------
+    # Variable Watch / Step Narration
+    # -----------------------------------------------------------------------
+
+    WATCH_VAR_PATTERNS = [
+        r"^track\s+(\w+)$",
+        r"^track\s+(?:variable\s+)?(\w+)$",
+    ]
+
+    STOP_WATCHING_PATTERNS = [
+        r"^stop\s+watching\s+(\w+)$",
+        r"^unwatch\s+(\w+)$",
+        r"^untrack\s+(\w+)$",
+    ]
+
+    CLEAR_WATCHED_PATTERNS = [
+        r"^clear\s+(?:watched\s+)?variables$",
+        r"^stop\s+watching\s+(?:all\s+)?variables$",
+        r"^clear\s+(?:all\s+)?watches$",
+    ]
+
+    STEP_NARRATION_PATTERNS = [
+        r"^run\s+with\s+(?:step\s+)?narration$",
+        r"^step\s+narration$",
+        r"^narrate\s+(?:the\s+)?(?:execution|run|steps?)$",
+        r"^run\s+and\s+narrate$",
+        r"^trace\s+(?:the\s+)?(?:execution|run)$",
+    ]
+
+    READ_VARIABLE_VALUES_PATTERNS = [
+        r"^read\s+variable\s+values$",
+        r"^(?:what\s+are\s+)?(?:the\s+)?variable\s+values$",
+        r"^show\s+(?:variable\s+)?values$",
+    ]
+
+    WHAT_CHANGED_STEP_PATTERNS = [
+        r"^what\s+changed\s+in\s+this\s+step$",
+        r"^what\s+changed\s+(?:at\s+)?this\s+(?:point|step)$",
+    ]
+
+    ONLY_ANNOUNCE_CHANGES_PATTERNS = [
+        r"^only\s+announce\s+changes$",
+        r"^announce\s+(?:only\s+)?changes$",
+        r"^changes\s+only$",
+    ]
+
+    # -----------------------------------------------------------------------
+    # Mistake Replay / Before-vs-After
+    # -----------------------------------------------------------------------
+
+    COMPARE_BEFORE_AFTER_PATTERNS = [
+        r"^compare\s+before\s+and\s+after$",
+        r"^before\s+(?:and|vs\.?)\s+after$",
+        r"^(?:show\s+)?(?:the\s+)?(?:before\s+and\s+after|diff)$",
+    ]
+
+    REPLAY_MISTAKE_PATTERNS = [
+        r"^replay\s+(?:my\s+)?mistake$",
+        r"^(?:show|explain)\s+(?:my\s+)?(?:last\s+)?mistake$",
+        r"^what\s+(?:was\s+)?(?:my\s+)?mistake$",
+    ]
+
+    WHY_FIXED_WORKS_PATTERNS = [
+        r"^why\s+does\s+(?:the\s+)?fixed\s+version\s+work$",
+        r"^why\s+(?:does\s+)?(?:the\s+)?(?:corrected|new)\s+(?:version|code)\s+work$",
+        r"^why\s+(?:did\s+(?:it|the\s+fix)\s+)?work$",
+    ]
+
+    SHOW_CHANGED_LINES_PATTERNS = [
+        r"^show\s+(?:only\s+)?changed\s+lines$",
+        r"^(?:what|which)\s+lines?\s+(?:changed|are\s+different)$",
+    ]
+
     MENTOR_STOP_PATTERNS = [
         r"^mentor\s+stop$",
         r"^stop\s+mentor$",
@@ -773,6 +889,26 @@ class IntentParser:
             # phrases so questions route to the tutor layer.
             "mentor_stop":     self.MENTOR_STOP_PATTERNS,
             "mentor_code_map": self.MENTOR_CODE_MAP_PATTERNS,
+            # Audio code map queries
+            "code_map":        self.CODE_MAP_PATTERNS,
+            "inside_loop":     self.INSIDE_LOOP_PATTERNS,
+            "after_loop":      self.AFTER_LOOP_PATTERNS,
+            "nesting_depth":   self.NESTING_DEPTH_PATTERNS,
+            "list_functions":  self.LIST_FUNCTIONS_PATTERNS,
+            "where_in_program": self.WHERE_IN_PROGRAM_PATTERNS,
+            # Variable watch / step narration
+            "watch_var":       self.WATCH_VAR_PATTERNS,
+            "stop_watching":   self.STOP_WATCHING_PATTERNS,
+            "clear_watched":   self.CLEAR_WATCHED_PATTERNS,
+            "step_narration":  self.STEP_NARRATION_PATTERNS,
+            "read_var_values": self.READ_VARIABLE_VALUES_PATTERNS,
+            "what_changed_step": self.WHAT_CHANGED_STEP_PATTERNS,
+            "only_announce_changes": self.ONLY_ANNOUNCE_CHANGES_PATTERNS,
+            # Mistake replay
+            "compare_before_after": self.COMPARE_BEFORE_AFTER_PATTERNS,
+            "replay_mistake":  self.REPLAY_MISTAKE_PATTERNS,
+            "why_fixed_works": self.WHY_FIXED_WORKS_PATTERNS,
+            "show_changed_lines": self.SHOW_CHANGED_LINES_PATTERNS,
             "mentor_progress": self.MENTOR_PROGRESS_PATTERNS,
             "mentor_hint":     self.MENTOR_HINT_PATTERNS,
             "mentor_walkthrough": self.MENTOR_WALKTHROUGH_PATTERNS,
@@ -976,6 +1112,8 @@ class IntentParser:
                     continue
                 if intent == "set_color_mode" and "mode" not in slots:
                     continue
+                if intent in ("watch_var", "stop_watching") and "variable" not in slots:
+                    continue
                 
                 return {
                     "intent": intent,
@@ -1083,6 +1221,10 @@ class IntentParser:
                     slots["line_number"] = num
 
         elif intent == "watch_variable":
+            if match.groups() and match.group(1):
+                slots["variable"] = match.group(1).strip()
+
+        elif intent in ("watch_var", "stop_watching"):
             if match.groups() and match.group(1):
                 slots["variable"] = match.group(1).strip()
 

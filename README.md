@@ -1,36 +1,91 @@
-# CodeUp: A Blind-First Python IDE
+# CodeUp: An Audio-Native Python Learning Environment
 
 [![Test](https://github.com/da-taki/Code_Up/actions/workflows/test.yml/badge.svg)](https://github.com/da-taki/Code_Up/actions/workflows/test.yml)
 
-CodeUp is a Python IDE designed for blind and visually impaired learners. Unlike traditional IDEs that retrofit accessibility on top of visual workflows, CodeUp treats non-visual interaction as the default. Every core feature (navigation, execution, debugging, code understanding) works through audio, keyboard, and natural language commands.
+CodeUp is a blind-first, audio-native Python learning and debugging environment that translates visual programming structure, runtime state and debugging history into spoken, navigable explanations. Students understand indentation and scope through audio code mapping, hear verified variable changes during execution, compare a broken attempt with a corrected program, and receive AI-assisted coaching grounded in deterministic program facts — all through voice commands, typed commands, or keyboard-driven interaction. Every core feature works offline without an API key.
 
-The project is independently developed and intended for use in schools and accessibility programs.
+The project is independently developed and in active use at the **School for the Blind and Deaf, Patiala**, where coding sessions are conducted twice monthly.
 
 > **Sister project:** CodeUp Web extends the same accessibility model to HTML and CSS. See [Code_Up_Web](https://github.com/da-taki/CodeUp-web) (in active development).
 
 ---
 
-## Status and adoption
+## Flagship Capabilities
 
-**v0.8.0**, classroom-pilot ready. Locally tested with the current automated suite in `tests/test_security_voice.py` and validated through a structured pilot with real blind users.
+### Audio Code Map
 
-### Pilot results
+Derives program structure from deterministic Python AST analysis. Students hear loops, conditions, functions, statements after blocks and nesting depth without reading every line. Sub-queries like "what is inside the loop" and "what comes after the loop" return precise, line-numbered answers.
 
-CodeUp has been piloted with 10 users to date:
+### Variable Watch + Step Narration
 
-- 7 users rated it 10/10
-- 3 users rated it between 7.5/10 and 8.5/10
-- Full anonymized pilot table: [docs/pilot-results.md](docs/pilot-results.md)
+Runs code within the existing sandboxed execution environment and narrates actual traced variable updates and output. Values are derived from execution traces, not guessed by AI. Students say `watch total` to focus narration on specific variables, then `run with step narration` to hear each change as it happens.
 
-The project is in active use at the **School for the Blind and Deaf, Patiala**, where it was formally adopted as a teaching tool. Coding sessions are conducted there twice monthly.
+### Mistake Replay
 
-### Testing approach
+Compares a recent failed attempt with a corrected successful run. Explains structural differences — such as moving an assignment inside a loop — and why behaviour changes. The comparison is built from deterministic diff and AST analysis, with optional AI rephrasing for beginner-friendliness.
 
-CodeUp is tested across two complementary surfaces.
+### AI-Assisted Coaching
 
-**Automated tests** cover sandbox security (escape attempts, restricted imports, time and memory caps), voice intent parsing (English and Hindi, including compound number words), trace playback, snippet CRUD, request size limits, per-session isolation, rate limiting, and the sandboxed filesystem. The current repository keeps these checks in one large pytest file plus shared fixtures. Tests are fully isolated: snippet storage redirects to a temp directory and no real AI calls are made. Run with `python -m pytest -q`.
+Groq (Llama 3.3 70B) enhances explanations for clarity and beginner-friendliness. Deterministic AST, trace and diff facts remain the source of truth — AI rephrases verified facts, never invents them. When cloud AI is unavailable, every feature falls back to its deterministic output. A local Ollama fallback is also supported.
 
-**User testing** is conducted in person with blind students at the School for the Blind and Deaf, Patiala. Test plans focus on whether each feature is reachable, understandable, and useful without sighted assistance. Iterations from this loop include the move from `window.prompt()` to inline accessible modals, the auto-save behaviour, the audio heartbeat during long runs, and the beginner-mode error explainer.
+### Accessibility-First Interaction
+
+Typed commands, keyboard-accessible controls, spoken output and narration, and voice-command routing in English and Hindi. All buttons have ARIA labels and are keyboard-reachable. Output appears in `aria-live` regions. Press `Escape` at any time to stop speech.
+
+---
+
+## Flagship Demo Flow
+
+Start with this broken program:
+
+```python
+total = 0
+for i in range(3):
+total = total + i
+print(total)
+```
+
+| Step | Command | What the student hears |
+|------|---------|----------------------|
+| 1 | **Run** | Beginner-friendly explanation: the line after the loop must be indented with four spaces |
+| 2 | `give me a code map` | "Your code has a syntax error near line 3. Here is what I can tell from indentation alone." |
+| 3 | Fix indentation → `    total = total + i` | — |
+| 4 | `watch total` | "Now watching total." |
+| 5 | `run with step narration` | "total becomes 0 … total changes to 1 … total changes to 3. Output: 3" |
+| 6 | `compare before and after` | "Line 3 was indented from 0 to 4 spaces, changing what block it belongs to." + explanation of why the fix works |
+
+The student identifies the scope problem, traces `total` as it changes through loop execution, and understands the fix relative to their earlier mistake.
+
+---
+
+## Supported Commands
+
+Many natural variations work because the intent parser is grammar-based, not exact-match.
+
+| Purpose | Example commands |
+|---------|-----------------|
+| Understand structure | `code map`, `give me a code map`, `what is inside the loop`, `what comes after the loop`, `how deeply nested am I`, `list my functions` |
+| Trace execution | `watch total`, `track score`, `clear watched variables`, `run with step narration`, `what changed in this step` |
+| Learn from mistakes | `compare before and after`, `replay my mistake`, `why does the fixed version work`, `show changed lines` |
+| Run and debug | `run`, `execute code`, `set breakpoint at line 10`, `watch variable x`, `continue`, `next step`, `previous step` |
+| Navigate code | `go to line twenty five`, `read line three`, `find variable x`, `where am i` |
+| Audio features | `sonify block`, `tell the story`, `what's different` |
+| AI assistance | `fix`, `analyze`, `explain simply`, `generate code for fibonacci`, `learning mode`, `quiz me on loops` |
+| Hindi | `चलाओ` (run), `कोड समझाओ` (analyze), `कोड ठीक करो` (fix), `लाइन बीस पर जाओ` (go to line 20), `मदद` (help) |
+
+Hindi number words 0–100 are recognized in line-navigation commands.
+
+---
+
+## How It Works
+
+| Layer | Mechanism |
+|-------|-----------|
+| **Structural analysis** | Python `ast` module parses code into loops, conditions, functions, assignments and nesting depth. Syntax errors fall back to indentation-based heuristics. |
+| **Runtime tracing** | Code runs in a sandboxed subprocess with a `sys.settrace` callback that records variable initializations, changes and function calls. Values come from actual execution, never AI. |
+| **Mistake Replay** | Session-scoped snapshots store the most recent failed and successful code. `difflib.SequenceMatcher` computes line-level changes; AST comparison identifies structural shifts like indentation scope changes. |
+| **AI coaching** | Groq rephrases deterministic facts into student-friendly spoken summaries. System prompts instruct the model not to invent structural facts or variable values. |
+| **Deterministic fallback** | When AI is unavailable (no key, network error, disabled), every feature returns its raw deterministic output. No feature depends on AI for correctness. |
 
 ---
 
@@ -42,71 +97,9 @@ CodeUp is tested across two complementary surfaces.
 
 ---
 
-## Before vs After CodeUp
-
-| Traditional IDE | CodeUp |
-|---|---|
-| `SyntaxError: line 3` | `Line 3 is inside the loop. The indentation dropped. Try adding four spaces before print.` |
-| Error output is mostly visual | Error is spoken, simplified, and tied to code structure |
-| Trace requires reading debugger panes | Trace steps can be heard with `next step` and `previous step` |
-| Indentation is only visual | Indentation can be heard through sonification |
-
----
-
-## What it does
-
-- **Voice commands** in English and Hindi for navigation, execution, and editing
-- **Audio Code Map**: hear program structure, nesting, block relationships, and function lists without reading every line. Commands: `code map`, `what is inside the loop`, `what comes after the loop`, `how deeply nested am i`, `list my functions`
-- **Variable Watch and Step Narration**: narrates verified runtime value changes during controlled execution. Commands: `watch total`, `track i`, `run with step narration`, `clear watched variables`
-- **Mistake Replay**: explains how a corrected version differs from the previous failed attempt and why behaviour changes. Commands: `compare before and after`, `replay my mistake`, `why does the fixed version work`
-- **Audio code structure** through sonification: pitch maps to indentation, distinct tones for functions, classes, loops, and conditionals
-- **Step-by-step execution traces** with spoken playback and a "story mode" narrative
-- **Sandboxed Python execution** with subprocess isolation, restricted imports, time and memory caps, AST audit, and same-origin enforcement on state-changing requests
-- **Optional AI assistance** (Groq Llama 3.3 70B) for error explanation, code generation, summarization, and a mentor mode with quizzes and bug challenges
-- **Audio breakpoint debugger** with variable watching
-- **Six-step interactive tutorial** in both English and Hindi covering print, variables, loops, and conditionals
-- **Conversational CodeUp Mentor** for short follow-up questions, hints, progress checks, and audio code maps
-
-Program structure and runtime state are derived deterministically from Python AST parsing and sandboxed execution traces. AI is used only to rephrase verified facts into spoken-friendly coaching. Every core feature works without an API key or network connection.
-
-### Flagship demo sequence
-
-1. Load the broken example: `total = 0` / `for i in range(3):` / `total = total + i` (not indented) / `print(total)`
-2. Run it — CodeUp explains the indentation error
-3. Say `code map` — CodeUp describes the attempted structure
-4. Fix the indentation
-5. Say `watch total`, then `run with step narration` — CodeUp narrates actual value changes
-6. Say `compare before and after` — CodeUp explains why the fix works
-
----
-
-## Demo and teaching materials
-
-- One-command demo flow: [DEMO_FLOW.md](DEMO_FLOW.md)
-- Accessibility test checklist: [ACCESSIBILITY_TESTING.md](ACCESSIBILITY_TESTING.md)
-- Teacher guide: [docs/teacher-guide.md](docs/teacher-guide.md)
-- Beginner lessons: [lesson 1](lessons/lesson_1_print.md), [lesson 2](lessons/lesson_2_variables.md), [lesson 3](lessons/lesson_3_loops.md)
-- Security model: [SECURITY.md](SECURITY.md)
-
----
-
-## Accessibility
-
-- Screen reader support via `aria-live` announcer (NVDA, JAWS, VoiceOver)
-- Color vision modes (Protanopia, Deuteranopia, Tritanopia)
-- High Contrast mode
-- Night Mode for low-light environments and users who prefer dark themes
-- Dyslexia-friendly mode with Atkinson Hyperlegible font and increased line spacing
-- Reduced motion support, both via in-app toggle and the OS-level `prefers-reduced-motion` setting
-- Full keyboard navigation: every feature reachable without a mouse
-- Press `Escape` at any time to stop speech mid-sentence
-- No `window.prompt()`. All dialogs use accessible inline modals with focus management
-
----
-
 ## Quickstart
 
-Requirements: Python 3.8 or newer. The IDE itself runs offline once installed. Monaco, JetBrains Mono, and Atkinson Hyperlegible are all vendored. The landing page additionally requires a one-time Node build to vendor React and bundle the JSX components (see "Building the landing page" below).
+Requirements: Python 3.8 or newer. The IDE runs offline once installed. Monaco, JetBrains Mono, and Atkinson Hyperlegible are all vendored. The landing page additionally requires a one-time Node build (see "Building the landing page" below).
 
 Clone and set up a virtualenv:
 
@@ -170,7 +163,41 @@ Tests are fully isolated. Snippet storage redirects to a temp directory and no r
 
 ---
 
-## Evaluation metrics
+## Validation Status
+
+| Check | Result |
+|-------|--------|
+| Automated tests | 423 passed, 1 skipped |
+| Python compile check | Clean |
+| Ruff lint | Clean |
+| JavaScript syntax checks | Clean |
+| Frontend build | Clean |
+| Audio Code Map (browser) | Verified — deterministic AST facts and AI-enhanced output |
+| Step Narration (browser) | Verified — correct traced variable values |
+| Mistake Replay (browser) | Verified — correct diff and indentation/scope explanation |
+| Groq-backed enhancement | Verified — AI rephrases without inventing facts |
+| Offline/deterministic fallback | Verified — all three features return correct deterministic output |
+| Secret/API-key scan | No leakage found in responses, console, or tracked files |
+
+> **Limitations not yet independently validated:** physical microphone capture for all new commands, NVDA/JAWS/VoiceOver screen reader testing of the new controls, and physical mobile-device accessibility.
+
+---
+
+## Status and Adoption
+
+**v0.8.0**, classroom-pilot ready.
+
+### Pilot results
+
+CodeUp has been piloted with 10 users to date:
+
+- 7 users rated it 10/10
+- 3 users rated it between 7.5/10 and 8.5/10
+- Full anonymized pilot table: [docs/pilot-results.md](docs/pilot-results.md)
+
+The project is in active use at the **School for the Blind and Deaf, Patiala**, where it was formally adopted as a teaching tool.
+
+### Evaluation metrics
 
 The pilot and future classroom tests track:
 
@@ -184,43 +211,11 @@ See [docs/pilot-results.md](docs/pilot-results.md) for the current anonymized ta
 
 ---
 
-## Landing page
-
-The marketing landing page at `/` is a separate React experience that walks visitors through the core ideas before they reach the IDE itself. It is built around four sections:
-
-1. **Sonification demo** with a 9-tone Web Audio playback of a sample function, showing how pitch maps to indentation and timbre maps to construct
-2. **Voice typewriter** cycling through bilingual command examples (English and Hindi) with live transcription
-3. **IDE preview** showing a working trace stepper, breakpoint glyph, and snippet sidebar
-4. **Features grid + manifesto** covering the sandbox, bilingual voice, accessibility commitments, and zero-CDN dependency posture
-
-The landing page is fully keyboard navigable, respects `prefers-reduced-motion`, ships an aria-labeled skip link past the decorative hero, and uses the same paper-themed design system as the IDE.
-
-The IDE at `/ide` works without any Node tooling. The current repository includes the built landing-page assets, so a clean clone can start Flask and open `/` immediately after Python dependencies are installed. Rebuild the landing bundle only if the built files are missing or you edit `static/landing/*.jsx`.
-
-### Building the landing page
-
-Developer rebuild:
-
-    npm install
-    npm run build
-
-This produces:
-
-- `static/vendor/react/react.production.min.js`
-- `static/vendor/react/react-dom.production.min.js`
-- `static/landing/dist/bundle.js`
-
-After editing any `static/landing/*.jsx` file, rerun `npm run build`. Node is only required for the landing page. Running, deploying, or hacking on the IDE never needs it.
-
-If you're deploying to a school environment without Node, the three built files above can be committed to the repo so end users skip the build step entirely.
-
----
-
 ## Architecture
 
 ### Backend (`app.py`)
 
-Flask application handling code execution, AST-based analysis, voice intent parsing, and AI proxying. Each `/run` request spawns a fresh subprocess confined to a per-session workspace directory, with restricted built-ins and (on POSIX systems) `RLIMIT_AS` and `RLIMIT_CPU` enforced via `preexec_fn`. Per-session state (execution traces, snippets, sandboxes) is keyed by signed session cookies.
+Flask application handling code execution, AST-based analysis, voice intent parsing, and AI proxying. Each `/run` request spawns a fresh subprocess confined to a per-session workspace directory, with restricted built-ins and (on POSIX systems) `RLIMIT_AS` and `RLIMIT_CPU` enforced via `preexec_fn`. Per-session state (execution traces, snippets, watched variables, mistake snapshots, sandboxes) is keyed by signed session cookies.
 
 ### Frontend
 
@@ -233,6 +228,24 @@ Monaco Editor (vendored locally, no CDN dependency), JavaScript using the Web Sp
 | `intent_parser.py` | Natural language to structured intent and slots, with Hindi number support |
 | `structure_parser.py` | AST-based code structure extraction (functions, classes, loops, async detection, parent class tracking) |
 | `sandboxed_fs.py` | Per-session restricted workspace file system |
+
+---
+
+## Sandbox
+
+User code runs in a separate Python subprocess with:
+
+- Restricted imports: only `math`, `random`, `string`, `datetime` allowed
+- Restricted built-ins: `eval`, `exec`, `compile`, `open`, `__import__`, and direct module attribute access blocked
+- 3-second wall-clock timeout
+- 5,000-event trace cap to prevent runaway memory growth
+- POSIX-only: 128 MB address space cap and 3-second CPU time cap via `setrlimit`
+- Working directory confined to a per-session temp workspace
+- `input()` blocked with a clear explanation suggesting hardcoded values
+
+The wall-clock timeout stops slow or sleeping programs. The POSIX CPU cap stops tight loops that burn processor time before wall-clock timeout would otherwise fire.
+
+Per-session rate limit: 30 runs per 60 seconds.
 
 ---
 
@@ -273,58 +286,30 @@ Monaco Editor (vendored locally, no CDN dependency), JavaScript using the Web Sp
 
 ---
 
-## Voice Commands
+## Accessibility
 
-A partial list. Many natural variations work because the intent parser is grammar-based, not exact-match.
-
-| Say | Action |
-|---|---|
-| "run" / "execute code" | Run code |
-| "go to line twenty five" | Navigate to line 25 |
-| "read line three" | Read line 3 aloud |
-| "what changed here" | Describe variable changes at current trace step |
-| "next step" / "previous step" | Step through execution trace |
-| "find variable x" | Jump to all usages of variable x |
-| "summarize this file" | AI file summary |
-| "generate code for fibonacci sequence" | AI code generation |
-| "check for errors" | Syntax check plus audio beacon |
-| "sonify block" | Hear current block as audio tones |
-| "save snippet named hello world" | Save current code |
-| "tell the story" | Narrate what your code did |
-| "set breakpoint at line 10" | Audio debugger |
-| "watch variable x" | Report x at each breakpoint |
-| "continue" | Run to next breakpoint |
-| "learning mode" | Start mentor / quiz mode |
-| "quiz me on loops" | Get a quiz question |
-| "explain variables" | Concept explanation |
-| "bug challenge" | Find and fix a bug |
-| "insert function called greet" | Voice code editing |
-| "suggest next line" then "choose 2" | AI autocomplete |
-| "help" | List all commands |
-
-Hindi equivalents work for around 15 core commands including `चलाओ` (run), `कोड समझाओ` (analyze), `कोड ठीक करो` (fix), `लाइन बीस पर जाओ` (go to line 20), `मदद` (help). Hindi number words 0 to 50 are recognized in line-navigation commands.
+- Screen reader support via `aria-live` announcer (NVDA, JAWS, VoiceOver)
+- Color vision modes (Protanopia, Deuteranopia, Tritanopia)
+- High Contrast mode
+- Night Mode for low-light environments
+- Dyslexia-friendly mode with Atkinson Hyperlegible font and increased line spacing
+- Reduced motion support, both via in-app toggle and the OS-level `prefers-reduced-motion` setting
+- Full keyboard navigation: every feature reachable without a mouse
+- No `window.prompt()`. All dialogs use accessible inline modals with focus management
 
 ---
 
-## Sandbox
+## Demo and Teaching Materials
 
-User code runs in a separate Python subprocess with:
-
-- Restricted imports: only `math`, `random`, `string`, `datetime` allowed
-- Restricted built-ins: `eval`, `exec`, `compile`, `open`, `__import__`, and direct module attribute access blocked
-- 3-second wall-clock timeout
-- 5,000-event trace cap to prevent runaway memory growth
-- POSIX-only: 128 MB address space cap and 3-second CPU time cap via `setrlimit`
-- Working directory confined to a per-session temp workspace
-- `input()` blocked with a clear explanation suggesting hardcoded values
-
-The wall-clock timeout stops slow or sleeping programs. The POSIX CPU cap stops tight loops that burn processor time before wall-clock timeout would otherwise fire.
-
-Per-session rate limit: 30 runs per 60 seconds.
+- One-command demo flow: [DEMO_FLOW.md](DEMO_FLOW.md)
+- Accessibility test checklist: [ACCESSIBILITY_TESTING.md](ACCESSIBILITY_TESTING.md)
+- Teacher guide: [docs/teacher-guide.md](docs/teacher-guide.md)
+- Beginner lessons: [lesson 1](lessons/lesson_1_print.md), [lesson 2](lessons/lesson_2_variables.md), [lesson 3](lessons/lesson_3_loops.md)
+- Security model: [SECURITY.md](SECURITY.md)
 
 ---
 
-## Known limitations
+## Known Limitations
 
 - Chrome and Edge are best for speech recognition. Firefox has limited Web Speech API support, so keyboard and typed commands are the fallback there.
 - Live `input()` mode is POSIX-only. The pre-flight input panel works across platforms.
@@ -334,26 +319,34 @@ Per-session rate limit: 30 runs per 60 seconds.
 
 ---
 
-## What's new in 0.8.0
+## Landing Page
 
-- **`input()` support, two ways**:
-  - *Pre-flight* (default, reproducible): declare values ahead with the inputs panel, voice (`set inputs to alice and seventeen`), or a magic comment (`# inputs: alice, 17`)
-  - *Live* (POSIX only): say `live input mode`, then your code pauses at each `input()` and asks you for the value via voice or typing
-- **Output diff narration**: re-run code and hear only what changed, not the whole output again. Voice: `what's different`
-- **Audio heartbeat**: soft tone every 500ms while code runs so you know it's alive
-- **Voice macros**: `remember this as quick sort` saves the editor as a named macro. `use macro quick sort` loads it
-- **Output bookmarks**: `bookmark this` mid-output, then `read from bookmark <name>` later
-- **Breadcrumbs**: Alt+B (or `where am i`) reads "function calculate, inside for loop, line 15"
-- **Beginner errors**: after an error, say `explain simply` for a jargon-free, real-life-analogy version
-- **Auto-save**: every 30 seconds, silently. A draft from the previous session is restored automatically on next visit
-- **Coffee theme**: replaces the previous teal palette with cream, caramel, and espresso
+The marketing landing page at `/` is a separate React experience that walks visitors through the core ideas before they reach the IDE. It includes a sonification demo, voice typewriter, IDE preview, and features grid. The landing page is fully keyboard navigable and respects `prefers-reduced-motion`.
 
-Next:
+The IDE at `/ide` works without any Node tooling. The repository includes built landing-page assets, so a clean clone can start Flask immediately. Rebuild only if you edit `static/landing/*.jsx`.
 
-- Continued user testing with blind students at the School for the Blind and Deaf, Patiala
-- Deployment behind HTTPS for non-localhost use
-- Research write-up
-- CodeUp Web (HTML / CSS sister project) reaching feature parity on the accessibility surface
+### Building the landing page
+
+    npm install
+    npm run build
+
+This produces `static/vendor/react/*.min.js` and `static/landing/dist/bundle.js`. Node is only required for the landing page.
+
+---
+
+## What's New in 0.8.0
+
+- **Audio Code Map**: hear program structure from deterministic AST analysis
+- **Variable Watch + Step Narration**: trace verified runtime variable changes during execution
+- **Mistake Replay**: compare broken and fixed code with structural diff explanation
+- **`input()` support**: pre-flight inputs panel and live input mode (POSIX only)
+- **Output diff narration**: re-run code and hear only what changed
+- **Audio heartbeat**: soft tone every 500ms while code runs
+- **Voice macros**: `remember this as quick sort` / `use macro quick sort`
+- **Output bookmarks**: `bookmark this` / `read from bookmark <name>`
+- **Breadcrumbs**: Alt+B reads "function calculate, inside for loop, line 15"
+- **Beginner errors**: `explain simply` for jargon-free error explanations
+- **Auto-save**: every 30 seconds, with draft restoration on next visit
 
 ---
 

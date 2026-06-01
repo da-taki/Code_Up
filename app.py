@@ -826,7 +826,8 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en", max_
                 return "The cloud AI took too long to respond and offline AI is not available. Try a shorter request."
             if "connection" in err_str or "network" in err_str or "dns" in err_str:
                 return "No internet connection and offline AI is not available. Ask your teacher to install Ollama for offline mode."
-            return f"AI service had a problem: {str(e)[:100]}. Offline AI is also not available."
+            _debug_log(f"AI service failure: {sanitize_traceback(str(e))}")
+            return "AI service had a problem and offline AI is not available. Core CodeUp features still work."
         finally:
             with _gemini_active_lock:
                 _gemini_active_requests -= 1
@@ -879,7 +880,8 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en", max_
         local = _try_ollama_fallback()
         if local:
             return f"[offline mode] {local}"
-        return f"AI service is currently unavailable: {str(e)}"
+        _debug_log(f"AI executor unavailable: {sanitize_traceback(str(e))}")
+        return "AI service is currently unavailable. Core CodeUp features still work."
 
     try:
         return future.result(timeout=MAX_GEMINI_TIMEOUT + 1)
@@ -895,7 +897,8 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en", max_
         local = _try_ollama_fallback()
         if local:
             return f"[offline mode] {local}"
-        return f"AI service is currently unavailable: {str(e)}"    
+        _debug_log(f"AI future failed: {sanitize_traceback(str(e))}")
+        return "AI service is currently unavailable. Core CodeUp features still work."
 
 def extract_code(text: str):
     m = re.search(r"```(?:python)?\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
@@ -1124,26 +1127,107 @@ def api_config():
             return jsonify({"success": False, "error": "API key is invalid or cloud AI is unavailable"}), 401
         return jsonify({"success": True, "message": "API key configured successfully"})
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        _debug_log(f"API key configuration failed: {sanitize_traceback(str(e))}")
+        return jsonify({"success": False, "error": "Could not configure the API key. Please check the key and try again."}), 500
 
 # ==========================
 # ERROR EXPLAINER
 # ==========================
 
 def sanitize_traceback(traceback_str: str) -> str:
-    """Remove sensitive information from traceback before sending to LLM."""
-    lines = traceback_str.split('\n')
-    sanitized = []
-    for line in lines:
-        line = re.sub(r'[A-Za-z]:[/\\][^:\n]*', '<path>', line)   # Windows paths
-        line = re.sub(r'/home/[^:]*', '<path>', line)              # Linux /home
-        line = re.sub(r'/Users/[^:]*', '<path>', line)             # macOS /Users
-        line = re.sub(r'/var/[^:]*', '<path>', line)               # Linux /var
-        # FIX M-1: Also sanitize /tmp/ paths so subprocess temp-script paths
-        # (e.g. /tmp/tmpXXXX.py) are not leaked to the Gemini LLM or the client.
-        line = re.sub(r'/tmp/[^:]*', '<path>', line)               # Linux /tmp
-        sanitized.append(line)
-    return '\n'.join(sanitized)
+    """Remove sensitive paths and credentials from diagnostic text."""
+    text = str(traceback_str or "")
+    text = re.sub(r'gsk_[A-Za-z0-9_-]{16,}', '<redacted-api-key>', text)
+    text = re.sub(r'(?i)(api[_-]?key["\']?\s*[:=]\s*)["\']?[^"\'\s,;]+', r'\1<redacted>', text)
+    text = re.sub(r'[A-Za-z]:[/\\][^"\'\n\r]*', '<path>', text)
+    text = re.sub(r'/(?:home|Users|var|tmp|private|opt|srv|mnt|workspace|app)/[^"\'\n\r]*', '<path>', text)
+    return text
+
+
+def _line_from_code(code: str, line_no: Optional[int]) -> str:
+    if not line_no or line_no < 1:
+        return ""
+    lines = code.splitlines()
+    if line_no > len(lines):
+        return ""
+    return lines[line_no - 1].strip()
+
+
+def _syntax_error_message(error: SyntaxError, code: str) -> str:
+    err_type = type(error).__name__
+    msg = str(error.msg or "Python syntax error").strip()
+    line_no = error.lineno or 1
+    line_text = _line_from_code(code, line_no)
+    parts = [f"Line {line_no}: {err_type}: {msg}."]
+    if isinstance(error, IndentationError):
+        if "expected an indented block" in msg.lower():
+            parts.append("The line after the loop or block header must be indented.")
+            if line_text:
+                parts.append(f"Add four spaces before: {line_text}")
+        elif "unexpected indent" in msg.lower():
+            parts.append("This line is indented more than Python expected.")
+    return " ".join(parts)
+
+
+def _extract_error_summary(error_text: str) -> Tuple[Optional[int], str, str]:
+    safe_text = sanitize_traceback(error_text)
+    line_no = None
+    for match in re.finditer(r'File\s+"<user>",\s+line\s+(\d+)', safe_text):
+        line_no = int(match.group(1))
+    if line_no is None:
+        match = re.search(r'\bline\s+(\d+)\b', safe_text, flags=re.IGNORECASE)
+        if match:
+            line_no = int(match.group(1))
+
+    for raw_line in reversed([line.strip() for line in safe_text.splitlines() if line.strip()]):
+        if raw_line.startswith("^") or raw_line.startswith("File ") or raw_line.startswith("Traceback"):
+            continue
+        match = re.match(r'([A-Za-z_][A-Za-z0-9_]*Error|Exception|KeyboardInterrupt|SystemExit):\s*(.*)', raw_line)
+        if match:
+            return line_no, match.group(1), match.group(2).strip()
+    return line_no, "PythonError", "Python could not run this code."
+
+
+def user_facing_error(error_text: str) -> str:
+    """Return concise error text for students, never internal traceback frames."""
+    line_no, err_type, message = _extract_error_summary(error_text)
+    prefix = f"Line {line_no}: " if line_no else ""
+    message = sanitize_traceback(message).strip() or "Python could not run this code."
+    return f"{prefix}{err_type}: {message}"
+
+
+def _local_error_explanation(code: str, err_text: str, language: str = "en", beginner: bool = False) -> str:
+    cleaned_error = sanitize_traceback(err_text).strip()
+    if re.search(r'(?:^|\b)(?:[A-Za-z_][A-Za-z0-9_]*Error|Exception|KeyboardInterrupt|SystemExit):', cleaned_error):
+        safe_error = cleaned_error
+    else:
+        safe_error = user_facing_error(err_text)
+    lower = safe_error.lower()
+    line_match = re.search(r'line\s+(\d+)', safe_error, flags=re.IGNORECASE)
+    line_no = int(line_match.group(1)) if line_match else None
+    line_text = _line_from_code(code, line_no)
+
+    if "indentationerror" in lower and "expected an indented block" in lower:
+        target = f" line {line_no}" if line_no else " the next line"
+        sample = f" Add four spaces before `{line_text}`." if line_text else ""
+        return (
+            f"The line after the loop must be indented. Python uses spaces to know what belongs inside the loop. "
+            f"Indent{target} with four spaces, then run again.{sample}"
+        )
+    if "indentationerror" in lower:
+        return "Python found an indentation problem. Check the spacing at the line named in the error, then make the block line up consistently."
+    if "syntaxerror" in lower:
+        return "Python could not understand the code yet. Check the line named in the error for a missing colon, bracket, quote, or other punctuation."
+    if "nameerror" in lower:
+        return "Python saw a name it does not know yet. Check the spelling, or create that variable before you use it."
+    if "zerodivisionerror" in lower:
+        return "The code tried to divide by zero. Change the divisor or add a check so the divisor is not zero."
+    if "codeupinputerror" in lower or "input()" in lower:
+        return "Your code asks for input. Add pre-flight inputs in the inputs panel, add a '# inputs:' comment, or switch to live input mode."
+
+    if beginner:
+        return "Python could not run this yet. Read the line named in the error, fix that one part, and run again."
+    return "Python could not run this code. Check the line named in the error, fix it, and run again."
 
 def explain_error(code: str, err_text: str, language="en", beginner=False) -> str:
     if beginner:
@@ -1193,9 +1277,15 @@ def explain_error(code: str, err_text: str, language="en", beginner=False) -> st
             "Max 6 short lines. Be direct.\n"
             "End with one question: Do you want a tiny hint, the exact fix, or a line-by-line explanation?"
         )
-    safe_error = sanitize_traceback(err_text)
+    safe_error = user_facing_error(err_text)
+    local_explanation = _local_error_explanation(code, safe_error, language=language, beginner=beginner)
+    if "indentationerror" in safe_error.lower():
+        return local_explanation
     user = f"Code:\n```python\n{code}\n```\n\nError:\n```\n{safe_error}\n```"
-    return call_gemini(system, user, language=language)
+    ai_explanation = call_gemini(system, user, language=language)
+    if _is_ai_service_message(ai_explanation) or _ai_unavailable(ai_explanation):
+        return local_explanation
+    return ai_explanation
 
 
 @app.route("/explain-error-beginner", methods=["POST"])
@@ -1530,7 +1620,7 @@ def mentor_chat_stream():
             yield "data: [DONE]\n\n"
         except GeneratorExit:
             return
-        except Exception as e:
+        except Exception:
             # On error, try non-streaming fallback; if that also fails, send error message
             try:
                 reply = call_gemini(system, user, temperature=0.25, language=language)
@@ -1860,6 +1950,19 @@ def run_code():
     if blocked:
         return blocked
 
+    try:
+        compile(code, "<user>", "exec")
+    except SyntaxError as e:
+        safe_error = _syntax_error_message(e, code)
+        explanation = _local_error_explanation(code, safe_error, language=safe(body.get("language"), "en"), beginner=True)
+        return jsonify({
+            "success": False,
+            "error": safe_error,
+            "explanation": explanation,
+            "inputs_hint": None,
+            "input_prompts": [],
+        })
+
     # Heuristic: detect input() use without provided inputs and surface a
     # friendly hint up front. The subprocess will still raise the canonical
     # error if it actually hits input() with an empty queue, but this helps
@@ -1968,7 +2071,8 @@ def run_code():
         except json.JSONDecodeError:
             trace_error = 'Trace data was corrupted or incomplete'
         except OSError as e:
-            trace_error = f'Error reading trace: {str(e)}'
+            _debug_log(f"Error reading trace file: {sanitize_traceback(str(e))}")
+            trace_error = 'Trace data could not be read'
         finally:
             try:
                 if os.path.exists(trace_file):
@@ -1985,7 +2089,8 @@ def run_code():
         save_execution_trace(trace, duration_ms)
 
         output = stdout_buf.getvalue()
-        error = stderr_buf.getvalue()
+        raw_error = stderr_buf.getvalue()
+        error = user_facing_error(raw_error) if raw_error.strip() else ""
 
         # Compute output diff vs last run (only on success — error states aren't
         # comparable in a useful way)
@@ -2022,11 +2127,12 @@ def run_code():
 
     except Exception:
         tb = traceback.format_exc()
-        explanation = explain_error(code, tb, language=safe(body.get("language"), "en"))
+        _debug_log(f"Internal /run failure:\n{sanitize_traceback(tb)}")
+        error = "CodeUp hit an internal problem while running this code. Please try again, and ask the instructor to check the server log if it repeats."
         return jsonify({
             "success": False,
-            "error": tb,
-            "explanation": explanation,
+            "error": error,
+            "explanation": "The student-facing error has been kept safe. The detailed diagnostic is in the server log for the instructor.",
             "inputs_hint": inputs_hint,
             "input_prompts": input_prompts,
         })
@@ -2470,7 +2576,7 @@ def track_variables():
     try:
         tree = ast.parse(code)
     except SyntaxError as e:
-        return jsonify({"success": False, "message": f"Syntax error: {e}"})
+        return jsonify({"success": False, "message": _syntax_error_message(e, code)})
 
     class VariableTracker(ast.NodeVisitor):
         def __init__(self):
@@ -3408,7 +3514,8 @@ def suggest_next():
         suggestions = parsed.get("suggestions", [])[:3]
         return jsonify({"success": True, "suggestions": suggestions})
     except Exception as e:
-        return jsonify({"success": False, "suggestions": [], "error": str(e)})
+        _debug_log(f"Suggestion generation failed: {sanitize_traceback(str(e))}")
+        return jsonify({"success": False, "suggestions": [], "error": "Could not generate suggestions right now."})
 
 def _trace_playback(direction):
     """Advance, rewind, or report the current trace step. All reads and the
@@ -3603,6 +3710,8 @@ def voice():
             return _store_and_return({"success": True, "action": "choose_suggestion", "choice": slots.get("choice", 1), "confidence": confidence})
         if intent == "story_mode":
             return _store_and_return({"success": True, "action": "story_mode", "confidence": confidence})
+        if intent == "help":
+            return _store_and_return({"success": True, "action": "help", "confidence": confidence})
         if intent == "more_help":
             return _store_and_return({"success": True, "action": "more_help", "confidence": confidence})
         if intent == "set_breakpoint":
@@ -3737,7 +3846,7 @@ def breadcrumbs():
     try:
         tree = ast.parse(code)
     except SyntaxError as e:
-        return jsonify({"success": False, "message": f"Cannot parse: {e}"})
+        return jsonify({"success": False, "message": _syntax_error_message(e, code)})
 
     trail = []  # list of (kind, name, start_line, end_line)
 
@@ -4242,7 +4351,8 @@ def run_stream_start():
     try:
         os.mkfifo(fifo_path)
     except OSError as e:
-        return jsonify({"success": False, "error": f"Could not create input pipe: {e}"}), 500
+        _debug_log(f"Could not create input pipe for interactive run: {sanitize_traceback(str(e))}")
+        return jsonify({"success": False, "error": "Could not start live input mode. Please use the inputs panel and run again."}), 500
 
     # Write code to temp file in workspace
     with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False,
@@ -4285,7 +4395,8 @@ def run_stream_start():
             os.unlink(code_file_path)
         except OSError:
             pass
-        return jsonify({"success": False, "error": f"Could not start run: {e}"}), 500
+        _debug_log(f"Could not start interactive run: {sanitize_traceback(str(e))}")
+        return jsonify({"success": False, "error": "Could not start the live run. Please try pre-flight input mode."}), 500
 
     state = {
         "proc": proc,
@@ -4318,7 +4429,8 @@ def run_stream_start():
                 else:
                     output_queue.put({"type": "stdout", "text": line})
         except (OSError, ValueError) as e:
-            output_queue.put({"type": "error", "text": f"stdout reader error: {e}"})
+            _debug_log(f"stdout reader error for run {run_id}: {sanitize_traceback(str(e))}")
+            output_queue.put({"type": "error", "text": "Output stream ended unexpectedly."})
         finally:
             try:
                 proc.stdout.close()
@@ -4326,14 +4438,19 @@ def run_stream_start():
                 pass
 
     def _stderr_reader():
+        collected = []
         try:
             for line in iter(proc.stderr.readline, ''):
                 if not line:
                     break
-                output_queue.put({"type": "stderr", "text": line})
+                collected.append(line)
         except (OSError, ValueError) as e:
-            output_queue.put({"type": "error", "text": f"stderr reader error: {e}"})
+            _debug_log(f"stderr reader error for run {run_id}: {sanitize_traceback(str(e))}")
+            output_queue.put({"type": "error", "text": "Error stream ended unexpectedly."})
         finally:
+            raw_error = "".join(collected)
+            if raw_error.strip():
+                output_queue.put({"type": "stderr", "text": user_facing_error(raw_error) + "\n"})
             try:
                 proc.stderr.close()
             except (AttributeError, OSError, ValueError):
@@ -4438,7 +4555,8 @@ def run_stream_input(run_id):
     except OSError as e:
         if e.errno in (errno.ENXIO, errno.EAGAIN, errno.EWOULDBLOCK):
             return jsonify({"success": False, "error": "Input reader is not ready"}), 409
-        return jsonify({"success": False, "error": str(e)}), 500
+        _debug_log(f"Could not write live input for run {run_id}: {sanitize_traceback(str(e))}")
+        return jsonify({"success": False, "error": "Could not send input to the running program."}), 500
 
 
 @app.route("/run-stream/<run_id>/cancel", methods=["POST"])
@@ -4594,6 +4712,33 @@ def _event_to_speech(event, idx=None, total=None):
 # EXECUTION STORY MODE
 # ==========================
 
+def _local_execution_story(trace: List[Dict[str, Any]]) -> str:
+    if not trace:
+        return "No execution trace available. Please run your code first."
+
+    line_events = [e for e in trace if e.get('type') == 'line_exec']
+    state_events = [e for e in trace if e.get('type') == 'state_change']
+    lines_seen = []
+    for event in line_events:
+        line = event.get('line')
+        if line not in lines_seen:
+            lines_seen.append(line)
+
+    sentences = [
+        f"The program ran under CodeUp's tracer for {len(trace)} steps.",
+    ]
+    if lines_seen:
+        sentences.append("It visited line " + ", then line ".join(str(line) for line in lines_seen[:6]) + ".")
+    for event in state_events[:4]:
+        changes = "; ".join(event.get('changes', [])[:3])
+        if changes:
+            sentences.append(f"On line {event.get('line')}, {changes}.")
+    if len(state_events) > 4:
+        sentences.append(f"There were {len(state_events) - 4} more state changes after that.")
+    sentences.append("Use next step and previous step to hear the trace one event at a time.")
+    return " ".join(sentences[:8])
+
+
 @app.route("/execution-story", methods=["POST"])
 def execution_story():
     body = safejson()
@@ -4649,6 +4794,8 @@ def execution_story():
 
     user = f"Code:\n```python\n{code}\n```\n\nExecution trace:\n{trace_text}"
     story = call_gemini(system, user, temperature=0.3, language=language)
+    if _is_ai_service_message(story) or _ai_unavailable(story):
+        story = _local_execution_story(trace)
     return jsonify({"success": True, "story": story})
 
 

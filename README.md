@@ -102,6 +102,10 @@ Clone and set up a virtualenv:
     cd Code_Up
     python -m venv .venv
 
+On Windows PowerShell, use the Python launcher if `python` is not on PATH:
+
+    py -m venv .venv
+
 Activate the virtualenv (Windows PowerShell):
 
     .\.venv\Scripts\Activate.ps1
@@ -112,7 +116,7 @@ Activate the virtualenv (macOS / Linux):
 
 Install dependencies:
 
-    pip install -r requirements.txt
+    python -m pip install -r requirements.txt
 
 Configure environment:
 
@@ -179,11 +183,11 @@ The marketing landing page at `/` is a separate React experience that walks visi
 
 The landing page is fully keyboard navigable, respects `prefers-reduced-motion`, ships an aria-labeled skip link past the decorative hero, and uses the same paper-themed design system as the IDE.
 
-The IDE at `/ide` works without any Node tooling. Only the landing page requires a Node build to bundle JSX.
+The IDE at `/ide` works without any Node tooling. The current repository includes the built landing-page assets, so a clean clone can start Flask and open `/` immediately after Python dependencies are installed. Rebuild the landing bundle only if the built files are missing or you edit `static/landing/*.jsx`.
 
 ### Building the landing page
 
-First-time setup:
+Developer rebuild:
 
     npm install
     npm run build

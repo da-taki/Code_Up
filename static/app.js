@@ -2873,11 +2873,32 @@ async function submitCommand() {
   if (!field) return;
   const txt = field.value.trim();
   if (!txt) return;
+  if (_activeStreamRun && _activeStreamRun.runId && _activeStreamRun.awaitingPrompt) {
+    await sendStreamingInput(txt);
+    field.value = '';
+    return;
+  }
   await handleCommandText(txt);
   field.value = '';
 }
 
 // ---------- VOICE ----------
+function voiceUnavailableMessage() {
+  const isFirefox = navigator.userAgent.toLowerCase().includes('firefox');
+  return isFirefox
+    ? 'Voice input is not supported in Firefox. Please open CodeUp in Chrome or Edge for voice control. Keyboard shortcuts and the typed command box still work in Firefox.'
+    : 'Speech recognition is not supported in this browser. Please use Chrome or Edge for voice input. Keyboard shortcuts and the typed command box still work.';
+}
+
+function setVoiceButtonOff() {
+  const btn = document.getElementById('voiceButton');
+  if (!btn) return;
+  btn.textContent = '\uD83C\uDFA4 Voice (Off)';
+  btn.setAttribute('aria-pressed', 'false');
+  btn.classList.remove('cu-button-voice--active');
+  btn.classList.remove('cu-button-voice--paused');
+}
+
 function toggleVoice() {
   // Use VoiceEngine if available
   if (typeof VoiceEngine !== 'undefined' && VoiceEngine.VoiceInput) {
@@ -2895,10 +2916,33 @@ function toggleVoice() {
       AppState.isListening = false;
       speak('Voice control deactivated.');
     } else {
-      VoiceEngine.VoiceInput.start(true);
+      const started = VoiceEngine.VoiceInput.start(true);
+      if (!started) {
+        const msg = voiceUnavailableMessage();
+        isListening = false;
+        AppState.isListening = false;
+        _voicePaused = false;
+        setVoiceButtonOff();
+        out(msg);
+        speak(msg);
+        srAnnounce('Speech recognition unavailable');
+        return;
+      }
       isListening = true;
       AppState.isListening = true;
       _voicePaused = false;
+      setTimeout(() => {
+        if (isListening && typeof VoiceEngine !== 'undefined' && VoiceEngine.VoiceInput && !VoiceEngine.VoiceInput.isActive()) {
+          const msg = 'Microphone access blocked. Please grant microphone permission and toggle voice again. Keyboard shortcuts and the typed command box still work.';
+          out(msg);
+          speak(msg);
+          srAnnounce('Microphone access blocked');
+          isListening = false;
+          AppState.isListening = false;
+          _voicePaused = false;
+          setVoiceButtonOff();
+        }
+      }, 1500);
       // Provide audio feedback
       if (typeof cueSuccess === 'function') cueSuccess();
       const code = getCode();
@@ -2922,10 +2966,8 @@ function toggleVoice() {
 function startListening() {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SR) {
-    const isFirefox = navigator.userAgent.toLowerCase().includes('firefox');
-    const msg = isFirefox
-      ? 'Voice input is not supported in Firefox. Please open CodeUp in Chrome or Edge for voice control. Keyboard shortcuts and the typed command box still work in Firefox.'
-      : 'Speech recognition is not supported in this browser. Please use Chrome or Edge for voice input. Keyboard shortcuts and the typed command box still work.';
+    const msg = voiceUnavailableMessage();
+    setVoiceButtonOff();
     out(msg);
     speak(msg);
     srAnnounce('Speech recognition unavailable');
@@ -3036,14 +3078,21 @@ function startListening() {
   };
 
   recognition.onerror = (event) => {
-    console.error('Voice error:', event.error);
+    _debugLog('Voice recognition error:', event.error);
     if (event.error === 'no-speech') { return; }
     if (event.error === 'aborted')   { isListening = false; AppState.isListening = false; return; }
     if (event.error === 'audio-capture' || event.error === 'not-allowed') {
-      speak('Microphone access blocked. Please grant microphone permission and toggle voice again.');
-      isListening = false; AppState.isListening = false; return;
+      const msg = 'Microphone access blocked. Please grant microphone permission and toggle voice again. Keyboard shortcuts and the typed command box still work.';
+      out(msg);
+      speak(msg);
+      srAnnounce('Microphone access blocked');
+      isListening = false;
+      AppState.isListening = false;
+      _voicePaused = false;
+      setVoiceButtonOff();
+      return;
     }
-    console.warn('Voice error (will retry):', event.error);
+    _debugLog('Voice error (will retry):', event.error);
   };
 
   recognition.onend = () => {
@@ -3107,9 +3156,13 @@ function startListening() {
     _voiceStartIsUserInitiated = true;
     recognition.start();
   } catch (e) {
-    console.error('Failed to start recognition:', e);
-    speak('Failed to start voice control.');
+    _debugLog('Failed to start recognition:', e && e.message ? e.message : e);
+    const msg = 'Failed to start voice control. Keyboard shortcuts and the typed command box still work.';
+    out(msg);
+    speak(msg);
+    srAnnounce('Speech recognition unavailable');
     isListening = false; AppState.isListening = false;
+    setVoiceButtonOff();
     _voiceStartIsUserInitiated = false;
   }
 }
@@ -3182,7 +3235,7 @@ function resumeVoiceRecognition() {
     // If voice was off entirely, just turn it on instead of refusing.
     // Better UX than telling a presenter "voice control is not active".
     _voicePaused = false;
-    startListening();
+    toggleVoice();
     return;
   }
   if (!_voicePaused) { speak('Voice is already listening.'); return; }

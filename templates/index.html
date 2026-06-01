@@ -528,7 +528,15 @@
         if (sel) { sel.value = lang; sel.dispatchEvent(new Event('change')); }
         primeAudio();
         var gate = document.getElementById('startGate');
-        if (gate) gate.style.display = 'none';
+        if (gate) {
+          gate.style.display = 'none';
+          gate.setAttribute('hidden', '');
+          gate.setAttribute('aria-hidden', 'true');
+          ['startEnglish', 'startHindi', 'startReturning'].forEach(function (id) {
+            var btn = document.getElementById(id);
+            if (btn) { btn.disabled = true; btn.tabIndex = -1; }
+          });
+        }
 
         var tutorialBtn = document.getElementById('tutorialBtn');
         if (tutorialBtn) tutorialBtn.focus();
@@ -826,6 +834,12 @@
         }
       });
       document.getElementById('sendCommandBtn').addEventListener('click', function () { if (typeof submitCommand === 'function') submitCommand(); });
+      var voiceTextInput = document.getElementById('voiceText');
+      if (voiceTextInput) {
+        voiceTextInput.addEventListener('keydown', function (e) {
+          if (e.key === 'Enter') { e.preventDefault(); if (typeof submitCommand === 'function') submitCommand(); }
+        });
+      }
       document.getElementById('submitApiKeyBtn').addEventListener('click', function () {
         if (typeof submitApiKey === 'function') submitApiKey();
       });

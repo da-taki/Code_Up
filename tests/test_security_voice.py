@@ -905,6 +905,12 @@ def test_python_string_containing_html_is_allowed(client):
     assert "<html><body>ok</body></html>" in data["output"]
 
 
+def test_monaco_worker_nls_route_serves_bundled_asset(client):
+    res = client.get("/vs/base/common/worker/simpleWorker.nls.js")
+    assert res.status_code == 200
+    assert b"Microsoft Corporation" in res.data[:200]
+
+
 def test_snippet_create_rejects_blank_name_or_code(client):
     blank_name = client.post("/snippets", json={"name": "  ", "code": "print(1)"})
     assert blank_name.status_code == 400
@@ -940,6 +946,37 @@ def test_voice_command_non_string_and_too_long_payloads(client):
     assert too_long.status_code == 413
 
 
+def test_command_input_enter_and_live_input_contracts_are_wired():
+    with open(os.path.join("templates", "index.html"), encoding="utf-8") as handle:
+        html = handle.read()
+    assert "voiceTextInput.addEventListener('keydown'" in html
+    assert "submitCommand" in html
+
+    with open(os.path.join("static", "app.js"), encoding="utf-8") as handle:
+        app_js = handle.read()
+    submit_start = app_js.index("async function submitCommand()")
+    submit_end = app_js.index("// ---------- VOICE ----------")
+    submit_block = app_js[submit_start:submit_end]
+    assert "sendStreamingInput(txt)" in submit_block
+
+
+def test_start_gate_is_removed_from_keyboard_order_after_language_choice():
+    with open(os.path.join("templates", "index.html"), encoding="utf-8") as handle:
+        html = handle.read()
+    assert "gate.setAttribute('hidden', '')" in html
+    assert "gate.setAttribute('aria-hidden', 'true')" in html
+    assert "btn.disabled = true; btn.tabIndex = -1" in html
+
+
+def test_microphone_denied_path_uses_visible_fallback_without_console_error():
+    with open(os.path.join("static", "app.js"), encoding="utf-8") as handle:
+        app_js = handle.read()
+    assert "console.error('Voice error:'" not in app_js
+    assert "Microphone access blocked" in app_js
+    assert "Keyboard shortcuts and the typed command box still work" in app_js
+    assert "VoiceEngine.VoiceInput.isActive()" in app_js
+
+
 def test_repeat_preserves_fuzzy_fallback_actions(client):
     first = client.post("/voice-command", json={"text": "copy code"})
     assert first.status_code == 200
@@ -968,6 +1005,9 @@ def test_missing_body_handled(client):
     ("delete line 4",               "delete_line",  lambda d: d.get("line") == 4),
     ("clear editor",                "clear_editor", lambda d: True),
     ("summarize this file",         "summarize",    lambda d: True),
+    ("read code",                   "narrate_file", lambda d: True),
+    ("read the code",               "narrate_file", lambda d: True),
+    ("explain structure",           "read_outline", lambda d: True),
     ("advise on code",              "advise",       lambda d: True),
     ("next step",                   "next_step",    lambda d: True),
     ("previous step",               "previous_step",lambda d: True),
@@ -1641,6 +1681,8 @@ def test_semantic_issues_in_response(client):
     ("set breakpoint at line 10",   "set_breakpoint",lambda s: s.get("line_number") == 10),
     ("watch variable counter",      "watch_variable",lambda s: s.get("variable") == "counter"),
     ("quiz me on variables",        "quiz_me",      lambda s: "variables" in s.get("topic", "")),
+    ("read code",                   "narrate_file", lambda s: True),
+    ("explain structure",           "read_outline", lambda s: True),
     ("run",                         "run",          lambda s: True),
     ("fix code",                    "fix",          lambda s: True),
     ("suggest next line",           "suggest_next", lambda s: True),
@@ -1851,6 +1893,35 @@ class TestCodeTempFile:
 
 
 class TestRunRateLimit:
+
+    @pytest.mark.timeout(30)
+    def test_flagship_demo_sequence_allows_more_than_ten_quick_runs(self, client):
+        app_module._run_timestamps.clear()
+        statuses = [
+            client.post("/run", json={"code": "print('demo run')"}).status_code
+            for _ in range(12)
+        ]
+        assert all(s == 200 for s in statuses), f"Flagship demo was throttled too early: {statuses}"
+
+    @pytest.mark.timeout(15)
+    def test_validation_errors_are_not_masked_by_rate_limit(self, client, monkeypatch):
+        app_module._run_timestamps.clear()
+        monkeypatch.setattr(app_module, "RUN_RATE_LIMIT", 2)
+
+        assert client.post("/run", json={"code": "print(1)"}).status_code == 200
+        assert client.post("/run", json={"code": "print(2)"}).status_code == 200
+
+        empty = client.post("/run", json={"code": ""})
+        assert empty.status_code == 400
+        assert empty.get_json()["error"] == "Code cannot be empty"
+
+        syntax = client.post("/run", json={"code": "for i in range(3):\nprint(i)"})
+        assert syntax.status_code == 200
+        assert syntax.get_json()["success"] is False
+        assert "IndentationError" in syntax.get_json()["error"]
+
+        throttled = client.post("/run", json={"code": "print(3)"})
+        assert throttled.status_code == 429
 
     @pytest.mark.timeout(30)
     def test_rate_limit_blocks_after_threshold(self, client):

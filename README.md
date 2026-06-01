@@ -308,7 +308,7 @@ User code runs in a separate Python subprocess with:
 
 The wall-clock timeout stops slow or sleeping programs. The POSIX CPU cap stops tight loops that burn processor time before wall-clock timeout would otherwise fire.
 
-Per-session rate limit: 10 runs per 60 seconds.
+Per-session rate limit: 30 runs per 60 seconds.
 
 ---
 

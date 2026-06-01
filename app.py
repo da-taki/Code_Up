@@ -1837,6 +1837,11 @@ def _run_with_trace_for_narration(code: str, watched_vars: set, session_id: str)
         return {"success": False, "narration": narration, "output": output_text,
                 "error": error_text, "steps": steps, "raw_trace": trace}
 
+    if proc.returncode not in (None, 0):
+        limit_message = "Execution timed out or exceeded a safe runtime limit."
+        return {"success": False, "narration": ["Starting execution.", limit_message],
+                "output": output_text, "error": limit_message, "steps": steps, "raw_trace": trace}
+
     narration.append("Starting execution.")
     step_count = 0
     MAX_NARRATION_STEPS = 200

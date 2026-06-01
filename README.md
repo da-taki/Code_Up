@@ -2,7 +2,7 @@
 
 [![Test](https://github.com/da-taki/Code_Up/actions/workflows/test.yml/badge.svg)](https://github.com/da-taki/Code_Up/actions/workflows/test.yml)
 
-CodeUp is a blind-first, audio-native Python learning and debugging environment that translates visual programming structure, runtime state and debugging history into spoken, navigable explanations. Students understand indentation and scope through audio code mapping, hear verified variable changes during execution, compare a broken attempt with a corrected program, and receive AI-assisted coaching grounded in deterministic program facts — all through voice commands, typed commands, or keyboard-driven interaction. Every core feature works offline without an API key.
+CodeUp is a blind-first, audio-native Python learning and debugging environment that translates visual programming structure, runtime state and debugging history into spoken, navigable explanations. Students understand indentation and scope through audio code mapping, hear verified variable changes during execution, compare a broken attempt with a corrected program, and receive AI-assisted coaching grounded in deterministic program facts through voice commands, typed commands, or keyboard-driven interaction. Audio Code Map, Step Narration and Mistake Replay retain deterministic fallback output without a cloud API key; AI coaching is optional.
 
 The project is independently developed and in active use at the **School for the Blind and Deaf, Patiala**, where coding sessions are conducted twice monthly.
 
@@ -22,11 +22,11 @@ Runs code within the existing sandboxed execution environment and narrates actua
 
 ### Mistake Replay
 
-Compares a recent failed attempt with a corrected successful run. Explains structural differences — such as moving an assignment inside a loop — and why behaviour changes. The comparison is built from deterministic diff and AST analysis, with optional AI rephrasing for beginner-friendliness.
+Compares a recent failed attempt with a corrected successful run. Explains structural differences, such as moving an assignment inside a loop, and why behaviour changes. The comparison is built from deterministic diff and AST analysis, with optional AI rephrasing for beginner-friendliness.
 
 ### AI-Assisted Coaching
 
-Groq (Llama 3.3 70B) enhances explanations for clarity and beginner-friendliness. Deterministic AST, trace and diff facts remain the source of truth — AI rephrases verified facts, never invents them. When cloud AI is unavailable, every feature falls back to its deterministic output. A local Ollama fallback is also supported.
+Groq (Llama 3.3 70B) enhances explanations for clarity and beginner-friendliness. Deterministic AST, trace and diff facts remain the source of truth; AI rephrases verified facts and never invents them. When cloud AI is unavailable, every feature falls back to its deterministic output. A local Ollama fallback is also supported.
 
 ### Accessibility-First Interaction
 
@@ -49,7 +49,7 @@ print(total)
 |------|---------|----------------------|
 | 1 | **Run** | Beginner-friendly explanation: the line after the loop must be indented with four spaces |
 | 2 | `give me a code map` | "Your code has a syntax error near line 3. Here is what I can tell from indentation alone." |
-| 3 | Fix indentation → `    total = total + i` | — |
+| 3 | Fix indentation → `    total = total + i` | Not applicable |
 | 4 | `watch total` | "Now watching total." |
 | 5 | `run with step narration` | "total becomes 0 … total changes to 1 … total changes to 3. Output: 3" |
 | 6 | `compare before and after` | "Line 3 was indented from 0 to 4 spaces, changing what block it belongs to." + explanation of why the fix works |
@@ -172,11 +172,11 @@ Tests are fully isolated. Snippet storage redirects to a temp directory and no r
 | Ruff lint | Clean |
 | JavaScript syntax checks | Clean |
 | Frontend build | Clean |
-| Audio Code Map (browser) | Verified — deterministic AST facts and AI-enhanced output |
-| Step Narration (browser) | Verified — correct traced variable values |
-| Mistake Replay (browser) | Verified — correct diff and indentation/scope explanation |
-| Groq-backed enhancement | Verified — AI rephrases without inventing facts |
-| Offline/deterministic fallback | Verified — all three features return correct deterministic output |
+| Audio Code Map (browser) | Verified: deterministic AST facts and AI-enhanced output |
+| Step Narration (browser) | Verified: correct traced variable values |
+| Mistake Replay (browser) | Verified: correct diff and indentation/scope explanation |
+| Groq-backed enhancement | Verified: AI rephrases without inventing facts |
+| Offline/deterministic fallback | Verified: all three features return correct deterministic output |
 | Secret/API-key scan | No leakage found in responses, console, or tracked files |
 
 > **Limitations not yet independently validated:** physical microphone capture for all new commands, NVDA/JAWS/VoiceOver screen reader testing of the new controls, and physical mobile-device accessibility.
@@ -195,7 +195,7 @@ CodeUp has been piloted with 10 users to date:
 - 3 users rated it between 7.5/10 and 8.5/10
 - Full anonymized pilot table: [docs/pilot-results.md](docs/pilot-results.md)
 
-The project is in active use at the **School for the Blind and Deaf, Patiala**, where it was formally adopted as a teaching tool.
+The project is in active use at the **School for the Blind and Deaf, Patiala**, where it is used in twice-monthly coding sessions.
 
 ### Evaluation metrics
 
@@ -288,7 +288,7 @@ Per-session rate limit: 30 runs per 60 seconds.
 
 ## Accessibility
 
-- Screen reader support via `aria-live` announcer (NVDA, JAWS, VoiceOver)
+- Screen-reader-oriented output through `aria-live` regions and keyboard-accessible controls; direct NVDA, JAWS and VoiceOver validation is still pending.
 - Color vision modes (Protanopia, Deuteranopia, Tritanopia)
 - High Contrast mode
 - Night Mode for low-light environments

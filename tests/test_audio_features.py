@@ -7,19 +7,18 @@ Tests for the three audio-native features:
 Tests cover deterministic analysis, intent parsing, API routes, edge cases,
 and command routing — all without requiring AI/Groq.
 """
-import os
 import pytest
 
-os.environ.setdefault("FLASK_TESTING", "true")
-os.environ.setdefault("GEMINI_ENABLED", "false")
-os.environ.setdefault("CODEUP_AI_ENABLED", "0")
-
-import app as app_module  # noqa: E402
-from intent_parser import IntentParser  # noqa: E402
+import app as app_module
+from intent_parser import IntentParser
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
+    monkeypatch.setenv("CODEUP_AI_ENABLED", "0")
+    monkeypatch.setenv("GEMINI_ENABLED", "false")
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     app_module.app.config["TESTING"] = True
     with app_module.app.test_client() as c:
         yield c

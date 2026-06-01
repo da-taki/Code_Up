@@ -246,6 +246,7 @@ class IntentParser:
     ]
     NARRATE_FILE_PATTERNS = [
         r"^narrate(?:\s+(?:the\s+)?(?:file|code|whole\s+file))?$",
+        r"^read\s+(?:me\s+)?(?:the\s+)?(?:file|code)$",
         r"^read\s+(?:the\s+)?(?:whole|entire|full)\s+(?:file|code)$",
         r"^read\s+(?:me\s+)?(?:the\s+)?(?:file|code)\s+(?:from\s+)?(?:start\s+to\s+(?:end|finish))?$",
         r"^(?:walk|talk)\s+(?:me\s+)?through\s+(?:the\s+)?(?:file|code)$",
@@ -544,6 +545,7 @@ class IntentParser:
 
     READ_OUTLINE_PATTERNS = [
         r"^(?:read|speak|say)\s+(?:the\s+)?(?:outline|structure)$",
+        r"^(?:explain|describe)\s+(?:the\s+)?(?:code\s+)?structure$",
         r"^(?:file|code)\s+outline$",
         r"^(?:à¤°à¥‚à¤ªà¤°à¥‡à¤–à¤¾|outline)\s+(?:à¤ªà¤¢à¤¼à¥‹|à¤¬à¥‹à¤²à¥‹)$",
     ]

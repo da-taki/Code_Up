@@ -19,7 +19,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from typing import Any, Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
-from flask import Flask, Response, g, has_request_context, jsonify, render_template, request, stream_with_context
+from flask import Flask, Response, g, has_request_context, jsonify, render_template, request, send_from_directory, stream_with_context
 from rapidfuzz import fuzz
 
 from intent_parser import parse_intent
@@ -380,7 +380,7 @@ MAX_MENTOR_CONTEXT_SIZE = 4_000
 
 # Per-session rate limiting for /run
 # Allows at most RUN_RATE_LIMIT executions per RUN_RATE_WINDOW seconds per session.
-RUN_RATE_LIMIT  = 10   # max runs
+RUN_RATE_LIMIT  = 30   # max runs
 RUN_RATE_WINDOW = 60   # per this many seconds
 _run_timestamps: dict = {}   # session_id -> list[float]
 _run_rate_lock = threading.Lock()
@@ -968,6 +968,14 @@ def landing():
 @app.route("/ide")
 def ide():
     return render_template('index.html')
+
+
+@app.route("/vs/<path:filename>")
+def monaco_vs_asset(filename):
+    return send_from_directory(
+        os.path.join(app.static_folder, "vendor", "monaco", "min", "vs"),
+        filename,
+    )
 
 
 @app.route("/healthz", methods=["GET"])
@@ -1935,12 +1943,6 @@ def run_code():
     # Sanitize: stringify, cap length per item and total count
     inputs = [str(x)[:1000] for x in inputs[:50]]
 
-    if not _check_run_rate_limit(get_session_id()):
-        return jsonify({
-            "success": False,
-            "error": f"Rate limit exceeded. Max {RUN_RATE_LIMIT} runs per {RUN_RATE_WINDOW} seconds."
-        }), 429
-
     if len(code) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
 
@@ -1962,6 +1964,12 @@ def run_code():
             "inputs_hint": None,
             "input_prompts": [],
         })
+
+    if not _check_run_rate_limit(get_session_id()):
+        return jsonify({
+            "success": False,
+            "error": f"Rate limit exceeded. Max {RUN_RATE_LIMIT} runs per {RUN_RATE_WINDOW} seconds."
+        }), 429
 
     # Heuristic: detect input() use without provided inputs and surface a
     # friendly hint up front. The subprocess will still raise the canonical

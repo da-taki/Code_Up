@@ -4,16 +4,13 @@ Covers: streaming endpoint, state transitions, interrupt behavior,
 language detection, and deduplication.
 """
 
-import json
 import os
 import sys
-import time
 
 import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-import app as app_module
 from app import app
 
 

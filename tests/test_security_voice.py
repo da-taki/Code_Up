@@ -1909,6 +1909,14 @@ class TestCodeTempFile:
         assert data["success"] is False
         assert data.get("error")
 
+    @pytest.mark.timeout(15)
+    def test_timeout_reports_timeout_not_generic_python_error(self, client):
+        res = client.post("/run", json={"code": "while True:\n    pass\n"})
+        data = res.get_json()
+        assert data["success"] is False
+        assert "timed out" in data.get("error", "").lower()
+        assert "execution complete" not in str(data).lower()
+
 
 
 class TestRunRateLimit:

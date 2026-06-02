@@ -20,6 +20,10 @@ Derives program structure from deterministic Python AST analysis. Students hear 
 
 Runs code within the existing sandboxed execution environment and narrates actual traced variable updates and output. Values are derived from execution traces, not guessed by AI. Students say `watch total` to focus narration on specific variables, then `run with step narration` to hear each change as it happens.
 
+### Conditional Audio Breakpoints
+
+Lets students pause narrated execution when a traced variable reaches a numeric condition, such as `pause when total becomes greater than 10` or `pause when score equals 6`. The pause explanation uses the stored trace value, `why did it pause` repeats the verified reason, and `continue execution` resumes from the stored trace.
+
 ### Mistake Replay
 
 Compares a recent failed attempt with a corrected successful run. Explains structural differences, such as moving an assignment inside a loop, and why behaviour changes. The comparison is built from deterministic diff and AST analysis, with optional AI rephrasing for beginner-friendliness.
@@ -67,7 +71,7 @@ Many natural variations work because the intent parser is grammar-based, not exa
 | Understand structure | `code map`, `give me a code map`, `what is inside the loop`, `what comes after the loop`, `how deeply nested am I`, `list my functions` |
 | Trace execution | `watch total`, `track score`, `clear watched variables`, `run with step narration`, `what changed in this step` |
 | Learn from mistakes | `compare before and after`, `replay my mistake`, `why does the fixed version work`, `show changed lines` |
-| Run and debug | `run`, `execute code`, `set breakpoint at line 10`, `watch variable x`, `continue`, `next step`, `previous step` |
+| Run and debug | `run`, `execute code`, `set breakpoint at line 10`, `pause when total becomes greater than 10`, `why did it pause`, `continue`, `next step`, `previous step` |
 | Navigate code | `go to line twenty five`, `read line three`, `find variable x`, `where am i` |
 | Audio features | `sonify block`, `tell the story`, `what's different` |
 | AI assistance | `fix`, `analyze`, `explain simply`, `generate code for fibonacci`, `learning mode`, `quiz me on loops` |
@@ -83,6 +87,7 @@ Hindi number words 0–100 are recognized in line-navigation commands.
 |-------|-----------|
 | **Structural analysis** | Python `ast` module parses code into loops, conditions, functions, assignments and nesting depth. Syntax errors fall back to indentation-based heuristics. |
 | **Runtime tracing** | Code runs in a sandboxed subprocess with a `sys.settrace` callback that records variable initializations, changes and function calls. Values come from actual execution, never AI. |
+| **Conditional audio breakpoints** | Session-scoped breakpoint rules compare traced variable values against numeric thresholds. Conditions reject arbitrary expressions and pause only on verified trace events. |
 | **Mistake Replay** | Session-scoped snapshots store the most recent failed and successful code. `difflib.SequenceMatcher` computes line-level changes; AST comparison identifies structural shifts like indentation scope changes. |
 | **AI coaching** | Groq rephrases deterministic facts into student-friendly spoken summaries. System prompts instruct the model not to invent structural facts or variable values. |
 | **Deterministic fallback** | When AI is unavailable (no key, network error, disabled), every feature returns its raw deterministic output. No feature depends on AI for correctness. |

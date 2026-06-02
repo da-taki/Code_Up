@@ -487,6 +487,21 @@ class IntentParser:
         r"break\s+(?:at\s+)?(?:line\s+)?([\w\s]+?)(?:\s*$|\s+(?:please|now))",
     ]
 
+    SET_AUDIO_BREAKPOINT_PATTERNS = [
+        r"^(?:pause|stop|break)(?:\s+execution)?\s+when\s+(.+)$",
+        r"^set\s+(?:a\s+)?conditional\s+(?:audio\s+)?breakpoint\s+when\s+(.+)$",
+    ]
+
+    LIST_AUDIO_BREAKPOINT_PATTERNS = [
+        r"^(?:list|show|read)\s+(?:conditional\s+)?(?:audio\s+)?breakpoints?$",
+    ]
+
+    WHY_AUDIO_BREAKPOINT_PATTERNS = [
+        r"^why\s+did\s+(?:it|execution|the\s+program)\s+pause$",
+        r"^why\s+am\s+i\s+paused$",
+        r"^explain\s+(?:the\s+)?(?:current\s+)?pause$",
+    ]
+
     CLEAR_BREAKPOINT_PATTERNS = [
         r"^(?:clear|remove|delete)\s+(?:all\s+)?breakpoints?$",
         r"^(?:breakpoints?\s+)?(?:clear|remove|delete)\s+(?:all\s+)?breakpoints?$",
@@ -962,6 +977,9 @@ class IntentParser:
             # Story mode
             "story_mode":          self.STORY_MODE_PATTERNS,
             # Breakpoint debugger
+            "set_audio_breakpoint": self.SET_AUDIO_BREAKPOINT_PATTERNS,
+            "list_audio_breakpoints": self.LIST_AUDIO_BREAKPOINT_PATTERNS,
+            "why_audio_breakpoint": self.WHY_AUDIO_BREAKPOINT_PATTERNS,
             "set_breakpoint":      self.SET_BREAKPOINT_PATTERNS,
             "clear_breakpoints":   self.CLEAR_BREAKPOINT_PATTERNS,
             "watch_variable":      self.WATCH_VARIABLE_PATTERNS,
@@ -1102,6 +1120,8 @@ class IntentParser:
                     continue
                 if intent == "set_breakpoint" and "line_number" not in slots:
                     continue
+                if intent == "set_audio_breakpoint" and "condition" not in slots:
+                    continue
                 if intent == "explain_concept" and "concept" not in slots:
                     continue
                 if intent == "set_inputs" and "values" not in slots:
@@ -1219,6 +1239,12 @@ class IntentParser:
                 num = self._word_to_number(raw)
                 if num is not None:
                     slots["line_number"] = num
+
+        elif intent == "set_audio_breakpoint":
+            if match.groups() and match.group(1):
+                condition = match.group(1).strip()
+                if condition:
+                    slots["condition"] = condition
 
         elif intent == "watch_variable":
             if match.groups() and match.group(1):

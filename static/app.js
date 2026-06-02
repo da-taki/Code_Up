@@ -2106,10 +2106,13 @@ async function handleConfirmedAction(action, payload) {
   else if (action === 'suggest_next')       await suggestNextLine();
   else if (action === 'choose_suggestion')  chooseSuggestion(payload && payload.choice);
   else if (action === 'story_mode')         await tellExecutionStory();
+  else if (action === 'set_audio_breakpoint') await requestAudioBreakpoint('add', payload && payload.condition);
+  else if (action === 'list_audio_breakpoints') await requestAudioBreakpoint('list');
+  else if (action === 'why_audio_breakpoint') await requestAudioBreakpoint('why');
   else if (action === 'set_breakpoint')     setBreakpoint(payload && payload.line_number);
-  else if (action === 'clear_breakpoints')  clearBreakpoints();
+  else if (action === 'clear_breakpoints')  { clearBreakpoints(); await requestAudioBreakpoint('clear'); }
   else if (action === 'watch_variable')     await requestWatchVariable(payload && payload.variable, 'add');
-  else if (action === 'debug_continue')     debugContinue();
+  else if (action === 'debug_continue')     await continueDebugging();
   else if (action === 'debug_step_in')      speak('Step in is not yet supported in sandbox mode.');
   else if (action === 'debug_step_out')     speak('Step out is not yet supported in sandbox mode.');
   else if (action === 'mentor_mode')        startMentorMode();
@@ -2767,6 +2770,33 @@ async function requestWatchVariable(variable, action) {
   }
 }
 
+// ---------- CONDITIONAL AUDIO BREAKPOINTS ----------
+async function requestAudioBreakpoint(action, condition, options) {
+  const opts = options || {};
+  try {
+    const body = { action: action || 'add' };
+    if (condition) body.condition = condition;
+    const res = await fetch('/audio-breakpoints', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    const msg = data.speech || data.error || 'Done.';
+    const inactive = data.active === false && data.success === false;
+    if (!(opts.silentInactive && inactive)) {
+      out(msg);
+      speak(msg);
+      srAnnounce(msg);
+    }
+    return data;
+  } catch (e) {
+    console.error(e);
+    if (!opts.silentErrors) speak('Could not update conditional breakpoint.');
+    return null;
+  }
+}
+
 // ---------- STEP NARRATION ----------
 async function requestStepNarration() {
   if (!ensurePythonEditorContent('step narration')) return;
@@ -2779,7 +2809,9 @@ async function requestStepNarration() {
     });
     const data = await res.json();
     if (data.output) { out(data.output); }
-    const narration = data.narration_text || data.speech || (data.narration || []).join(' ') || data.error || 'No narration available.';
+    const narration = data.paused
+      ? (data.speech || data.narration_text || (data.narration || []).join(' '))
+      : (data.narration_text || data.speech || (data.narration || []).join(' ') || data.error || 'No narration available.');
     out(narration);
     speak(narration);
     srAnnounce('Step narration complete');
@@ -4492,6 +4524,15 @@ function watchVariable(varName) {
   speak(`Now watching variable ${varName}. I will report its value at each breakpoint.`);
   srAnnounce(`Watching ${varName}`);
   out(`Watched variables: ${Array.from(_watchedVars).join(', ')}`);
+}
+
+async function continueDebugging() {
+  const data = await requestAudioBreakpoint('continue', null, {
+    silentInactive: true,
+    silentErrors: true,
+  });
+  if (data && data.success && data.continued) return;
+  debugContinue();
 }
 
 function debugContinue() {

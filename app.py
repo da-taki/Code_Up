@@ -322,6 +322,8 @@ def _make_session_storage():
         'trace_timestamp': now,
         'trace_duration_ms': 0,
         'last_voice_action': None,
+        'audio_breakpoints': [],
+        'audio_breakpoint_pause': None,
         'created_at': now,
         'last_accessed': now,
     }
@@ -371,6 +373,7 @@ MAX_API_KEY_SIZE = 8_000
 MAX_VOICE_TEXT_SIZE = 2_000
 MAX_LEARNING_TOPIC_SIZE = 500
 MAX_NARRATION_OUTPUT_SIZE = 4_000
+MAX_AUDIO_BREAKPOINTS = 10
 try:
     DEFAULT_AI_MAX_TOKENS = int(os.environ.get("GROQ_MAX_TOKENS", "2048"))
 except (TypeError, ValueError):
@@ -1968,6 +1971,430 @@ def _run_with_trace_for_narration(code: str, watched_vars: set, session_id: str)
             "error": "", "steps": steps, "raw_trace": trace}
 
 
+_AUDIO_BREAKPOINT_VAR_RE = re.compile(r'^[A-Za-z_]\w*$')
+_AUDIO_BREAKPOINT_NUM_RE = r'[-+]?\d+(?:\.\d+)?'
+_AUDIO_BREAKPOINT_OPERATORS = {">", "<", "==", ">=", "<="}
+_AUDIO_BREAKPOINT_OPERATOR_LABELS = {
+    ">": "greater than",
+    "<": "less than",
+    "==": "equal to",
+    ">=": "greater than or equal to",
+    "<=": "less than or equal to",
+}
+_AUDIO_BREAKPOINT_PHRASES = {
+    "greater than or equal to": ">=",
+    "at least": ">=",
+    "less than or equal to": "<=",
+    "at most": "<=",
+    "greater than": ">",
+    "more than": ">",
+    "above": ">",
+    "less than": "<",
+    "below": "<",
+}
+
+
+def _format_audio_number(value: Any) -> str:
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
+def _coerce_audio_number(value: Any) -> Optional[float]:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        number = value
+    elif isinstance(value, str):
+        text = value.strip()
+        if not re.fullmatch(_AUDIO_BREAKPOINT_NUM_RE, text):
+            return None
+        try:
+            number = ast.literal_eval(text)
+        except (SyntaxError, ValueError):
+            return None
+    else:
+        return None
+    if isinstance(number, bool) or not isinstance(number, (int, float)):
+        return None
+    if number != number or number in (float("inf"), float("-inf")):
+        return None
+    return int(number) if isinstance(number, float) and number.is_integer() else number
+
+
+def _normalize_audio_breakpoint_text(text: str) -> str:
+    cleaned = _safe_text(text, limit=MAX_VOICE_TEXT_SIZE).strip()
+    cleaned = re.sub(r'^(?:please\s+)?(?:pause|stop|break)(?:\s+execution)?\s+when\s+', '', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+    return cleaned.rstrip(".?! ")
+
+
+def _parse_audio_breakpoint_condition(text: str) -> Optional[Dict[str, Any]]:
+    condition = _normalize_audio_breakpoint_text(text)
+    if not condition:
+        return None
+    var = r'(?P<variable>[A-Za-z_]\w*)'
+    num = rf'(?P<threshold>{_AUDIO_BREAKPOINT_NUM_RE})'
+    phrase = (
+        r'(?P<phrase>greater than or equal to|less than or equal to|'
+        r'greater than|more than|less than|at least|at most|above|below)'
+    )
+    patterns = [
+        rf'^{var}\s*(?P<operator>>=|<=|==|>|<)\s*{num}$',
+        rf'^{var}\s+(?:becomes|gets|goes|is|turns)\s+{phrase}\s+{num}$',
+        rf'^{var}\s+{phrase}\s+{num}$',
+        rf'^{var}\s+(?:equals|is equal to|is|becomes|reaches)\s+{num}$',
+    ]
+    for pattern in patterns:
+        match = re.fullmatch(pattern, condition, flags=re.IGNORECASE)
+        if not match:
+            continue
+        slots = match.groupdict()
+        operator = slots.get("operator")
+        if not operator:
+            phrase_text = (slots.get("phrase") or "").lower()
+            operator = _AUDIO_BREAKPOINT_PHRASES.get(phrase_text, "==")
+        threshold = _coerce_audio_number(slots.get("threshold"))
+        variable = slots.get("variable", "")
+        if not variable or threshold is None:
+            return None
+        return _build_audio_breakpoint(variable, operator, threshold, condition)
+    return None
+
+
+def _build_audio_breakpoint(variable: Any, operator: Any, threshold: Any, source: str = "") -> Optional[Dict[str, Any]]:
+    variable = _safe_text(variable, limit=80).strip()
+    operator = _safe_text(operator, limit=4).strip()
+    threshold_number = _coerce_audio_number(threshold)
+    if not _AUDIO_BREAKPOINT_VAR_RE.fullmatch(variable):
+        return None
+    if operator not in _AUDIO_BREAKPOINT_OPERATORS or threshold_number is None:
+        return None
+    return {
+        "id": uuid.uuid4().hex[:12],
+        "variable": variable,
+        "operator": operator,
+        "threshold": threshold_number,
+        "source": source or _audio_breakpoint_label(variable, operator, threshold_number),
+    }
+
+
+def _audio_breakpoint_label(variable: Any, operator: Any, threshold: Any) -> str:
+    op_label = _AUDIO_BREAKPOINT_OPERATOR_LABELS.get(str(operator), str(operator))
+    return f"{variable} {op_label} {_format_audio_number(threshold)}"
+
+
+def _numeric_from_trace_repr(text: str) -> Optional[float]:
+    try:
+        value = ast.literal_eval(text.strip())
+    except (SyntaxError, ValueError):
+        return None
+    return _coerce_audio_number(value)
+
+
+def _parse_audio_trace_change(change: str) -> Optional[Dict[str, Any]]:
+    initialized = re.fullmatch(r'([A-Za-z_]\w*) initialized to (.+)', change)
+    if initialized:
+        current_text = initialized.group(2)
+        current = _numeric_from_trace_repr(current_text)
+        if current is None:
+            return None
+        return {
+            "variable": initialized.group(1),
+            "previous": None,
+            "current": current,
+            "previous_display": None,
+            "current_display": _format_audio_number(current),
+            "change": change,
+        }
+    changed = re.fullmatch(r'([A-Za-z_]\w*) changed from (.+) to (.+)', change)
+    if changed:
+        previous = _numeric_from_trace_repr(changed.group(2))
+        current = _numeric_from_trace_repr(changed.group(3))
+        if current is None:
+            return None
+        return {
+            "variable": changed.group(1),
+            "previous": previous,
+            "current": current,
+            "previous_display": _format_audio_number(previous) if previous is not None else None,
+            "current_display": _format_audio_number(current),
+            "change": change,
+        }
+    return None
+
+
+def _audio_breakpoint_matches(current: float, operator: str, threshold: float) -> bool:
+    if operator == ">":
+        return current > threshold
+    if operator == "<":
+        return current < threshold
+    if operator == "==":
+        return current == threshold
+    if operator == ">=":
+        return current >= threshold
+    if operator == "<=":
+        return current <= threshold
+    return False
+
+
+def _find_audio_breakpoint_pause(trace: List[Dict[str, Any]], breakpoints: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    context_values: Dict[str, str] = {}
+    for idx, event in enumerate(trace or []):
+        if event.get("type") != "state_change":
+            continue
+        for change_str in event.get("changes", []) or []:
+            change = _parse_audio_trace_change(change_str)
+            if not change:
+                continue
+            context_values[change["variable"]] = change["current_display"]
+            for breakpoint in breakpoints:
+                if change["variable"] != breakpoint.get("variable"):
+                    continue
+                threshold = breakpoint.get("threshold")
+                operator = breakpoint.get("operator")
+                if _audio_breakpoint_matches(change["current"], operator, threshold):
+                    return {
+                        "breakpoint": breakpoint,
+                        "event_index": idx,
+                        "resume_index": idx + 1,
+                        "line": event.get("line"),
+                        "change": change,
+                        "context": dict(context_values),
+                    }
+    return None
+
+
+def _trace_slice_to_narration(
+    trace: List[Dict[str, Any]],
+    watched_vars: Optional[set] = None,
+    start_index: int = 0,
+    end_index: Optional[int] = None,
+    output_text: str = "",
+    include_start: bool = False,
+    include_complete: bool = False,
+) -> List[str]:
+    narration: List[str] = []
+    watched = watched_vars or set()
+    if include_start:
+        narration.append("Starting execution.")
+    step_count = 0
+    for idx, event in enumerate(trace or []):
+        if idx < start_index:
+            continue
+        if end_index is not None and idx > end_index:
+            break
+        if step_count >= 200:
+            narration.append("Narration capped at 200 steps. The program continued beyond this point.")
+            break
+        etype = event.get("type")
+        if etype == "state_change":
+            for change_str in event.get("changes", []) or []:
+                parts = change_str.split(" ", 1)
+                var_name = parts[0] if parts else ""
+                if watched and var_name not in watched:
+                    continue
+                if "initialized to" in change_str:
+                    narration.append(f"{var_name} becomes {change_str.split('initialized to ')[-1]}.")
+                elif "changed from" in change_str:
+                    old_new = change_str.split("changed from ")[-1]
+                    narration.append(f"{var_name} changes to {old_new.split(' to ')[-1] if ' to ' in old_new else old_new}.")
+                elif "remains" in change_str:
+                    narration.append(f"{var_name} remains the same.")
+                else:
+                    narration.append(change_str + ".")
+                step_count += 1
+        elif etype == "call":
+            func = event.get("function", "?")
+            if func != "<module>":
+                narration.append(f"Entering function {func}.")
+                step_count += 1
+        elif etype == "return":
+            val = event.get("value", "")
+            if val and val != "None":
+                narration.append(f"Returned {val}.")
+                step_count += 1
+        elif etype == "overflow":
+            narration.append("Trace limit reached. The program may have more steps.")
+            break
+    if output_text:
+        narration.append(f"Output: {output_text[:500]}")
+    if include_complete:
+        narration.append("Execution complete.")
+    return narration
+
+
+def _audio_breakpoint_pause_message(pause: Dict[str, Any]) -> str:
+    breakpoint = pause.get("breakpoint", {})
+    change = pause.get("change", {})
+    variable = change.get("variable", "")
+    context = pause.get("context", {}) or {}
+    context_parts = [
+        f"{name} is {value}"
+        for name, value in context.items()
+        if name != variable
+    ][:3]
+    if change.get("previous_display") is None:
+        change_phrase = f"{variable} became {change.get('current_display')}"
+    else:
+        change_phrase = (
+            f"{variable} changed from {change.get('previous_display')} "
+            f"to {change.get('current_display')}"
+        )
+    prefix = ""
+    if context_parts:
+        prefix = ", ".join(context_parts) + " and "
+    return (
+        f"Paused because {prefix}{change_phrase}, satisfying your breakpoint: "
+        f"{_audio_breakpoint_label(breakpoint.get('variable'), breakpoint.get('operator'), breakpoint.get('threshold'))}."
+    )
+
+
+def _get_audio_breakpoint_state(session_id: str) -> Dict[str, Any]:
+    with _session_traces_lock:
+        if session_id not in _session_traces:
+            _session_traces[session_id] = _make_session_storage()
+        storage = _session_traces[session_id]
+        storage["last_accessed"] = time.time()
+        storage.setdefault("audio_breakpoints", [])
+        storage.setdefault("audio_breakpoint_pause", None)
+        return {
+            "breakpoints": list(storage["audio_breakpoints"]),
+            "pause": storage.get("audio_breakpoint_pause"),
+            "trace": list(storage.get("last_trace", []) or []),
+        }
+
+
+def _store_audio_breakpoint_pause(session_id: str, pause: Dict[str, Any]) -> None:
+    with _session_traces_lock:
+        if session_id not in _session_traces:
+            _session_traces[session_id] = _make_session_storage()
+        storage = _session_traces[session_id]
+        storage["audio_breakpoint_pause"] = pause
+        storage["last_accessed"] = time.time()
+
+
+def _clear_audio_breakpoint_pause(session_id: str) -> None:
+    with _session_traces_lock:
+        storage = _session_traces.get(session_id)
+        if storage:
+            storage["audio_breakpoint_pause"] = None
+            storage["last_accessed"] = time.time()
+
+
+def _continue_audio_breakpoint(session_id: str) -> Dict[str, Any]:
+    with _session_traces_lock:
+        storage = _session_traces.get(session_id)
+        if not storage or not storage.get("audio_breakpoint_pause"):
+            msg = "No active conditional audio breakpoint pause."
+            return {"success": False, "active": False, "speech": msg, "auto_speak": True}
+        pause = storage.get("audio_breakpoint_pause") or {}
+        trace = list(storage.get("last_trace", []) or [])
+        storage["audio_breakpoint_pause"] = None
+        storage["last_accessed"] = time.time()
+
+    output_text = pause.get("output", "")
+    start_index = int(pause.get("resume_index", 0))
+    narration = _trace_slice_to_narration(
+        trace,
+        start_index=start_index,
+        output_text=output_text,
+        include_complete=True,
+    )
+    if not narration:
+        narration = ["Execution complete."]
+    speech = "Continuing from the audio breakpoint. " + " ".join(narration[:50])
+    return {
+        "success": True,
+        "active": False,
+        "continued": True,
+        "narration": narration,
+        "narration_text": speech,
+        "output": output_text,
+        "speech": speech,
+        "auto_speak": True,
+    }
+
+
+@app.route("/audio-breakpoints", methods=["POST"])
+def audio_breakpoints_route():
+    body = safejson()
+    action = _safe_text(body.get("action", "add"), limit=40).strip().lower() or "add"
+    session_id = get_session_id()
+
+    if action in {"list", "show"}:
+        state = _get_audio_breakpoint_state(session_id)
+        breakpoints = state["breakpoints"]
+        if not breakpoints:
+            msg = "No conditional audio breakpoints are set."
+        else:
+            labels = [
+                _audio_breakpoint_label(bp["variable"], bp["operator"], bp["threshold"])
+                for bp in breakpoints
+            ]
+            msg = "Conditional audio breakpoints: " + "; ".join(labels) + "."
+        return jsonify({"success": True, "breakpoints": breakpoints, "speech": msg, "auto_speak": True})
+
+    if action in {"clear", "remove", "delete"}:
+        with _session_traces_lock:
+            if session_id not in _session_traces:
+                _session_traces[session_id] = _make_session_storage()
+            storage = _session_traces[session_id]
+            storage["audio_breakpoints"] = []
+            storage["audio_breakpoint_pause"] = None
+            storage["last_accessed"] = time.time()
+        msg = "Cleared all conditional audio breakpoints."
+        return jsonify({"success": True, "breakpoints": [], "speech": msg, "auto_speak": True})
+
+    if action in {"why", "why_pause", "why_paused"}:
+        state = _get_audio_breakpoint_state(session_id)
+        pause = state.get("pause")
+        if not pause:
+            msg = "There is no active conditional audio breakpoint pause to explain."
+            return jsonify({"success": False, "active": False, "speech": msg, "auto_speak": True})
+        msg = _audio_breakpoint_pause_message(pause)
+        return jsonify({"success": True, "active": True, "speech": msg, "auto_speak": True, "pause": pause})
+
+    if action in {"continue", "resume"}:
+        return jsonify(_continue_audio_breakpoint(session_id))
+
+    if action != "add":
+        return jsonify({"success": False, "error": "Unknown audio breakpoint action."}), 400
+
+    breakpoint = None
+    if body.get("variable") is not None or body.get("operator") is not None or body.get("threshold") is not None:
+        breakpoint = _build_audio_breakpoint(body.get("variable"), body.get("operator"), body.get("threshold"))
+    if breakpoint is None:
+        command = body.get("condition") or body.get("text") or body.get("command") or ""
+        breakpoint = _parse_audio_breakpoint_condition(command)
+    if breakpoint is None:
+        msg = "I can set conditional breakpoints like: pause when total becomes greater than 10."
+        return jsonify({"success": False, "error": "Invalid conditional audio breakpoint.", "speech": msg, "auto_speak": True}), 400
+
+    with _session_traces_lock:
+        if session_id not in _session_traces:
+            _session_traces[session_id] = _make_session_storage()
+        storage = _session_traces[session_id]
+        breakpoints = list(storage.get("audio_breakpoints", []))
+        if len(breakpoints) >= MAX_AUDIO_BREAKPOINTS:
+            msg = f"Conditional audio breakpoints are limited to {MAX_AUDIO_BREAKPOINTS}. Clear one before adding another."
+            return jsonify({"success": False, "error": msg, "speech": msg, "auto_speak": True}), 400
+        breakpoints.append(breakpoint)
+        storage["audio_breakpoints"] = breakpoints
+        storage["audio_breakpoint_pause"] = None
+        storage["last_accessed"] = time.time()
+
+    label = _audio_breakpoint_label(breakpoint["variable"], breakpoint["operator"], breakpoint["threshold"])
+    msg = f"Conditional audio breakpoint set: {label}."
+    return jsonify({
+        "success": True,
+        "breakpoint": breakpoint,
+        "breakpoints": breakpoints,
+        "speech": msg,
+        "auto_speak": True,
+    })
+
+
 @app.route("/step-narration", methods=["POST"])
 def step_narration():
     """Run code with step narration, reporting variable changes."""
@@ -1983,16 +2410,18 @@ def step_narration():
     if blocked:
         return blocked
 
+    session_id = get_session_id()
+    _clear_audio_breakpoint_pause(session_id)
+
     try:
         compile(code, "<user>", "exec")
     except SyntaxError as e:
         msg = _syntax_error_message(e, code)
         return jsonify({"success": False, "error": msg, "narration": [msg]})
 
-    if not _check_run_rate_limit(get_session_id()):
+    if not _check_run_rate_limit(session_id):
         return jsonify({"success": False, "error": "Rate limit exceeded"}), 429
 
-    session_id = get_session_id()
     with _watched_vars_lock:
         watched = set(_watched_vars.get(session_id, set()))
 
@@ -2001,6 +2430,35 @@ def step_narration():
     # Save trace for step navigation
     if result.get("raw_trace"):
         save_execution_trace(result["raw_trace"])
+
+    if result["success"]:
+        state = _get_audio_breakpoint_state(session_id)
+        pause = _find_audio_breakpoint_pause(result.get("raw_trace", []), state["breakpoints"])
+        if pause:
+            pause["output"] = result.get("output", "")
+            _store_audio_breakpoint_pause(session_id, pause)
+            pause_msg = _audio_breakpoint_pause_message(pause)
+            paused_narration = _trace_slice_to_narration(
+                result.get("raw_trace", []),
+                watched_vars=watched,
+                start_index=0,
+                end_index=pause["event_index"],
+                include_start=True,
+            )
+            paused_narration.append(pause_msg)
+            narration_text = " ".join(paused_narration[:50])
+            return jsonify({
+                "success": True,
+                "paused": True,
+                "pause": pause,
+                "narration": paused_narration,
+                "narration_text": narration_text,
+                "output": "",
+                "error": "",
+                "step_count": len(paused_narration),
+                "speech": pause_msg,
+                "auto_speak": True,
+            })
 
     # Build spoken narration
     narration_text = " ".join(result["narration"][:50])
@@ -4552,6 +5010,12 @@ def voice():
             return _store_and_return({"success": True, "action": "help", "confidence": confidence})
         if intent == "more_help":
             return _store_and_return({"success": True, "action": "more_help", "confidence": confidence})
+        if intent == "set_audio_breakpoint":
+            return _store_and_return({"success": True, "action": "set_audio_breakpoint", "condition": slots.get("condition", ""), "confidence": confidence})
+        if intent == "list_audio_breakpoints":
+            return _store_and_return({"success": True, "action": "list_audio_breakpoints", "confidence": confidence})
+        if intent == "why_audio_breakpoint":
+            return _store_and_return({"success": True, "action": "why_audio_breakpoint", "confidence": confidence})
         if intent == "set_breakpoint":
             return _store_and_return({"success": True, "action": "set_breakpoint", "line_number": slots.get("line_number", 1), "confidence": confidence})
         if intent == "clear_breakpoints":

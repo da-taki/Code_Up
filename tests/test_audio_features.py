@@ -282,6 +282,147 @@ class TestStepNarration:
         assert data["success"] is True
 
 
+class TestConditionalAudioBreakpoints:
+
+    def test_add_pause_why_and_continue_from_trace(self, client):
+        client.set_cookie(app_module.SESSION_COOKIE_NAME, "audio-bp-main")
+        resp = client.post("/audio-breakpoints", json={
+            "action": "add",
+            "condition": "total becomes greater than 10",
+        })
+        data = resp.get_json()
+        assert data["success"] is True
+        assert data["breakpoint"]["variable"] == "total"
+        assert data["breakpoint"]["operator"] == ">"
+        assert data["breakpoint"]["threshold"] == 10
+
+        code = "total = 0\nfor i in range(10):\n    total = total + i\nprint(total)\n"
+        resp = client.post("/step-narration", json={"code": code})
+        data = resp.get_json()
+        assert data["success"] is True
+        assert data["paused"] is True
+        assert data["output"] == ""
+        assert data["pause"]["change"]["previous_display"] == "10"
+        assert data["pause"]["change"]["current_display"] == "15"
+        speech = data["speech"].lower()
+        assert "i is 5" in speech
+        assert "total changed from 10 to 15" in speech
+
+        why = client.post("/audio-breakpoints", json={"action": "why"}).get_json()
+        assert why["success"] is True
+        assert "total changed from 10 to 15" in why["speech"].lower()
+
+        continued = client.post("/audio-breakpoints", json={"action": "continue"}).get_json()
+        assert continued["success"] is True
+        assert continued["continued"] is True
+        assert continued["output"] == "45"
+        assert "Output: 45" in continued["narration_text"]
+        assert "Execution complete" in continued["narration_text"]
+
+    def test_no_match_uses_normal_step_narration(self, client):
+        client.set_cookie(app_module.SESSION_COOKIE_NAME, "audio-bp-no-match")
+        client.post("/audio-breakpoints", json={
+            "action": "add",
+            "condition": "total greater than 100",
+        })
+        code = "total = 0\nfor i in range(3):\n    total = total + i\nprint(total)\n"
+        data = client.post("/step-narration", json={"code": code}).get_json()
+        assert data["success"] is True
+        assert data.get("paused") is not True
+        assert data["output"] == "3"
+        assert any("Execution complete" in step for step in data["narration"])
+
+    def test_new_run_clears_stale_pause_state(self, client):
+        client.set_cookie(app_module.SESSION_COOKIE_NAME, "audio-bp-stale")
+        client.post("/audio-breakpoints", json={
+            "action": "add",
+            "condition": "total greater than 10",
+        })
+        hit_code = "total = 0\nfor i in range(10):\n    total = total + i\nprint(total)\n"
+        paused = client.post("/step-narration", json={"code": hit_code}).get_json()
+        assert paused["paused"] is True
+
+        miss_code = "total = 0\nfor i in range(3):\n    total = total + i\nprint(total)\n"
+        missed = client.post("/step-narration", json={"code": miss_code}).get_json()
+        assert missed.get("paused") is not True
+        why = client.post("/audio-breakpoints", json={"action": "why"}).get_json()
+        assert why["success"] is False
+        assert why["active"] is False
+
+    def test_equals_breakpoint_pauses_on_actual_value(self, client):
+        client.set_cookie(app_module.SESSION_COOKIE_NAME, "audio-bp-equals")
+        client.post("/audio-breakpoints", json={
+            "action": "add",
+            "condition": "score equals 6",
+        })
+        code = (
+            "score = 0\n"
+            "for number in range(5):\n"
+            "    if number % 2 == 0:\n"
+            "        score = score + number\n"
+            "print(score)\n"
+        )
+        data = client.post("/step-narration", json={"code": code}).get_json()
+        assert data["success"] is True
+        assert data["paused"] is True
+        assert data["pause"]["change"]["variable"] == "score"
+        assert data["pause"]["change"]["current_display"] == "6"
+        assert "score changed" in data["speech"].lower()
+
+    def test_list_clear_and_session_isolation(self, client):
+        client.set_cookie(app_module.SESSION_COOKIE_NAME, "audio-bp-one")
+        client.post("/audio-breakpoints", json={
+            "action": "add",
+            "condition": "total > 10",
+        })
+        listed = client.post("/audio-breakpoints", json={"action": "list"}).get_json()
+        assert listed["success"] is True
+        assert len(listed["breakpoints"]) == 1
+
+        client.set_cookie(app_module.SESSION_COOKIE_NAME, "audio-bp-two")
+        other = client.post("/audio-breakpoints", json={"action": "list"}).get_json()
+        assert other["breakpoints"] == []
+
+        client.set_cookie(app_module.SESSION_COOKIE_NAME, "audio-bp-one")
+        cleared = client.post("/audio-breakpoints", json={"action": "clear"}).get_json()
+        assert cleared["success"] is True
+        listed = client.post("/audio-breakpoints", json={"action": "list"}).get_json()
+        assert listed["breakpoints"] == []
+
+    def test_rejects_unsafe_or_unsupported_conditions(self, client):
+        client.set_cookie(app_module.SESSION_COOKIE_NAME, "audio-bp-invalid")
+        unsafe = client.post("/audio-breakpoints", json={
+            "action": "add",
+            "condition": "total > __import__('os')",
+        })
+        assert unsafe.status_code == 400
+        dotted = client.post("/audio-breakpoints", json={
+            "action": "add",
+            "variable": "total.value",
+            "operator": ">",
+            "threshold": 10,
+        })
+        assert dotted.status_code == 400
+
+    def test_breakpoint_limit_is_bounded(self, client):
+        client.set_cookie(app_module.SESSION_COOKIE_NAME, "audio-bp-limit")
+        for idx in range(app_module.MAX_AUDIO_BREAKPOINTS):
+            resp = client.post("/audio-breakpoints", json={
+                "action": "add",
+                "variable": f"v{idx}",
+                "operator": ">",
+                "threshold": idx,
+            })
+            assert resp.status_code == 200
+        overflow = client.post("/audio-breakpoints", json={
+            "action": "add",
+            "variable": "too_many",
+            "operator": ">",
+            "threshold": 99,
+        })
+        assert overflow.status_code == 400
+
+
 # =====================================================================
 # MISTAKE REPLAY / BEFORE-VS-AFTER
 # =====================================================================
@@ -417,6 +558,30 @@ class TestWatchIntents:
         assert result["intent"] == expected_intent, f"'{text}' -> {result['intent']} (expected {expected_intent})"
 
 
+class TestConditionalBreakpointIntents:
+
+    @pytest.mark.parametrize("text,expected_condition", [
+        ("pause when total becomes greater than 10", "total becomes greater than 10"),
+        ("stop when score equals 6", "score equals 6"),
+        ("break when i reaches 3", "i reaches 3"),
+        ("set a conditional breakpoint when total <= 20", "total <= 20"),
+    ])
+    def test_set_audio_breakpoint_intents(self, parser, text, expected_condition):
+        result = parser.parse(text)
+        assert result["intent"] == "set_audio_breakpoint"
+        assert result["slots"]["condition"] == expected_condition
+
+    @pytest.mark.parametrize("text,expected_intent", [
+        ("list breakpoints", "list_audio_breakpoints"),
+        ("show conditional audio breakpoints", "list_audio_breakpoints"),
+        ("why did it pause", "why_audio_breakpoint"),
+        ("explain the pause", "why_audio_breakpoint"),
+    ])
+    def test_audio_breakpoint_control_intents(self, parser, text, expected_intent):
+        result = parser.parse(text)
+        assert result["intent"] == expected_intent
+
+
 class TestMistakeReplayIntents:
 
     @pytest.mark.parametrize("text,expected_intent", [
@@ -498,6 +663,22 @@ class TestVoiceCommandRouting:
         resp = client.post("/voice-command", json={"text": "why does the fixed version work"})
         data = resp.get_json()
         assert data["action"] == "why_fixed_works"
+
+    def test_set_audio_breakpoint_voice(self, client):
+        resp = client.post("/voice-command", json={"text": "pause when total becomes greater than 10"})
+        data = resp.get_json()
+        assert data["action"] == "set_audio_breakpoint"
+        assert data["condition"] == "total becomes greater than 10"
+
+    def test_list_audio_breakpoints_voice(self, client):
+        resp = client.post("/voice-command", json={"text": "list breakpoints"})
+        data = resp.get_json()
+        assert data["action"] == "list_audio_breakpoints"
+
+    def test_why_audio_breakpoint_voice(self, client):
+        resp = client.post("/voice-command", json={"text": "why did it pause"})
+        data = resp.get_json()
+        assert data["action"] == "why_audio_breakpoint"
 
 
 # =====================================================================

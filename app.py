@@ -370,6 +370,7 @@ MAX_GEMINI_TIMEOUT = 30       # 30 second timeout for LLM calls
 MAX_API_KEY_SIZE = 8_000
 MAX_VOICE_TEXT_SIZE = 2_000
 MAX_LEARNING_TOPIC_SIZE = 500
+MAX_NARRATION_OUTPUT_SIZE = 4_000
 try:
     DEFAULT_AI_MAX_TOKENS = int(os.environ.get("GROQ_MAX_TOKENS", "2048"))
 except (TypeError, ValueError):
@@ -1183,7 +1184,11 @@ def _extract_error_summary(error_text: str) -> Tuple[Optional[int], str, str]:
     for match in re.finditer(r'File\s+"<user>",\s+line\s+(\d+)', safe_text):
         line_no = int(match.group(1))
     if line_no is None:
-        match = re.search(r'\bline\s+(\d+)\b', safe_text, flags=re.IGNORECASE)
+        non_frame_text = "\n".join(
+            line for line in safe_text.splitlines()
+            if not line.strip().startswith("File ")
+        )
+        match = re.search(r'\bline\s+(\d+)\b', non_frame_text, flags=re.IGNORECASE)
         if match:
             line_no = int(match.group(1))
 
@@ -1198,10 +1203,29 @@ def _extract_error_summary(error_text: str) -> Tuple[Optional[int], str, str]:
 
 def user_facing_error(error_text: str) -> str:
     """Return concise error text for students, never internal traceback frames."""
+    safe_text = sanitize_traceback(error_text)
+    timeout_match = re.search(r'Execution timed out after\s+([0-9.]+)s', safe_text, flags=re.IGNORECASE)
+    if timeout_match:
+        return f"Execution timed out after {timeout_match.group(1)} seconds."
+    if re.search(r'\b(?:timed out|timeout)\b', safe_text, flags=re.IGNORECASE):
+        return "Execution timed out before it could finish."
+    if re.search(r'\b(?:resource limit|memory limit|cpu limit|killed)\b', safe_text, flags=re.IGNORECASE):
+        return "Execution stopped because it exceeded a safe runtime or resource limit."
     line_no, err_type, message = _extract_error_summary(error_text)
     prefix = f"Line {line_no}: " if line_no else ""
     message = sanitize_traceback(message).strip() or "Python could not run this code."
     return f"{prefix}{err_type}: {message}"
+
+
+def _bounded_narration_output(output_text: str) -> str:
+    text = str(output_text or "")
+    if len(text) <= MAX_NARRATION_OUTPUT_SIZE:
+        return text
+    omitted = len(text) - MAX_NARRATION_OUTPUT_SIZE
+    return (
+        text[:MAX_NARRATION_OUTPUT_SIZE]
+        + f"\n[Output truncated after {MAX_NARRATION_OUTPUT_SIZE} characters; {omitted} more characters omitted.]"
+    )
 
 
 def _local_error_explanation(code: str, err_text: str, language: str = "en", beginner: bool = False) -> str:
@@ -1450,6 +1474,39 @@ def _ast_block_children(node):
     return children
 
 
+def _assignment_target_names(node: ast.AST) -> List[str]:
+    targets = []
+    if isinstance(node, ast.Assign):
+        candidate_targets = node.targets
+    elif isinstance(node, ast.AnnAssign):
+        candidate_targets = [node.target]
+    elif isinstance(node, ast.AugAssign):
+        candidate_targets = [node.target]
+    else:
+        candidate_targets = []
+    for target in candidate_targets:
+        if isinstance(target, ast.Name):
+            targets.append(target.id)
+    return targets
+
+
+def _condition_body_summary(node: ast.If) -> str:
+    nested_parts = []
+    for child in node.body:
+        names = _assignment_target_names(child)
+        if names:
+            nested_parts.append(f"an assignment to {', '.join(names)} on line {child.lineno}")
+        elif isinstance(child, ast.Expr) and isinstance(getattr(child, 'value', None), ast.Call):
+            call = child.value
+            if isinstance(call.func, ast.Name) and call.func.id == 'print':
+                nested_parts.append(f"a print on line {child.lineno}")
+        elif isinstance(child, (ast.For, ast.While)):
+            nested_parts.append(f"a nested loop on line {child.lineno}")
+    if nested_parts:
+        return f"a condition on line {node.lineno} containing {'; '.join(nested_parts[:3])}"
+    return f"a condition on line {node.lineno}"
+
+
 def _deepest_nesting(code: str) -> int:
     """Compute the deepest nesting level of control flow in code."""
     try:
@@ -1541,11 +1598,12 @@ def _enhanced_code_map(code: str) -> dict:
             body_summary = []
             for child in _ast_block_children(node):
                 if isinstance(child, ast.If):
-                    body_summary.append("a condition")
+                    body_summary.append(_condition_body_summary(child))
                 elif isinstance(child, (ast.For, ast.While)):
                     body_summary.append("a nested loop")
-                elif isinstance(child, ast.Assign):
-                    body_summary.append("an assignment")
+                elif _assignment_target_names(child):
+                    names = _assignment_target_names(child)
+                    body_summary.append(f"an assignment to {', '.join(names)}")
                 elif isinstance(child, ast.Expr) and isinstance(getattr(child, 'value', None), ast.Call):
                     call = child.value
                     if isinstance(call.func, ast.Name) and call.func.id == 'print':
@@ -1561,13 +1619,12 @@ def _enhanced_code_map(code: str) -> dict:
                 "start": node.lineno,
                 "end": getattr(node, 'end_lineno', node.lineno),
             })
-        elif isinstance(node, ast.Assign):
-            for target in node.targets:
-                if isinstance(target, ast.Name):
-                    result["assignments"].append({
-                        "name": target.id,
-                        "line": node.lineno,
-                    })
+        elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            for name in _assignment_target_names(node):
+                result["assignments"].append({
+                    "name": name,
+                    "line": node.lineno,
+                })
         elif isinstance(node, ast.Expr) and isinstance(getattr(node, 'value', None), ast.Call):
             call = node.value
             if isinstance(call.func, ast.Name) and call.func.id == 'print':
@@ -1630,11 +1687,11 @@ def _inside_loop_summary(code: str) -> str:
             body_parts = []
             for child in node.body:
                 if isinstance(child, ast.If):
-                    body_parts.append(f"a condition on line {child.lineno}")
+                    body_parts.append(_condition_body_summary(child))
                 elif isinstance(child, (ast.For, ast.While)):
                     body_parts.append(f"a nested loop on line {child.lineno}")
-                elif isinstance(child, ast.Assign):
-                    targets = [t.id for t in child.targets if isinstance(t, ast.Name)]
+                elif _assignment_target_names(child):
+                    targets = _assignment_target_names(child)
                     body_parts.append(f"an assignment to {', '.join(targets) or 'a variable'} on line {child.lineno}")
                 elif isinstance(child, ast.Expr) and isinstance(getattr(child, 'value', None), ast.Call):
                     call = child.value
@@ -1829,13 +1886,14 @@ def _run_with_trace_for_narration(code: str, watched_vars: set, session_id: str)
     narration = []
     steps = []
     error_text = stderr.strip() if stderr else ""
-    output_text = stdout.strip() if stdout else ""
+    output_text = _bounded_narration_output(stdout.strip() if stdout else "")
 
     if error_text:
+        safe_error = user_facing_error(error_text)
         narration.append("Starting execution.")
-        narration.append(f"The program encountered an error: {user_facing_error(error_text)}")
+        narration.append(f"The program encountered an error: {safe_error}")
         return {"success": False, "narration": narration, "output": output_text,
-                "error": error_text, "steps": steps, "raw_trace": trace}
+                "error": safe_error, "steps": steps, "raw_trace": trace}
 
     if proc.returncode not in (None, 0):
         limit_message = "Execution timed out or exceeded a safe runtime limit."
@@ -2035,6 +2093,19 @@ def _compute_code_diff(before: str, after: str) -> dict:
     before_lines = before.splitlines()
     after_lines = after.splitlines()
 
+    def _indent_width(line: str) -> int:
+        return len(line) - len(line.lstrip(' '))
+
+    def _changed_line(line_no: int, before_line: str, after_line: str, kind: str) -> dict:
+        return {
+            "line": line_no,
+            "before": before_line,
+            "after": after_line,
+            "kind": kind,
+            "before_indent": _indent_width(before_line),
+            "after_indent": _indent_width(after_line),
+        }
+
     # Textual diff
     changes = []
     matcher = difflib.SequenceMatcher(None, before_lines, after_lines)
@@ -2043,36 +2114,32 @@ def _compute_code_diff(before: str, after: str) -> dict:
             continue
         if tag == 'replace':
             for k in range(min(i2 - i1, j2 - j1)):
-                changes.append({
-                    "line": j1 + k + 1,
-                    "before": before_lines[i1 + k],
-                    "after": after_lines[j1 + k],
-                    "kind": "changed",
-                })
+                changes.append(_changed_line(j1 + k + 1, before_lines[i1 + k], after_lines[j1 + k], "changed"))
         elif tag == 'delete':
             for k in range(i1, i2):
-                changes.append({"line": k + 1, "before": before_lines[k], "after": "", "kind": "removed"})
+                changes.append(_changed_line(k + 1, before_lines[k], "", "removed"))
         elif tag == 'insert':
             for k in range(j1, j2):
-                changes.append({"line": k + 1, "before": "", "after": after_lines[k], "kind": "added"})
+                changes.append(_changed_line(k + 1, "", after_lines[k], "added"))
 
-    # AST-level structural analysis
     structural_changes = []
+    for ch in changes:
+        if ch["kind"] == "changed":
+            before_indent = ch["before_indent"]
+            after_indent = ch["after_indent"]
+            if before_indent != after_indent:
+                direction = "indented" if after_indent > before_indent else "unindented"
+                movement = "into" if after_indent > before_indent else "out of"
+                structural_changes.append(
+                    f"Line {ch['line']} was {direction} from {before_indent} to {after_indent} spaces, "
+                    f"so it moved {movement} the surrounding block."
+                )
+
+    # Keep this parse check as a future extension point for richer AST facts;
+    # indentation changes above must still work when the broken version is invalid.
     try:
         ast.parse(before)
         ast.parse(after)
-
-        # Check if indentation changed scope
-        for ch in changes:
-            if ch["kind"] == "changed":
-                before_indent = len(ch["before"]) - len(ch["before"].lstrip(' '))
-                after_indent = len(ch["after"]) - len(ch["after"].lstrip(' '))
-                if before_indent != after_indent:
-                    direction = "indented" if after_indent > before_indent else "unindented"
-                    structural_changes.append(
-                        f"Line {ch['line']} was {direction} (from {before_indent} to {after_indent} spaces), "
-                        f"which changes what block it belongs to."
-                    )
     except SyntaxError:
         pass
 
@@ -2095,7 +2162,16 @@ def _deterministic_mistake_explanation(before: str, after: str, diff: dict) -> s
 
     for ch in diff["changes"][:5]:
         if ch["kind"] == "changed":
-            parts.append(f"Line {ch['line']} changed from \"{ch['before'].strip()}\" to \"{ch['after'].strip()}\".")
+            if (
+                ch["before"].strip() == ch["after"].strip()
+                and ch.get("before_indent") != ch.get("after_indent")
+            ):
+                parts.append(
+                    f"Line {ch['line']} kept \"{ch['after'].strip()}\" but changed indentation "
+                    f"from {ch.get('before_indent', 0)} to {ch.get('after_indent', 0)} spaces."
+                )
+            else:
+                parts.append(f"Line {ch['line']} changed from \"{ch['before'].strip()}\" to \"{ch['after'].strip()}\".")
         elif ch["kind"] == "added":
             parts.append(f"Line {ch['line']} was added: \"{ch['after'].strip()}\".")
         elif ch["kind"] == "removed":

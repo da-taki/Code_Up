@@ -61,6 +61,22 @@ class TestEnhancedCodeMap:
         assert len(result["loops"]) >= 1
         assert result["nesting_depth"] >= 2
 
+    def test_condition_inside_loop_mentions_nested_assignment(self):
+        code = (
+            "total = 0\n"
+            "for i in range(3):\n"
+            "    if i > 0:\n"
+            "        total = total + i\n"
+            "print(total)\n"
+        )
+        result = app_module._enhanced_code_map(code)
+        summary = result["summary"].lower()
+        inside = app_module._inside_loop_summary(code).lower()
+        assert "condition" in summary
+        assert "assignment to total" in summary
+        assert "condition" in inside
+        assert "assignment to total" in inside
+
     def test_function_definition(self):
         code = "def greet(name):\n    print('Hello', name)\n\ngreet('Alice')\n"
         result = app_module._enhanced_code_map(code)
@@ -221,6 +237,25 @@ class TestStepNarration:
         data = resp.get_json()
         assert data["success"] is False
         assert "error" in data.get("error", "").lower() or "error" in " ".join(data.get("narration", [])).lower()
+        assert "sandbox_runner.py" not in data.get("error", "")
+        assert "<path>" not in data.get("error", "")
+
+    def test_narration_sandbox_error_is_sanitized(self, client):
+        code = "import os\nprint(os.listdir('.'))\n"
+        resp = client.post("/step-narration", json={"code": code})
+        data = resp.get_json()
+        assert data["success"] is False
+        assert "not allowed" in data.get("error", "").lower()
+        assert "sandbox_runner.py" not in data.get("error", "")
+        assert "<path>" not in data.get("error", "")
+
+    def test_large_output_is_bounded(self, client):
+        code = "for i in range(1000):\n    print('x' * 100)\n"
+        resp = client.post("/step-narration", json={"code": code})
+        data = resp.get_json()
+        assert data["success"] is True
+        assert len(data["output"]) <= app_module.MAX_NARRATION_OUTPUT_SIZE + 100
+        assert "Output truncated" in data["output"]
 
     def test_narration_empty_code(self, client):
         resp = client.post("/step-narration", json={"code": ""})
@@ -275,6 +310,9 @@ class TestMistakeReplay:
         assert data["success"] is True
         assert "reply" in data
         assert len(data["reply"]) > 0
+        assert "indent" in data["reply"].lower()
+        assert "block" in data["reply"].lower() or "scope" in data["reply"].lower()
+        assert data["diff"]["structural_changes"]
 
     def test_changed_operator(self, client):
         broken = "x = 5\ny = x / 0\nprint(y)\n"
@@ -311,6 +349,9 @@ class TestMistakeReplay:
         diff = app_module._compute_code_diff(before, after)
         assert diff["total_changes"] >= 1
         assert len(diff["changes"]) >= 1
+        assert diff["changes"][0]["before_indent"] == 0
+        assert diff["changes"][0]["after_indent"] == 4
+        assert diff["structural_changes"]
 
     def test_deterministic_explanation(self):
         before = "x = 1\n"

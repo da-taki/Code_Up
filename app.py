@@ -1217,6 +1217,14 @@ def user_facing_error(error_text: str) -> str:
     return f"{prefix}{err_type}: {message}"
 
 
+def _subprocess_exit_error(returncode: Optional[int]) -> str:
+    if returncode in (None, 0):
+        return ""
+    if returncode < 0:
+        return "Execution timed out or exceeded a safe runtime limit."
+    return f"Execution stopped unexpectedly with exit code {returncode}."
+
+
 def _bounded_narration_output(output_text: str) -> str:
     text = str(output_text or "")
     if len(text) <= MAX_NARRATION_OUTPUT_SIZE:
@@ -2914,7 +2922,10 @@ def run_code():
 
         output = stdout_buf.getvalue()
         raw_error = stderr_buf.getvalue()
-        error = user_facing_error(raw_error) if raw_error.strip() else ""
+        if raw_error.strip():
+            error = user_facing_error(raw_error)
+        else:
+            error = _subprocess_exit_error(proc_handle.returncode)
 
         # Compute output diff vs last run (only on success — error states aren't
         # comparable in a useful way)

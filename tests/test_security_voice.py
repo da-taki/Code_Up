@@ -1917,6 +1917,11 @@ class TestCodeTempFile:
         assert "timed out" in data.get("error", "").lower()
         assert "execution complete" not in str(data).lower()
 
+    def test_signal_killed_subprocess_reports_limit(self):
+        error = app_module._subprocess_exit_error(-9)
+        assert "timed out" in error.lower()
+        assert "limit" in error.lower()
+
 
 
 class TestRunRateLimit:

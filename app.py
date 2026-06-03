@@ -26,7 +26,7 @@ from intent_parser import parse_intent
 from sandboxed_fs import cleanup_sandbox, cleanup_stale_sandboxes, get_sandbox
 from structure_parser import CodeAnalyzer
 
-load_dotenv()
+load_dotenv(override=True)
 
 __version__ = "0.8.0"
 

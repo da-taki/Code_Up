@@ -172,6 +172,18 @@ class TestInterruptBehavior:
             assert resp.status_code == 200
 
 
+class TestSpeechChunking:
+    def test_voice_engine_uses_semantic_narration_chunks(self):
+        path = os.path.join(os.path.dirname(__file__), '..', 'static', 'voice-engine.js')
+        with open(path, encoding='utf-8') as handle:
+            voice_js = handle.read()
+
+        assert 'speechChunkSize: 260' in voice_js
+        assert 'streamNarrationMinChars: 140' in voice_js
+        assert 'takeSpeakableStreamText' in voice_js
+        assert 'Micro-chunk narration' not in voice_js
+
+
 # ---------------------------------------------------------------------------
 # Streaming No-Break Tests (existing endpoints still work)
 # ---------------------------------------------------------------------------

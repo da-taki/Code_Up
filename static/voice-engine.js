@@ -70,7 +70,8 @@ const VoiceEngine = (function () {
 
   // ─── CONFIGURATION ──────────────────────────────────────────────────────────
   const Config = {
-    microChunkSize: 20,
+    speechChunkSize: 260,
+    streamNarrationMinChars: 140,
     speechRate: 1.0,
     speechPitch: 1.0,
     language: 'auto',  // 'auto', 'en', 'hi'
@@ -78,6 +79,11 @@ const VoiceEngine = (function () {
   };
 
   function configure(opts) {
+    opts = opts || {};
+    if (opts.microChunkSize && !opts.speechChunkSize) {
+      opts.speechChunkSize = opts.microChunkSize;
+      delete opts.microChunkSize;
+    }
     Object.assign(Config, opts);
     if (opts.language) {
       _persistLanguagePreference(opts.language);
@@ -179,7 +185,7 @@ const VoiceEngine = (function () {
     }
     _narrationAborted = false;
 
-    const chunks = _microChunk(text);
+    const chunks = _semanticSpeechChunks(text);
     if (!chunks.length) return Promise.resolve();
 
     return new Promise(resolve => {
@@ -192,11 +198,11 @@ const VoiceEngine = (function () {
     });
   }
 
-  function _microChunk(text) {
+  function _semanticSpeechChunks(text) {
     const normalized = String(text || '').replace(/\s+/g, ' ').trim();
     if (!normalized) return [];
 
-    const maxChunk = Config.microChunkSize;
+    const maxChunk = Config.speechChunkSize || 260;
     if (normalized.length <= maxChunk) return [normalized];
 
     const chunks = [];
@@ -208,17 +214,26 @@ const VoiceEngine = (function () {
         break;
       }
 
-      // Find a word boundary near the target size
       let boundary = -1;
-      // Look for sentence-end punctuation first
-      const sentEnd = remaining.slice(0, maxChunk + 5).search(/[.!?;:]\s/);
-      if (sentEnd >= 8 && sentEnd <= maxChunk + 3) {
-        boundary = sentEnd + 1;
+      const window_ = remaining.slice(0, maxChunk + 1);
+      const sentenceMatches = Array.from(window_.matchAll(/[.!?]\s+/g));
+      const sentenceEnd = sentenceMatches.length
+        ? sentenceMatches[sentenceMatches.length - 1].index
+        : -1;
+      if (sentenceEnd >= 80) {
+        boundary = sentenceEnd + 1;
       } else {
-        // Find last space within range
-        const window_ = remaining.slice(0, maxChunk + 5);
-        boundary = window_.lastIndexOf(' ');
-        if (boundary < 8) boundary = maxChunk;
+        const pauseBoundary = Math.max(
+          window_.lastIndexOf('; '),
+          window_.lastIndexOf(': '),
+          window_.lastIndexOf(', ')
+        );
+        if (pauseBoundary >= 140) {
+          boundary = pauseBoundary + 1;
+        } else {
+          const spaceBoundary = window_.lastIndexOf(' ');
+          boundary = spaceBoundary >= 120 ? spaceBoundary : maxChunk;
+        }
       }
 
       chunks.push(remaining.slice(0, boundary).trim());
@@ -309,7 +324,7 @@ const VoiceEngine = (function () {
   }
 
   function _resumeListeningAfterSpeech() {
-    if (Config.voiceEnabled && VoiceInput.isActive()) {
+    if (Config.voiceEnabled && VoiceInput.isEnabledByUser() && VoiceInput.isActive()) {
       setState(States.LISTENING);
     } else {
       setState(States.IDLE);
@@ -342,7 +357,7 @@ const VoiceEngine = (function () {
     _requestLocked = false;
 
     // 5. Reset to LISTENING
-    if (VoiceInput.isActive()) {
+    if (VoiceInput.isEnabledByUser() && VoiceInput.isActive()) {
       _state = States.LISTENING; // Force — bypass validation for interrupt
       _updateUIState(States.LISTENING);
     } else {
@@ -541,6 +556,7 @@ const VoiceEngine = (function () {
     let _recognition = null;
     let _active = false;
     let _paused = false;
+    let _enabledByUser = false;
     let _restartTimer = null;
     let _watchdogTimer = null;
     let _lastActivity = Date.now();
@@ -550,11 +566,17 @@ const VoiceEngine = (function () {
 
     function isActive() { return _active; }
     function isPaused() { return _paused; }
+    function isEnabledByUser() { return _enabledByUser; }
 
     function start(userInitiated = true) {
       const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
       if (!SR) {
         _debug('Speech recognition not available');
+        return false;
+      }
+      if (userInitiated) {
+        _enabledByUser = true;
+      } else if (!_enabledByUser) {
         return false;
       }
       if (_active) return true;
@@ -571,6 +593,14 @@ const VoiceEngine = (function () {
       _userInitiated = userInitiated;
 
       _recognition.onstart = () => {
+        if (!_enabledByUser) {
+          try { _recognition.stop(); } catch (e) {}
+          _active = false;
+          _paused = false;
+          _stopWatchdog();
+          _updateVoiceButton(false, false);
+          return;
+        }
         _active = true;
         _restartAttempts = 0;
         _lastActivity = Date.now();
@@ -582,6 +612,7 @@ const VoiceEngine = (function () {
       };
 
       _recognition.onresult = (event) => {
+        if (!_enabledByUser) return;
         const transcript = event.results[event.results.length - 1][0].transcript;
         _lastActivity = Date.now();
         _debug('Heard:', transcript);
@@ -601,9 +632,18 @@ const VoiceEngine = (function () {
       _recognition.onerror = (event) => {
         _debug('Recognition error:', event.error);
         if (event.error === 'no-speech') return;
-        if (event.error === 'aborted') { _active = false; return; }
+        if (event.error === 'aborted') {
+          _active = false;
+          if (!_enabledByUser) {
+            _paused = false;
+            _stopWatchdog();
+            _updateVoiceButton(false, false);
+          }
+          return;
+        }
         if (event.error === 'audio-capture' || event.error === 'not-allowed') {
           _active = false;
+          _enabledByUser = false;
           setState(States.IDLE);
           _updateVoiceButton(false, false);
         }
@@ -611,7 +651,7 @@ const VoiceEngine = (function () {
 
       _recognition.onend = () => {
         _debug('Recognition session ended');
-        if (!_active) return;
+        if (!_active || !_enabledByUser) return;
         _restartAttempts++;
         if (_restartAttempts > MAX_RESTARTS) {
           _restartAttempts = 0;
@@ -619,15 +659,16 @@ const VoiceEngine = (function () {
         if (_restartTimer) { clearTimeout(_restartTimer); _restartTimer = null; }
         _restartTimer = setTimeout(() => {
           _restartTimer = null;
-          if (_active) {
+          if (_active && _enabledByUser) {
             try {
               _recognition.start();
               _lastActivity = Date.now();
             } catch (e) {
               setTimeout(() => {
-                try { if (_active) _recognition.start(); } catch (e2) {
+                try { if (_active && _enabledByUser) _recognition.start(); } catch (e2) {
                   _debug('Restart failed permanently');
                   _active = false;
+                  _enabledByUser = false;
                   setState(States.IDLE);
                   _updateVoiceButton(false, false);
                 }
@@ -648,24 +689,31 @@ const VoiceEngine = (function () {
     }
 
     function stop() {
-      if (!_recognition || !_active) return;
+      _enabledByUser = false;
       _active = false;
       _paused = false;
       _stopWatchdog();
       if (_restartTimer) { clearTimeout(_restartTimer); _restartTimer = null; }
+      if (!_recognition) {
+        setState(States.IDLE);
+        _updateVoiceButton(false, false);
+        return;
+      }
       try { _recognition.stop(); } catch (e) {}
       setState(States.IDLE);
       _updateVoiceButton(false, false);
     }
 
     function pause() {
-      if (!_active) return;
-      _paused = true;
-      _updateVoiceButton(true, true);
+      stop();
     }
 
     function unpause() {
-      if (!_active) return;
+      if (!_active) {
+        start(true);
+        return;
+      }
+      _enabledByUser = true;
       _paused = false;
       _updateVoiceButton(true, false);
       if (_state !== States.PROCESSING && _state !== States.RESPONDING && _state !== States.SPEAKING) {
@@ -681,7 +729,7 @@ const VoiceEngine = (function () {
     }
 
     function setLanguage(lang) {
-      if (_recognition && _active) {
+      if (_recognition && _active && _enabledByUser) {
         _recognition.lang = lang === 'hi' ? 'hi-IN' : 'en-US';
         // Restart to apply
         try {
@@ -694,13 +742,13 @@ const VoiceEngine = (function () {
     function _startWatchdog() {
       _stopWatchdog();
       _watchdogTimer = setInterval(() => {
-        if (!_active) return;
+        if (!_active || !_enabledByUser) return;
         const idle = Date.now() - _lastActivity;
         if (idle > 45000) {
           _debug('Watchdog: kicking recognition');
           _lastActivity = Date.now();
           try { _recognition.stop(); } catch (e) {
-            try { _recognition.start(); } catch (e2) {}
+            try { if (_enabledByUser) _recognition.start(); } catch (e2) {}
           }
         }
       }, 15000);
@@ -730,7 +778,7 @@ const VoiceEngine = (function () {
       }
     }
 
-    return { isActive, isPaused, start, stop, pause, unpause, setLanguage };
+    return { isActive, isPaused, isEnabledByUser, start, stop, pause, unpause, setLanguage };
   })();
 
   // ─── INPUT HANDLING (voice → action pipeline) ───────────────────────────────
@@ -769,7 +817,7 @@ const VoiceEngine = (function () {
       _releaseRequestLock();
       // If we're still in PROCESSING after the command, transition back
       if (_state === States.PROCESSING) {
-        if (VoiceInput.isActive()) {
+        if (VoiceInput.isEnabledByUser() && VoiceInput.isActive()) {
           _state = States.LISTENING;
           _updateUIState(States.LISTENING);
         } else {
@@ -799,7 +847,54 @@ const VoiceEngine = (function () {
 
     let fullText = '';
     let narrationBuffer = '';
-    const narrationThreshold = Config.microChunkSize;
+    const narrationThreshold = Config.streamNarrationMinChars || 140;
+
+    function takeSpeakableStreamText(force = false) {
+      const buffer = String(narrationBuffer || '');
+      const trimmed = buffer.trim();
+      if (!trimmed) return '';
+      if (force) {
+        narrationBuffer = '';
+        return trimmed;
+      }
+
+      const sentenceMatches = Array.from(buffer.matchAll(/[.!?]\s+/g));
+      for (const match of sentenceMatches) {
+        const end = match.index + 1;
+        if (end >= 60) {
+          const spoken = buffer.slice(0, end).trim();
+          narrationBuffer = buffer.slice(end).trimStart();
+          return spoken;
+        }
+      }
+
+      if (buffer.length < Math.max(narrationThreshold, 220)) {
+        return '';
+      }
+
+      const windowText = buffer.slice(0, Config.speechChunkSize || 260);
+      const boundary = Math.max(
+        windowText.lastIndexOf('; '),
+        windowText.lastIndexOf(': '),
+        windowText.lastIndexOf(', '),
+        windowText.lastIndexOf('\n')
+      );
+      if (boundary >= narrationThreshold) {
+        const spoken = buffer.slice(0, boundary + 1).trim();
+        narrationBuffer = buffer.slice(boundary + 1).trimStart();
+        return spoken;
+      }
+
+      if (buffer.length >= (Config.speechChunkSize || 260)) {
+        const space = windowText.lastIndexOf(' ');
+        const end = space >= narrationThreshold ? space : windowText.length;
+        const spoken = buffer.slice(0, end).trim();
+        narrationBuffer = buffer.slice(end).trimStart();
+        return spoken;
+      }
+
+      return '';
+    }
 
     return new Promise((resolve, reject) => {
       StreamHandler.streamResponse(url, body,
@@ -812,17 +907,15 @@ const VoiceEngine = (function () {
           // Update UI immediately
           if (_streamUICallback) _streamUICallback(fullText, chunk);
 
-          // Micro-chunk narration: speak when buffer is large enough
-          if (opts.narrate !== false && narrationBuffer.length >= narrationThreshold) {
-            const boundary = narrationBuffer.lastIndexOf(' ');
-            if (boundary > 8) {
-              const toSpeak = narrationBuffer.slice(0, boundary);
-              narrationBuffer = narrationBuffer.slice(boundary);
+          if (opts.narrate !== false) {
+            let toSpeak = takeSpeakableStreamText(false);
+            while (toSpeak) {
               speak(toSpeak, { lang: detectLanguage(toSpeak) });
-              if (_state === States.RESPONDING) {
-                _state = States.SPEAKING;
-                _updateUIState(States.SPEAKING);
-              }
+              toSpeak = takeSpeakableStreamText(false);
+            }
+            if (_state === States.RESPONDING && (_isSpeaking || _narrationQueue.length > 0)) {
+              _state = States.SPEAKING;
+              _updateUIState(States.SPEAKING);
             }
           }
         },
@@ -830,13 +923,15 @@ const VoiceEngine = (function () {
         (data, error) => {
           if (isStaleCallback(epoch)) { resolve({ aborted: true }); return; }
 
-          // Speak remaining buffer
-          if (narrationBuffer.trim() && opts.narrate !== false) {
-            speak(narrationBuffer.trim(), { lang: detectLanguage(narrationBuffer) });
+          if (opts.narrate !== false) {
+            const remainingSpeech = takeSpeakableStreamText(true);
+            if (remainingSpeech) {
+              speak(remainingSpeech, { lang: detectLanguage(remainingSpeech) });
+            }
           }
 
           if (error) {
-            if (VoiceInput.isActive()) setState(States.LISTENING);
+            if (VoiceInput.isEnabledByUser() && VoiceInput.isActive()) setState(States.LISTENING);
             else setState(States.IDLE);
             resolve({ error, fullText });
           } else {
@@ -858,7 +953,7 @@ const VoiceEngine = (function () {
                 }
               }, 200);
             } else {
-              if (VoiceInput.isActive()) setState(States.LISTENING);
+              if (VoiceInput.isEnabledByUser() && VoiceInput.isActive()) setState(States.LISTENING);
               else setState(States.IDLE);
             }
             resolve({ data, fullText });
@@ -902,14 +997,14 @@ const VoiceEngine = (function () {
         await speak(speechText, { lang: detectLanguage(speechText) });
         _resumeListeningAfterSpeech();
       } else {
-        if (VoiceInput.isActive()) setState(States.LISTENING);
+        if (VoiceInput.isEnabledByUser() && VoiceInput.isActive()) setState(States.LISTENING);
         else setState(States.IDLE);
       }
 
       return { data };
     } catch (e) {
       if (e.name === 'AbortError') return { aborted: true };
-      if (VoiceInput.isActive()) setState(States.LISTENING);
+      if (VoiceInput.isEnabledByUser() && VoiceInput.isActive()) setState(States.LISTENING);
       else setState(States.IDLE);
       return { error: e.message };
     } finally {

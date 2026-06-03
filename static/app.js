@@ -19,10 +19,10 @@ function tabState() { return window._tabState[_tabId]; }
 let isListening = false;
 let recognition = null;
 let _restartTimer = null;
-// Voice paused state — recognition is still running but commands are dropped
-// until the user says "resume". We do NOT persist this across reloads —
-// a fresh page should always start unpaused.
+// Manual voice intent for this tab. Auto-restart paths may run only while the
+// user has explicitly left voice enabled.
 let _voicePaused = false;
+let _voiceEnabledByUser = false;
 
 // Watchdog: track last time recognition was confirmed active. If voice is
 // supposedly listening but we haven't seen activity in a while, the session
@@ -34,19 +34,20 @@ let _watchdogTimer = null;
 function _startRecognitionWatchdog() {
   if (_watchdogTimer) return;
   _watchdogTimer = setInterval(() => {
-    if (!isListening) return;  // not running, nothing to watch
+    if (!isListening || !_voiceEnabledByUser) return;  // not running, nothing to watch
     const idle = Date.now() - _lastRecognitionActivity;
     // 45s of silence = Chrome has likely auto-stopped. Force a kick.
     if (idle > 45000) {
       _debugLog('Watchdog: recognition idle for', idle, 'ms — kicking');
       _lastRecognitionActivity = Date.now();  // reset to avoid kick loops
       try {
+        if (!_voiceEnabledByUser) return;
         // Stop and restart to force a clean session. onend will trigger
         // the auto-restart chain.
         recognition.stop();
       } catch (e) {
         // If stop fails, try start directly
-        try { recognition.start(); } catch (e2) {
+        try { if (_voiceEnabledByUser) recognition.start(); } catch (e2) {
           _debugLog('Watchdog kick failed:', e2.message);
         }
       }
@@ -337,6 +338,7 @@ function sleep(ms) {
 // ---------- SONIFICATION MANAGER ----------
 const SonificationManager = (function () {
   const jobs = new Map();
+  const activeToneStops = new Set();
 
   function ensureAudio() {
     if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -354,14 +356,23 @@ const SonificationManager = (function () {
       const ctx = ensureAudio();
       const osc  = ctx.createOscillator();
       const gain = ctx.createGain();
+      let stopped = false;
       gain.gain.value   = vol;
       osc.frequency.value = freq;
       osc.connect(gain);
       gain.connect(ctx.destination);
+      const stopTone = () => {
+        if (stopped) return;
+        stopped = true;
+        activeToneStops.delete(stopTone);
+        try { osc.stop(); } catch (e) {}
+        try { osc.disconnect(); gain.disconnect(); } catch (e) {}
+      };
+      activeToneStops.add(stopTone);
       osc.start();
       osc.stop(ctx.currentTime + duration);
       setTimeout(() => {
-        try { osc.disconnect(); gain.disconnect(); } catch (e) {}
+        stopTone();
       }, (duration + 0.1) * 1000);
     } catch (e) {}
   }
@@ -370,7 +381,11 @@ const SonificationManager = (function () {
     startJob(id)         { jobs.set(id, []); },
     pushTimer(id, t)     { const a = jobs.get(id); if (a) a.push(t); },
     cancelJob(id)        { (jobs.get(id) || []).forEach(t => clearTimeout(t)); jobs.delete(id); },
-    clearAll()           { for (const [, a] of jobs) a.forEach(t => clearTimeout(t)); jobs.clear(); },
+    clearAll()           {
+      for (const [, a] of jobs) a.forEach(t => clearTimeout(t));
+      jobs.clear();
+      for (const stopTone of Array.from(activeToneStops)) stopTone();
+    },
     playTone,
   };
 })();
@@ -470,28 +485,69 @@ async function sonifyCurrentBlock() {
     endLine -= 1;
   }
 
+  const structuralLines = [];
+  for (let i = startLine - 1; i < endLine; i++) {
+    const line = String(lines[i] || '');
+    if (!line.trim()) continue;
+    structuralLines.push({
+      lineNumber: i + 1,
+      indent: Math.floor(getIndentLevel(line)),
+    });
+  }
+  if (!structuralLines.length) {
+    const msg = 'No nonblank lines to sonify.';
+    out(msg);
+    speak(msg);
+    srAnnounce(msg);
+    return;
+  }
+
   SonificationManager.clearAll();
   const startMsg = `Sonifying block from line ${startLine} to line ${endLine}.`;
   out(startMsg);
-  speak(startMsg);
   srAnnounce(startMsg);
 
   const jobId = Date.now();
   SonificationManager.startJob(jobId);
-  let delay = 0;
-  for (let i = startLine - 1; i < endLine; i++) {
-    const line   = lines[i];
-    const indent = Math.floor(getIndentLevel(line));
-    const t = setTimeout(() => { try { sonifyLine(line, indent); } catch (e) {} }, delay);
+  const toneMs = 180;
+  const gapMs = 140;
+  const stepMs = toneMs + gapMs;
+  const baseIndent = structuralLines[0].indent;
+  const nestedCount = structuralLines.filter(line => line.indent > baseIndent).length;
+  const formatCount = n => {
+    const words = ['zero', 'one', 'two', 'three', 'four', 'five'];
+    return n >= 0 && n < words.length ? words[n] : String(n);
+  };
+
+  structuralLines.forEach((entry, idx) => {
+    const delay = idx * stepMs;
+    const t = setTimeout(() => {
+      try {
+        const depth = Math.max(0, Math.min(entry.indent - baseIndent, 5));
+        SonificationManager.playTone(260 + depth * 150, toneMs / 1000, 0.1);
+      } catch (e) {}
+    }, delay);
     SonificationManager.pushTimer(jobId, t);
-    delay += 120;
-  }
+  });
+  const durationMs = Math.max(1000, (structuralLines.length - 1) * stepMs + toneMs + 300);
+  window._lastBlockSonificationPlan = {
+    startLine,
+    endLine,
+    toneCount: structuralLines.length,
+    depths: structuralLines.map(entry => Math.max(0, entry.indent - baseIndent)),
+    durationMs,
+  };
   const fin = setTimeout(() => {
-    out(`${startMsg}\nBlock sonification complete.`);
-    speak('Block sonification complete.');
-    srAnnounce('Block sonification complete');
+    const lineWord = formatCount(structuralLines.length);
+    const nestedWord = formatCount(nestedCount);
+    const completion = getLanguage() === 'hi'
+      ? `Block sonification complete. Is block mein ${lineWord} line${structuralLines.length === 1 ? '' : 's'} hain, aur ${nestedWord} nested line${nestedCount === 1 ? '' : 's'} hai.`
+      : `Block sonification complete. ${lineWord[0].toUpperCase()}${lineWord.slice(1)} line${structuralLines.length === 1 ? '' : 's'}, with ${nestedWord} nested line${nestedCount === 1 ? '' : 's'}.`;
+    out(`${startMsg}\n${completion}`);
+    speak(completion);
+    srAnnounce(completion);
     SonificationManager.cancelJob(jobId);
-  }, delay + 200);
+  }, durationMs);
   SonificationManager.pushTimer(jobId, fin);
 }
 
@@ -803,7 +859,7 @@ function pasteCode() {
 function speak(text, opts = {}) {
   if (!text) return;
   lastSpokenText = text;
-  // Delegate to VoiceEngine if available for micro-chunk narration
+  // Delegate to VoiceEngine when available so speech stays interruptible.
   if (typeof VoiceEngine !== 'undefined' && VoiceEngine.speak) {
     VoiceEngine.speak(text, opts).catch(() => {});
   } else {
@@ -817,6 +873,18 @@ function speakOutput() {
 }
 function repeatLastSpeech() {
   speak(lastSpokenText || 'There is nothing to repeat yet.', { forceFull: true });
+}
+
+function buildVoiceCommandPayload(text) {
+  const pos = editor && editor.getPosition ? editor.getPosition() : null;
+  const errorText = window.lastRunError || (_lastErrorContext && _lastErrorContext.error) || '';
+  return {
+    text: String(text || ''),
+    code: getCode(),
+    error: errorText,
+    language: getLanguage(),
+    cursor_line: pos && pos.lineNumber ? pos.lineNumber : null,
+  };
 }
 
 // ---------- AI BUBBLE ----------
@@ -1123,9 +1191,9 @@ async function runCode() {
   AppState.isExecuting = true;
   cueSuccess();
   startHeartbeat();
-  const _runMsgOut = getLanguage() === 'hi' ? 'चल रहा है...' : 'Running...';
-  const _runMsgSpoken = getLanguage() === 'hi' ? 'कोड चल रहा है।' : 'Running code.';
-  const _runMsgAI = getLanguage() === 'hi' ? 'कोड चल रहा है...' : 'Running code...';
+  const _runMsgOut = getLanguage() === 'hi' ? 'Code run ho raha hai...' : 'Running...';
+  const _runMsgSpoken = getLanguage() === 'hi' ? 'Code run ho raha hai.' : 'Running code.';
+  const _runMsgAI = getLanguage() === 'hi' ? 'Code run ho raha hai...' : 'Running code...';
   if (!usesInput) out(_runMsgOut);
   showAI(_runMsgAI);
   speak(_runMsgSpoken);
@@ -1826,6 +1894,149 @@ function deleteLine(line) {
   speak(`Deleted line ${line}.`);
 }
 
+function applyConversationalEdit(aiAction) {
+  const edit = aiAction || {};
+  const kind = edit.action;
+  const target = edit.target || {};
+  const model = getModel();
+  const confirmation = edit.spoken_confirmation || 'I applied that edit.';
+
+  if (edit.requires_confirmation) {
+    const msg = confirmation || 'That change needs confirmation before I replace the program.';
+    out(msg);
+    speak(msg);
+    srAnnounce('Edit needs confirmation');
+    return;
+  }
+
+  if (kind === 'undo') {
+    if (!editor) { speak('Editor not ready.'); return; }
+    editor.trigger('voice', 'undo', null);
+    out(confirmation);
+    speak(confirmation);
+    srAnnounce('Edit undone');
+    return;
+  }
+
+  if (!model || !editor) {
+    speak('Editor not ready.');
+    return;
+  }
+
+  const lineCount = model.getLineCount();
+  const rawCode = String(edit.code || '').replace(/\r\n/g, '\n');
+  const lineNumber = Number(target.line_number || edit.line_number || 0);
+
+  function validLine(n) {
+    return Number.isInteger(n) && n >= 1 && n <= lineCount;
+  }
+
+  function validInsertLine(n) {
+    return Number.isInteger(n) && n >= 1 && n <= lineCount + 1;
+  }
+
+  function appendBlock(code) {
+    const lastLine = model.getLineCount();
+    const lastCol = model.getLineMaxColumn(lastLine);
+    const current = getCode();
+    const prefix = current && !current.endsWith('\n') ? '\n' : '';
+    model.pushEditOperations([], [{
+      range: new monaco.Range(lastLine, lastCol, lastLine, lastCol),
+      text: prefix + code,
+    }], () => null);
+    const addedLines = (prefix + code).split('\n').length - 1;
+    const newLine = Math.min(model.getLineCount(), lastLine + addedLines);
+    editor.setPosition({ lineNumber: newLine, column: model.getLineMaxColumn(newLine) });
+    editor.revealLineInCenter(newLine);
+  }
+
+  function insertBlock(n, code) {
+    if (n === lineCount + 1) {
+      appendBlock(code);
+      return;
+    }
+    model.pushEditOperations([], [{
+      range: new monaco.Range(n, 1, n, 1),
+      text: code.endsWith('\n') ? code : code + '\n',
+    }], () => null);
+    editor.setPosition({ lineNumber: n, column: 1 });
+    editor.revealLineInCenter(n);
+  }
+
+  function replaceLine(n, code) {
+    const col = model.getLineMaxColumn(n);
+    model.pushEditOperations([], [{
+      range: new monaco.Range(n, 1, n, col),
+      text: code,
+    }], () => null);
+    editor.setPosition({ lineNumber: n, column: 1 });
+    editor.revealLineInCenter(n);
+  }
+
+  function deleteRawLine(n) {
+    const col = model.getLineMaxColumn(n);
+    const range = n === lineCount && lineCount > 1
+      ? new monaco.Range(n - 1, model.getLineMaxColumn(n - 1), n, col)
+      : new monaco.Range(n, 1, Math.min(n + 1, lineCount + 1), 1);
+    model.pushEditOperations([], [{ range, text: '' }], () => null);
+    const nextLine = Math.min(n, model.getLineCount());
+    editor.setPosition({ lineNumber: nextLine, column: 1 });
+    editor.revealLineInCenter(nextLine);
+  }
+
+  function indentLine(n) {
+    replaceLine(n, '    ' + model.getLineContent(n));
+  }
+
+  function dedentLine(n) {
+    const line = model.getLineContent(n);
+    let next = line;
+    if (next.startsWith('    ')) next = next.slice(4);
+    else if (next.startsWith('\t')) next = next.slice(1);
+    else {
+      const msg = 'That line is not indented.';
+      out(msg);
+      speak(msg);
+      return false;
+    }
+    replaceLine(n, next);
+    return true;
+  }
+
+  let applied = true;
+  if (kind === 'append_code') {
+    if (!rawCode.trim()) { speak('No code was provided for that edit.'); return; }
+    appendBlock(rawCode);
+  } else if (kind === 'insert_line') {
+    if (!validInsertLine(lineNumber) || !rawCode.trim()) { speak('I could not place that inserted line safely.'); return; }
+    insertBlock(lineNumber, rawCode);
+  } else if (kind === 'replace_line') {
+    if (!validLine(lineNumber) || !rawCode.trim()) { speak('I could not replace that line safely.'); return; }
+    replaceLine(lineNumber, rawCode);
+  } else if (kind === 'delete_line') {
+    if (!validLine(lineNumber)) { speak('I could not delete that line safely.'); return; }
+    deleteRawLine(lineNumber);
+  } else if (kind === 'indent_line') {
+    if (!validLine(lineNumber)) { speak('I could not indent that line safely.'); return; }
+    indentLine(lineNumber);
+  } else if (kind === 'dedent_line') {
+    if (!validLine(lineNumber)) { speak('I could not remove indentation safely.'); return; }
+    applied = dedentLine(lineNumber);
+  } else if (kind === 'replace_code') {
+    if (!rawCode.trim()) { speak('No replacement code was provided.'); return; }
+    if (!setCode(rawCode, { preserveSpeech: true, source: 'conversational edit' })) return;
+  } else {
+    speak('I could not apply that edit safely.');
+    return;
+  }
+
+  if (!applied) return;
+  suggestPreflightInputsFromCode(getCode());
+  out(confirmation);
+  speak(confirmation);
+  srAnnounce('Conversational edit applied');
+}
+
 // ---------- SNIPPETS ----------
 function srAnnounce(msg) {
   const el = document.getElementById('srAnnouncer');
@@ -1842,7 +2053,8 @@ async function saveSnippet() {
 
 async function saveSnippetAccessible(voiceName) {
   const input = document.getElementById('snippetNameInput');
-  const name  = voiceName || (input && input.value.trim()) || 'Untitled';
+  const typedName = input && input.value.trim();
+  const name  = normalizeSnippetVoiceName(voiceName || typedName);
   const saved = await saveSnippetWithName(name);
   if (saved) {
     if (input) input.value = '';
@@ -1850,19 +2062,46 @@ async function saveSnippetAccessible(voiceName) {
   }
 }
 
+function normalizeSnippetVoiceName(name) {
+  return String(name || '')
+    .replace(/\s+/g, ' ')
+    .replace(/[^\w\s-]/g, '')
+    .trim()
+    .slice(0, 80);
+}
+
+function nextSnippetName() {
+  const names = new Set(snippetsCache.map(sn => String(sn.name || '').toLowerCase()));
+  let index = 1;
+  while (names.has(`snippet ${index}`)) index += 1;
+  return `Snippet ${index}`;
+}
+
 async function saveSnippetWithName(name) {
   if (!ensurePythonEditorContent('save snippet')) return;
   const code = getCode();
   if (!code.trim()) {
-    const msg = 'The editor is empty. Nothing to save as a snippet.';
+    const msg = getLanguage() === 'hi'
+      ? 'Editor empty hai. Snippet save karne ke liye pehle code likho.'
+      : 'The editor is empty. Nothing to save as a snippet.';
     out(msg); speak(msg);
     return false;
   }
   try {
+    await loadSnippets();
+    const cleanName = normalizeSnippetVoiceName(name) || nextSnippetName();
+    const duplicate = snippetsCache.find(sn => String(sn.name || '').toLowerCase() === cleanName.toLowerCase());
+    if (duplicate) {
+      const msg = getLanguage() === 'hi'
+        ? `${cleanName} naam ka snippet already saved hai. Save karne ke liye alag naam choose karo.`
+        : `A snippet named ${cleanName} already exists. Choose a different name before saving.`;
+      out(msg); speak(msg);
+      return false;
+    }
     const res = await fetch('/snippets', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ name, code }),
+      body:    JSON.stringify({ name: cleanName, code }),
     });
     const data = await res.json();
     if (!res.ok || !data.success) {
@@ -1871,7 +2110,11 @@ async function saveSnippetWithName(name) {
       return false;
     }
     await loadSnippets();
-    speak(data.speech || `Snippet saved as ${name}.`);
+    const msg = getLanguage() === 'hi'
+      ? `${cleanName} naam ka snippet save ho gaya.`
+      : `Saved this code as the snippet ${cleanName}.`;
+    out(msg);
+    speak(msg);
     return true;
   } catch (e) {
     console.error('Snippet save failed:', e);
@@ -1925,13 +2168,55 @@ async function loadSnippets() {
   }
 }
 
-async function loadSnippetById(id) {
+async function loadSnippetById(id, confirmed) {
+  await loadSnippets();
   const needle = String(id || '').toLowerCase();
   const sn = snippetsCache.find(s => String(s.id) === String(id) ||
                                     (s.name && String(s.name).toLowerCase() === needle));
-  if (!sn) { speak(`Snippet ${id} not found.`); out(`Snippet ${id} not found.`); return; }
+  if (!sn) {
+    const msg = getLanguage() === 'hi'
+      ? `${id} naam ka snippet nahi mila.`
+      : `Snippet ${id} not found.`;
+    speak(msg); out(msg); return;
+  }
+  const current = getCode().trim();
+  if (!confirmed && current && current !== String(sn.code || '').trim()) {
+    pendingConfirm = {
+      options: ['load_snippet'],
+      context: { id, confirmed: true },
+      expiresAt: Date.now() + 30000,
+    };
+    const msg = getLanguage() === 'hi'
+      ? `${sn.name || id} snippet load karne se current editor replace hoga. Continue ke liye yes bolo, ya code rakhne ke liye cancel bolo.`
+      : `Loading snippet ${sn.name || id} will replace the current editor. Say yes to continue or cancel to keep your code.`;
+    out(msg);
+    speak(msg);
+    srAnnounce('Snippet load needs confirmation');
+    return;
+  }
   if (!setCode(sn.code, { source: `snippet ${sn.name || id}` })) return;
-  speak(`Loaded snippet ${sn.name || id}.`); out(`Loaded snippet ${sn.name || id}.`);
+  const msg = getLanguage() === 'hi'
+    ? `${sn.name || id} snippet editor mein load ho gaya.`
+    : `Loaded the snippet ${sn.name || id} into the editor.`;
+  speak(msg); out(msg);
+}
+
+async function listSnippetsAccessible() {
+  await loadSnippets();
+  if (!snippetsCache.length) {
+    const msg = getLanguage() === 'hi' ? 'Aapke paas saved snippets nahi hain.' : 'You have no saved snippets.';
+    out(msg); speak(msg);
+    return;
+  }
+  const names = snippetsCache.map(sn => sn.name || 'Untitled');
+  const msg = getLanguage() === 'hi'
+    ? `Aapke snippets hain: ${names.join(', ')}.`
+    : (names.length === 1
+      ? `Your snippet is: ${names[0]}.`
+      : `Your snippets are: ${names.join(', ')}.`);
+  out(msg);
+  speak(msg);
+  srAnnounce('Snippet list updated');
 }
 
 async function deleteSnippetById(id) {
@@ -2035,7 +2320,9 @@ async function handleConfirmedAction(action, payload) {
   }
   else if (action === 'generate_code') await generateCode(payload && payload.prompt ? payload.prompt : '');
   else if (action === 'save_snippet_named') await saveSnippetAccessible(payload && payload.name ? payload.name : 'Untitled');
-  else if (action === 'load_snippet')    await loadSnippetById(payload && payload.id);
+  else if (action === 'save_snippet_auto')  await saveSnippetAccessible();
+  else if (action === 'list_snippets')   await listSnippetsAccessible();
+  else if (action === 'load_snippet')    await loadSnippetById(payload && payload.id, payload && payload.confirmed);
   else if (action === 'delete_snippet')  await deleteSnippetById(payload && payload.id);
   else if (action === 'rename_snippet')  await renameSnippetById(payload && payload.id, payload && payload.new_name ? payload.new_name : 'Renamed');
   else if (action === 'preview_snippet') await previewSnippetById(payload && payload.snippet_id);
@@ -2045,6 +2332,7 @@ async function handleConfirmedAction(action, payload) {
   else if (action === 'next_line')       nextLine();
   else if (action === 'prev_line')       prevLine();
   else if (action === 'clear_editor')    clearEditor();
+  else if (action === 'conversational_edit') applyConversationalEdit(payload && payload.ai_action);
   else if (action === 'delete_line')     deleteLine(payload && payload.line ? payload.line : 1);
   else if (action === 'read_function')   readFunction(payload && payload.function_name ? payload.function_name : '');
   else if (action === 'summarize')       await summarizeFile();
@@ -2875,6 +3163,7 @@ function tryResolveConfirmation(txt) {
     return false;  // let the new command flow through normally
   }
   const options = pendingConfirm.options || [];
+  const context = pendingConfirm.context || {};
   const lower   = txt.toLowerCase().trim();
 
   // 1. Explicit cancel — user wants out
@@ -2887,12 +3176,21 @@ function tryResolveConfirmation(txt) {
     return true;
   }
 
+  const yesWords = ['yes', 'yeah', 'yep', 'confirm', 'continue', 'go ahead', 'ok', 'okay'];
+  if (yesWords.some(w => lower === w) && options.length === 1) {
+    const chosen = options[0];
+    pendingConfirm = null;
+    speak('Got it. ' + chosen.replace(/_/g, ' ') + '.');
+    handleConfirmedAction(chosen, context);
+    return true;
+  }
+
   // 2. Exact match on one of the offered options — clear yes
   for (const opt of options) {
     if (lower === opt || lower === opt.replace(/_/g, ' ')) {
       pendingConfirm = null;
       speak('Got it. ' + opt.replace(/_/g, ' ') + '.');
-      handleConfirmedAction(opt, pendingConfirm && pendingConfirm.context || {});
+      handleConfirmedAction(opt, context);
       return true;
     }
   }
@@ -2907,7 +3205,7 @@ function tryResolveConfirmation(txt) {
     const chosen = options[positionalMap[lower]];
     pendingConfirm = null;
     speak('Got it. ' + chosen.replace(/_/g, ' ') + '.');
-    handleConfirmedAction(chosen, {});
+    handleConfirmedAction(chosen, context);
     return true;
   }
 
@@ -2985,7 +3283,7 @@ async function handleCommandText(txt) {
     const res  = await fetch('/voice-command', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ text: txt }),
+      body:    JSON.stringify(buildVoiceCommandPayload(txt)),
     });
     const data = await res.json();
 
@@ -2995,7 +3293,8 @@ async function handleCommandText(txt) {
 
     if (action === 'unknown') {
       const heard = data.heard || txt;
-      speak(`I heard "${heard}", but I could not match it to a command. Say help to hear available commands.`);
+      const message = data.message || `I heard "${heard}", but I could not match it to a command. Say help to hear available commands.`;
+      speak(message);
       out(`Unrecognized command: "${heard}"`);
       return;
     }
@@ -3051,30 +3350,30 @@ function setVoiceButtonOff() {
   btn.classList.remove('cu-button-voice--paused');
 }
 
+function markVoiceListeningOff() {
+  _voiceEnabledByUser = false;
+  isListening = false;
+  AppState.isListening = false;
+  _voicePaused = false;
+  _voiceStartIsUserInitiated = false;
+  if (_restartTimer) { clearTimeout(_restartTimer); _restartTimer = null; }
+  _stopRecognitionWatchdog();
+  setVoiceButtonOff();
+}
+
 function toggleVoice() {
   // Use VoiceEngine if available
   if (typeof VoiceEngine !== 'undefined' && VoiceEngine.VoiceInput) {
-    if (VoiceEngine.VoiceInput.isPaused()) {
-      VoiceEngine.VoiceInput.unpause();
-      isListening = true;
-      AppState.isListening = true;
-      _voicePaused = false;
-      speak('Voice is back on.');
-      return;
-    }
-    if (VoiceEngine.VoiceInput.isActive()) {
+    if (VoiceEngine.VoiceInput.isActive() || VoiceEngine.VoiceInput.isPaused()) {
       VoiceEngine.VoiceInput.stop();
-      isListening = false;
-      AppState.isListening = false;
+      markVoiceListeningOff();
       speak('Voice control deactivated.');
     } else {
+      _voiceEnabledByUser = true;
       const started = VoiceEngine.VoiceInput.start(true);
       if (!started) {
         const msg = voiceUnavailableMessage();
-        isListening = false;
-        AppState.isListening = false;
-        _voicePaused = false;
-        setVoiceButtonOff();
+        markVoiceListeningOff();
         out(msg);
         speak(msg);
         srAnnounce('Speech recognition unavailable');
@@ -3084,15 +3383,12 @@ function toggleVoice() {
       AppState.isListening = true;
       _voicePaused = false;
       setTimeout(() => {
-        if (isListening && typeof VoiceEngine !== 'undefined' && VoiceEngine.VoiceInput && !VoiceEngine.VoiceInput.isActive()) {
+        if (_voiceEnabledByUser && isListening && typeof VoiceEngine !== 'undefined' && VoiceEngine.VoiceInput && !VoiceEngine.VoiceInput.isActive()) {
           const msg = 'Microphone access blocked. Please grant microphone permission and toggle voice again. Keyboard shortcuts and the typed command box still work.';
           out(msg);
           speak(msg);
           srAnnounce('Microphone access blocked');
-          isListening = false;
-          AppState.isListening = false;
-          _voicePaused = false;
-          setVoiceButtonOff();
+          markVoiceListeningOff();
         }
       }, 1500);
       // Provide audio feedback
@@ -3108,10 +3404,6 @@ function toggleVoice() {
     return;
   }
   // Legacy fallback
-  if (isListening && _voicePaused) {
-    resumeVoiceRecognition();
-    return;
-  }
   if (isListening) stopListening(); else startListening();
 }
 
@@ -3127,6 +3419,8 @@ function startListening() {
   }
   if (isListening) { speak('Already listening.'); return; }
 
+  _voiceEnabledByUser = true;
+  _voicePaused = false;
   recognition = new SR();
   recognition.continuous      = true;
   recognition.interimResults  = false;
@@ -3136,6 +3430,12 @@ function startListening() {
   recognition._backoffBase     = 300;
 
   recognition.onstart = () => {
+    if (!_voiceEnabledByUser) {
+      try { recognition.stop(); } catch (e) {}
+      markVoiceListeningOff();
+      _debugLog('Voice: blocked stale recognition start after manual off');
+      return;
+    }
     isListening = true;
     AppState.isListening = true;
     recognition._restartAttempts = 0;
@@ -3180,8 +3480,7 @@ function startListening() {
     if (!window._voiceGreetedThisSession) {
       window._voiceGreetedThisSession = true;
       if (lang === 'hi') {
-        // Hindi: minimal greeting. Demo testing has been English-only.
-        speak('कोड चलाओ कहें।');
+        speak('Voice on. Code run karo keh sakte ho.');
       } else {
         speak('Voice on.');
         if (hasCode) {
@@ -3196,6 +3495,7 @@ function startListening() {
   };
 
   recognition.onresult = async (event) => {
+    if (!_voiceEnabledByUser) return;
     const transcript = event.results[event.results.length - 1][0].transcript;
     _debugLog('Voice heard:', transcript);
     _lastRecognitionActivity = Date.now();  // any input proves recognition is alive
@@ -3232,16 +3532,21 @@ function startListening() {
   recognition.onerror = (event) => {
     _debugLog('Voice recognition error:', event.error);
     if (event.error === 'no-speech') { return; }
-    if (event.error === 'aborted')   { isListening = false; AppState.isListening = false; return; }
+    if (event.error === 'aborted') {
+      if (!_voiceEnabledByUser) {
+        markVoiceListeningOff();
+      } else {
+        isListening = false;
+        AppState.isListening = false;
+      }
+      return;
+    }
     if (event.error === 'audio-capture' || event.error === 'not-allowed') {
       const msg = 'Microphone access blocked. Please grant microphone permission and toggle voice again. Keyboard shortcuts and the typed command box still work.';
       out(msg);
       speak(msg);
       srAnnounce('Microphone access blocked');
-      isListening = false;
-      AppState.isListening = false;
-      _voicePaused = false;
-      setVoiceButtonOff();
+      markVoiceListeningOff();
       return;
     }
     _debugLog('Voice error (will retry):', event.error);
@@ -3249,7 +3554,7 @@ function startListening() {
 
   recognition.onend = () => {
     _debugLog('Voice: Session ended');
-    if (!isListening) return;
+    if (!isListening || !_voiceEnabledByUser) return;
     recognition._restartAttempts = (recognition._restartAttempts || 0) + 1;
     if (recognition._restartAttempts > 10) {
       recognition._restartAttempts = 0;
@@ -3261,7 +3566,8 @@ function startListening() {
       _restartTimer = null;
       _voiceStartIsUserInitiated = false;
       try {
-        if (isListening) recognition.start();
+        if (!(isListening && _voiceEnabledByUser)) return;
+        recognition.start();
         // Recognition is alive again — reset the watchdog
         _lastRecognitionActivity = Date.now();
       } catch (e) {
@@ -3270,7 +3576,8 @@ function startListening() {
         _debugLog('Auto-restart deferred:', e.message);
         setTimeout(() => {
           try {
-            if (isListening) recognition.start();
+            if (!(isListening && _voiceEnabledByUser)) return;
+            recognition.start();
             _lastRecognitionActivity = Date.now();
           }
           catch (e2) {
@@ -3278,21 +3585,13 @@ function startListening() {
             // Third and final attempt
             setTimeout(() => {
               try {
-                if (isListening) recognition.start();
+                if (!(isListening && _voiceEnabledByUser)) return;
+                recognition.start();
                 _lastRecognitionActivity = Date.now();
               } catch (e3) {
                 // Recognition is dead. Stop lying to the user about state.
                 _debugLog('Recognition session permanently lost. Reconciling.');
-                isListening = false;
-                AppState.isListening = false;
-                _voicePaused = false;
-                const btn = document.getElementById('voiceButton');
-                if (btn) {
-                  btn.textContent = '🎤 Voice (Off)';
-                  btn.setAttribute('aria-pressed', 'false');
-                  btn.classList.remove('cu-button-voice--active');
-                  btn.classList.remove('cu-button-voice--paused');
-                }
+                markVoiceListeningOff();
                 // Audible cue so the user knows something happened
                 SonificationManager.playTone(300, 0.15, 0.1);
                 speak('Voice recognition stopped unexpectedly. Press the voice button or Control Shift M to restart.');
@@ -3313,35 +3612,44 @@ function startListening() {
     out(msg);
     speak(msg);
     srAnnounce('Speech recognition unavailable');
-    isListening = false; AppState.isListening = false;
-    setVoiceButtonOff();
+    markVoiceListeningOff();
     _voiceStartIsUserInitiated = false;
   }
 }
 
 function stopListening() {
   if (!recognition || !isListening) { speak('Voice control is not active.'); return; }
-  if (_restartTimer) { clearTimeout(_restartTimer); _restartTimer = null; }
-  _stopRecognitionWatchdog();
-  isListening = false;
-  AppState.isListening = false;
-  // Stopping fully clears paused state for this tab.
-  _voicePaused = false;
-  const btn = document.getElementById('voiceButton');
-  if (btn) {
-    btn.textContent = '🎤 Voice (Off)';
-    btn.setAttribute('aria-pressed', 'false');
-    btn.classList.remove('cu-button-voice--active');
-  }
-  recognition.stop();
+  markVoiceListeningOff();
+  try { recognition.stop(); } catch (e) {}
   speak('Voice control deactivated.');
   _debugLog('Voice: Listening stopped');
 }
 
-// Pause: keep the mic open so we can hear "resume", but drop every command
-// in between. This lets the presenter put on a blindfold and pitch without
-// CodeUp reacting to ambient speech.
+// Pause/off is a true manual stop. Recognition must not auto-resume until the
+// user explicitly turns voice on again.
 function pauseVoiceRecognition() {
+  const voiceEngineActive = typeof VoiceEngine !== 'undefined'
+    && VoiceEngine.VoiceInput
+    && (VoiceEngine.VoiceInput.isActive() || VoiceEngine.VoiceInput.isPaused());
+  if (!isListening && !voiceEngineActive) { speak('Voice control is not active.'); return; }
+  if (voiceEngineActive) {
+    VoiceEngine.VoiceInput.stop();
+  }
+  if (recognition) {
+    try { recognition.stop(); } catch (e) {}
+  }
+  markVoiceListeningOff();
+  SonificationManager.playTone(700, 0.08, 0.1);
+  setTimeout(() => SonificationManager.playTone(500, 0.12, 0.1), 100);
+  const offLang = getLanguage();
+  const offMsg = offLang === 'hi'
+    ? 'Voice off kar diya. Jab ready ho, Voice on kar sakte ho.'
+    : 'Voice off. I will not listen until you turn Voice on again.';
+  out(offMsg);
+  speak(offMsg);
+  srAnnounce('Voice off');
+  _debugLog('Voice: Manually off');
+  return;
   if (!isListening) { speak('Voice control is not active.'); return; }
   if (_voicePaused) { speak('Voice is already paused.'); return; }
   _voicePaused = true;
@@ -3386,11 +3694,13 @@ function resumeVoiceRecognition() {
   if (!isListening) {
     // If voice was off entirely, just turn it on instead of refusing.
     // Better UX than telling a presenter "voice control is not active".
+    _voiceEnabledByUser = true;
     _voicePaused = false;
     toggleVoice();
     return;
   }
   if (!_voicePaused) { speak('Voice is already listening.'); return; }
+  _voiceEnabledByUser = true;
   _voicePaused = false;
 
   const btn = document.getElementById('voiceButton');
@@ -3411,7 +3721,7 @@ function resumeVoiceRecognition() {
     _lastRecognitionActivity = Date.now();
   } catch (e) {
     _debugLog('Resume: stop failed, trying direct restart', e.message);
-    try { recognition.start(); _lastRecognitionActivity = Date.now(); }
+    try { if (_voiceEnabledByUser) { recognition.start(); _lastRecognitionActivity = Date.now(); } }
     catch (e2) { _debugLog('Resume: direct restart also failed', e2.message); }
   }
 
@@ -3512,7 +3822,7 @@ async function handleVoiceCommand(rawText) {
     // to our question — treat it as a fresh command and fall through.
   }
 
-  const cleaned = rawText.toLowerCase().trim()
+  const cleaned = String(rawText || '').trim()
     .replace(/^(please|can you|could you|would you|hey|okay|ok)\s+/gi, '')
     .replace(/\s+(please|thanks|thank you)$/gi, '')
     .trim();
@@ -3523,7 +3833,7 @@ async function handleVoiceCommand(rawText) {
     const res  = await fetch('/voice-command', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ text: cleaned }),
+      body:    JSON.stringify(buildVoiceCommandPayload(cleaned)),
     });
     const data = await res.json();
 
@@ -3547,7 +3857,7 @@ async function handleVoiceCommand(rawText) {
       _debugLog('Backend action:', data.action);
       await handleConfirmedAction(data.action, data);
     } else {
-      speak("I didn't understand that command. Say 'help' for available commands.");
+      speak(data.message || "I didn't understand that command. Say 'help' for available commands.");
       _debugLog('Command not recognized:', cleaned);
     }
   } catch (e) {

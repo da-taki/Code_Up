@@ -256,9 +256,21 @@ class IntentParser:
         r"^read\s+(?:me\s+)?(?:the\s+)?(?:file|code)$",
         r"^read\s+(?:the\s+)?(?:whole|entire|full)\s+(?:file|code)$",
         r"^read\s+(?:me\s+)?(?:the\s+)?(?:file|code)\s+(?:from\s+)?(?:start\s+to\s+(?:end|finish))?$",
-        r"^(?:walk|talk)\s+(?:me\s+)?through\s+(?:the\s+)?(?:file|code)$",
         r"^(?:पूरा|पूरी)\s+(?:file|कोड|code)\s+(?:पढ़ो|सुनाओ|narrate\s*करो)$",
         r"^(?:कोड|file)\s+(?:को\s+)?(?:शुरू\s+से\s+अंत\s+तक\s+)?(?:पढ़ो|सुनाओ)$",
+    ]
+
+    # "Walk through" / "explain this code" route to the holistic /walkthrough
+    # explanation (what the program does and why), NOT the literal line-by-line
+    # read above. "read the code" stays a literal narrate. These patterns must
+    # require a code/program object so "walk me through this slowly" still falls
+    # to the mentor walkthrough and "explain the error" stays a mentor question.
+    WALK_THROUGH_PATTERNS = [
+        r"^(?:walk|talk|take)\s+(?:me\s+)?through\s+(?:this\s+|the\s+)?(?:code|program)$",
+        r"^(?:walk|take)\s+(?:me\s+)?through\s+(?:this|it)$",
+        r"^explain\s+what\s+(?:this\s+|the\s+)?(?:code|program)\s+does$",
+        r"^explain\s+(?:this\s+|the\s+)?(?:code|program)(?:\s+step\s+by\s+step)?$",
+        r"^step\s+by\s+step\s+explanation(?:\s+of\s+(?:this\s+|the\s+)?(?:code|program))?$",
     ]
 
     DEMO_LIST_PATTERNS = [
@@ -982,6 +994,9 @@ class IntentParser:
             "fix":            self.FIX_PATTERNS,
             "advise":         self.ADVISE_PATTERNS,
             "summarize":      self.SUMMARIZE_PATTERNS,
+            # Holistic walkthrough explanation — must precede narrate_file so a
+            # "walk through the code" request explains rather than literal-reads.
+            "walk_through":   self.WALK_THROUGH_PATTERNS,
             "narrate_file":   self.NARRATE_FILE_PATTERNS,
             "demo_run":       self.DEMO_RUN_PATTERNS,
             "demo_list":      self.DEMO_LIST_PATTERNS,

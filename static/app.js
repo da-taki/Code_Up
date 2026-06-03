@@ -502,6 +502,14 @@ async function sonifyCurrentBlock() {
     return;
   }
 
+  // Single audio job: replace any in-flight step narration so its deferred
+  // cues and speech can't overlap this block's tones. (Re-triggering step
+  // narration already clears sonification, so this makes the rule symmetric.)
+  if (typeof _stepNarrationJob !== 'undefined' && _stepNarrationJob) {
+    _stepNarrationJob.cancelled = true;
+    _stepNarrationJob = null;
+    SpeechManager.cancelAll();
+  }
   SonificationManager.clearAll();
   const startMsg = `Sonifying block from line ${startLine} to line ${endLine}.`;
   out(startMsg);

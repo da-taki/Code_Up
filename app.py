@@ -1258,7 +1258,7 @@ def _local_error_explanation(code: str, err_text: str, language: str = "en", beg
         sample = f" Add four spaces before `{line_text}`." if line_text else ""
         if language == "hi":
             line_part = f"Line {line_no} par" if line_no else "Next line par"
-            sample_part = f" Print statement se pehle four spaces add karo." if line_text else ""
+            sample_part = " Print statement se pehle four spaces add karo." if line_text else ""
             return (
                 f"{line_part} indentation missing hai. Python spaces se samajhta hai ki kaunsa code loop ke andar hai. "
                 f"Print statement loop ke andar hona chahiye, isliye us line se pehle four spaces add karo.{sample_part}"

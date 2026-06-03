@@ -1948,12 +1948,14 @@ def _run_with_trace_for_narration(code: str, watched_vars: set, session_id: str)
                 "output": output_text, "error": limit_message, "steps": steps, "raw_trace": trace}
 
     narration.append("Starting execution.")
+    narration_lines: list = [None]
     step_count = 0
     MAX_NARRATION_STEPS = 200
 
     for event in trace:
         if step_count >= MAX_NARRATION_STEPS:
             narration.append(f"Narration capped at {MAX_NARRATION_STEPS} steps. The program continued beyond this point.")
+            narration_lines.append(None)
             break
 
         etype = event.get('type')
@@ -1968,7 +1970,6 @@ def _run_with_trace_for_narration(code: str, watched_vars: set, session_id: str)
                     continue
                 step = {"line": line, "description": change_str}
                 steps.append(step)
-                # Make it friendlier
                 if 'initialized to' in change_str:
                     narration.append(f"{var_name} becomes {change_str.split('initialized to ')[-1]}.")
                 elif 'changed from' in change_str:
@@ -1978,12 +1979,14 @@ def _run_with_trace_for_narration(code: str, watched_vars: set, session_id: str)
                     narration.append(f"{var_name} remains the same.")
                 else:
                     narration.append(change_str + ".")
+                narration_lines.append(line)
                 step_count += 1
 
         elif etype == 'call':
             func = event.get('function', '?')
             if func != '<module>':
                 narration.append(f"Entering function {func}.")
+                narration_lines.append(event.get('line'))
                 steps.append({"line": event.get('line'), "description": f"call {func}"})
                 step_count += 1
 
@@ -1991,20 +1994,24 @@ def _run_with_trace_for_narration(code: str, watched_vars: set, session_id: str)
             val = event.get('value', '')
             if val and val != 'None':
                 narration.append(f"Returned {val}.")
+                narration_lines.append(None)
                 steps.append({"line": 0, "description": f"return {val}"})
                 step_count += 1
 
         elif etype == 'overflow':
             narration.append("Trace limit reached. The program may have more steps.")
+            narration_lines.append(None)
             break
 
     if output_text:
         narration.append(f"Output: {output_text[:500]}")
+        narration_lines.append(None)
 
     narration.append("Execution complete.")
+    narration_lines.append(None)
 
-    return {"success": True, "narration": narration, "output": output_text,
-            "error": "", "steps": steps, "raw_trace": trace}
+    return {"success": True, "narration": narration, "narration_lines": narration_lines,
+            "output": output_text, "error": "", "steps": steps, "raw_trace": trace}
 
 
 _AUDIO_BREAKPOINT_VAR_RE = re.compile(r'^[A-Za-z_]\w*$')
@@ -2520,10 +2527,22 @@ def step_narration():
             if not _ai_unavailable(ai_text):
                 narration_text = ai_text
 
+    source_lines = code.splitlines()
+    narration_lines = result.get("narration_lines", [])
+    indent_depths = []
+    for ln in narration_lines:
+        if ln is not None and 1 <= ln <= len(source_lines):
+            src = source_lines[ln - 1]
+            spaces = len(src) - len(src.lstrip())
+            indent_depths.append(spaces // 4)
+        else:
+            indent_depths.append(-1)
+
     return jsonify({
         "success": result["success"],
         "narration": result["narration"],
         "narration_text": narration_text,
+        "indent_depths": indent_depths,
         "output": result.get("output", ""),
         "error": result.get("error", ""),
         "step_count": len(result.get("steps", [])),
@@ -3599,6 +3618,127 @@ def analyze_deep():
     user = f"Python code:\n```python\n{code}\n```"
     analysis = call_gemini(system, user, language=language, max_tokens=4096)
     return jsonify({"analysis": analysis, "speech": analysis, "auto_speak": True})
+
+
+# ==========================
+# WALKTHROUGH (beginner-friendly program explanation)
+# ==========================
+
+
+def _deterministic_walkthrough(code: str, language: str = "en") -> str:
+    """Build a basic structural explanation without AI."""
+    lines = code.strip().splitlines()
+    if not lines:
+        return "There is no code to walk through yet."
+
+    analyzer = CodeAnalyzer()
+    structure = analyzer.analyze(code)
+    if structure.get("error"):
+        err = structure["error"]
+        if language == "hi":
+            return (
+                f"Is code mein ek problem hai: {err}. "
+                "Pehle error fix karo, phir walkthrough try karo."
+            )
+        return (
+            f"This code has a problem: {err}. "
+            "Fix the error first, then try the walkthrough again."
+        )
+
+    parts = []
+    non_blank = sum(1 for ln in lines if ln.strip())
+    if language == "hi":
+        parts.append(f"Is program mein {non_blank} line{'s' if non_blank != 1 else ''} of code hai{'n' if non_blank != 1 else ''}.")
+    else:
+        parts.append(f"This program has {non_blank} line{'s' if non_blank != 1 else ''} of code.")
+
+    loops = structure.get("loops", [])
+    functions = structure.get("functions", [])
+    classes = structure.get("classes", [])
+
+    for fn in functions:
+        params = fn.get("params", [])
+        pnames = []
+        for p in params:
+            pnames.append(p.get("name", str(p)) if isinstance(p, dict) else str(p))
+        pstr = ", ".join(pnames) if pnames else "no parameters"
+        parts.append(f"It defines a function called {fn['name']} that takes {pstr}.")
+
+    for cls in classes:
+        methods = cls.get("methods", [])
+        mstr = ", ".join(methods[:5]) if methods else "no methods"
+        parts.append(f"It defines a class called {cls['name']} with {mstr}.")
+
+    for lp in loops:
+        parts.append(f"There is a {lp['type']} loop on line {lp['line']}.")
+
+    for i, line in enumerate(lines):
+        trimmed = line.strip()
+        if trimmed.startswith("print("):
+            arg = trimmed[6:].rstrip(")")
+            indent = len(line) - len(line.lstrip())
+            if indent > 0:
+                parts.append(f"Line {i + 1} is indented, meaning it runs inside the block above it. It prints {arg}.")
+            else:
+                parts.append(f"Line {i + 1} prints {arg}.")
+        elif "=" in trimmed and not trimmed.startswith(("if ", "elif ", "while ", "for ", "def ", "class ", "#", "==", "!=")):
+            m = re.match(r"^(\w+)\s*=\s*(.+)$", trimmed)
+            if m:
+                parts.append(f"Line {i + 1} creates a variable called {m.group(1)} and sets it to {m.group(2)}.")
+
+    return " ".join(parts)
+
+
+@app.route("/walkthrough", methods=["POST"])
+def walkthrough():
+    body = safejson()
+    code = safe(body.get("code"), "")
+    language = safe(body.get("language"), "en")
+
+    if len(code) > MAX_CODE_SIZE:
+        return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
+    if not code.strip():
+        msg = "There is no code to walk through yet." if language != "hi" else "Abhi editor mein koi code nahi hai."
+        return jsonify({"success": True, "explanation": msg, "speech": msg, "auto_speak": True})
+    blocked = _reject_non_python_response(code)
+    if blocked:
+        return blocked
+
+    if language == "hi":
+        system = (
+            "Aap ek friendly Python tutor ho jo blind student ko padhate ho.\n"
+            "Code ka walkthrough do — explain karo ki program kya karta hai, step by step.\n"
+            "Batao ki kaunsi line kya karti hai aur kyun. Loops mein batao ki kitni baar chalega aur kya output aayega.\n"
+            "Agar code mein error hai (jaise indentation) toh clearly batao ki program abhi chal nahi payega aur kyun.\n"
+            "Spoken Roman Hinglish mein likho. Technical terms (loop, print, variable, indentation) English mein rakhna.\n"
+            "8 sentences se kam. No markdown. No code blocks."
+        )
+    else:
+        system = (
+            "You are a friendly Python tutor explaining code to a blind beginner student.\n"
+            "Walk through what this program does step by step.\n"
+            "Explain what each meaningful line does and WHY, not just what it says.\n"
+            "For loops, explain how many times they run and what values the variable takes.\n"
+            "For nested lines, explain that they are inside the loop or block above.\n"
+            "If the code has a syntax error (like missing indentation), clearly state that the program "
+            "cannot run as written and explain the problem.\n"
+            "Mention what the final output would be.\n"
+            "Under 8 sentences. Spoken English only. No markdown. No code blocks."
+        )
+
+    user = f"Python code:\n```python\n{code}\n```"
+    explanation = call_gemini(system, user, temperature=0.2, language=language)
+
+    if _ai_unavailable(explanation):
+        explanation = _deterministic_walkthrough(code, language)
+
+    return jsonify({
+        "success": True,
+        "explanation": explanation,
+        "speech": explanation,
+        "auto_speak": True,
+    })
+
 
 # ==========================
 # ADVISE (FEATURE / IMPROVEMENT SUGGESTIONS)

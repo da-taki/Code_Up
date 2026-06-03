@@ -449,8 +449,11 @@ async function sonifyCurrentBlock() {
   if (!model) return;
   if (!ensurePythonEditorContent('sonify block')) return;
   const pos         = editor.getPosition() || { lineNumber: 1 };
-  const currentLine = pos.lineNumber;
   const lines       = getCode().split('\n');
+  let currentLine = Math.max(1, Math.min(pos.lineNumber, lines.length));
+  while (currentLine > 1 && !String(lines[currentLine - 1] || '').trim()) {
+    currentLine -= 1;
+  }
   const currentIndent = getIndentLevel(lines[currentLine - 1]);
 
   let startLine = currentLine;
@@ -463,9 +466,15 @@ async function sonifyCurrentBlock() {
     if (getIndentLevel(lines[i]) < currentIndent && lines[i].trim()) { endLine = i + 1; break; }
     if (i === lines.length - 1) endLine = i + 1;
   }
+  while (endLine > startLine && !String(lines[endLine - 1] || '').trim()) {
+    endLine -= 1;
+  }
 
   SonificationManager.clearAll();
-  speak(`Sonifying block from line ${startLine} to line ${endLine}`);
+  const startMsg = `Sonifying block from line ${startLine} to line ${endLine}.`;
+  out(startMsg);
+  speak(startMsg);
+  srAnnounce(startMsg);
 
   const jobId = Date.now();
   SonificationManager.startJob(jobId);
@@ -477,7 +486,12 @@ async function sonifyCurrentBlock() {
     SonificationManager.pushTimer(jobId, t);
     delay += 120;
   }
-  const fin = setTimeout(() => { speak('Block sonification complete.'); SonificationManager.cancelJob(jobId); }, delay + 200);
+  const fin = setTimeout(() => {
+    out(`${startMsg}\nBlock sonification complete.`);
+    speak('Block sonification complete.');
+    srAnnounce('Block sonification complete');
+    SonificationManager.cancelJob(jobId);
+  }, delay + 200);
   SonificationManager.pushTimer(jobId, fin);
 }
 

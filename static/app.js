@@ -2307,7 +2307,7 @@ async function handleConfirmedAction(action, payload) {
     SpeechManager.cancelAll();
     SonificationManager.clearAll();
     ErrorBeaconManager.stop();
-    if (typeof _walkActive !== 'undefined') _walkActive = false;
+    if (typeof _stepNarrationJob !== 'undefined' && _stepNarrationJob) { _stepNarrationJob.cancelled = true; }
     out('Stopped.');
     SonificationManager.playTone(400, 0.08, 0.08);
   }
@@ -3100,8 +3100,24 @@ async function requestAudioBreakpoint(action, condition, options) {
 }
 
 // ---------- STEP NARRATION ----------
+let _stepNarrationJob = null;
+
+function _playDepthCue(depth) {
+  if (depth < 0) return;
+  const freq = 260 + Math.min(depth, 5) * 150;
+  SonificationManager.playTone(freq, 0.1, 0.08);
+}
+
 async function requestStepNarration() {
   if (!ensurePythonEditorContent('step narration')) return;
+  if (_stepNarrationJob) {
+    _stepNarrationJob.cancelled = true;
+    SpeechManager.cancelAll();
+    SonificationManager.clearAll();
+  }
+  const job = { cancelled: false };
+  _stepNarrationJob = job;
+
   showAI('Running with step narration...');
   try {
     const res = await fetch('/step-narration', {
@@ -3109,18 +3125,50 @@ async function requestStepNarration() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ code: getCode(), language: getLanguage() }),
     });
+    if (job.cancelled) return;
     const data = await res.json();
+    if (job.cancelled) return;
+
     if (data.output) { out(data.output); }
-    const narration = data.paused
-      ? (data.speech || data.narration_text || (data.narration || []).join(' '))
-      : (data.narration_text || data.speech || (data.narration || []).join(' ') || data.error || 'No narration available.');
-    out(narration);
-    speak(narration);
-    srAnnounce('Step narration complete');
+
+    const depths = data.indent_depths || [];
+    const steps = data.narration || [];
+
+    if (steps.length > 0 && depths.length === steps.length) {
+      const fullText = data.narration_text || data.speech || steps.join(' ');
+      out(fullText);
+
+      for (let i = 0; i < steps.length; i++) {
+        if (job.cancelled) return;
+        const depth = depths[i];
+        if (depth >= 0) {
+          _playDepthCue(depth);
+          await sleep(150);
+        }
+        if (job.cancelled) return;
+        await SpeechManager.enqueue(steps[i]);
+        if (job.cancelled) return;
+        let drainAttempts = 0;
+        while (window.speechSynthesis && window.speechSynthesis.speaking && !job.cancelled && drainAttempts < 80) {
+          await sleep(100);
+          drainAttempts++;
+        }
+        if (job.cancelled) return;
+        await sleep(200);
+      }
+    } else {
+      const narration = data.paused
+        ? (data.speech || data.narration_text || steps.join(' '))
+        : (data.narration_text || data.speech || steps.join(' ') || data.error || 'No narration available.');
+      out(narration);
+      speak(narration);
+    }
+
+    if (!job.cancelled) srAnnounce('Step narration complete');
   } catch (e) {
-    console.error(e);
-    speak('Step narration failed.');
+    if (!job.cancelled) { console.error(e); speak('Step narration failed.'); }
   } finally {
+    if (_stepNarrationJob === job) _stepNarrationJob = null;
     setTimeout(() => hideAI(), 1200);
   }
 }
@@ -3748,15 +3796,15 @@ async function handleVoiceCommand(rawText) {
     SpeechManager.cancelAll();
   }
 
-  // FAST PATH: if a walkthrough is running, intercept "stop" / "shut up" /
+  // FAST PATH: if step narration is running, intercept "stop" / "shut up" /
   // "be quiet" / "cancel" client-side BEFORE the /voice-command round trip.
-  if (_walkActive) {
+  if (_stepNarrationJob && !_stepNarrationJob.cancelled) {
     const t = rawText.toLowerCase().trim();
     const stopWords = ['stop', 'stop it', 'shut up', 'be quiet', 'silence',
                        'stop talking', 'cancel', 'enough', 'quit',
                        'रुको', 'बंद करो', 'चुप', 'रुक'];
     if (stopWords.some(w => t === w)) {
-      _walkActive = false;
+      _stepNarrationJob.cancelled = true;
       SpeechManager.cancelAll();
       SonificationManager.clearAll();
       ErrorBeaconManager.stop();
@@ -3884,9 +3932,10 @@ window.addEventListener('DOMContentLoaded', () => {
       const inputDialog = document.getElementById('_cuInputDialog');
       const dialogOpen  = !!(inputDialog && !inputDialog.hidden);
       if (paletteOpen || dialogOpen) return;
-      if (AppState.isSpeaking || (window.speechSynthesis && window.speechSynthesis.speaking) || _walkActive) {
-        _walkActive = false;
+      if (AppState.isSpeaking || (window.speechSynthesis && window.speechSynthesis.speaking) || (_stepNarrationJob && !_stepNarrationJob.cancelled)) {
+        if (_stepNarrationJob) _stepNarrationJob.cancelled = true;
         SpeechManager.cancelAll();
+        SonificationManager.clearAll();
         ErrorBeaconManager.stop();
         srAnnounce('Speech stopped');
         SonificationManager.playTone(600, 0.05, 0.06);
@@ -5238,138 +5287,31 @@ function pronounceVariableJS(name) {
   return map[name.toLowerCase()] || name;
 }
 
-// ---------- WALK THROUGH CODE (sonify + narrate every line) ----------
-let _walkActive = false;
+// ---------- WALK THROUGH CODE (AI-powered beginner explanation) ----------
 
 async function walkThroughCode() {
-  if (_walkActive) {
-    _walkActive = false;
-    SpeechManager.cancelAll();
-    SonificationManager.clearAll();
-    speak('Walkthrough stopped.');
-    return;
-  }
-  const model = getModel();
-  if (!model) { speak('Editor not ready.'); return; }
+  if (!ensurePythonEditorContent('walk through')) return;
   const code = getCode();
   if (!code.trim()) { speak('The editor is empty. Write some code first.'); return; }
-  if (!ensurePythonEditorContent('walk through')) return;
 
-  _walkActive = true;
-  SpeechManager.cancelAll();
-  await sleep(400);
-
-  // Wait for the speech engine to fully drain before starting
-  let drainAttempts = 0;
-  while (window.speechSynthesis && window.speechSynthesis.speaking && drainAttempts < 20) {
-    await sleep(100);
-    drainAttempts++;
-  }
-
-  // STEP 1: Show the full code in the output box up front so the user
-  // (or a sighted helper) can see/read the whole program before narration.
-  const lines = code.split('\n');
-  const fullCodeDisplay = 'WALKING THROUGH YOUR CODE:\n\n' +
-    lines.map((l, i) => `${i + 1}: ${l}`).join('\n') +
-    '\n\n--- NARRATION ---\n';
-  out(fullCodeDisplay);
-
-  speak('Walking through your code. Press Escape to stop at any time.');
-  await sleep(500);
-  drainAttempts = 0;
-  while (window.speechSynthesis && window.speechSynthesis.speaking && drainAttempts < 30) {
-    await sleep(100);
-    drainAttempts++;
-  }
-
-  // STEP 2: Narrate each line. APPEND descriptions to the output box
-  // instead of replacing it, so the full code stays visible.
-  const outputEl = document.getElementById('output');
-  let narrationLog = '';
-
-  for (let i = 0; i < lines.length; i++) {
-    if (!_walkActive) return;
-    const line = lines[i];
-    const lineNum = i + 1;
-    const trimmed = line.trim();
-
-    try {
-      editor.setPosition({ lineNumber: lineNum, column: 1 });
-      editor.revealLineInCenter(lineNum);
-    } catch (e) {}
-
-    const indent = Math.floor(getIndentLevel(line));
-
-    // Build description (same logic as before)
-    let desc;
-    if (!trimmed) {
-      desc = `Line ${lineNum}: blank line.`;
-    } else if (trimmed.startsWith('#')) {
-      desc = `Line ${lineNum}, comment: ${trimmed.replace(/^#\s*/, '')}.`;
-    } else if (trimmed.startsWith('def ')) {
-      const m = trimmed.match(/^def\s+(\w+)\(([^)]*)\)/);
-      if (m) {
-        const params = m[2].trim();
-        desc = `Line ${lineNum}, defines function ${m[1]}` + (params ? ` taking ${params}.` : ' with no parameters.');
-      } else {
-        desc = `Line ${lineNum}, function definition: ${trimmed}.`;
-      }
-    } else if (trimmed.startsWith('class ')) {
-      const m = trimmed.match(/^class\s+(\w+)/);
-      desc = m ? `Line ${lineNum}, defines class ${m[1]}.` : `Line ${lineNum}, class definition.`;
-    } else if (trimmed.startsWith('for ')) {
-      desc = `Line ${lineNum}, for loop: ${trimmed.replace(/^for\s+/, '').replace(/:$/, '')}.`;
-    } else if (trimmed.startsWith('while ')) {
-      desc = `Line ${lineNum}, while loop: ${trimmed.replace(/^while\s+/, '').replace(/:$/, '')}.`;
-    } else if (trimmed.startsWith('if ')) {
-      desc = `Line ${lineNum}, if condition: ${trimmed.replace(/^if\s+/, '').replace(/:$/, '')}.`;
-    } else if (trimmed.startsWith('elif ')) {
-      desc = `Line ${lineNum}, else if: ${trimmed.replace(/^elif\s+/, '').replace(/:$/, '')}.`;
-    } else if (trimmed.startsWith('else')) {
-      desc = `Line ${lineNum}, else branch.`;
-    } else if (trimmed.startsWith('return')) {
-      desc = `Line ${lineNum}, returns: ${trimmed.replace(/^return\s*/, '') || 'nothing'}.`;
-    } else if (trimmed.startsWith('import ') || trimmed.startsWith('from ')) {
-      desc = `Line ${lineNum}, ${trimmed}.`;
-    } else if (/^\w+\s*=/.test(trimmed)) {
-      const m = trimmed.match(/^(\w+)\s*=\s*(.+)$/);
-      desc = m ? `Line ${lineNum}, assigns ${m[1]} to ${m[2]}.` : `Line ${lineNum}: ${trimmed}.`;
-    } else if (trimmed.startsWith('print(')) {
-      desc = `Line ${lineNum}, prints: ${trimmed.replace(/^print\(/, '').replace(/\)$/, '')}.`;
-    } else {
-      desc = `Line ${lineNum}: ${trimmed}.`;
-    }
-
-    // APPEND, don't replace — full code + accumulated narration stays visible
-    narrationLog += desc + '\n';
-    if (outputEl) {
-      outputEl.textContent = fullCodeDisplay + narrationLog;
-    }
-
-    sonifyLine(line, indent);
-    await sleep(300);
-    if (!_walkActive) return;
-
-    await SpeechManager.enqueue(desc);
-    if (!_walkActive) return;
-
-    let postSpeakAttempts = 0;
-    while (window.speechSynthesis && window.speechSynthesis.speaking && _walkActive && postSpeakAttempts < 60) {
-      await sleep(100);
-      postSpeakAttempts++;
-    }
-    if (!_walkActive) return;
-
-    await sleep(400);
-    if (!_walkActive) return;
-  }
-
-  if (_walkActive) {
-    _walkActive = false;
-    speak('Walkthrough complete.');
-    if (outputEl) {
-      outputEl.textContent = fullCodeDisplay + narrationLog + '\nWalkthrough complete.';
-    }
+  showAI('Walking through your code...');
+  speak('Let me walk through your code.');
+  try {
+    const res = await fetch('/walkthrough', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, language: getLanguage() }),
+    });
+    const data = await res.json();
+    const explanation = data.explanation || data.speech || data.error || 'No walkthrough available.';
+    out(explanation);
+    speak(explanation);
+    srAnnounce('Walkthrough complete');
+  } catch (e) {
+    console.error(e);
+    speak('Walkthrough failed.');
+  } finally {
+    setTimeout(() => hideAI(), 1200);
   }
 }
 

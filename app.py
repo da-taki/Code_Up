@@ -1952,24 +1952,96 @@ def _run_with_trace_for_narration(code: str, watched_vars: set, session_id: str)
     step_count = 0
     MAX_NARRATION_STEPS = 200
 
+    # --- Source-line helpers for learner-visible cue semantics --------------
+    # Cues must reflect the indentation depth of the *source line a learner
+    # sees execute* (an output statement, an assignment), not the line where a
+    # variable change happens to be detected by the tracer. The raw trace is
+    # left untouched (the conditional-breakpoint feature and trace playback
+    # depend on it); all of this only shapes the spoken narration and the
+    # per-step indent depths the frontend turns into structural beeps.
+    src_lines = (code or "").splitlines()
+
+    def _src_line(lineno):
+        if lineno and 1 <= lineno <= len(src_lines):
+            return src_lines[lineno - 1]
+        return None
+
+    def _is_print_line(lineno):
+        src = _src_line(lineno)
+        return bool(src and re.match(r'\s*print\s*\(', src))
+
+    def _is_loop_header(lineno):
+        src = _src_line(lineno)
+        if not src:
+            return False
+        stripped = src.lstrip()
+        return stripped.startswith('for ') or stripped.startswith('while ')
+
+    # Each executed print line maps to one learner-visible output line. When the
+    # count of executed print lines matches the produced output lines we can
+    # narrate and cue each output at the exact depth of the print that produced
+    # it. If they don't line up (multi-line prints, end='', echoed input), we
+    # fall back to a single collapsed "Output:" line with no misleading cue.
+    out_lines = output_text.split('\n') if output_text else []
+    print_exec_count = sum(
+        1 for ev in trace
+        if ev.get('type') == 'line_exec' and _is_print_line(ev.get('line'))
+    )
+    per_print_mode = print_exec_count > 0 and print_exec_count == len(out_lines)
+    out_cursor = 0
+
+    # An assignment's effect is only visible to the tracer on the *next* line
+    # event, so a state change reported on line N was actually produced by the
+    # line that executed just before it. Track the last two executed lines so we
+    # can attribute each change to the line that caused it.
+    prev1 = None  # most recently executed source line
+    prev2 = None  # the line executed before prev1 (the cause of a fresh change)
+    pending_output = None  # (line, value) deferred until the print actually runs
+
+    def _flush_output():
+        nonlocal pending_output, step_count
+        if pending_output is None:
+            return
+        pline, pval = pending_output
+        pending_output = None
+        narration.append(f"The program prints {pval}." if pval else "The program prints a blank line.")
+        narration_lines.append(pline)
+        steps.append({"line": pline, "description": f"output {pval}"})
+        step_count += 1
+
     for event in trace:
         if step_count >= MAX_NARRATION_STEPS:
+            _flush_output()
             narration.append(f"Narration capped at {MAX_NARRATION_STEPS} steps. The program continued beyond this point.")
             narration_lines.append(None)
             break
 
         etype = event.get('type')
 
-        if etype == 'state_change':
+        if etype == 'line_exec':
+            # A new line is running, so any deferred print output has now been
+            # produced and is narrated before this line's effects.
+            _flush_output()
             line = event.get('line')
-            changes = event.get('changes', [])
-            for change_str in changes:
+            prev2 = prev1
+            prev1 = line
+            if per_print_mode and _is_print_line(line) and out_cursor < len(out_lines):
+                pending_output = (line, out_lines[out_cursor][:200])
+                out_cursor += 1
+
+        elif etype == 'state_change':
+            # Attribute the change to the line that caused it (prev2), not the
+            # line where the tracer noticed it. Skip the loop-induction variable
+            # bound by a for/while header so cues track learner-visible work.
+            causing = prev2 if prev2 is not None else event.get('line')
+            if _is_loop_header(causing):
+                continue
+            for change_str in event.get('changes', []):
                 parts = change_str.split(' ', 1)
                 var_name = parts[0] if parts else ''
                 if watched_vars and var_name not in watched_vars:
                     continue
-                step = {"line": line, "description": change_str}
-                steps.append(step)
+                steps.append({"line": causing, "description": change_str})
                 if 'initialized to' in change_str:
                     narration.append(f"{var_name} becomes {change_str.split('initialized to ')[-1]}.")
                 elif 'changed from' in change_str:
@@ -1979,10 +2051,11 @@ def _run_with_trace_for_narration(code: str, watched_vars: set, session_id: str)
                     narration.append(f"{var_name} remains the same.")
                 else:
                     narration.append(change_str + ".")
-                narration_lines.append(line)
+                narration_lines.append(causing)
                 step_count += 1
 
         elif etype == 'call':
+            _flush_output()
             func = event.get('function', '?')
             if func != '<module>':
                 narration.append(f"Entering function {func}.")
@@ -1991,6 +2064,7 @@ def _run_with_trace_for_narration(code: str, watched_vars: set, session_id: str)
                 step_count += 1
 
         elif etype == 'return':
+            _flush_output()
             val = event.get('value', '')
             if val and val != 'None':
                 narration.append(f"Returned {val}.")
@@ -1999,11 +2073,16 @@ def _run_with_trace_for_narration(code: str, watched_vars: set, session_id: str)
                 step_count += 1
 
         elif etype == 'overflow':
+            _flush_output()
             narration.append("Trace limit reached. The program may have more steps.")
             narration_lines.append(None)
             break
 
-    if output_text:
+    _flush_output()
+
+    # Only emit the collapsed output line when we could not narrate output
+    # per-statement above; otherwise it would duplicate the per-print steps.
+    if output_text and not per_print_mode:
         narration.append(f"Output: {output_text[:500]}")
         narration_lines.append(None)
 
@@ -3625,6 +3704,92 @@ def analyze_deep():
 # ==========================
 
 
+def _literal_int(node) -> Optional[int]:
+    """Return the integer value of a literal AST node, or None.
+
+    Accepts plain int constants and unary-minus on an int (e.g. ``-1``) so a
+    canonical ``range(...)`` walkthrough can be computed without executing code.
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, int) and not isinstance(node.value, bool):
+        return node.value
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+        inner = _literal_int(node.operand)
+        return -inner if inner is not None else None
+    return None
+
+
+def _canonical_loop_walkthrough(code: str, language: str = "en") -> Optional[str]:
+    """Concise, correct explanation for the canonical beginner loop.
+
+    Matches a program whose only statement is ``for <var> in range(...):`` with a
+    single ``print(<var>)`` body, where the range bounds are integer literals.
+    For that shape we can state the iteration count, the exact values the loop
+    variable takes, and the resulting output — the things a blind beginner most
+    needs — without running the code or relying on AI. Returns None for anything
+    else so the general structural explanation is used instead.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return None
+    if len(tree.body) != 1 or not isinstance(tree.body[0], ast.For):
+        return None
+    loop = tree.body[0]
+    if loop.orelse or not isinstance(loop.target, ast.Name):
+        return None
+    var = loop.target.id
+    it = loop.iter
+    if not (isinstance(it, ast.Call) and isinstance(it.func, ast.Name)
+            and it.func.id == "range" and not it.keywords):
+        return None
+    args = [_literal_int(a) for a in it.args]
+    if not (1 <= len(args) <= 3) or any(a is None for a in args):
+        return None
+    try:
+        values = list(range(*args))
+    except (ValueError, TypeError):
+        return None
+    if not values or len(values) > 50:
+        return None
+    # Body must be exactly one print() call.
+    if len(loop.body) != 1 or not isinstance(loop.body[0], ast.Expr):
+        return None
+    call = loop.body[0].value
+    if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id == "print"):
+        return None
+    prints_var = (len(call.args) == 1 and isinstance(call.args[0], ast.Name)
+                  and call.args[0].id == var)
+
+    count = len(values)
+    values_str = ", ".join(str(v) for v in values)
+    if prints_var:
+        outputs_str = ", then ".join(str(v) for v in values)
+        if language == "hi":
+            return (
+                f"Is program mein ek loop hai. Loop {count} baar chalta hai, aur "
+                f"variable {var} ki values {values_str} hoti hain. Loop ke andar "
+                f"print({var}) indented hai, isliye har baar chalta hai. "
+                f"Output aata hai {outputs_str}, har ek alag line par."
+            )
+        return (
+            f"This program has a loop. The loop runs {count} times, and the "
+            f"variable {var} takes the values {values_str}. Inside the loop, "
+            f"print({var}) is indented, so it runs on every pass. The program "
+            f"prints {outputs_str}, each on its own line."
+        )
+    if language == "hi":
+        return (
+            f"Is program mein ek loop hai jo {count} baar chalta hai, jismein "
+            f"{var} ki values {values_str} hoti hain. Loop ke andar print "
+            f"statement indented hai, isliye har baar ek line output hoti hai."
+        )
+    return (
+        f"This program has a loop that runs {count} times, with {var} taking "
+        f"the values {values_str}. Inside the loop, the indented print runs on "
+        f"every pass, producing one line of output each time."
+    )
+
+
 def _deterministic_walkthrough(code: str, language: str = "en") -> str:
     """Build a basic structural explanation without AI."""
     lines = code.strip().splitlines()
@@ -3644,6 +3809,10 @@ def _deterministic_walkthrough(code: str, language: str = "en") -> str:
             f"This code has a problem: {err}. "
             "Fix the error first, then try the walkthrough again."
         )
+
+    canonical = _canonical_loop_walkthrough(code, language)
+    if canonical:
+        return canonical
 
     parts = []
     non_blank = sum(1 for ln in lines if ln.strip())
@@ -5713,6 +5882,8 @@ def voice():
             return _store_and_return({"success": True, "action": "summarize", "confidence": confidence})
         if intent == "narrate_file":
             return _store_and_return({"success": True, "action": "narrate_file", "confidence": confidence})
+        if intent == "walk_through":
+            return _store_and_return({"success": True, "action": "walk_through", "confidence": confidence})
         if intent == "demo_list":
             return _store_and_return({"success": True, "action": "demo_list", "confidence": confidence})
         if intent == "demo_run":

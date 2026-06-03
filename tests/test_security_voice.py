@@ -977,6 +977,9 @@ def test_command_input_enter_and_live_input_contracts_are_wired():
     submit_end = app_js.index("// ---------- VOICE ----------")
     submit_block = app_js[submit_start:submit_end]
     assert "sendStreamingInput(txt)" in submit_block
+    assert "buildVoiceCommandPayload(txt)" in app_js
+    assert "code: getCode()" in app_js
+    assert "error: errorText" in app_js
 
 
 def test_start_gate_is_removed_from_keyboard_order_after_language_choice():
@@ -1040,6 +1043,19 @@ def test_missing_body_handled(client):
     ("learning mode",               "mentor_mode",  lambda d: True),
     ("bug challenge",               "bug_challenge",lambda d: True),
     ("save snippet named my prog",  "save_snippet_named", lambda d: "my prog" in d.get("name", "")),
+    ("save code as a snippet",      "save_snippet_auto",  lambda d: True),
+    ("show my snippets",            "list_snippets",      lambda d: True),
+    ("load the snippet called first loop", "load_snippet", lambda d: d.get("id") == "first loop"),
+    ("turn voice off",              "pause_voice",        lambda d: True),
+    ("turn voice on",               "resume_voice",       lambda d: True),
+    ("code run karo",               "run",                lambda d: True),
+    ("editor clear karo",           "clear_editor",       lambda d: True),
+    ("code map batao",              "code_map",           lambda d: True),
+    ("step by step run karke samjhao", "step_narration",  lambda d: True),
+    ("meri mistake samjhao",        "replay_mistake",     lambda d: True),
+    ("block sonify karo",           "sonify_block",       lambda d: True),
+    ("is code ko first loop naam se snippet save karo", "save_snippet_named", lambda d: d.get("name") == "first loop"),
+    ("first loop wala snippet load karo", "load_snippet", lambda d: d.get("id") == "first loop"),
     ("generate code for fibonacci", "generate_code",lambda d: "fibonacci" in d.get("prompt", "")),
     ("rename snippet 1234 to final","rename_snippet",lambda d: d.get("new_name") == "final"),
     ("quiz me on loops",            "quiz_me",      lambda d: "loops" in d.get("topic", "")),
@@ -1066,6 +1082,137 @@ def test_voice_unknown_command(client):
     assert res.status_code == 200
     data = res.get_json()
     assert data["action"] in ("unknown", "confirm")
+
+
+def test_deterministic_voice_command_does_not_call_conversational_ai(client, monkeypatch):
+    def fail_call(*args, **kwargs):
+        raise AssertionError("deterministic route should not call AI")
+
+    monkeypatch.setattr(app_module, "call_gemini", fail_call)
+    res = client.post("/voice-command", json={"text": "clear editor", "code": "print('hi')"})
+    assert res.status_code == 200
+    assert res.get_json()["action"] == "clear_editor"
+
+
+def test_why_did_this_fail_routes_to_accessible_error_explainer_when_error_present(client):
+    res = client.post("/voice-command", json={
+        "text": "why did this fail",
+        "code": "for i in range(3):\nprint(i)",
+        "error": "IndentationError: expected an indented block after for statement on line 1",
+    })
+    assert res.status_code == 200
+    data = res.get_json()
+    assert data["action"] == "explain_simply"
+
+
+def test_conversational_voice_uses_validated_structured_ai_action(client, monkeypatch):
+    def fake_call(*args, **kwargs):
+        return json.dumps({
+            "action": "append_code",
+            "target": {"line_number": None, "position": "end_of_file"},
+            "code": "total = 0",
+            "spoken_confirmation": "I added total equals zero.",
+            "confidence": 0.94,
+            "requires_confirmation": False,
+        })
+
+    monkeypatch.setattr(app_module, "call_gemini", fake_call)
+    res = client.post("/voice-command", json={
+        "text": "Please put total equal to zero at the end.",
+        "code": "",
+    })
+    data = res.get_json()
+    assert data["action"] == "conversational_edit"
+    assert data["ai_action"]["action"] == "append_code"
+    assert data["ai_action"]["code"] == "total = 0"
+    assert data["ai_action"]["requires_confirmation"] is False
+
+
+def test_conversational_voice_rejects_unsafe_ai_action(client, monkeypatch):
+    def fake_call(*args, **kwargs):
+        return json.dumps({
+            "action": "shell",
+            "target": {"line_number": None, "position": "end_of_file"},
+            "code": "open('.env').read()",
+            "spoken_confirmation": "done",
+            "confidence": 0.99,
+            "requires_confirmation": False,
+        })
+
+    monkeypatch.setattr(app_module, "call_gemini", fake_call)
+    res = client.post("/voice-command", json={
+        "text": "Change the message to hello Arun.",
+        "code": 'message = "hello"\nprint(message)',
+    })
+    data = res.get_json()
+    assert data["action"] == "unknown"
+    assert "could not confidently" in data["message"].lower()
+
+
+def test_conversational_voice_rejects_malformed_ai_json(client, monkeypatch):
+    monkeypatch.setattr(app_module, "call_gemini", lambda *args, **kwargs: "not json")
+    res = client.post("/voice-command", json={
+        "text": "Change the message to hello Arun.",
+        "code": 'message = "hello"\nprint(message)',
+    })
+    data = res.get_json()
+    assert data["action"] == "unknown"
+    assert "rephrase" in data["message"].lower()
+
+
+def test_conversational_voice_local_demo_fallback_when_ai_unavailable(client, monkeypatch):
+    monkeypatch.setattr(app_module, "call_gemini", lambda *args, **kwargs: "AI service not configured.")
+    res = client.post("/voice-command", json={
+        "text": "remove the indentation before the print statement so I can see the error",
+        "code": "for i in range(3):\n    print(i)",
+    })
+    data = res.get_json()
+    assert data["action"] == "conversational_edit"
+    assert data["ai_action"]["action"] == "dedent_line"
+    assert data["ai_action"]["target"]["line_number"] == 2
+    assert data["ai_action"]["source"] == "local"
+
+
+def test_add_loop_that_prints_uses_conversational_router_not_greedy_insert_loop(client, monkeypatch):
+    monkeypatch.setattr(app_module, "call_gemini", lambda *args, **kwargs: "AI service not configured.")
+    res = client.post("/voice-command", json={
+        "text": "add a loop that prints the numbers zero to two",
+        "code": "",
+    })
+    data = res.get_json()
+    assert data["action"] == "conversational_edit"
+    assert data["ai_action"]["action"] == "append_code"
+    assert data["ai_action"]["code"] == "for i in range(3):\n    print(i)"
+
+
+def test_hinglish_loop_and_indentation_fallbacks_when_ai_unavailable(client, monkeypatch):
+    monkeypatch.setattr(app_module, "call_gemini", lambda *args, **kwargs: "AI service not configured.")
+
+    loop = client.post("/voice-command", json={
+        "text": "zero se two tak ek loop banao jo har number print kare",
+        "code": "",
+        "language": "hi",
+    }).get_json()
+    assert loop["action"] == "conversational_edit"
+    assert loop["ai_action"]["action"] == "append_code"
+    assert loop["ai_action"]["code"] == "for i in range(3):\n    print(i)"
+    assert "zero se two" in loop["ai_action"]["spoken_confirmation"].lower()
+
+    dedent = client.post("/voice-command", json={
+        "text": "print statement ke pehle wali indentation hata do taaki error dikhe",
+        "code": "for i in range(3):\n    print(i)",
+        "language": "hi",
+    }).get_json()
+    assert dedent["ai_action"]["action"] == "dedent_line"
+    assert dedent["ai_action"]["target"]["line_number"] == 2
+
+    indent = client.post("/voice-command", json={
+        "text": "print statement ko loop ke andar karo",
+        "code": "for i in range(3):\nprint(i)",
+        "language": "hi",
+    }).get_json()
+    assert indent["ai_action"]["action"] == "indent_line"
+    assert indent["ai_action"]["target"]["line_number"] == 2
 
 
 def test_voice_ambiguous_triggers_confirm(client):

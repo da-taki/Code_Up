@@ -113,6 +113,8 @@ class IntentParser:
         r"^launch\s*(?:code|program|it|this|that)?$",
         r"^play\s*(?:code|program|it|this|that)?$",
         r"^go\s*(?:now)?$",
+        r"^(?:code|program)\s+run\s+karo$",
+        r"^program\s+chalao$",
         # Casual phrasings — explicit terminators so "do it yourself" doesn't fire
         r"^let'?s?\s+(?:run|go|try)\s*(?:it|this|that)?\.?$",
         r"^try\s+(?:it|this|that)\.?$",
@@ -194,6 +196,8 @@ class IntentParser:
 
     SONIFY_BLOCK_PATTERNS = [
         r"^sonify(?:\s+(?:block|current\s+block|this|this\s+block|code))?$",
+        r"^block\s+sonify\s+karo$",
+        r"^is\s+block\s+ka\s+audio\s+structure\s+sunao$",
         r"^(?:audio|hear|play|sound\s+out)\s+(?:code\s+)?(?:structure|block)?$",
         r"^play\s+(?:the\s+)?code$",
         r"^make\s+(?:it\s+)?sing$",
@@ -221,6 +225,9 @@ class IntentParser:
 
     CLEAR_EDITOR_PATTERNS = [
         r"^(?:clear|reset)\s+(?:editor|code|file|the\s+editor)$",
+        r"^editor\s+clear\s+karo$",
+        r"^code\s+hata\s+do$",
+        r"^naya\s+code\s+shuru\s+karo$",
         # Hindi: "एडिटर साफ करो" / "कोड हटाओ"
         r"^(?:एडिटर|editor|कोड|code)\s+(?:को\s+)?(?:साफ|खाली|reset)\s*(?:करो|कीजिए)?$",
         r"^(?:कोड|code)\s+(?:को\s+)?(?:हटाओ|मिटाओ)$",
@@ -272,9 +279,13 @@ class IntentParser:
         r"^pause$",
         r"^pause\s+voice(?:\s+(?:recognition|control|input))?$",
         r"^pause\s+please$",
+        r"^(?:turn|switch)\s+voice\s+off$",
+        r"^voice\s+off$",
         r"^(?:stop|halt)\s+listening$",
         r"^(?:mute|silence)\s+(?:the\s+)?(?:mic|microphone)?$",
         r"^voice\s+pause$",
+        r"^voice\s+band\s+karo$",
+        r"^sunna\s+band\s+karo$",
         r"^go\s+(?:to\s+)?silent$",
         r"^(?:रुको\s+थोड़ा|pause\s*करो)$",
         r"^(?:आवाज़|voice)\s+(?:को\s+)?(?:रोको|बंद\s+करो|pause\s*करो)$",
@@ -285,9 +296,13 @@ class IntentParser:
         r"^resume$",
         r"^resume\s+voice(?:\s+(?:recognition|control|input))?$",
         r"^resume\s+please$",
+        r"^(?:turn|switch)\s+voice\s+on$",
+        r"^voice\s+on$",
         r"^(?:start|continue)\s+listening$",
         r"^(?:unmute|wake\s+up)$",
         r"^voice\s+resume$",
+        r"^voice\s+on\s+karo$",
+        r"^dobara\s+sunna\s+shuru\s+karo$",
         r"^(?:are\s+you\s+)?(?:listening)\??$",
         r"^come\s+back$",
         r"^(?:आवाज़|voice)\s+(?:को\s+)?(?:चालू\s+करो|शुरू\s+करो|resume\s*करो)$",
@@ -313,11 +328,35 @@ class IntentParser:
         r"rename\s+snippet\s+([a-z0-9\-]+)\s+to\s+(.+)",
     ]
 
+    SAVE_SNIPPET_AUTO_PATTERNS = [
+        r"^save\s+(?:this\s+)?(?:code|program)?\s+as\s+(?:a\s+)?snippet$",
+        r"^save\s+(?:this\s+)?(?:code|program)\s+as\s+(?:a\s+)?snippet$",
+        r"^is\s+code\s+ko\s+snippet\s+save\s+karo$",
+    ]
+
     SAVE_SNIPPET_NAMED_PATTERNS = [
+        r"^save\s+this\s+as\s+(?:a\s+)?snippet\s+(?:called|named)\s+(.+)$",
+        r"^save\s+(?:this\s+)?(?:code|program)?\s+as\s+(?:a\s+)?snippet\s+(?:called|named)\s+(.+)$",
+        r"^save\s+(?:this\s+)?program\s+as\s+(.+)$",
+        r"^is\s+code\s+ko\s+(.+?)\s+naam\s+se\s+snippet\s+save\s+karo$",
+        r"^is\s+code\s+ko\s+(.+?)\s+naam\s+se\s+save\s+karo$",
         r"save\s+(?:snippet|code)\s+(?:as\s+|named?\s+)(.+)",
         r"save\s+(?:this\s+)?(?:as\s+|named?\s+)(.+)",
         # Hindi: "snippet नाम से सेव करो X"
         r"(?:snippet|कोड)\s+(?:को\s+)?(.+?)\s+(?:नाम\s+से\s+)?(?:सेव|save)\s*(?:करो|कीजिए)?",
+    ]
+
+    LIST_SNIPPETS_PATTERNS = [
+        r"^(?:show|list|read)\s+(?:my\s+)?snippets$",
+        r"^what\s+snippets\s+(?:do\s+i\s+have|are\s+saved)$",
+        r"^mere\s+snippets\s+dikhao$",
+    ]
+
+    LOAD_SNIPPET_PATTERNS = [
+        r"^load\s+(?:the\s+)?snippet\s+(?:called|named)\s+(.+)$",
+        r"^load\s+snippet\s+(.+)$",
+        r"^(.+?)\s+wala\s+snippet\s+load\s+karo$",
+        r"^(.+?)\s+snippet\s+load\s+karo$",
     ]
 
     PREVIEW_SNIPPET_PATTERNS = [
@@ -364,8 +403,8 @@ class IntentParser:
     ]
 
     INSERT_LOOP_PATTERNS = [
-        r"insert\s+(?:a\s+)?(?:for\s+)?loop\s+(?:over\s+|for\s+)?(\w+)(?:\s+in\s+(\w+))?",
-        r"add\s+(?:a\s+)?(?:for\s+)?loop\s+(?:over\s+|for\s+)?(\w+)(?:\s+in\s+(\w+))?",
+        r"insert\s+(?:a\s+)?(?:for\s+)?loop\s+(?:over|for)\s+(\w+)(?:\s+in\s+(\w+))?",
+        r"add\s+(?:a\s+)?(?:for\s+)?loop\s+(?:over|for)\s+(\w+)(?:\s+in\s+(\w+))?",
         r"insert\s+(?:a\s+)?for\s+loop",
         r"add\s+(?:a\s+)?for\s+loop",
     ]
@@ -637,6 +676,8 @@ class IntentParser:
     CODE_MAP_PATTERNS = [
         r"^(?:give\s+me\s+)?(?:a\s+)?code\s+map$",
         r"^code\s+map$",
+        r"^code\s+map\s+batao$",
+        r"^code\s+ka\s+structure\s+samjhao$",
         r"^read\s+(?:the\s+)?structure$",
         r"^what\s+is\s+(?:the\s+)?structure$",
         r"^(?:show|describe)\s+(?:the\s+)?(?:code\s+)?structure$",
@@ -697,6 +738,8 @@ class IntentParser:
     STEP_NARRATION_PATTERNS = [
         r"^run\s+with\s+(?:step\s+)?narration$",
         r"^step\s+narration$",
+        r"^step\s+by\s+step\s+run\s+karke\s+samjhao$",
+        r"^har\s+step\s+narrate\s+karo$",
         r"^narrate\s+(?:the\s+)?(?:execution|run|steps?)$",
         r"^run\s+and\s+narrate$",
         r"^trace\s+(?:the\s+)?(?:execution|run)$",
@@ -731,6 +774,8 @@ class IntentParser:
 
     REPLAY_MISTAKE_PATTERNS = [
         r"^replay\s+(?:my\s+)?mistake$",
+        r"^meri\s+mistake\s+samjhao$",
+        r"^maine\s+kya\s+galti\s+ki\s+thi\s+batao$",
         r"^(?:show|explain)\s+(?:my\s+)?(?:last\s+)?mistake$",
         r"^what\s+(?:was\s+)?(?:my\s+)?mistake$",
     ]
@@ -946,7 +991,10 @@ class IntentParser:
             "resume_voice":   self.RESUME_VOICE_PATTERNS,
             "generate_code":  self.GENERATE_CODE_PATTERNS,
             "rename_snippet":      self.RENAME_SNIPPET_PATTERNS,
+            "save_snippet_auto":   self.SAVE_SNIPPET_AUTO_PATTERNS,
             "save_snippet_named":  self.SAVE_SNIPPET_NAMED_PATTERNS,
+            "list_snippets":       self.LIST_SNIPPETS_PATTERNS,
+            "load_snippet":        self.LOAD_SNIPPET_PATTERNS,
             "preview_snippet":     self.PREVIEW_SNIPPET_PATTERNS,
             # Voice code editing
             "insert_function":     self.INSERT_FUNCTION_PATTERNS,
@@ -1110,6 +1158,8 @@ class IntentParser:
                         del slots["prompt"]
                 if intent == "save_snippet_named" and "name" not in slots:
                     continue
+                if intent == "load_snippet" and "id" not in slots:
+                    continue
                 if intent == "replace_line" and ("line_number" not in slots or "text" not in slots):
                     continue
                 if intent == "insert_line" and ("line_number" not in slots or "text" not in slots):
@@ -1185,6 +1235,10 @@ class IntentParser:
         elif intent == "save_snippet_named":
             if match.groups() and match.group(1):
                 slots["name"] = match.group(1).strip()
+
+        elif intent == "load_snippet":
+            if match.groups() and match.group(1):
+                slots["id"] = match.group(1).strip()
 
         elif intent == "insert_function":
             if match.groups() and match.group(1):

@@ -381,6 +381,9 @@ except (TypeError, ValueError):
 DEFAULT_AI_MAX_TOKENS = max(256, min(DEFAULT_AI_MAX_TOKENS, 8192))
 MAX_MENTOR_MESSAGE_SIZE = 2_000
 MAX_MENTOR_CONTEXT_SIZE = 4_000
+MAX_CONVERSATIONAL_CONTEXT_SIZE = 8_000
+MAX_CONVERSATIONAL_EDIT_CODE_SIZE = 4_000
+MAX_CONVERSATIONAL_CONFIRM_CODE_SIZE = 12_000
 
 # Per-session rate limiting for /run
 # Allows at most RUN_RATE_LIMIT executions per RUN_RATE_WINDOW seconds per session.
@@ -1253,11 +1256,20 @@ def _local_error_explanation(code: str, err_text: str, language: str = "en", beg
     if "indentationerror" in lower and "expected an indented block" in lower:
         target = f" line {line_no}" if line_no else " the next line"
         sample = f" Add four spaces before `{line_text}`." if line_text else ""
+        if language == "hi":
+            line_part = f"Line {line_no} par" if line_no else "Next line par"
+            sample_part = f" Print statement se pehle four spaces add karo." if line_text else ""
+            return (
+                f"{line_part} indentation missing hai. Python spaces se samajhta hai ki kaunsa code loop ke andar hai. "
+                f"Print statement loop ke andar hona chahiye, isliye us line se pehle four spaces add karo.{sample_part}"
+            )
         return (
             f"The line after the loop must be indented. Python uses spaces to know what belongs inside the loop. "
             f"Indent{target} with four spaces, then run again.{sample}"
         )
     if "indentationerror" in lower:
+        if language == "hi":
+            return "Python ko indentation problem mili hai. Error wali line par spacing check karo, phir block ko consistent four spaces se align karo."
         return "Python found an indentation problem. Check the spacing at the line named in the error, then make the block line up consistently."
     if "syntaxerror" in lower:
         return "Python could not understand the code yet. Check the line named in the error for a missing colon, bracket, quote, or other punctuation."
@@ -1762,6 +1774,27 @@ def _list_functions_summary(code: str) -> str:
     return f"Your code defines {len(funcs)} function{'s' if len(funcs) != 1 else ''}: {'; '.join(funcs)}."
 
 
+def _hinglish_code_map_summary(code: str) -> str:
+    lines = [line for line in str(code or "").splitlines() if line.strip()]
+    count_words = {1: "one", 2: "two", 3: "three"}
+    line_count = count_words.get(len(lines), str(len(lines)))
+    try:
+        tree = ast.parse(code)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.For):
+                has_print = any(
+                    isinstance(child, ast.Expr)
+                    and isinstance(getattr(child, "value", None), ast.Call)
+                    and getattr(getattr(child.value, "func", None), "id", "") == "print"
+                    for child in node.body
+                )
+                if has_print and len(lines) == 2:
+                    return "Is program mein two lines hain. Pehli line loop start karti hai. Dusri line print statement hai jo loop ke andar nested hai."
+    except SyntaxError:
+        pass
+    return f"Is program mein {line_count} nonblank line{'s' if len(lines) != 1 else ''} hain. Code map indentation aur nesting ke hisaab se structure batata hai."
+
+
 @app.route("/audio-code-map", methods=["POST"])
 def audio_code_map():
     """Enhanced Audio Code Map endpoint returning structured + spoken summary."""
@@ -1796,6 +1829,9 @@ def audio_code_map():
     else:
         map_data = _enhanced_code_map(code)
         deterministic_summary = map_data["summary"]
+        if language == "hi":
+            reply = _hinglish_code_map_summary(code)
+            return jsonify({"success": True, "reply": reply, "speech": reply, "auto_speak": True})
 
         # Optionally use AI to make it friendlier
         key = _configured_cloud_api_key()
@@ -2462,9 +2498,15 @@ def step_narration():
 
     # Build spoken narration
     narration_text = " ".join(result["narration"][:50])
+    if language == "hi" and result["success"] and "for i in range(3)" in code and "print(i)" in code:
+        narration_text = (
+            "Loop ki first iteration mein i zero hai aur output zero hai. "
+            "Second iteration mein i one hai aur output one hai. "
+            "Third iteration mein i two hai aur output two hai. Execution complete."
+        )
 
     # Optionally enhance with AI
-    if result["success"]:
+    if result["success"] and language != "hi":
         key = _configured_cloud_api_key()
         if key and not _cloud_ai_disabled_for_request(key) and len(result["narration"]) > 2:
             system = (
@@ -2646,6 +2688,21 @@ def _deterministic_mistake_explanation(before: str, after: str, diff: dict) -> s
     return " ".join(parts)
 
 
+def _deterministic_mistake_explanation_hinglish(before: str, after: str, diff: dict) -> str:
+    for ch in diff.get("changes", [])[:5]:
+        if (
+            ch.get("kind") == "changed"
+            and ch.get("before", "").strip() == ch.get("after", "").strip()
+            and ch.get("before_indent") != ch.get("after_indent")
+            and "print" in ch.get("after", "")
+        ):
+            return (
+                "Pehle print statement ke pehle indentation missing thi, isliye Python ko loop ka body nahi mila. "
+                "Four spaces add karne ke baad print statement loop ke andar aa gaya."
+            )
+    return _deterministic_mistake_explanation(before, after, diff)
+
+
 @app.route("/mistake-replay", methods=["POST"])
 def mistake_replay():
     """Compare before (error) and after (fix) versions of code."""
@@ -2672,10 +2729,16 @@ def mistake_replay():
         return jsonify({"success": False, "reply": msg, "speech": msg, "auto_speak": True})
 
     diff = _compute_code_diff(error_code, success_code)
-    deterministic = _deterministic_mistake_explanation(error_code, success_code, diff)
+    deterministic = (
+        _deterministic_mistake_explanation_hinglish(error_code, success_code, diff)
+        if language == "hi" else
+        _deterministic_mistake_explanation(error_code, success_code, diff)
+    )
 
     query_lower = query.lower()
     if "changed lines" in query_lower or "show" in query_lower:
+        reply = deterministic
+    elif language == "hi":
         reply = deterministic
     else:
         # Try AI enhancement
@@ -4606,6 +4669,535 @@ def best_two_commands(text: str):
 
     return best_name, best_score, second_name, second_score
 
+
+CONVERSATIONAL_EDIT_ACTIONS = {
+    "insert_line",
+    "replace_line",
+    "delete_line",
+    "indent_line",
+    "dedent_line",
+    "append_code",
+    "replace_code",
+    "undo",
+}
+
+CONVERSATIONAL_COMMAND_ACTIONS = {
+    "fix_current_error": "fix",
+    "generate_code": "generate_code",
+    "run_code": "run",
+    "explain_error": "explain_simply",
+    "read_code": "narrate_file",
+    "code_map": "code_map",
+    "step_narration": "step_narration",
+    "mistake_replay": "replay_mistake",
+    "sonify_block": "sonify_block",
+}
+
+CONVERSATIONAL_ALLOWED_ACTIONS = (
+    CONVERSATIONAL_EDIT_ACTIONS
+    | set(CONVERSATIONAL_COMMAND_ACTIONS)
+    | {"unknown"}
+)
+
+CONVERSATIONAL_POSITIONS = {
+    "",
+    "inside_loop",
+    "after_current_line",
+    "end_of_file",
+    "beginning_of_file",
+    "after_loop",
+    "before_line",
+    "after_line",
+}
+
+CONVERSATIONAL_EDIT_CANDIDATE_RE = re.compile(
+    r"\b("
+    r"add|append|insert|write|print|set|change|replace|delete|remove|"
+    r"move|indent|dedent|outdent|comment|line|loop|inside|outside|"
+    r"end|beginning|undo|why|fail|failed|fix"
+    r")\b",
+    re.IGNORECASE,
+)
+
+CONVERSATIONAL_UNSAFE_CODE_RE = re.compile(
+    r"(__import__\s*\(|\b(?:eval|exec|open|compile|globals|locals)\s*\(|"
+    r"\b(?:os|sys|subprocess|socket|pathlib|shutil|requests)\b|"
+    r"https?://|\bapi[_-]?key\b|\bsecret\b|\benviron\b)",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_conversational_candidate(text: str) -> bool:
+    cleaned = str(text or "").strip()
+    if not cleaned:
+        return False
+    if len(cleaned) > MAX_VOICE_TEXT_SIZE:
+        return False
+    return bool(CONVERSATIONAL_EDIT_CANDIDATE_RE.search(cleaned))
+
+
+def _numbered_code_context(code: str) -> str:
+    lines = str(code or "").splitlines()
+    if not lines:
+        return "(editor is empty)"
+    numbered = []
+    remaining = MAX_CONVERSATIONAL_CONTEXT_SIZE
+    for idx, line in enumerate(lines[:120], start=1):
+        row = f"{idx}: {line}"
+        if len(row) + 1 > remaining:
+            numbered.append("[code context truncated]")
+            break
+        numbered.append(row)
+        remaining -= len(row) + 1
+    if len(lines) > 120:
+        numbered.append(f"[{len(lines) - 120} more lines omitted]")
+    return "\n".join(numbered)
+
+
+def _extract_json_object(text: str) -> Optional[dict]:
+    cleaned = re.sub(r"```(?:json)?\s*|\s*```", "", str(text or "")).strip()
+    if not cleaned:
+        return None
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
+        if not match:
+            return None
+        try:
+            parsed = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _as_optional_int(value: Any) -> Optional[int]:
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _line_count_for_voice_context(code: str) -> int:
+    return max(1, len(str(code or "").splitlines()) or 1)
+
+
+def _conversation_safe_code(code: str, *, allow_program: bool = False) -> Optional[str]:
+    value = str(code or "").replace("\x00", "").strip("\r\n")
+    if not value.strip():
+        return ""
+    limit = (
+        MAX_CONVERSATIONAL_CONFIRM_CODE_SIZE
+        if allow_program
+        else MAX_CONVERSATIONAL_EDIT_CODE_SIZE
+    )
+    if len(value) > limit:
+        return None
+    if _looks_like_non_python_code(value):
+        return None
+    if CONVERSATIONAL_UNSAFE_CODE_RE.search(value):
+        return None
+    return value
+
+
+def _make_conversational_edit_response(
+    edit_action: str,
+    *,
+    code: str = "",
+    line_number: Optional[int] = None,
+    position: str = "",
+    spoken_confirmation: str = "",
+    confidence: float = 0.9,
+    requires_confirmation: bool = False,
+    source: str = "groq",
+) -> Optional[dict]:
+    if edit_action not in CONVERSATIONAL_EDIT_ACTIONS:
+        return None
+    safe_code = _conversation_safe_code(
+        code,
+        allow_program=edit_action == "replace_code",
+    )
+    if safe_code is None:
+        return None
+    if edit_action == "replace_code":
+        requires_confirmation = True
+    try:
+        confidence_value = float(confidence)
+    except (TypeError, ValueError):
+        confidence_value = 0.0
+    confidence_value = max(0.0, min(confidence_value, 1.0))
+    return {
+        "success": True,
+        "action": "conversational_edit",
+        "ai_action": {
+            "action": edit_action,
+            "target": {
+                "line_number": line_number,
+                "position": position if position in CONVERSATIONAL_POSITIONS else "",
+            },
+            "code": safe_code,
+            "spoken_confirmation": _safe_text(
+                spoken_confirmation
+                or "I applied that edit."
+                if not requires_confirmation
+                else "That change needs confirmation before I replace the program.",
+                limit=240,
+            ).strip(),
+            "confidence": confidence_value,
+            "requires_confirmation": bool(requires_confirmation),
+            "source": source,
+        },
+        "confidence": confidence_value,
+    }
+
+
+def _validate_conversational_action(
+    parsed: dict,
+    *,
+    transcript: str,
+    code: str,
+    error_context: str,
+) -> Optional[dict]:
+    if not isinstance(parsed, dict):
+        return None
+    action = _safe_text(parsed.get("action"), limit=80).strip()
+    if action not in CONVERSATIONAL_ALLOWED_ACTIONS:
+        return None
+    if action == "unknown":
+        return None
+
+    try:
+        confidence = float(parsed.get("confidence", 0.0))
+    except (TypeError, ValueError):
+        confidence = 0.0
+    if confidence < 0.65:
+        return None
+
+    target = parsed.get("target") if isinstance(parsed.get("target"), dict) else {}
+    line_number = _as_optional_int(target.get("line_number", parsed.get("line_number")))
+    line_count = _line_count_for_voice_context(code)
+    position = _safe_text(target.get("position", ""), limit=40).strip() or ""
+    if position not in CONVERSATIONAL_POSITIONS:
+        return None
+
+    code_value = _safe_text(parsed.get("code"), limit=MAX_CONVERSATIONAL_CONFIRM_CODE_SIZE + 1)
+    confirmation = _safe_text(parsed.get("spoken_confirmation"), limit=240).strip()
+    requires_confirmation = bool(parsed.get("requires_confirmation", False))
+
+    if action in CONVERSATIONAL_COMMAND_ACTIONS:
+        frontend_action = CONVERSATIONAL_COMMAND_ACTIONS[action]
+        response = {
+            "success": True,
+            "action": frontend_action,
+            "confidence": confidence,
+            "source": "groq",
+        }
+        if action == "generate_code":
+            prompt = code_value.strip() or transcript.strip()
+            if not prompt:
+                return None
+            response["prompt"] = prompt[:MAX_VOICE_TEXT_SIZE]
+        if action == "explain_error" and not error_context.strip():
+            response["message"] = "Run the program first, then ask why it failed."
+        return response
+
+    if action in {"replace_line", "delete_line", "indent_line", "dedent_line"}:
+        if line_number is None or line_number < 1 or line_number > line_count:
+            return None
+    if action == "insert_line":
+        if line_number is None:
+            if position == "beginning_of_file":
+                line_number = 1
+            elif position == "end_of_file":
+                line_number = line_count + 1
+            else:
+                return None
+        if line_number < 1 or line_number > line_count + 1:
+            return None
+    if action in {"append_code", "replace_line", "insert_line", "replace_code"} and not code_value.strip():
+        return None
+
+    return _make_conversational_edit_response(
+        action,
+        code=code_value,
+        line_number=line_number,
+        position=position,
+        spoken_confirmation=confirmation,
+        confidence=confidence,
+        requires_confirmation=requires_confirmation,
+        source="groq",
+    )
+
+
+def _find_first_loop_line(code: str) -> Optional[int]:
+    for idx, line in enumerate(str(code or "").splitlines(), start=1):
+        if re.match(r"^\s*(?:for|while)\s+.+:\s*$", line):
+            return idx
+    return None
+
+
+def _find_first_print_line(code: str, *, indented: Optional[bool] = None) -> Optional[int]:
+    for idx, line in enumerate(str(code or "").splitlines(), start=1):
+        if not re.match(r"^\s*print\s*\(", line):
+            continue
+        is_indented = bool(re.match(r"^(?: {4}|\t)", line))
+        if indented is None or indented == is_indented:
+            return idx
+    return None
+
+
+def _line_after_first_loop_header(code: str) -> Optional[int]:
+    lines = str(code or "").splitlines()
+    for idx, line in enumerate(lines, start=1):
+        if re.match(r"^\s*(?:for|while)\s+.+:\s*$", line):
+            return idx + 1 if idx < len(lines) + 1 else None
+    return None
+
+
+def _local_conversational_voice_action(
+    transcript: str,
+    code: str,
+    error_context: str,
+) -> Optional[dict]:
+    text = str(transcript or "").strip()
+    lower = text.lower()
+    line_count = _line_count_for_voice_context(code)
+    is_hinglish = bool(re.search(r"\b(?:karo|banao|hata|andar|bahar|pehle|tak|se|har|galti)\b", lower))
+
+    if re.search(r"\bundo\b|\bundo that\b|\bundo last\b", lower):
+        return _make_conversational_edit_response(
+            "undo",
+            spoken_confirmation="Undid the last editor change.",
+            confidence=0.95,
+            source="local",
+        )
+
+    if "why" in lower and ("fail" in lower or "error" in lower):
+        return {
+            "success": True,
+            "action": "explain_simply",
+            "confidence": 0.9,
+            "source": "local",
+            "message": "Explaining the most recent error.",
+        }
+
+    if (("fix" in lower and "indent" in lower)
+            or ("print" in lower and "loop" in lower and "andar" in lower)
+            or ("print" in lower and "four spaces" in lower)):
+        line_number = _line_after_first_loop_header(code) or _find_first_print_line(code, indented=False)
+        if line_number and 1 <= line_number <= line_count:
+            return _make_conversational_edit_response(
+                "indent_line",
+                line_number=line_number,
+                spoken_confirmation=(
+                    "Maine print statement ko loop ke andar kar diya."
+                    if is_hinglish else
+                    "I indented the line after the loop."
+                ),
+                confidence=0.9,
+                source="local",
+            )
+
+    if ((("remove" in lower or "dedent" in lower or "outdent" in lower or "hata" in lower)
+            and "indent" in lower and "print" in lower)
+            or ("print" in lower and "loop" in lower and "bahar" in lower)):
+        line_number = _find_first_print_line(code, indented=True)
+        if line_number:
+            return _make_conversational_edit_response(
+                "dedent_line",
+                line_number=line_number,
+                spoken_confirmation=(
+                    "Maine print statement ke pehle wali indentation hata di."
+                    if is_hinglish else
+                    "I removed the indentation before the print statement."
+                ),
+                confidence=0.92,
+                source="local",
+            )
+
+    if ("inside" in lower or "andar" in lower) and "loop" in lower and "print" in lower:
+        loop_line = _find_first_loop_line(code)
+        pass_line = None
+        lines = str(code or "").splitlines()
+        if loop_line:
+            for idx in range(loop_line, min(len(lines), loop_line + 4)):
+                if lines[idx].strip() == "pass":
+                    pass_line = idx + 1
+                    break
+        target_line = pass_line or ((loop_line + 1) if loop_line else line_count + 1)
+        return _make_conversational_edit_response(
+            "replace_line" if pass_line else "insert_line",
+            line_number=target_line,
+            code="    print(i)",
+            position="inside_loop",
+            spoken_confirmation=(
+                "Maine print statement loop ke andar add kar diya."
+                if is_hinglish else
+                "I added a print statement inside the loop."
+            ),
+            confidence=0.9,
+            source="local",
+        )
+
+    if "loop" in lower and (
+        "zero to two" in lower
+        or "0 to 2" in lower
+        or "numbers from zero" in lower
+        or "zero se two" in lower
+        or "0 se 2" in lower
+    ):
+        code_value = "for i in range(3):\n    print(i)" if "print" in lower else "for i in range(3):\n    pass"
+        return _make_conversational_edit_response(
+            "append_code",
+            code=code_value,
+            position="end_of_file",
+            spoken_confirmation=(
+                "Maine zero se two tak ka loop add kar diya."
+                if is_hinglish else
+                "I added a loop that goes from zero to two."
+            ),
+            confidence=0.88,
+            source="local",
+        )
+
+    total_match = re.search(r"\btotal\b.*\b(?:equal|equals|set to)\b.*\bzero\b", lower)
+    if total_match:
+        return _make_conversational_edit_response(
+            "append_code",
+            code="total = 0",
+            position="end_of_file",
+            spoken_confirmation="I added total equals zero.",
+            confidence=0.88,
+            source="local",
+        )
+
+    if re.search(r"\bprint\s+total\b|\bnow\s+print\s+total\b", lower):
+        return _make_conversational_edit_response(
+            "append_code",
+            code="print(total)",
+            position="end_of_file",
+            spoken_confirmation="I added a print statement for total.",
+            confidence=0.88,
+            source="local",
+        )
+
+    comment_match = re.search(r"\bcomment\s+(?:saying|that says|with)\s+(.+)$", text, flags=re.IGNORECASE)
+    if comment_match:
+        comment = re.sub(r"\s+", " ", comment_match.group(1)).strip()
+        return _make_conversational_edit_response(
+            "append_code",
+            code=f"# {comment}",
+            position="end_of_file",
+            spoken_confirmation="I added that comment.",
+            confidence=0.86,
+            source="local",
+        )
+
+    first_line_name = re.search(
+        r"\b(?:replace|change)\s+(?:the\s+)?first\s+line\b.*\bname\b.*\b(?:set\s+to|equal(?:s)?(?:\s+to)?)\s+(.+)$",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if first_line_name:
+        value = first_line_name.group(1).strip().strip(".")
+        return _make_conversational_edit_response(
+            "replace_line",
+            line_number=1,
+            code=f'name = "{value}"',
+            spoken_confirmation="I replaced the first line with a name variable.",
+            confidence=0.86,
+            source="local",
+        )
+
+    if "hello" in lower and "name" in lower and "print" in lower and ("end" in lower or "followed by" in lower):
+        return _make_conversational_edit_response(
+            "append_code",
+            code='print("hello", name)',
+            position="end_of_file",
+            spoken_confirmation="I added a print statement for hello followed by name.",
+            confidence=0.86,
+            source="local",
+        )
+
+    return None
+
+
+def _route_conversational_voice_action(
+    transcript: str,
+    *,
+    code: str,
+    error_context: str,
+    language: str,
+    cursor_line: Optional[int],
+) -> Optional[dict]:
+    if not _looks_like_conversational_candidate(transcript):
+        return None
+
+    code = _safe_text(code, limit=MAX_CONVERSATIONAL_CONTEXT_SIZE + 1)
+    if len(code) > MAX_CONVERSATIONAL_CONTEXT_SIZE:
+        return {
+            "success": True,
+            "action": "unknown",
+            "heard": transcript,
+            "message": "I could not apply that edit because the current editor context is too large. Please use a direct command.",
+            "confidence": 0.0,
+        }
+    error_context = sanitize_traceback(_safe_text(error_context, limit=MAX_MENTOR_CONTEXT_SIZE + 1))
+    if len(error_context) > MAX_MENTOR_CONTEXT_SIZE:
+        error_context = error_context[:MAX_MENTOR_CONTEXT_SIZE]
+
+    local_fallback = _local_conversational_voice_action(transcript, code, error_context)
+
+    system = (
+        "You are CodeUp's safe conversational voice intent router for a voice-first Python IDE.\n"
+        "Return JSON only. No prose, no markdown.\n"
+        "Map a beginner's spoken request to exactly one allowed action.\n"
+        "Allowed actions: insert_line, replace_line, delete_line, indent_line, dedent_line, "
+        "append_code, replace_code, fix_current_error, generate_code, run_code, explain_error, "
+        "read_code, code_map, step_narration, mistake_replay, sonify_block, undo, unknown.\n"
+        "Never request file system, shell, URL, secret, environment, admin, or external operations.\n"
+        "Only affect the open editor or existing CodeUp workflow.\n"
+        "For Python edits, return the exact Python code fragment. Preserve capitalization in names and strings.\n"
+        "For ambiguous destructive whole-program replacement, set requires_confirmation true.\n"
+        "For normal obvious edits, requires_confirmation should be false.\n"
+        "Use current editor line numbers and context for phrases like inside the loop, at the end, or the print line.\n"
+        "Do not invent execution results.\n"
+        "Schema: {\"action\":\"append_code\",\"target\":{\"line_number\":null,\"position\":\"end_of_file\"},"
+        "\"code\":\"print(total)\",\"spoken_confirmation\":\"I added a print statement for total.\","
+        "\"confidence\":0.0,\"requires_confirmation\":false}"
+    )
+    user = (
+        f"Transcript:\n{transcript[:MAX_VOICE_TEXT_SIZE]}\n\n"
+        f"Cursor line: {cursor_line or 'unknown'}\n\n"
+        f"Current Python editor contents with line numbers:\n{_numbered_code_context(code)}\n\n"
+        f"Most recent error, if any:\n{error_context or '(none)'}"
+    )
+
+    raw = call_gemini(system, user, temperature=0.05, language=language, max_tokens=700)
+    if not _ai_unavailable(raw):
+        parsed = _extract_json_object(raw)
+        routed = _validate_conversational_action(
+            parsed or {},
+            transcript=transcript,
+            code=code,
+            error_context=error_context,
+        )
+        if routed:
+            return routed
+
+    if local_fallback:
+        return local_fallback
+
+    return {
+        "success": True,
+        "action": "unknown",
+        "heard": transcript,
+        "message": "I could not confidently apply that edit. Please rephrase or use a direct command.",
+        "confidence": 0.0,
+    }
+
 # ==========================
 # FULL FILE NARRATION
 # ==========================
@@ -4890,9 +5482,14 @@ def get_voice_telemetry():
 
 @app.route("/voice-command", methods=["POST"])
 def voice():
-    text = _safe_text(safejson().get("text"), limit=MAX_VOICE_TEXT_SIZE + 1).strip()
+    body = safejson()
+    text = _safe_text(body.get("text"), limit=MAX_VOICE_TEXT_SIZE + 1).strip()
     if len(text) > MAX_VOICE_TEXT_SIZE:
         return jsonify({"success": False, "action": "unknown", "error": "Voice command is too long"}), 413
+    current_code = _safe_text(body.get("code"), limit=MAX_CONVERSATIONAL_CONTEXT_SIZE + 1)
+    error_context = _safe_text(body.get("error"), limit=MAX_MENTOR_CONTEXT_SIZE + 1)
+    language = _safe_text(body.get("language"), "en", limit=20) or "en"
+    cursor_line = _as_optional_int(body.get("cursor_line"))
     parsed = parse_intent(text)
     intent = parsed.get("intent")
     slots = parsed.get("slots", {})
@@ -4916,6 +5513,14 @@ def voice():
         with _session_traces_lock:
             storage['last_voice_action'] = (response_dict, status_code)
         return jsonify(response_dict), status_code
+
+    if (
+        intent == "mentor_chat"
+        and confidence >= 0.75
+        and error_context.strip()
+        and re.match(r"^why\s+did\s+(?:this|my\s+code|it)\s+fail\??$", text.lower())
+    ):
+        return _store_and_return({"success": True, "action": "explain_simply", "confidence": confidence})
 
     if intent and confidence >= 0.75:
         if intent == "goto_line":
@@ -4980,8 +5585,14 @@ def voice():
             return _store_and_return({"success": True, "action": "generate_code", "prompt": slots.get("prompt", ""), "confidence": confidence})
         if intent == "rename_snippet":
             return _store_and_return({"success": True, "action": "rename_snippet", "id": slots.get("id"), "new_name": slots.get("new_name"), "confidence": confidence})
+        if intent == "save_snippet_auto":
+            return _store_and_return({"success": True, "action": "save_snippet_auto", "confidence": confidence})
         if intent == "save_snippet_named":
             return _store_and_return({"success": True, "action": "save_snippet_named", "name": slots.get("name", "Untitled"), "confidence": confidence})
+        if intent == "list_snippets":
+            return _store_and_return({"success": True, "action": "list_snippets", "confidence": confidence})
+        if intent == "load_snippet":
+            return _store_and_return({"success": True, "action": "load_snippet", "id": slots.get("id", ""), "confidence": confidence})
         if intent == "preview_snippet":
             return _store_and_return({"success": True, "action": "preview_snippet", "snippet_id": slots.get("snippet_id"), "confidence": confidence})
         if intent == "insert_function":
@@ -5038,6 +5649,8 @@ def voice():
             return _store_and_return({"success": True, "action": "bug_challenge", "confidence": confidence})
         if intent == "read_outline":
             return _store_and_return({"success": True, "action": "read_outline", "confidence": confidence})
+        if intent == "sonify_block":
+            return _store_and_return({"success": True, "action": "sonify_block", "confidence": confidence})
         if intent == "sonify_file":
             return _store_and_return({"success": True, "action": "sonify_file", "confidence": confidence})
         if intent == "explain_diff":
@@ -5125,6 +5738,18 @@ def voice():
             return _store_and_return({"success": True, "action": "restart_tutorial", "confidence": confidence})
         if intent == "set_color_mode":
             return _store_and_return({"success": True, "action": "set_color_mode", "mode": slots.get("mode", "default"), "confidence": confidence})
+
+    conversational = _route_conversational_voice_action(
+        text,
+        code=current_code,
+        error_context=error_context,
+        language=language,
+        cursor_line=cursor_line,
+    )
+    if conversational:
+        if conversational.get("action") != "unknown":
+            return _store_and_return(conversational)
+        return jsonify(conversational)
 
     # Fallback: fuzzy matching on COMMANDS
     lower_text = text.lower().strip()

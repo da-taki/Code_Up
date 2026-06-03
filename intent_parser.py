@@ -376,6 +376,7 @@ class IntentParser:
     ]
 
     APPEND_LINE_PATTERNS = [
+        r"(?:insert|add)\s+(print\s+.+?)$",
         r"append\s+[\"']?(.+?)[\"']?$",
         r"add\s+(?:a\s+)?(?:new\s+)?line\s+[\"']?(.+?)[\"']?$",
         r"write\s+[\"']?(.+?)[\"']?$",
@@ -839,6 +840,7 @@ class IntentParser:
 
     # ----- Beginner explanation -----
     EXPLAIN_SIMPLY_PATTERNS = [
+        r"^(?:debug|explain)\s+(?:this|the|my)\s+error$",
         r"^explain\s+(?:like\s+i'?m\s+(?:five|new|a\s+beginner)|simpler|simply|in\s+plain\s+(?:words|english))$",
         r"^(?:simpler|too\s+complicated|i\s+don'?t\s+understand)$",
         r"^(?:और\s+आसान|simple\s+में|बच्चे\s+की\s+तरह)\s*(?:समझाओ)?$",

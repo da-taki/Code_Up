@@ -604,6 +604,28 @@ class IntentParser:
         r"(?:मुझे\s+)?(.+?)\s+(?:समझाओ|explain\s+करो)\s*(?:simply|simply\s+में)?",
     ]
 
+    # Natural conceptual questions about Python or the code currently in the
+    # editor — "what is a loop", "why is print indented", "what does range
+    # three mean". Registered LAST in the intent map so every specific command
+    # (walk_through, narrate_file, mentor_chat, explain_diff, code_map, the edit
+    # router, etc.) wins first; this only catches genuine question-shaped
+    # utterances that nothing else handled, and never imperatives like "add" or
+    # "fix" (those stay on the edit path). A leading filler ("hey,") is allowed.
+    # Hinglish equivalents (kya karta hai / ka matlab / kyun hai / kya hota hai)
+    # are included so concept questions work in the existing language modes.
+    CONCEPT_QUESTION_PATTERNS = [
+        r"^(?:hey|ok|okay|so|um|hmm)?[,\s]*what(?:'?s| is| are)\s+(?:a|an|the|this|that)?\s*[\w\s\-\"']*?\b(?:loop|print|range|colon|indent\w*|variable|function|string|list|dictionary|integer|float|boolean|for\s+line|while\s+line|space|line\s+\w+)\b",
+        r"^(?:hey|ok|okay|so|um|hmm)?[,\s]*what\s+does\s+.+?\b(?:mean|do|doing|represent|stand\s+for)\b",
+        r"^(?:hey|ok|okay|so|um|hmm)?[,\s]*why\s+(?:is|are)\s+(?:there\s+)?.+",
+        r"^(?:hey|ok|okay|so|um|hmm)?[,\s]*(?:can|could)\s+you\s+explain\s+.+",
+        r"^(?:hey|ok|okay|so|um|hmm)?[,\s]*explain\s+(?:line|this|that|the|why|how)\b.+",
+        r"^(?:hey|ok|okay|so|um|hmm)?[,\s]*what\s+happens\s+if\s+.+",
+        r"^(?:hey|ok|okay|so|um|hmm)?[,\s]*what(?:'?s| is)\s+wrong\s+with\s+.+",
+        r"^(?:hey|ok|okay|so|um|hmm)?[,\s]*show\s+me\s+(?:a|an|some)?\s*\w*\s*example\b(?!.*\bin\s+(?:the|my)\s+(?:editor|code)\b)",
+        r"^(?:hey|ok|okay|so|um|hmm)?[,\s]*how\s+(?:do|does|can)\s+.+\bwork\b",
+        r"\b(?:kya\s+karta\s+hai|ka\s+matlab|kyun\s+hai|kya\s+hota\s+hai|kya\s+represent\s+karta\s+hai)\b",
+    ]
+
     BUG_CHALLENGE_PATTERNS = [
         r"^(?:give\s+me\s+)?(?:a\s+)?bug\s+(?:fixing\s+)?challenge$",
         r"^(?:debug\s+)?challenge(?:\s+me)?$",
@@ -1082,6 +1104,8 @@ class IntentParser:
             # Beginner explanation + diff narration
             "explain_simply":      self.EXPLAIN_SIMPLY_PATTERNS,
             "narrate_diff":        self.NARRATE_DIFF_PATTERNS,
+            # Conceptual Q&A — LAST so every specific command/intent wins first.
+            "concept_question":    self.CONCEPT_QUESTION_PATTERNS,
         }
 
     # -----------------------------------------------------------------------
@@ -1332,6 +1356,12 @@ class IntentParser:
         elif intent == "explain_concept":
             if match.groups() and match.group(1):
                 slots["concept"] = match.group(1).strip()
+
+        elif intent == "concept_question":
+            # Pass the learner's full question to the mentor; strip a leading
+            # filler word ("hey,", "ok") so the tutor prompt stays clean.
+            cleaned = re.sub(r"^(?:hey|ok|okay|so|um|hmm)[,\s]+", "", text, flags=re.IGNORECASE).strip()
+            slots["message"] = cleaned or text.strip()
 
         elif intent == "mentor_chat":
             original = text.strip()

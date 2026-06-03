@@ -2887,6 +2887,282 @@ def mentor_code_map():
     return jsonify({"success": True, "reply": reply, "speech": reply, "auto_speak": True})
 
 
+# ==========================
+# CONCEPTUAL QUESTION FALLBACK
+# ==========================
+# Deterministic, context-aware explanations for the canonical beginner concepts
+# so conceptual questions still get a useful spoken answer when the AI mentor is
+# unavailable. This never inspects or mutates the editor beyond reading the code
+# string passed in, and never executes anything.
+
+_CONCEPT_NUMBER_WORDS = ["zero", "one", "two", "three", "four", "five", "six",
+                         "seven", "eight", "nine", "ten"]
+
+
+def _concept_num_word(n: int) -> str:
+    if isinstance(n, int) and 0 <= n < len(_CONCEPT_NUMBER_WORDS):
+        return _CONCEPT_NUMBER_WORDS[n]
+    return str(n)
+
+
+def _concept_join_words(values, sep_then: bool = False, hi: bool = False) -> str:
+    words = [_concept_num_word(v) for v in values]
+    if not words:
+        return ""
+    if sep_then:
+        return (", phir " if hi else ", then ").join(words)
+    conj = "aur" if hi else "and"
+    if len(words) == 1:
+        return words[0]
+    if len(words) == 2:
+        return f"{words[0]} {conj} {words[1]}"
+    return ", ".join(words[:-1]) + f", {conj} " + words[-1]
+
+
+def _concept_word_to_int(token: str):
+    token = (token or "").strip().lower()
+    try:
+        return int(token)
+    except ValueError:
+        pass
+    table = {"zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+             "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10}
+    return table.get(token)
+
+
+def _concept_code_facts(code: str) -> dict:
+    """Read-only structural facts about the editor code for concept answers.
+
+    Uses a line scan (not the AST) so it still works on code with an
+    indentation error — needed to explain the broken-indentation case honestly.
+    """
+    facts = {
+        "has_code": bool((code or "").strip()),
+        "syntax_ok": True,
+        "loop_var": None,
+        "range_args": None,
+        "range_values": None,
+        "print_arg": None,
+        "print_line": None,
+        "print_indented": None,
+        "for_line": None,
+    }
+    if not facts["has_code"]:
+        return facts
+    try:
+        compile(code, "<concept>", "exec")
+    except SyntaxError:
+        facts["syntax_ok"] = False
+    except Exception:
+        pass
+    for idx, line in enumerate((code or "").splitlines(), start=1):
+        mfor = re.match(r"^(\s*)for\s+(\w+)\s+in\s+range\s*\((.*?)\)\s*:", line)
+        if mfor and facts["for_line"] is None:
+            facts["for_line"] = idx
+            facts["loop_var"] = mfor.group(2)
+            arg_text = mfor.group(3).strip()
+            facts["range_args"] = arg_text
+            parts = [p.strip() for p in arg_text.split(",") if p.strip()]
+            try:
+                ints = [int(p) for p in parts]
+                if ints:
+                    facts["range_values"] = list(range(*ints))
+            except (ValueError, TypeError):
+                facts["range_values"] = None
+        mprint = re.match(r"^(\s*)print\s*\((.*)\)\s*$", line)
+        if mprint and facts["print_line"] is None:
+            facts["print_line"] = idx
+            facts["print_indented"] = len(mprint.group(1)) > 0
+            facts["print_arg"] = mprint.group(2).strip()
+    return facts
+
+
+def _concept_fallback(message: str, code: str, language: str = "en") -> str:
+    """Short, beginner-friendly explanation for canonical Python concepts.
+
+    Context-aware where possible (refers to the current code), honest about
+    broken indentation, explanation-only, and capped for comfortable speech.
+    """
+    q = (message or "").lower()
+    hi = (language == "hi")
+    facts = _concept_code_facts(code)
+    loop_var = facts["loop_var"] or "i"
+    values = facts["range_values"] if facts["range_values"] and len(facts["range_values"]) <= 12 else None
+    values_phrase = _concept_join_words(values, hi=hi) if values else None
+    values_then = _concept_join_words(values, sep_then=True, hi=hi) if values else None
+    count_word = _concept_num_word(len(values)) if values else None
+    print_arg = facts["print_arg"] or loop_var
+
+    # 0. "show me an example ..." — give a concrete example, no editor change.
+    if "example" in q:
+        if "loop" in q or re.search(r"\bfor\b", q):
+            if hi:
+                return ('Ek simple loop example: for n in range(3): print(n). Ye zero, one, aur two print karta '
+                        'hai. Maine aapka code nahi badla.')
+            return ('A simple loop example is: for n in range(3): print(n). It prints zero, one, and two. '
+                    'I have not changed your code.')
+        if hi:
+            return ('Ek simple example hai print("Hello"). Jab aap ise run karte ho to Python Hello dikhata hai. '
+                    'Maine aapka code nahi badla.')
+        return ('A simple example is print("Hello"). When you run it, Python displays Hello as output. '
+                'I have not changed your code.')
+
+    # 1. A specific line: "explain line two", "what is on line 2" (number only,
+    #    so "this line indented" is not mistaken for a line reference).
+    mline = re.search(r"line\s+(\w+)", q)
+    if mline and _concept_word_to_int(mline.group(1)) is not None:
+        n = _concept_word_to_int(mline.group(1))
+        src_lines = (code or "").splitlines()
+        if n and 1 <= n <= len(src_lines):
+            raw = src_lines[n - 1]
+            src = raw.strip()
+            indented = (len(raw) - len(raw.lstrip())) > 0
+            nw = _concept_num_word(n)
+            if re.match(r"^print\s*\(", src):
+                arg = src[src.find("(") + 1:src.rfind(")")].strip() or "a value"
+                tail = " It is indented, so it runs inside the block above it." if indented else ""
+                return f"Line {nw} is {src}. It prints {arg}.{tail}"
+            if re.match(r"^(for|while)\b", src):
+                return f"Line {nw} is {src}. It starts a loop, and the indented lines below it run inside that loop."
+            if re.match(r"^(if|elif|else)\b", src):
+                return f"Line {nw} is {src}. It is a condition that decides whether the indented lines below it run."
+            if "=" in src and not src.lstrip().startswith("#"):
+                return f"Line {nw} is {src}. It creates or updates a variable."
+            return f"Line {nw} is: {src}."
+        return f"There is no line {mline.group(1)} in your program right now."
+
+    # 2. Colon after a header
+    if "colon" in q:
+        if facts["for_line"]:
+            if hi:
+                return ("for line ke aakhir mein colon Python ko batata hai ki ab ek indented block "
+                        "shuru hone wala hai. Yahan wo block print statement hai jo loop ke andar chalta hai.")
+            return ("The colon at the end of the for line tells Python that an indented block is about "
+                    "to begin. Here, that block is the print statement that runs inside the loop.")
+        if hi:
+            return ("Colon, jaise for ya if statement ke baad, Python ko batata hai ki ab ek indented "
+                    "block shuru hone wala hai.")
+        return ("A colon at the end of a line, such as after a for, while, or if statement, tells Python "
+                "that an indented block is about to begin.")
+
+    # 3. Indentation / spaces (must win over print: "why is print indented")
+    if "indent" in q or "space" in q:
+        if facts["print_line"] and facts["print_indented"] is False and facts["has_code"]:
+            if hi:
+                return ("Aapke program mein print indented nahi hai, isliye Python ise loop ke andar nahi "
+                        "samajhta. for ya while header ke baad wali line ko indent karna zaroori hai, "
+                        "aam taur par chaar spaces se. Abhi ye indentation error dega.")
+            return ("In your program, print is not indented, so Python does not treat it as inside the loop. "
+                    "The line after a for or while header must be indented, usually by four spaces. "
+                    "As written, this raises an indentation error.")
+        if "remove" in q and facts["print_indented"]:
+            if hi:
+                return ("print ke aage ke spaces ise loop ke andar rakhte hain. Agar aap unhe hata denge, "
+                        "to print loop ke andar nahi rahega aur Python indentation error dega, kyunki loop "
+                        "ka koi body nahi bachega.")
+            return ("The spaces before print put it inside the loop. If you remove them, print is no longer "
+                    "inside the loop, and Python raises an indentation error because the loop would have no body.")
+        if facts["print_indented"]:
+            if hi:
+                return (f"Indentation ka matlab hai ki print loop ke andar hai. Andar hone ki wajah se ye "
+                        f"{loop_var} ki har value ke liye ek baar chalta hai. Indentation ke bina Python is "
+                        f"program mein valid loop body nahi dekhega.")
+            return (f"The indentation means print is inside the loop. Because it is inside, it runs once for "
+                    f"each value of {loop_var}. Without the indentation, Python would not see a valid loop "
+                    f"body in this program.")
+        if not facts["has_code"]:
+            if hi:
+                return ("Abhi editor mein koi code nahi hai, isliye main kisi ek line ko nahi bata sakta. Aam "
+                        "taur par indentation line ke shuru ke spaces hote hain, jo Python ko batate hain ki "
+                        "kaunsi lines kisi block, jaise loop ya function, ke andar hain.")
+            return ("There is no code in the editor yet, so I cannot point to a specific line. In general, "
+                    "indentation is the spaces at the start of a line, and Python uses it to show which lines "
+                    "are inside a block such as a loop or a function.")
+        if hi:
+            return ("Indentation line ke shuru ke spaces hote hain. Python mein ye dikhata hai ki kaunsi "
+                    "lines kisi block ke andar hain, jaise loop ya function ke body mein.")
+        return ("Indentation is the spaces at the start of a line. In Python it shows which lines are inside "
+                "a block, such as the body of a loop or a function.")
+
+    # 4. range
+    if "range" in q:
+        if values:
+            args = facts["range_args"] or str(len(values))
+            if hi:
+                return (f"range({args}) loop ko {count_word} values deta hai: {values_phrase}. Python yahan "
+                        f"zero se ginna shuru karta hai, isliye loop {count_word} baar chalta hai.")
+            return (f"range({args}) gives the loop {count_word} values: {values_phrase}. Python starts counting "
+                    f"from zero here, so the loop runs {count_word} times.")
+        if hi:
+            return ("range numbers ki ek sequence banata hai. Jaise range(3) zero, one, aur two deta hai — "
+                    "zero se shuru hone wali teen values.")
+        return ("range creates a sequence of numbers. For example, range(3) gives zero, one, and two — three "
+                "values starting from zero.")
+
+    # 5. Loop variable by name ("what does i mean") or the word "variable"
+    if "variable" in q or re.search(r"\b" + re.escape(loop_var) + r"\b", q):
+        if values:
+            if hi:
+                return (f"{loop_var} loop variable hai. Pehli baar ye {values_then} hota hai. print statement "
+                        f"har baar {loop_var} ki value dikhata hai.")
+            return (f"{loop_var} is the loop variable. During the passes it is {values_then}. The print "
+                    f"statement shows each of those values.")
+        if hi:
+            return (f"{loop_var} ek variable hai. Ye ek value store karta hai jise program chalte waqt use "
+                    f"aur change kar sakta hai.")
+        return (f"{loop_var} is the loop variable. It takes a new value on each pass of the loop, and your "
+                f"code can use that value inside the loop.")
+
+    # 6. loop
+    if "loop" in q or re.search(r"\bfor\b", q) or "while" in q:
+        if values:
+            if hi:
+                return (f"Loop ek action ko baar baar chalata hai. Aapke program mein loop print({print_arg}) "
+                        f"ko {count_word} baar chalata hai, har value ke liye ek baar: {values_phrase}.")
+            return (f"A loop repeats an action. In your program, the loop repeats print({print_arg}) {count_word} "
+                    f"times, once for each value: {values_phrase}.")
+        if hi:
+            return ("Loop ek action ko kai baar repeat karta hai. Jaise ek for loop print statement ko range "
+                    "ke har number ke liye ek baar chala sakta hai.")
+        return ("A loop repeats an action several times. For example, a for loop can run a print statement once "
+                "for each number in a range.")
+
+    # 7. print
+    if "print" in q:
+        if facts["print_line"] and values:
+            if hi:
+                return (f"print ek Python function hai jo value ko output ke roop mein dikhata hai. Aapke program "
+                        f"mein print({print_arg}) har baar {print_arg} ki current value dikhata hai. Yahan output "
+                        f"{values_phrase} hoga.")
+            return (f"print is a Python function that shows a value as output. In your program, print({print_arg}) "
+                    f"shows the current value of {print_arg} each time the loop runs. Here, your program displays "
+                    f"{values_phrase}.")
+        if facts["print_line"]:
+            if hi:
+                return (f"print ek Python function hai jo value ko output ke roop mein dikhata hai. Aapke program "
+                        f"mein print({print_arg}) ek value dikhata hai. Jaise print(\"Hello\") Hello dikhata hai.")
+            return (f"print is a Python function that shows a value as output. In your program, print({print_arg}) "
+                    f"displays a value. For example, print(\"Hello\") displays Hello.")
+        if hi:
+            return ("print ek Python function hai jo value ko output ke roop mein dikhata hai. Jaise "
+                    "print(\"Hello\") screen par Hello dikhata hai.")
+        return ("print is a Python function that shows a value as output. For example, print(\"Hello\") displays "
+                "Hello on the screen.")
+
+    # 8. Generic clarification — short, and offers concrete choices.
+    if facts["has_code"] and facts["for_line"]:
+        if hi:
+            return ("Main aapke program ke hisson ko samjha sakta hoon, jaise loop, print statement, colon, ya "
+                    "indentation. Aap kis cheez ke baare mein puchhna chahte hain?")
+        return ("I can explain parts of your program, like the loop, the print statement, the colon, or the "
+                "indentation. Which one would you like me to explain?")
+    if hi:
+        return ("Main Python ki cheezein samjha sakta hoon, jaise print, loop, range, ya indentation. Aap kya "
+                "samajhna chahte hain?")
+    return ("I can explain Python ideas like print, loops, range, or indentation. Which one would you like me "
+            "to explain?")
+
+
 @app.route("/mentor/chat", methods=["POST"])
 def mentor_chat():
     body = safejson()
@@ -2932,7 +3208,9 @@ def mentor_chat():
     elif mode == "slow_walkthrough":
         system += "\nMode: walk through slowly, line by line, with short spoken sentences."
     elif mode == "concept":
-        system += "\nMode: explain the concept in the current code."
+        system += ("\nMode: the student asked a conceptual question about Python or their current code. "
+                   "Explain the concept simply in 2 to 4 short sentences, connect it to their current code "
+                   "when relevant, give at most one tiny example, and do not modify their code.")
     elif mode == "shorter":
         system += "\nMode: rewrite the previous mentor answer shorter."
     elif mode == "simpler":
@@ -2952,6 +3230,11 @@ def mentor_chat():
     )
     reply = call_gemini(system, user, temperature=0.25, language=language)
     if _ai_unavailable(reply):
+        # Conceptual questions get a deterministic, context-aware explanation so
+        # the live-demo concepts still work when the AI mentor is unavailable.
+        if mode == "concept":
+            concept_reply = _concept_fallback(message, code, language)
+            return jsonify({"success": True, "reply": concept_reply, "speech": concept_reply, "auto_speak": True})
         fallback = (
             "The AI mentor is unavailable right now. You can still run the code, ask for a code map, or use explain simply after an error."
         )
@@ -3005,7 +3288,9 @@ def mentor_chat_stream():
     elif mode == "slow_walkthrough":
         system += "\nMode: walk through slowly, line by line, with short spoken sentences."
     elif mode == "concept":
-        system += "\nMode: explain the concept in the current code."
+        system += ("\nMode: the student asked a conceptual question about Python or their current code. "
+                   "Explain the concept simply in 2 to 4 short sentences, connect it to their current code "
+                   "when relevant, give at most one tiny example, and do not modify their code.")
     elif mode == "shorter":
         system += "\nMode: rewrite the previous mentor answer shorter."
     elif mode == "simpler":
@@ -5870,6 +6155,11 @@ def voice():
             return _store_and_return({"success": True, "action": "mentor_preference", "key": slots.get("key"), "value": slots.get("value"), "confidence": confidence})
         if intent == "mentor_chat":
             return _store_and_return({"success": True, "action": "mentor_chat", "message": slots.get("message", text), "mode": slots.get("mode", "general"), "confidence": confidence})
+        if intent == "concept_question":
+            # Conceptual questions ("what is a loop", "why is print indented")
+            # are explanation-only: route to the mentor in concept mode, which
+            # returns spoken text and never edits the editor.
+            return _store_and_return({"success": True, "action": "mentor_chat", "message": slots.get("message", text), "mode": "concept", "confidence": confidence})
         if intent == "analyze_deep":
             return _store_and_return({"success": True, "action": "analyze_deep", "confidence": confidence})
         if intent == "analyze":

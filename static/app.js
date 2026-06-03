@@ -2297,11 +2297,14 @@ async function handleConfirmedAction(action, payload) {
   if (action === 'run')              await runCode();
   else if (action === 'mentor_stop') { SpeechManager.cancelAll(); speak('Mentor stopped.'); srAnnounce('Mentor stopped'); }
   else if (action === 'mentor_chat') {
-    // Use streaming version when VoiceEngine is available for real-time narration
-    if (typeof VoiceEngine !== 'undefined' && typeof talkToMentorStreaming === 'function') {
-      await talkToMentorStreaming(payload && payload.message, payload && payload.mode ? payload.mode : 'general');
+    const _mentorMode = payload && payload.mode ? payload.mode : 'general';
+    // Conceptual questions use the non-streaming path so the backend's
+    // deterministic concept fallback is used when AI is unavailable. Other
+    // mentor modes stream for real-time narration when VoiceEngine is present.
+    if (_mentorMode !== 'concept' && typeof VoiceEngine !== 'undefined' && typeof talkToMentorStreaming === 'function') {
+      await talkToMentorStreaming(payload && payload.message, _mentorMode);
     } else {
-      await talkToMentor(payload && payload.message, payload && payload.mode ? payload.mode : 'general');
+      await talkToMentor(payload && payload.message, _mentorMode);
     }
   }
   else if (action === 'mentor_progress') await checkProgressWithMentor();

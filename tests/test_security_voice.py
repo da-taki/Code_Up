@@ -1033,6 +1033,7 @@ def test_missing_body_handled(client):
     ("what changed here",           "what_changed", lambda d: True),
     ("run",                         "run",          lambda d: True),
     ("fix code",                    "fix",          lambda d: True),
+    ("debug this error",            "explain_simply", lambda d: True),
     ("check for errors",            "check_errors", lambda d: True),
     ("suggest next line",           "suggest_next", lambda d: True),
     ("story mode",                  "story_mode",   lambda d: True),
@@ -1046,6 +1047,7 @@ def test_missing_body_handled(client):
     ("watch variable x",            "watch_variable",lambda d: d.get("variable") == "x"),
     ("insert function called greet","insert_function",lambda d: d.get("function_name") == "greet"),
     ("insert a for loop",           "insert_loop",  lambda d: True),
+    ("insert print hello world",    "append_line",  lambda d: d.get("text") == "print hello world"),
 ])
 def test_voice_intent_parsing(client, voice_input, expected_action, check):
     res = client.post("/voice-command", json={"text": voice_input})

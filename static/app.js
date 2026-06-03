@@ -4262,6 +4262,100 @@ async function readStructureOutline() {
 
 // ---------- VOICE CODE EDITING ----------
 
+const SPOKEN_CODE_NUMBERS = Object.freeze({
+  zero: '0',
+  one: '1',
+  two: '2',
+  three: '3',
+  four: '4',
+  five: '5',
+  six: '6',
+  seven: '7',
+  eight: '8',
+  nine: '9',
+  ten: '10',
+});
+
+function normalizeSpokenCodeExpression(text) {
+  let expr = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!expr) return '';
+  expr = expr
+    .replace(/\b(?:open|left)\s+(?:paren|parenthesis)\b/gi, '(')
+    .replace(/\b(?:close|right)\s+(?:paren|parenthesis)\b/gi, ')')
+    .replace(/\bequals\s+equals\b/gi, ' == ')
+    .replace(/\bnot\s+equals\b/gi, ' != ')
+    .replace(/\bless\s+than\s+or\s+equal(?:\s+to)?\b/gi, ' <= ')
+    .replace(/\bgreater\s+than\s+or\s+equal(?:\s+to)?\b/gi, ' >= ')
+    .replace(/\bless\s+than\b/gi, ' < ')
+    .replace(/\bgreater\s+than\b/gi, ' > ')
+    .replace(/\bplus\b/gi, ' + ')
+    .replace(/\bminus\b/gi, ' - ')
+    .replace(/\btimes\b|\bmultiplied\s+by\b/gi, ' * ')
+    .replace(/\bdivided\s+by\b/gi, ' / ')
+    .replace(/\bmodulo\b|\bmod\b/gi, ' % ')
+    .replace(/\bequals?\b|\bequal\s+to\b/gi, ' = ')
+    .replace(/\bcolon\b/gi, ':')
+    .replace(/\b(zero|one|two|three|four|five|six|seven|eight|nine|ten)\b/gi,
+      word => SPOKEN_CODE_NUMBERS[word.toLowerCase()] || word);
+  return expr
+    .replace(/\s+([),:])/g, '$1')
+    .replace(/([(])\s+/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isSimplePythonExpression(text) {
+  const expr = String(text || '').trim();
+  if (!expr) return false;
+  if (/^["'][\s\S]*["']$/.test(expr)) return true;
+  if (/^-?\d+(?:\.\d+)?$/.test(expr)) return true;
+  if (/^[A-Za-z_]\w*(?:\([^)]*\))?$/.test(expr)) return true;
+  return /^(?:[A-Za-z_]\w*|-?\d+(?:\.\d+)?)(?:\s*(?:\+|-|\*|\/|%|==|!=|<=|>=|<|>)\s*(?:[A-Za-z_]\w*|-?\d+(?:\.\d+)?))+$/.test(expr);
+}
+
+function quotePythonString(text) {
+  return `"${String(text || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+function normalizeSpokenPrintArgument(text) {
+  const raw = String(text || '').replace(/\s+/g, ' ').trim();
+  const expr = normalizeSpokenCodeExpression(raw);
+  return isSimplePythonExpression(expr) ? expr : quotePythonString(raw);
+}
+
+function normalizeSpokenCodeText(text) {
+  let raw = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!raw) return '';
+
+  let indent = '';
+  while (/^(?:indent|indented|four\s+spaces|tab)\s+/i.test(raw)) {
+    indent += '    ';
+    raw = raw.replace(/^(?:indent|indented|four\s+spaces|tab)\s+/i, '').trim();
+  }
+
+  if (/^[A-Za-z_]\w*\s*=/.test(raw) || /^\s*(?:print|range)\s*\(/i.test(raw) || /:\s*$/.test(raw)) {
+    return indent + raw;
+  }
+
+  const forMatch = raw.match(/^for\s+([A-Za-z_]\w*)\s+in\s+range(?:\s+of)?\s+(.+?)(?:\s+colon|:)?$/i);
+  if (forMatch) {
+    const count = normalizeSpokenCodeExpression(forMatch[2]);
+    return `${indent}for ${forMatch[1]} in range(${count}):`;
+  }
+
+  const printMatch = raw.match(/^print(?:\s+statement)?\s+(.+)$/i);
+  if (printMatch) {
+    return `${indent}print(${normalizeSpokenPrintArgument(printMatch[1])})`;
+  }
+
+  const assignMatch = raw.match(/^([A-Za-z_]\w*)\s+(?:equals?|equal\s+to|is|set\s+to)\s+(.+)$/i);
+  if (assignMatch) {
+    return `${indent}${assignMatch[1]} = ${normalizeSpokenCodeExpression(assignMatch[2])}`;
+  }
+
+  return indent + normalizeSpokenCodeExpression(raw);
+}
+
 function insertAtCursor(text) {
   const model = getModel();
   if (!model) { speak('Editor not ready.'); return; }
@@ -4312,8 +4406,9 @@ function insertIfVoice(condition) {
 
 function appendLineVoice(text) {
   if (!text) { speak('No text to append.'); return; }
-  insertAtCursor(text);
-  speak(`Appended: ${text}`);
+  const code = normalizeSpokenCodeText(text);
+  insertAtCursor(code);
+  speak(`Appended: ${code}`);
   srAnnounce('Line appended');
 }
 
@@ -4322,13 +4417,14 @@ function replaceLineVoice(lineNum, text) {
   if (!model) { speak('Editor not ready.'); return; }
   const maxLine = model.getLineCount();
   if (lineNum < 1 || lineNum > maxLine) { speak(`Line ${lineNum} is out of range.`); return; }
+  const code = normalizeSpokenCodeText(text);
   const col = model.getLineMaxColumn(lineNum);
   model.pushEditOperations([], [{
     range: new monaco.Range(lineNum, 1, lineNum, col),
-    text:  text,
+    text:  code,
   }], () => null);
   editor.setPosition({ lineNumber: lineNum, column: 1 });
-  speak(`Replaced line ${lineNum} with: ${text}`);
+  speak(`Replaced line ${lineNum} with: ${code}`);
   srAnnounce(`Line ${lineNum} replaced`);
 }
 
@@ -4337,12 +4433,13 @@ function insertLineVoice(lineNum, text) {
   if (!model) { speak('Editor not ready.'); return; }
   const maxLine = model.getLineCount();
   if (lineNum < 1 || lineNum > maxLine + 1) { speak(`Line ${lineNum} is out of range.`); return; }
+  const code = normalizeSpokenCodeText(text);
   model.pushEditOperations([], [{
     range: new monaco.Range(lineNum, 1, lineNum, 1),
-    text:  text + '\n',
+    text:  code + '\n',
   }], () => null);
   editor.setPosition({ lineNumber: lineNum, column: 1 });
-  speak(`Inserted at line ${lineNum}: ${text}`);
+  speak(`Inserted at line ${lineNum}: ${code}`);
   srAnnounce(`Line inserted at ${lineNum}`);
 }
 

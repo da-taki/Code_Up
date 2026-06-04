@@ -149,15 +149,26 @@ const VoiceEngine = (function () {
     const enVoices = _voices.filter(v => v.lang && v.lang.startsWith('en'));
     const hiVoices = _voices.filter(v => v.lang && v.lang.startsWith('hi'));
 
-    // Prefer: Google > Microsoft > default, non-local over local for quality
-    _englishVoice = enVoices.find(v => v.name.includes('Google')) ||
-                    enVoices.find(v => v.name.includes('Microsoft') && v.name.includes('Online')) ||
-                    enVoices.find(v => !v.localService) ||
+    // Names that are reliably female / male across common platforms. Used to
+    // keep one stable, acceptable female voice and to never fall back to a
+    // default male voice (e.g. "Microsoft David"). This is a deterministic
+    // preference + safe fallback, not a hardcoded single voice.
+    const FEMALE = /(zira|aria|jenny|michelle|clara|samantha|susan|google us english|google uk english female|female|heera|swara|kalpana)/i;
+    const MALE = /(\bdavid\b|\bmark\b|george|james|\bguy\b|daniel|google uk english male|\bmale\b|ravi|hemant|madhur|prabhat)/i;
+
+    // Keep "Google US English" (the existing preferred, female voice) at the
+    // top, then any known female, then online, then any non-male, then first.
+    _englishVoice = enVoices.find(v => v.name.includes('Google') && !MALE.test(v.name)) ||
+                    enVoices.find(v => FEMALE.test(v.name)) ||
+                    enVoices.find(v => v.name.includes('Microsoft') && v.name.includes('Online') && !MALE.test(v.name)) ||
+                    enVoices.find(v => !v.localService && !MALE.test(v.name)) ||
+                    enVoices.find(v => !MALE.test(v.name)) ||
                     enVoices[0] || null;
 
-    _hindiVoice = hiVoices.find(v => v.name.includes('Google')) ||
-                  hiVoices.find(v => v.name.includes('Microsoft')) ||
-                  hiVoices.find(v => !v.localService) ||
+    _hindiVoice = hiVoices.find(v => v.name.includes('Google') && !MALE.test(v.name)) ||
+                  hiVoices.find(v => FEMALE.test(v.name)) ||
+                  hiVoices.find(v => v.name.includes('Microsoft') && !MALE.test(v.name)) ||
+                  hiVoices.find(v => !v.localService && !MALE.test(v.name)) ||
                   hiVoices[0] || null;
 
     _debug('Voices loaded. EN:', _englishVoice?.name, 'HI:', _hindiVoice?.name);

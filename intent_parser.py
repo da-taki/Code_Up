@@ -431,12 +431,43 @@ class IntentParser:
         r"add\s+(?:an?\s+)?if\s+(?:statement\s+)?(?:for\s+|checking\s+)?(.+)",
     ]
 
+    # "insert a while loop while count is less than or equal to 3"
+    # "add a while loop until count is greater than 5"
+    # "insert while count <= 3"
+    INSERT_WHILE_PATTERNS = [
+        r"(?:insert|add)\s+(?:a\s+)?while\s+loop\s+(?:that\s+runs\s+)?"
+        r"(?:while\s+|until\s+|when\s+|for\s+(?:as\s+long\s+as\s+)?|"
+        r"checking\s+(?:whether\s+|that\s+)?)?(.+)",
+        r"(?:insert|add)\s+(?:a\s+)?while\s+(.+)",
+    ]
+
+    # "insert a variable named name and give it the value Taknoor"
+    # "insert a variable called score with value 7"
+    # "create a variable age set to 12" / "add variable city holding Patiala"
+    # The value is captured raw; the frontend decides quoting (text vs number).
+    INSERT_VARIABLE_PATTERNS = [
+        r"(?:insert|add|create|make|declare)\s+(?:a\s+|an\s+|new\s+)*variable\s+"
+        r"(?:called\s+|named\s+)?([A-Za-z_]\w*)\s+(?:and\s+)?"
+        r"(?:give\s+it\s+the\s+value|giving\s+it\s+the\s+value|give\s+the\s+value|"
+        r"with\s+(?:the\s+)?value|with\s+value|set\s+to|equal\s+to|equals|"
+        r"holding|storing|that\s+(?:holds|stores|is|equals))\s+(.+)",
+        r"(?:insert|add|create|make|declare)\s+(?:a\s+|an\s+|new\s+)*variable\s+"
+        r"(?:called\s+|named\s+)?([A-Za-z_]\w*)\s*=\s*(.+)",
+    ]
+
     APPEND_LINE_PATTERNS = [
         r"(?:insert|add)\s+(print\s+.+?)$",
         r"append\s+[\"']?(.+?)[\"']?$",
         r"add\s+(?:a\s+)?(?:new\s+)?line\s+[\"']?(.+?)[\"']?$",
         r"write\s+[\"']?(.+?)[\"']?$",
         r"type\s+[\"']?(.+?)[\"']?$",
+        # General fallback: "insert <spoken code>" appends a normalized line. This
+        # is intentionally last and only reached after the specific insert_*
+        # intents (function/class/line/loop/if/while/variable) have been tried,
+        # so it never hijacks them. It lets the guided tutorial — and any voice
+        # user — say "insert for i in range 3", "insert count equals 1", or
+        # "insert indented print count" and have it inserted line by line.
+        r"insert\s+(.+)$",
     ]
 
     # -----------------------------------------------------------------------
@@ -1065,6 +1096,10 @@ class IntentParser:
             "add_parameter":       self.ADD_PARAMETER_PATTERNS,
             "insert_loop":         self.INSERT_LOOP_PATTERNS,
             "insert_if":           self.INSERT_IF_PATTERNS,
+            # insert_while / insert_variable must precede append_line so the
+            # general "insert <line>" fallback never swallows them.
+            "insert_while":        self.INSERT_WHILE_PATTERNS,
+            "insert_variable":     self.INSERT_VARIABLE_PATTERNS,
             "append_line":         self.APPEND_LINE_PATTERNS,
             # Tutorial intents must come before choose_suggestion, whose
             # ^(\w+)$ pattern would otherwise swallow the bare word "tutorial".
@@ -1253,6 +1288,10 @@ class IntentParser:
                     continue
                 if intent == "insert_class" and "class_name" not in slots:
                     continue
+                if intent == "insert_while" and "condition" not in slots:
+                    continue
+                if intent == "insert_variable" and ("name" not in slots or "value" not in slots):
+                    continue
                 if intent == "set_breakpoint" and "line_number" not in slots:
                     continue
                 if intent == "set_audio_breakpoint" and "condition" not in slots:
@@ -1341,6 +1380,15 @@ class IntentParser:
         elif intent == "insert_if":
             if match.groups() and match.group(1):
                 slots["condition"] = match.group(1).strip()
+
+        elif intent == "insert_while":
+            if match.groups() and match.group(1):
+                slots["condition"] = match.group(1).strip()
+
+        elif intent == "insert_variable":
+            if match.groups() and len(match.groups()) >= 2 and match.group(1) and match.group(2):
+                slots["name"] = match.group(1).strip()
+                slots["value"] = match.group(2).strip()
 
         elif intent == "append_line":
             if match.groups() and match.group(1):

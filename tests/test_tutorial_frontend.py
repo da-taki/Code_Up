@@ -43,6 +43,23 @@ class TestTutorialModelNode:
         )
         assert "groups passed" in result.stdout
 
+    def test_spoken_code_normalizers_pass_in_node(self):
+        # Verifies static/app.js turns spoken "insert ..." commands into correct
+        # Python (string vs number quoting, conditions, indentation), and that
+        # the canonical tutorial commands build the example programs.
+        node = shutil.which("node")
+        if not node:
+            pytest.skip("node not available in this environment")
+        script = os.path.join(ROOT, "tests", "spoken_code.test.js")
+        result = subprocess.run(
+            [node, script], capture_output=True, text=True, timeout=60
+        )
+        assert result.returncode == 0, (
+            "node spoken-code normalizer test failed:\n"
+            f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+        )
+        assert "groups passed" in result.stdout
+
 
 # ---------------------------------------------------------------------------
 # 2a. tutorial.js speaks through the real path
@@ -88,6 +105,19 @@ class TestTutorialJsSpeechPath:
         assert "/tutorial/validate" in src
         assert "/tutorial/modules" in src
 
+    def test_is_voice_first_not_typing_first(self, src):
+        # The orientation must teach that CodeUp is built by speaking commands,
+        # and the activity must not tell the learner to type Python into the editor.
+        assert "build Python programs by speaking" in src
+        assert "Type your code, then press Control and Enter" not in src
+
+    def test_has_staged_voice_build_steps(self, src):
+        # Declarative per-module steps, each naming an exact insert command.
+        assert "TUTORIAL_STEPS" in src
+        assert "onInsert:" in src           # observes real insertions
+        assert "_readMyCode" in src         # read-back of the learner's program
+        assert "insert a variable named name and give it the value Taknoor" in src
+
 
 # ---------------------------------------------------------------------------
 # 2b. app.js integration
@@ -113,6 +143,20 @@ class TestAppJsIntegration:
 
     def test_practice_action_handled(self, src):
         assert "action === 'tutorial_practice'" in src
+
+    def test_new_insert_actions_routed(self, src):
+        # The new voice-insert actions reach the editor through the normal
+        # confirmed-action dispatch (same path as all other voice commands).
+        assert "action === 'insert_variable'" in src
+        assert "action === 'insert_while'" in src
+        assert "insertVariableVoice(" in src
+        assert "insertWhileVoice(" in src
+
+    def test_tutorial_observes_inserts_without_intercepting(self, src):
+        # handleConfirmedAction notifies the tutorial AFTER performing the insert,
+        # so the command flows normally and the tutorial only watches the result.
+        assert "_TUTORIAL_EDIT_ACTIONS" in src
+        assert "TutorialController.onInsert" in src
 
 
 # ---------------------------------------------------------------------------

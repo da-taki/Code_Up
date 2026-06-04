@@ -2440,6 +2440,8 @@ async function handleConfirmedAction(action, payload) {
   else if (action === 'insert_class')       insertClassVoice(payload && payload.class_name);
   else if (action === 'insert_loop')        insertLoopVoice(payload && payload.loop_var, payload && payload.iterable);
   else if (action === 'insert_if')          insertIfVoice(payload && payload.condition);
+  else if (action === 'insert_while')       insertWhileVoice(payload && payload.condition);
+  else if (action === 'insert_variable')    insertVariableVoice(payload && payload.name, payload && payload.value);
   else if (action === 'append_line')        appendLineVoice(payload && payload.text);
   else if (action === 'replace_line')       replaceLineVoice(payload && payload.line_number, payload && payload.text);
   else if (action === 'insert_line')        insertLineVoice(payload && payload.line_number, payload && payload.text);
@@ -2501,7 +2503,23 @@ async function handleConfirmedAction(action, payload) {
   else if (action === 'replay_mistake')       await requestMistakeReplay('replay');
   else if (action === 'why_fixed_works')      await requestMistakeReplay('why');
   else if (action === 'show_changed_lines')   await requestMistakeReplay('changed lines');
+
+  // Guided tutorial OBSERVES real editor insertions made through the normal
+  // voice/typed pipeline (it never intercepts them). This runs AFTER the insert
+  // helper above has spoken its own read-back, so the tutorial's follow-up
+  // guidance is queued after it — never overlapping. See TutorialController.onInsert.
+  if (_TUTORIAL_EDIT_ACTIONS.has(action) &&
+      window.TutorialController && window.TutorialController.active &&
+      typeof window.TutorialController.onInsert === 'function') {
+    try { window.TutorialController.onInsert(action); } catch (e) { console.error('Tutorial onInsert error:', e); }
+  }
 }
+
+// Editor-mutating voice actions the guided tutorial watches for step progress.
+const _TUTORIAL_EDIT_ACTIONS = new Set([
+  'insert_variable', 'insert_while', 'insert_if', 'insert_loop',
+  'insert_function', 'insert_class', 'append_line', 'insert_line', 'replace_line',
+]);
 
 // ---------- PRE-FLIGHT INPUTS ----------
 function setPreflightInputs(values) {
@@ -4685,6 +4703,7 @@ async function readStructureOutline() {
 
 // ---------- VOICE CODE EDITING ----------
 
+// ==== SPOKEN-CODE-NORMALIZERS-START (pure; mirrored by tests/spoken_code.test.js) ====
 const SPOKEN_CODE_NUMBERS = Object.freeze({
   zero: '0',
   one: '1',
@@ -4751,9 +4770,11 @@ function normalizeSpokenCodeText(text) {
   if (!raw) return '';
 
   let indent = '';
-  while (/^(?:indent|indented|four\s+spaces|tab)\s+/i.test(raw)) {
+  // Strip a leading "indented" / "four spaces" / "tab" cue, tolerating an
+  // article in front ("an indented print ...") so spoken structure works.
+  while (/^(?:an?\s+|the\s+)?(?:indent|indented|four\s+spaces|tab)\s+/i.test(raw)) {
     indent += '    ';
-    raw = raw.replace(/^(?:indent|indented|four\s+spaces|tab)\s+/i, '').trim();
+    raw = raw.replace(/^(?:an?\s+|the\s+)?(?:indent|indented|four\s+spaces|tab)\s+/i, '').trim();
   }
 
   if (/^[A-Za-z_]\w*\s*=/.test(raw) || /^\s*(?:print|range)\s*\(/i.test(raw) || /:\s*$/.test(raw)) {
@@ -4766,6 +4787,13 @@ function normalizeSpokenCodeText(text) {
     return `${indent}for ${forMatch[1]} in range(${count}):`;
   }
 
+  // "print saying ready" / "print statement that says ready": the word "saying"
+  // marks a literal message, so always quote it (even a single word like ready).
+  const printSayingMatch = raw.match(/^print(?:\s+statement)?\s+(?:saying|that\s+says)\s+(.+)$/i);
+  if (printSayingMatch) {
+    return `${indent}print(${quotePythonString(printSayingMatch[1].trim())})`;
+  }
+  // "print hello world" (quoted) / "print name" (a variable, left bare).
   const printMatch = raw.match(/^print(?:\s+statement)?\s+(.+)$/i);
   if (printMatch) {
     return `${indent}print(${normalizeSpokenPrintArgument(printMatch[1])})`;
@@ -4779,9 +4807,82 @@ function normalizeSpokenCodeText(text) {
   return indent + normalizeSpokenCodeExpression(raw);
 }
 
+// ---- Spoken value / condition normalizers (shared by voice insert actions) ----
+
+// Turn a spoken variable value into Python. Numbers and booleans stay literal;
+// a bare word like "Taknoor" becomes a quoted string (it is almost always a
+// name or label, not a variable reference); simple arithmetic stays an
+// expression. Keeps assignment inserts valid both inside and outside the tutorial.
+function normalizeSpokenValue(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '""';
+  const expr = normalizeSpokenCodeExpression(raw);
+  if (/^-?\d+(?:\.\d+)?$/.test(expr)) return expr;            // number
+  const low = expr.toLowerCase();
+  if (low === 'true') return 'True';
+  if (low === 'false') return 'False';
+  if (low === 'none' || low === 'nothing') return 'None';
+  if (/^(['"])[\s\S]*\1$/.test(expr)) return expr;            // already quoted
+  if (/[-+*/%]/.test(expr) && isSimplePythonExpression(expr)) return expr;  // arithmetic
+  return quotePythonString(raw);                              // text literal
+}
+
+// Turn a spoken comparison into a Python condition: strip lead-ins
+// ("whether"/"that"), fold "is greater than" -> "greater than", map equality
+// words to ==, then reuse the operator/number normalizer.
+function normalizeSpokenCondition(text) {
+  let c = String(text || '').trim();
+  if (!c) return 'True';
+  c = c.replace(/^(?:whether|that|if)\s+/i, '');
+  // Drop the beginner connective "is" before a comparison word ("age is greater
+  // than" -> "age greater than"), keeping "or equal to" intact so <= / >= still
+  // resolve. The operator words themselves are mapped by normalizeSpokenCodeExpression.
+  c = c.replace(/\bis\s+(greater|less|more|bigger|smaller|not|equal)\b/gi, '$1');
+  c = c.replace(/\bbigger\s+than\b/gi, 'greater than');
+  c = c.replace(/\bsmaller\s+than\b/gi, 'less than');
+  c = c.replace(/\bmore\s+than\b/gi, 'greater than');
+  let expr = normalizeSpokenCodeExpression(c);
+  // In a condition a lone "=" (from "equals"/"equal to") must become "==".
+  expr = expr.replace(/(^|[^<>=!])=(?!=)/g, '$1==');
+  expr = expr.replace(/={3,}/g, '==').replace(/\s+/g, ' ').trim();
+  return expr || 'True';
+}
+
+// Read a Python condition back in words, for clear spoken confirmation.
+function spokenConditionPhrase(cond) {
+  return String(cond || '')
+    .replace(/>=/g, ' is greater than or equal to ')
+    .replace(/<=/g, ' is less than or equal to ')
+    .replace(/==/g, ' equals ')
+    .replace(/!=/g, ' is not equal to ')
+    .replace(/>/g, ' is greater than ')
+    .replace(/</g, ' is less than ')
+    .replace(/\s+/g, ' ').trim();
+}
+// ==== SPOKEN-CODE-NORMALIZERS-END ====
+
+// True while the guided tutorial is mid-activity. Structural inserts (if / for /
+// while) then drop the "pass" placeholder, because the tutorial guides the
+// learner to add the indented body next; outside the tutorial the placeholder
+// keeps the snippet runnable.
+function tutorialBuildingActivity() {
+  return !!(window.TutorialController && window.TutorialController.active &&
+            window.TutorialController.model &&
+            window.TutorialController.model.stage === 'activity');
+}
+
 function insertAtCursor(text) {
   const model = getModel();
   if (!model) { speak('Editor not ready.'); return; }
+  // First line into an empty editor goes at the very top — no leading blank
+  // line — so line numbers and read-back stay clean for screen-reader users.
+  if (!model.getValue().trim()) {
+    model.setValue(text);
+    const last = model.getLineCount();
+    editor.setPosition({ lineNumber: last, column: model.getLineMaxColumn(last) });
+    editor.revealLineInCenter(last);
+    return;
+  }
   const pos = editor.getPosition() || { lineNumber: model.getLineCount(), column: 1 };
   const line = pos.lineNumber;
   const col  = model.getLineMaxColumn(line);
@@ -4813,26 +4914,71 @@ function insertClassVoice(className) {
 function insertLoopVoice(loopVar, iterable) {
   const v = loopVar  || 'i';
   const it = iterable || 'range(10)';
-  const code = `for ${v} in ${it}:\n    pass`;
-  insertAtCursor(code);
-  speak(`Inserted for loop. Variable ${v} in ${it}. Replace pass with your loop body.`);
+  if (tutorialBuildingActivity()) {
+    insertAtCursor(`for ${v} in ${it}:`);
+    speak(`Inserted a for loop header: for ${v} in ${it}. The next line must be indented; that is the action the loop repeats.`);
+  } else {
+    insertAtCursor(`for ${v} in ${it}:\n    pass`);
+    speak(`Inserted for loop. Variable ${v} in ${it}. Replace pass with your loop body.`);
+  }
   srAnnounce('For loop inserted');
 }
 
 function insertIfVoice(condition) {
-  const cond = condition || 'True';
-  const code = `if ${cond}:\n    pass`;
-  insertAtCursor(code);
-  speak(`Inserted if statement checking ${cond}. Replace pass with your code.`);
+  const cond = normalizeSpokenCondition(condition) || 'True';
+  if (tutorialBuildingActivity()) {
+    insertAtCursor(`if ${cond}:`);
+    speak(`Inserted an if statement: if ${spokenConditionPhrase(cond)}. The next line must be indented, so it only runs when this is true.`);
+  } else {
+    insertAtCursor(`if ${cond}:\n    pass`);
+    speak(`Inserted if statement checking ${spokenConditionPhrase(cond)}. Replace pass with your code.`);
+  }
   srAnnounce('If statement inserted');
+}
+
+function insertWhileVoice(condition) {
+  const cond = normalizeSpokenCondition(condition) || 'True';
+  if (tutorialBuildingActivity()) {
+    insertAtCursor(`while ${cond}:`);
+    speak(`Inserted a while loop: while ${spokenConditionPhrase(cond)}. The next line must be indented. Remember to change something inside so the loop can stop.`);
+  } else {
+    insertAtCursor(`while ${cond}:\n    pass`);
+    speak(`Inserted while loop checking ${spokenConditionPhrase(cond)}. Replace pass with your loop body, and change the condition inside so it can stop.`);
+  }
+  srAnnounce('While loop inserted');
+}
+
+function insertVariableVoice(name, value) {
+  let n = String(name || '').trim();
+  if (!/^[A-Za-z_]\w*$/.test(n)) n = 'value';
+  const v = normalizeSpokenValue(value);
+  insertAtCursor(`${n} = ${v}`);
+  const isText = /^(['"])[\s\S]*\1$/.test(v);
+  const spokenValue = isText
+    ? `the text ${v.replace(/^['"]|['"]$/g, '')}`
+    : `the value ${v}`;
+  speak(`Inserted: ${n} equals ${spokenValue}.`);
+  srAnnounce(`Variable ${n} inserted`);
 }
 
 function appendLineVoice(text) {
   if (!text) { speak('No text to append.'); return; }
   const code = normalizeSpokenCodeText(text);
   insertAtCursor(code);
-  speak(`Appended: ${code}`);
-  srAnnounce('Line appended');
+  speak(`Inserted: ${spokenCodeReadback(code)}`);
+  srAnnounce('Line inserted');
+}
+
+// Read a generated line of code back in a screen-reader-friendly way: announce
+// indentation explicitly, and describe brackets/operators only lightly so the
+// learner hears structure without a flood of symbol names.
+function spokenCodeReadback(code) {
+  const raw = String(code || '');
+  const indentMatch = raw.match(/^(\s*)/);
+  const spaces = indentMatch ? indentMatch[1].length : 0;
+  const body = raw.trim();
+  const prefix = spaces >= 4 ? 'indented, ' : '';
+  return prefix + body;
 }
 
 function replaceLineVoice(lineNum, text) {

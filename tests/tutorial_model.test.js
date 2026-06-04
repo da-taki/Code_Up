@@ -8,7 +8,7 @@
  */
 const assert = require('assert');
 const path = require('path');
-const { TutorialModel } = require(path.join(__dirname, '..', 'static', 'tutorial.js'));
+const { TutorialModel, TUTORIAL_STEPS } = require(path.join(__dirname, '..', 'static', 'tutorial.js'));
 
 let groups = 0;
 function check(name, fn) {
@@ -121,6 +121,76 @@ check('global commands pass through untouched', () => {
   assert.strictEqual(C('go to line 5'), null);
   assert.strictEqual(C('analyze'), null);
   assert.strictEqual(C(''), null);
+});
+
+// CRITICAL: real coding commands must NOT be classified as tutorial controls,
+// so they fall through to the normal voice-command pipeline while the tutorial
+// is active. This is the root-cause guard for the Variables insert bug.
+check('insert / run code commands are never swallowed', () => {
+  const C = TutorialModel.classifyDecision;
+  assert.strictEqual(C('insert a variable named name and give it the value Taknoor'), null);
+  assert.strictEqual(C('insert a variable called name with value Aman'), null);
+  assert.strictEqual(C('insert print name'), null);
+  assert.strictEqual(C('insert print hello world'), null);
+  assert.strictEqual(C('insert an if statement checking age is greater than 10'), null);
+  assert.strictEqual(C('insert for i in range 3'), null);
+  assert.strictEqual(C('insert while count is less than or equal to 3'), null);
+  assert.strictEqual(C('insert an indented print count'), null);
+  assert.strictEqual(C('run code'), null);
+});
+
+// Staged activities: each module exposes ordered, voice-built steps.
+check('staged steps exist for every module', () => {
+  assert.deepStrictEqual(Object.keys(TUTORIAL_STEPS).sort(),
+    ['for', 'if', 'print', 'variables', 'while'].sort());
+  assert.strictEqual(TUTORIAL_STEPS.print.length, 1);
+  assert.strictEqual(TUTORIAL_STEPS.variables.length, 2);
+  assert.strictEqual(TUTORIAL_STEPS.if.length, 3);
+  assert.strictEqual(TUTORIAL_STEPS.for.length, 2);
+  assert.strictEqual(TUTORIAL_STEPS.while.length, 4);
+  // Every step names an exact "insert ..." command and a spoken prompt.
+  Object.keys(TUTORIAL_STEPS).forEach(mid => {
+    TUTORIAL_STEPS[mid].forEach(step => {
+      assert.ok(/^insert\b/.test(step.say), mid + ' step.say should be an insert command: ' + step.say);
+      assert.ok(step.prompt && step.prompt.length > 10, mid + ' step needs a prompt');
+      assert.strictEqual(typeof step.check, 'function');
+    });
+  });
+});
+
+// Variables: requires assignment THEN a print of that variable (staged).
+check('variables step checks gate assignment + print', () => {
+  const S = TUTORIAL_STEPS.variables;
+  assert.strictEqual(S[0].check('name = "Taknoor"'), true);   // assignment present
+  assert.strictEqual(S[0].check('print(name)'), false);       // no assignment yet
+  assert.strictEqual(S[1].check('name = "Taknoor"'), false);  // assigned but not printed
+  assert.strictEqual(S[1].check('name = "Taknoor"\nprint(name)'), true);
+  // Different names/values also work (not hardcoded).
+  assert.strictEqual(S[1].check('student = "Aman"\nprint(student)'), true);
+  assert.strictEqual(S[1].check('score = 7\nprint(score)'), true);
+});
+
+// While: counter, header, indented print, and a real increment.
+check('while step checks gate the safe-loop structure', () => {
+  const S = TUTORIAL_STEPS.while;
+  const full = 'count = 1\nwhile count <= 3:\n    print(count)\n    count = count + 1';
+  assert.strictEqual(S[0].check(full), true);   // counter
+  assert.strictEqual(S[1].check(full), true);   // while header
+  assert.strictEqual(S[2].check(full), true);   // indented print
+  assert.strictEqual(S[3].check(full), true);   // increment
+  // Missing increment fails the last step.
+  assert.strictEqual(S[3].check('count = 1\nwhile count <= 3:\n    print(count)'), false);
+  // "count += 1" also counts as an increment.
+  assert.strictEqual(S[3].check('count = 1\nwhile count <= 3:\n    print(count)\n    count += 1'), true);
+});
+
+// If / for: header + indented body, condition is not mistaken for assignment.
+check('if and for step checks gate header + indented body', () => {
+  assert.strictEqual(TUTORIAL_STEPS.if[1].check('age = 12\nif age > 10:'), true);
+  assert.strictEqual(TUTORIAL_STEPS.if[0].check('if age > 10:'), false);   // "==" guard: header is not an assignment
+  assert.strictEqual(TUTORIAL_STEPS.if[2].check('age = 12\nif age > 10:\n    print("you can vote")'), true);
+  assert.strictEqual(TUTORIAL_STEPS.for[0].check('for i in range(3):'), true);
+  assert.strictEqual(TUTORIAL_STEPS.for[1].check('for i in range(3):\n    print(i)'), true);
 });
 
 console.log('tutorial_model.test.js: ' + groups + ' groups passed');

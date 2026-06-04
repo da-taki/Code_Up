@@ -6253,6 +6253,10 @@ def voice():
             return _store_and_return({"success": True, "action": "insert_loop", "loop_var": slots.get("loop_var", "i"), "iterable": slots.get("iterable", "range(10)"), "confidence": confidence})
         if intent == "insert_if":
             return _store_and_return({"success": True, "action": "insert_if", "condition": slots.get("condition", "True"), "confidence": confidence})
+        if intent == "insert_while":
+            return _store_and_return({"success": True, "action": "insert_while", "condition": slots.get("condition", "True"), "confidence": confidence})
+        if intent == "insert_variable":
+            return _store_and_return({"success": True, "action": "insert_variable", "name": slots.get("name", "value"), "value": slots.get("value", ""), "confidence": confidence})
         if intent == "append_line":
             return _store_and_return({"success": True, "action": "append_line", "text": slots.get("text", ""), "confidence": confidence})
         if intent == "replace_line":

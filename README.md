@@ -40,7 +40,7 @@ Typed commands, keyboard-accessible controls, spoken output and narration, and v
 
 A spoken, conversational, activity-based tutorial that lets a blind beginner learn basic Python independently. It teaches five modules in order — **print statements → variables → if statements → for loops → while loops** — but is fully **opt-in and modular**: after *every* module the learner is asked whether to continue, practise again, hear a recap, or stop and start coding. Finishing one topic never forces the next.
 
-Each module is short: a spoken explanation, a spoken example, then a real hands-on activity where the learner writes and runs actual code in the editor. Their attempt is validated structurally (so many different correct answers are accepted, not one scripted string), and they get spoken success feedback or spoken hints. Every essential event — welcome, explanation, task, success, errors, hints, choices, module completion, and exit — is spoken through CodeUp's real, proven speech pipeline (the same one that speaks program output), not just shown on screen. See [Guided Tutorial](#guided-tutorial) below for commands and design.
+Each module is short: a spoken explanation, then a real **voice-driven construction** activity. The tutorial tells the learner an exact command to say — beginning with `insert …` — they say it (or type the same command into the command box), and CodeUp's normal voice pipeline inserts the Python and reads it back. Programs are built line by line by speaking, never by typing Python into the editor. The finished program is validated structurally (so many different correct answers are accepted, not one scripted string), and the learner gets spoken success feedback or spoken hints. Every essential event — orientation, explanation, the command to say, each inserted line, run output, success, errors, hints, choices, and exit — is spoken through CodeUp's real, proven speech pipeline (the same one that speaks program output), not just shown on screen. See [Guided Tutorial](#guided-tutorial) below for commands and design.
 
 ---
 
@@ -81,7 +81,7 @@ Many natural variations work because the intent parser is grammar-based, not exa
 | Navigate code | `go to line twenty five`, `read line three`, `find variable x`, `where am i` |
 | Audio features | `sonify block`, `tell the story`, `what's different` |
 | AI assistance | `fix`, `analyze`, `explain simply`, `generate code for fibonacci`, `learning mode`, `quiz me on loops` |
-| Guided tutorial | `start tutorial`, `practise for loops`, and (while in the tutorial) `continue`, `try again`, `recap`, `hint`, `give me an example`, `repeat`, `exit tutorial` |
+| Guided tutorial | `start tutorial`, `practise for loops`, the `insert …` command shown for each step, `run code`, and (while in the tutorial) `continue`, `try again`, `recap`, `hint`, `read my code`, `give me an example`, `repeat`, `exit tutorial` |
 | Hindi | `चलाओ` (run), `कोड समझाओ` (analyze), `कोड ठीक करो` (fix), `लाइन बीस पर जाओ` (go to line 20), `मदद` (help) |
 
 Hindi number words 0–100 are recognized in line-navigation commands.
@@ -94,7 +94,25 @@ A spoken, activity-based tutorial that walks a blind beginner through writing an
 
 ### What it does
 
-It teaches five modules **in order** — print statements, variables, if statements, for loops, while loops — but progression is **always opt-in**. After every module you are asked what to do next; finishing print statements never forces you into variables. Each module is a short spoken explanation, a spoken example, then a hands-on activity where you write and run real code. Your attempt is validated by structure (using Python's AST), so many different correct answers are accepted — `print("hi")`, `print("hello world")`, `name = "Aman"; print(name)`, `score = 10; print(score)`, and so on all work. You hear spoken success feedback when it works and spoken hints when it doesn't.
+It teaches five modules **in order** — print statements, variables, if statements, for loops, while loops — but progression is **always opt-in**. After every module you are asked what to do next; finishing print statements never forces you into variables.
+
+The tutorial teaches CodeUp's actual **voice-driven coding workflow**, not a visual editor with narration. In each module it: (1) explains the concept aloud; (2) gives you an exact spoken command to say, beginning with `insert …`; (3) you say it — or type the same command into the command box as a keyboard fallback; (4) the command is handled by CodeUp's *normal* voice-command pipeline, which (5) inserts the Python and (6) reads the inserted line back to you; (7) the tutorial confirms the structure and prompts the next line; (8) when the program is complete you say `run code`; (9) output and success are spoken; (10) only then are you offered recap / practise again / continue / exit. You never have to type Python directly into the editor.
+
+Multi-line constructs are built **line by line** so you hear the structure (especially indentation) as it forms. The finished program is validated by structure (using Python's AST), so many different correct answers are accepted — `print("hi")`, `name = "Aman"` then `print(name)`, `score = 7` then `print(score)`, and so on all work. You hear spoken success feedback when it works and spoken hints when it doesn't.
+
+### The `insert …` commands each module teaches
+
+Say these (or type them into the command box). They are ordinary CodeUp voice commands — they work the same after you leave the tutorial.
+
+| Module | Commands the tutorial guides you to say |
+|---|---|
+| Print | `insert print hello world` → `print("hello world")` |
+| Variables | `insert a variable named name and give it the value Taknoor` → `name = "Taknoor"`, then `insert print name` → `print(name)` |
+| If | `insert a variable named age and give it the value 12`, `insert an if statement checking age is greater than 10`, `insert an indented print saying you can vote` |
+| For | `insert for i in range 3`, `insert an indented print i` |
+| While | `insert a variable named count and give it the value 1`, `insert while count is less than or equal to 3`, `insert an indented print count`, `insert an indented count equals count plus 1` |
+
+A spoken word value becomes a quoted string (`Taknoor` → `"Taknoor"`); a number stays a number (`12` → `12`). Spoken comparisons become real operators (`is greater than` → `>`, `is less than or equal to` → `<=`). The word `indented` adds the four spaces that put a line inside an `if`, `for`, or `while`.
 
 ### How to start
 
@@ -107,16 +125,18 @@ All of these work by voice **or** the typed command box, and each also has a key
 
 | You can say / type | What happens |
 |---|---|
+| `insert …` (the command shown for the step) | Inserts the next line through the normal voice pipeline and reads it back |
+| `run code` (or `Ctrl+Enter`) | Run your program (normal IDE command, works as always) |
+| `read my code` | Hear your program read back line by line, with indentation announced |
 | `continue` / `next` | Move on to the next topic (only offered after you succeed) |
-| `try again` / `practise again` | Repeat the current activity |
+| `try again` / `practise again` | Repeat the current activity from a clean editor |
 | `recap` | Hear a short summary of the current topic |
-| `hint` | Hear the next hint |
-| `give me an example` | Fill a worked example into the editor for you to run |
-| `repeat` | Hear the current instructions again |
-| `run` (or `Ctrl+Enter`) | Run your code (normal IDE command, works as always) |
+| `hint` | Hear a hint for the exact step you are on |
+| `give me an example` | Fill a worked example in for you to run |
+| `repeat` | Hear the current step's command again |
 | `exit tutorial` / `start coding` | Leave the tutorial cleanly and return to free coding |
 
-Regular IDE commands (`run`, `read line 2`, `what variables`, …) keep working throughout — the tutorial only intercepts its own navigation words.
+Crucially, **real coding commands are never swallowed by the tutorial.** `insert …`, `run code`, `read line 2`, `what variables`, navigation, and every other IDE command flow through to the normal CodeUp pipeline while the tutorial is active — the tutorial only intercepts its own control words (`continue`, `repeat`, `hint`, `recap`, `practise again`, `read my code`, `exit tutorial`) and observes the resulting insertions.
 
 ### Modules and optional progression
 
@@ -132,12 +152,15 @@ Regular IDE commands (`run`, `read line 2`, `what variables`, …) keep working 
 
 - Backend lesson content + AST validators + while-loop safety: `tests/test_tutorial_engine.py`
 - Routes (`/tutorial/modules`, `/tutorial/validate`) and command routing: `tests/test_tutorial_routes.py`
-- Pure state-machine transitions (run with Node): `tests/tutorial_model.test.js`
-- Frontend wiring + proof the tutorial speaks via the real path: `tests/test_tutorial_frontend.py`
+- Voice-insert pipeline (`insert_variable` / `insert_while` / general `insert`, voice-first lesson content): `tests/test_tutorial_insert_pipeline.py`
+- Pure state-machine transitions **and staged build-step checks** (run with Node): `tests/tutorial_model.test.js`
+- Spoken-code normalizers — string vs number quoting, conditions, indentation (run with Node): `tests/spoken_code.test.js`
+- Frontend wiring + proof the tutorial speaks via the real path and is voice-first: `tests/test_tutorial_frontend.py`
 
 ```
-python -m pytest tests/test_tutorial_engine.py tests/test_tutorial_routes.py tests/test_tutorial_frontend.py -q
+python -m pytest tests/test_tutorial_engine.py tests/test_tutorial_routes.py tests/test_tutorial_insert_pipeline.py tests/test_tutorial_frontend.py -q
 node tests/tutorial_model.test.js
+node tests/spoken_code.test.js
 ```
 
 The lesson content and validators live in `tutorial_engine.py` (one source of truth, served to the frontend by `/tutorial/modules`). The frontend controller is `static/tutorial.js`.

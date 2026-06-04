@@ -198,10 +198,146 @@
     return null;
   };
 
-  // Export the pure model for Node-based unit testing. Nothing below this point
-  // runs under Node, because it all depends on document/window.
+  // ─── STAGED ACTIVITY MODEL (declarative, pure) ───────────────────────────
+  // Each module's hands-on activity is built line by line, by voice. A step is
+  // satisfied when its `check(code)` predicate matches the live editor text.
+  // Checks are cumulative and order-independent: the controller advances past
+  // every satisfied step, so a learner can build pieces in any order and still
+  // progress. These predicates are pure (regex over a code string) so they run
+  // under Node and are unit-tested in tests/tutorial_model.test.js.
+  function _hasAssign(code) {
+    // A real assignment line (x = ...), not a comparison (x == ...).
+    return /^[ \t]*[A-Za-z_]\w*\s*=(?!=)\s*\S/m.test(String(code || ''));
+  }
+  function _printsVariable(code) {
+    // An assignment somewhere AND a print of a bare name (print(x)).
+    return _hasAssign(code) && /\bprint\s*\(\s*[A-Za-z_]\w*\s*\)/.test(String(code || ''));
+  }
+  function _hasPrintArg(code) {
+    return /\bprint\s*\(\s*\S/.test(String(code || ''));
+  }
+  function _hasIfHeader(code)    { return /^[ \t]*if\b.*:\s*$/m.test(String(code || '')); }
+  function _hasForHeader(code)   { return /^[ \t]*for\b.*:\s*$/m.test(String(code || '')); }
+  function _hasWhileHeader(code) { return /^[ \t]*while\b.*:\s*$/m.test(String(code || '')); }
+  function _hasIndentedPrint(code) { return /^[ \t]+print\s*\(/m.test(String(code || '')); }
+  function _hasIncrement(code) {
+    // Indented "count = count + 1" or "count += 1".
+    return /^[ \t]+[A-Za-z_]\w*\s*(?:=(?!=)\s*[A-Za-z_]\w*\s*[-+]|[-+]=)/m.test(String(code || ''));
+  }
+
+  var TUTORIAL_STEPS = {
+    print: [
+      {
+        id: 'print',
+        say: 'insert print hello world',
+        prompt: 'Let us make Python say something out loud. Say, or type into the command box: insert print, hello world. You may use any short message.',
+        hint: 'Say the word insert, then print, then your message. For example: insert print hello world.',
+        readback: 'That print line will speak your message when the program runs.',
+        check: _hasPrintArg,
+      },
+    ],
+    variables: [
+      {
+        id: 'assign',
+        say: 'insert a variable named name and give it the value Taknoor',
+        prompt: 'A variable is a named box that stores information for later. Let us make a box called name and put a word inside it. Say: insert a variable named name and give it the value, then your own name. For example: insert a variable named name and give it the value Taknoor.',
+        hint: 'Begin with: insert a variable named name. Then say: and give it the value, then a word such as Taknoor.',
+        readback: 'You created a variable. The box called name now holds that text.',
+        check: _hasAssign,
+      },
+      {
+        id: 'print-var',
+        say: 'insert print name',
+        prompt: 'Now let us show what is inside the box. Say: insert print, then the same variable name. For example: insert print name.',
+        hint: 'Say insert print, then the variable name you chose, with no quotes. For example: insert print name.',
+        readback: 'You used the variable. When the program runs, it will read out the value stored inside it.',
+        check: _printsVariable,
+      },
+    ],
+    if: [
+      {
+        id: 'variable',
+        say: 'insert a variable named age and give it the value 12',
+        prompt: 'An if statement makes a decision. First we need something to decide about. Say: insert a variable named age and give it the value 12. You may pick any number.',
+        hint: 'Say: insert a variable named age and give it the value 12.',
+        readback: 'Good. Now we have a number to test.',
+        check: _hasAssign,
+      },
+      {
+        id: 'if-header',
+        say: 'insert an if statement checking age is greater than 10',
+        prompt: 'Now the decision itself. Say: insert an if statement checking age is greater than 10. CodeUp will add the colon at the end for you.',
+        hint: 'Say: insert an if statement checking age is greater than 10.',
+        readback: 'That is the question Python will check. The next line says what happens when it is true.',
+        check: _hasIfHeader,
+      },
+      {
+        id: 'indented-print',
+        say: 'insert an indented print saying you can vote',
+        prompt: 'The action belongs inside the decision, so it must be indented. Say: insert an indented print saying you can vote.',
+        hint: 'Say: insert an indented print saying you can vote. The word indented adds the four spaces for you.',
+        readback: 'That print is indented, so it only runs when the condition is true. Indentation is how Python knows it belongs to the if.',
+        check: _hasIndentedPrint,
+      },
+    ],
+    for: [
+      {
+        id: 'for-header',
+        say: 'insert for i in range 3',
+        prompt: 'A for loop repeats an action a set number of times. Say: insert for i in range 3. That sets up a loop that runs three times.',
+        hint: 'Say: insert for i in range 3. CodeUp adds the brackets and the colon for you.',
+        readback: 'That sets up the loop. The next line, indented, is the action it repeats.',
+        check: _hasForHeader,
+      },
+      {
+        id: 'indented-print',
+        say: 'insert an indented print i',
+        prompt: 'Now the action to repeat. Say: insert an indented print i. The i is the counter, so it will read out 0, then 1, then 2.',
+        hint: 'Say: insert an indented print i. The word indented adds the four spaces that put it inside the loop.',
+        readback: 'That print is indented, so the loop repeats it each time it runs.',
+        check: _hasIndentedPrint,
+      },
+    ],
+    while: [
+      {
+        id: 'counter',
+        say: 'insert a variable named count and give it the value 1',
+        prompt: 'A while loop repeats while a condition stays true. First we need a counter that will change over time. Say: insert a variable named count and give it the value 1.',
+        hint: 'Say: insert a variable named count and give it the value 1.',
+        readback: 'Good. Count starts at 1.',
+        check: _hasAssign,
+      },
+      {
+        id: 'while-header',
+        say: 'insert while count is less than or equal to 3',
+        prompt: 'Now the loop. Say: insert while count is less than or equal to 3. The loop keeps going while that stays true.',
+        hint: 'Say: insert while count is less than or equal to 3.',
+        readback: 'That is the condition the loop checks each time, before it repeats.',
+        check: _hasWhileHeader,
+      },
+      {
+        id: 'indented-print',
+        say: 'insert an indented print count',
+        prompt: 'Inside the loop, let us read the counter aloud. Say: insert an indented print count.',
+        hint: 'Say: insert an indented print count. The word indented puts it inside the loop.',
+        readback: 'That print is inside the loop, so it runs every repetition.',
+        check: _hasIndentedPrint,
+      },
+      {
+        id: 'increment',
+        say: 'insert an indented count equals count plus 1',
+        prompt: 'This is the most important line: we must change the counter so the loop can stop. Say: insert an indented count equals count plus 1.',
+        hint: 'Say: insert an indented count equals count plus 1. Without this, the loop would run forever.',
+        readback: 'That update grows count each time, so the condition eventually becomes false and the loop stops safely.',
+        check: _hasIncrement,
+      },
+    ],
+  };
+
+  // Export the pure model + staged-activity definitions for Node-based unit
+  // testing. Nothing below this point runs under Node (it needs document/window).
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { TutorialModel: TutorialModel };
+    module.exports = { TutorialModel: TutorialModel, TUTORIAL_STEPS: TUTORIAL_STEPS };
   }
 
   if (typeof document === 'undefined' || typeof window === 'undefined') {
@@ -249,62 +385,70 @@
     var ta = document.querySelector('#editor textarea');
     if (ta) { try { ta.focus(); } catch (e) {} }
   }
+  // During tutorial activities the learner types/says insert COMMANDS, not raw
+  // Python — so keyboard focus goes to the command box, never the code editor.
+  function _focusCommandBox() {
+    var el = document.getElementById('voiceText');
+    if (el) { try { el.focus(); } catch (e) {} }
+  }
   function _safeStorage(fn) { try { return fn(); } catch (e) { return null; } }
 
   // ─── FALLBACK CONTENT (used only if /tutorial/modules cannot be fetched) ──
+  // Mirrors tutorial_engine.py. Concept + example are spoken in the intro; the
+  // step-by-step "insert ..." prompts come from TUTORIAL_STEPS above.
   var FALLBACK_CONTENT = {
     order: ['print', 'variables', 'if', 'for', 'while'],
     count: 5,
     modules: {
       print: {
         id: 'print', order: 1, title: 'Print statements',
-        concept: 'A print statement makes Python say something in the output. Write print, then brackets, with your message in quotes inside.',
+        concept: 'A print statement makes your program say or display a message when it runs. In CodeUp you create one by speaking an insert command.',
         example_code: 'print("Hello world")',
-        example_spoken: 'For example: print, open bracket, quote, Hello world, quote, close bracket.',
-        task: 'Now you try. Write one line that prints any short message. Press Control and Enter to run. Say give me an example for help.',
-        hints: ['Start with the word print and an opening bracket.', 'Put your message in double quotes.', 'Close the bracket at the end.'],
+        example_spoken: 'For example, to make Python greet us, you would say: insert print hello world.',
+        task: 'I will tell you a command to say. When you say it, I will place the code and read it back.',
+        hints: ['Say: insert print hello world.', 'Start with the word insert, then print, then your message.', 'You can also type the command into the command box and press Enter.'],
         success: 'Nicely done. You made Python speak with a print statement.',
-        recap: 'Recap: print, then brackets, then your message in quotes.'
+        recap: 'Recap: a print statement shows a message. You make one by saying: insert print, then your message.'
       },
       variables: {
         id: 'variables', order: 2, title: 'Variables',
-        concept: 'A variable gives a name to information. Choose a name, an equals sign, then a value.',
-        example_code: 'name = "Aman"\nprint(name)',
-        example_spoken: 'For example: name equals quote Aman quote, then print bracket name bracket.',
-        task: 'Store any word or number in a variable, then print that variable. Press Control and Enter to run.',
-        hints: ['Line one: a name, equals, a value.', 'Line two: print your variable by name.', 'For example: score equals 10, then print bracket score bracket.'],
-        success: 'Well done. You stored a value and printed it back.',
-        recap: 'Recap: a variable is a name, equals, and a value.'
+        concept: 'A variable is a named box that stores information so your program can use it later. You give the box a name and put a value inside.',
+        example_code: 'name = "Taknoor"\nprint(name)',
+        example_spoken: 'For example, to store your name you would say: insert a variable named name and give it the value Taknoor. Then to show it: insert print name.',
+        task: 'We will build it in two steps: first create the variable, then print what is inside it.',
+        hints: ['First say: insert a variable named name and give it the value Taknoor.', 'Then say: insert print name.', 'You may choose any name and any value.'],
+        success: 'Well done. You stored a value in a variable and printed it back.',
+        recap: 'Recap: a variable is a named box. Say insert a variable named, a name, and give it the value, then a value. Print it by saying insert print and the name.'
       },
       if: {
         id: 'if', order: 3, title: 'If statements',
-        concept: 'An if statement makes a choice. It runs the indented lines underneath only when its condition is true.',
-        example_code: 'age = 18\nif age >= 18:\n    print("You can vote")',
-        example_spoken: 'For example: age equals 18, then if age greater-or-equal 18 colon, then an indented print.',
-        task: 'Set a variable, then write an if statement with a colon, and an indented print underneath. Press Control and Enter to run.',
-        hints: ['Set a variable first, like x equals 10.', 'The if line ends with a colon.', 'Indent the print under the if by four spaces.'],
-        success: 'Great work. Your if statement made a decision.',
-        recap: 'Recap: if checks a condition, ends with a colon, and indents what runs.'
+        concept: 'An if statement lets a program make a decision. Python checks whether something is true, and only then runs the indented action underneath it.',
+        example_code: 'age = 12\nif age > 10:\n    print("you can vote")',
+        example_spoken: 'For example: insert a variable named age and give it the value 12. Then: insert an if statement checking age is greater than 10. Then: insert an indented print saying you can vote.',
+        task: 'We will build it line by line: a variable to test, the if decision, then an indented action.',
+        hints: ['First the variable: insert a variable named age and give it the value 12.', 'Then the decision: insert an if statement checking age is greater than 10.', 'Then the action: insert an indented print saying you can vote.'],
+        success: 'Great work. Your if statement made a decision and printed when the condition was true.',
+        recap: 'Recap: an if statement checks a condition and ends with a colon. The line that runs when it is true is indented underneath.'
       },
       for: {
         id: 'for', order: 4, title: 'For loops',
-        concept: 'A for loop repeats an action a set number of times. The repeated lines are indented under the for line.',
-        example_code: 'for number in range(3):\n    print(number)',
-        example_spoken: 'For example: for number in range bracket 3 bracket colon, then an indented print.',
-        task: 'Write a for loop that prints something a few times. Use range bracket 3 bracket to repeat three times. Press Control and Enter to run.',
-        hints: ['Start with for, a name, in range, a number, then a colon.', 'Indent the repeated line four spaces.', 'For example: for i in range 3 colon, then print bracket i bracket.'],
-        success: 'Excellent. Your for loop repeated and printed each time.',
-        recap: 'Recap: a for loop with range repeats a set number of times.'
+        concept: 'A for loop repeats an action a known number of times. The repeated line is indented underneath the for line.',
+        example_code: 'for i in range(3):\n    print(i)',
+        example_spoken: 'For example: insert for i in range 3. Then: insert an indented print i.',
+        task: 'We will build it in two steps: the loop line, then the indented action it repeats.',
+        hints: ['First say: insert for i in range 3.', 'Then say: insert an indented print i.', 'The word indented adds the four spaces that put the line inside the loop.'],
+        success: 'Excellent. Your for loop repeated the action and printed each time.',
+        recap: 'Recap: a for loop with range repeats a set number of times. The repeated line is indented underneath.'
       },
       while: {
         id: 'while', order: 5, title: 'While loops',
-        concept: 'A while loop repeats while a condition stays true. Use a counter that changes so it stops safely.',
+        concept: 'A while loop repeats an action while a condition stays true. Because the condition could stay true forever, a while loop must change something each time so it can stop.',
         example_code: 'count = 1\nwhile count <= 3:\n    print(count)\n    count = count + 1',
-        example_spoken: 'For example: count equals 1, while count less-or-equal 3 colon, an indented print, then count equals count plus 1.',
-        task: 'Start a counter, write a while loop, print the counter inside, and increase it so the loop ends. Press Control and Enter to run.',
-        hints: ['Set a counter first, like count equals 1.', 'The while line ends with a colon.', 'Most important: change the counter inside the loop, like count equals count plus 1.'],
+        example_spoken: 'For example: insert a variable named count and give it the value 1. Then: insert while count is less than or equal to 3. Then: insert an indented print count. Then: insert an indented count equals count plus 1.',
+        task: 'We will build a safe counter loop in four steps, ending with the line that lets it stop.',
+        hints: ['Start the counter: insert a variable named count and give it the value 1.', 'The loop: insert while count is less than or equal to 3.', 'Most important, the update: insert an indented count equals count plus 1.'],
         success: 'Brilliant. Your while loop counted up and stopped safely. That completes the last topic.',
-        recap: 'Recap: a while loop repeats while true; always change the counter so it stops.'
+        recap: 'Recap: a while loop repeats while its condition is true. Always change the counter inside so it eventually stops.'
       }
     }
   };
@@ -319,6 +463,7 @@
     _hintIndex: 0,
     _lastInstruction: '',
     _validating: false,
+    _stepIndex: 0,  // which staged step of the current activity we are on
 
     get active() { return this.model.active; },
     get step() { return this.model.moduleNumber(); },  // legacy compat
@@ -326,6 +471,15 @@
     _module: function () {
       if (!this.content) return null;
       return this.content.modules[this.model.moduleId] || null;
+    },
+
+    // Ordered build steps for the current module's activity (may be empty).
+    _steps: function () {
+      return TUTORIAL_STEPS[this.model.moduleId] || [];
+    },
+    _currentStep: function () {
+      var steps = this._steps();
+      return (this._stepIndex >= 0 && this._stepIndex < steps.length) ? steps[this._stepIndex] : null;
     },
 
     _ensureContent: function () {
@@ -381,8 +535,9 @@
         if (self.model.completed.length) {
           completedNote = ' You have already completed ' + self.model.completed.length + ' topic' + (self.model.completed.length === 1 ? '' : 's') + ', but we will start from the beginning. You can also say, practise, then a topic name, to jump straight to one.';
         }
-        _speak('Welcome to the CodeUp guided tutorial. I will help you write your first Python programs using speech and sound. We will begin with print statements. After each topic, you can stop, practise again, or continue. You are always in control.' + completedNote);
-        _speak('At any time you can say, or type: repeat, to hear the instructions again. hint, for a clue. give me an example, to fill in code for you. run, to run your code. or exit tutorial, to stop. You can also press Tab to reach the tutorial buttons.');
+        _speak('Welcome to the CodeUp guided tutorial. CodeUp lets you build Python programs by speaking instructions. In each lesson I will first explain a concept, then tell you an insert command to say. When you say it, I will place the code in the editor and read it back to you. You can also type the same command into the command box if voice is unavailable.' + completedNote);
+        _speak('We will begin with print statements. After each topic you can stop, practise again, or continue. You are always in control.');
+        _speak('At any time you can say, or type: repeat, to hear the instruction again. hint, for a clue. read my code, to hear what you have written. run code, to run it. or exit tutorial, to stop. You can also press Tab to reach the tutorial buttons.');
         _srAnnounce('Guided tutorial started. Topic 1 of ' + self.content.count + ', print statements.');
         self._enterModuleIntro(self.model.moduleId, { skipModelReset: true });
       });
@@ -450,17 +605,54 @@
     _enterActivity: function () {
       this.model.beginActivity();
       this._hintIndex = 0;
+      this._stepIndex = 0;
       var m = this._module();
       if (!m) return;
-      // Fresh editor for the activity so the learner starts clean.
+      // Fresh editor for the activity so the learner builds from a clean slate.
       _setCode('');
-      this._lastInstruction = m.task;
+      var first = this._currentStep();
+      this._lastInstruction = first ? first.prompt : (m.task || '');
       this.render();
-      this._setStatus('Activity: ' + m.title + '. Write your code, then Run.');
-      _speak(m.task);
-      _speak('The editor is ready. Type your code, then press Control and Enter to run.');
-      _srAnnounce('Activity: ' + m.title + '. Editor ready.');
-      _focusEditor();
+      this._setStatus(first ? ('Say: ' + first.say) : ('Activity: ' + m.title));
+      _speak('Now let us build it together, one line at a time, with your voice.');
+      if (first) _speak(first.prompt);
+      _speak('Say the command, or type it into the command box and press Enter.');
+      _srAnnounce('Activity: ' + m.title + '. Say the insert command.');
+      _focusCommandBox();
+    },
+
+    // Observe a real insertion made through the normal voice/typed pipeline (the
+    // tutorial never intercepts insert commands — it watches their result). The
+    // insert helper has already read the new line back; here we confirm the
+    // structure and prompt the next step. Speech is queued, so nothing overlaps.
+    onInsert: function () {
+      if (!this.model.active || this.model.stage !== 'activity') return;
+      var steps = this._steps();
+      if (!steps.length) return;
+      var code = _getCode();
+      var advanced = false;
+      // Advance past every step the code now satisfies (order-independent).
+      while (this._stepIndex < steps.length && steps[this._stepIndex].check(code)) {
+        var done = steps[this._stepIndex];
+        this._stepIndex++;
+        advanced = true;
+        if (done.readback) _speak(done.readback);
+      }
+      if (!advanced) return;  // the generic read-back already played; wait for more.
+      if (this._stepIndex < steps.length) {
+        var next = steps[this._stepIndex];
+        this._lastInstruction = next.prompt;
+        this.render();
+        this._setStatus('Next, say: ' + next.say);
+        _speak('Next. ' + next.prompt);
+        _srAnnounce('Next step. ' + next.say);
+      } else {
+        this._lastInstruction = 'Say run code, or press Control and Enter, to run your program.';
+        this.render();
+        this._setStatus('All lines added. Say: run code.');
+        _speak('Your program is complete. Now run it. Say: run code. Or press Control and Enter.');
+        _srAnnounce('All lines added. Say run code.');
+      }
     },
 
     // Called by window._tutorialOnRunSuccess / _tutorialOnRunError.
@@ -482,10 +674,12 @@
         } else {
           if (res.feedback) _speak(res.feedback);
           if (res.hint) _speak('Here is a hint. ' + res.hint);
-          _speak('Adjust your code and run again, or say give me an example.');
-          self._setStatus('Keep trying — listen to the hint, then run again.');
+          var cur = self._currentStep();
+          if (cur) _speak('Try this command again. ' + cur.prompt);
+          else _speak('Adjust your program and run again, or say give me an example.');
+          self._setStatus('Not yet — listen to the hint, then say the command again.');
           _srAnnounce('Not yet. Hint given.');
-          _focusEditor();
+          _focusCommandBox();
         }
       });
     },
@@ -565,17 +759,44 @@
       if (this.model.stage === 'decision') {
         _speak(this._lastInstruction || 'Say continue, practise again, or exit tutorial.');
       } else {
-        _speak(m.task);
+        var cur = this._currentStep();
+        if (cur) _speak('You are building it now. ' + cur.prompt);
+        else _speak(this._lastInstruction || 'Say run code when you are ready.');
       }
       _srAnnounce('Recap given.');
     },
 
     _repeatInstruction: function () {
       _speak(this._lastInstruction || 'There is nothing to repeat yet.');
-      _srAnnounce('Repeating instructions.');
+      _srAnnounce('Repeating the instruction.');
+    },
+
+    // Read the editor back, line by line, announcing indentation — so a blind
+    // learner can hear the structure they have built so far.
+    _readMyCode: function () {
+      var trimmed = String(_getCode() || '').replace(/\s+$/, '');
+      if (!trimmed.trim()) {
+        _speak('Your program is empty so far. ' + (this._lastInstruction || ''));
+        _srAnnounce('Program empty.');
+        return;
+      }
+      var lines = trimmed.split('\n');
+      _speak('Here is your program. ' + lines.length + ' line' + (lines.length === 1 ? '' : 's') + '.');
+      for (var i = 0; i < lines.length; i++) {
+        var lead = (lines[i].match(/^[ \t]*/) || [''])[0].replace(/\t/g, '    ');
+        var note = lead.length >= 4 ? 'indented, ' : '';
+        var body = lines[i].trim();
+        _speak('Line ' + (i + 1) + '. ' + note + (body || 'blank') + '.');
+      }
+      _srAnnounce('Read your code.');
     },
 
     _giveHint: function () {
+      // Prefer the hint for the exact build step the learner is on.
+      if (this.model.stage === 'activity') {
+        var cur = this._currentStep();
+        if (cur && cur.hint) { _speak('Hint. ' + cur.hint); _srAnnounce('Hint given'); return; }
+      }
       var m = this._module();
       if (!m || !m.hints || !m.hints.length) { _speak('Try saying: give me an example.'); return; }
       var idx = Math.min(this._hintIndex, m.hints.length - 1);
@@ -589,9 +810,15 @@
       var m = this._module();
       if (!m) return;
       _setCode(m.example_code);
-      _speak('I have filled in an example. Press Control and Enter to run it, or change it first.');
+      // A full example satisfies every build step; jump to the run prompt.
+      this._stepIndex = this._steps().length;
+      this._lastInstruction = 'Say run code, or press Control and Enter, to run it.';
+      this.render();
+      this._setStatus('Example loaded. Say: run code.');
+      _speak('I have filled in a complete example for you. ' + (m.example_spoken || ''));
+      _speak('When you are ready, say run code, or press Control and Enter. Or say practise again to build it yourself.');
       _srAnnounce('Example loaded into the editor.');
-      _focusEditor();
+      _focusCommandBox();
     },
 
     _skipToDecision: function () {
@@ -609,8 +836,15 @@
     // ── utterance interception (returns true if consumed) ────────────────────
     handleUtterance: function (text) {
       if (!this.model.active) return false;
-      var kind = TutorialModel.classifyDecision(text);
-      var low = String(text || '').toLowerCase().trim();
+      var low = String(text || '').toLowerCase().trim().replace(/[.!?]+$/, '').replace(/\s+/g, ' ');
+
+      // "read my code" / "read my program" — read the editor back. Line-specific
+      // reads ("read line 2") are NOT consumed; they fall through to the IDE.
+      if (low === 'read my code' || low === 'read my program' || low === 'read the code' ||
+          low === 'read my program back' || low === 'read it back' || low === 'read back my code') {
+        this._readMyCode();
+        return true;
+      }
 
       // "skip" / "move on" during an activity -> offer the decision point.
       if (this.model.stage === 'activity' && (low === 'skip' || low === 'skip this' || low === 'skip this topic' || low === 'move on')) {
@@ -618,6 +852,7 @@
         return true;
       }
 
+      var kind = TutorialModel.classifyDecision(text);
       if (!kind) return false;
 
       switch (kind) {
@@ -629,8 +864,9 @@
         case 'again':  this._practiceAgain(); return true;
         case 'continue':
           if (this.model.stage === 'decision') { this._continue(); return true; }
-          // "continue" said mid-activity: nudge them to run instead.
-          _speak('Finish this activity first. Write your code, then press Control and Enter to run. Say give me an example if you would like help.');
+          // "continue" said mid-activity: nudge them through the current step.
+          var cur = this._currentStep();
+          _speak('Let us finish this first. ' + (cur ? cur.prompt : 'Say give me an example if you would like help.'));
           return true;
         default: return false;
       }
@@ -660,7 +896,7 @@
         'Topic ' + this.model.moduleNumber() + ' of ' + this.content.count);
       var stageText = '';
       if (this.model.stage === 'intro') stageText = m.concept;
-      else if (this.model.stage === 'activity') stageText = m.task;
+      else if (this.model.stage === 'activity') stageText = this._lastInstruction || (this._currentStep() && this._currentStep().prompt) || m.task;
       else if (this.model.stage === 'decision') stageText = this._lastInstruction;
       this._setText(document.getElementById('tutorialText'), stageText);
 

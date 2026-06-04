@@ -42,31 +42,29 @@ MODULES: Dict[str, Dict] = {
         "order": 1,
         "title": "Print statements",
         "concept": (
-            "A print statement makes Python say something in the output. "
-            "You write the word print, then round brackets, and inside the "
-            "brackets you put your message wrapped in quotes."
+            "A print statement makes your program say or display a message when "
+            "it runs. In CodeUp you create one by speaking an insert command, and "
+            "I place the code for you."
         ),
         "example_code": 'print("Hello world")',
         "example_spoken": (
-            "Here is an example. print, open round bracket, double quote, "
-            "Hello world, double quote, close round bracket."
+            "For example, to make Python greet us, you would say: insert print "
+            "hello world."
         ),
         "task": (
-            "Now you try. Write one line that prints any short message you "
-            "like. When you are ready, press Control and Enter together to run "
-            "it. If you would like me to type an example for you, say: give me "
-            "an example."
+            "I will tell you a command to say. When you say it, or type it into "
+            "the command box, I will place the code and read it back. Then you "
+            "run it by saying: run code."
         ),
         "hints": [
-            "Start the line with the word print, then an opening round bracket.",
-            "Put your message inside double quotes, for example: quote, hello, quote.",
-            "Finish with a closing round bracket. The whole line reads: print, "
-            "bracket, quote, your message, quote, bracket.",
+            "Say: insert print hello world.",
+            "Start with the word insert, then print, then your message.",
+            "You can also type the command into the command box and press Enter.",
         ],
         "success": "Nicely done. You just made Python speak using a print statement.",
         "recap": (
-            "Quick recap. A print statement is the word print, then brackets, "
-            "with your message in quotes inside. It shows text in the output."
+            "Quick recap. A print statement shows a message. You make one by "
+            "saying: insert print, then your message."
         ),
     },
     "variables": {
@@ -74,33 +72,31 @@ MODULES: Dict[str, Dict] = {
         "order": 2,
         "title": "Variables",
         "concept": (
-            "A variable gives a name to a piece of information so you can use it "
-            "later. You choose a name, write an equals sign, then the value. In "
-            "CodeUp you set values directly with equals. You do not need input."
+            "A variable is a named box that stores information so your program "
+            "can use it later. You give the box a name and put a value inside. "
+            "We will make a box called name, then show what is inside it."
         ),
-        "example_code": 'name = "Aman"\nprint(name)',
+        "example_code": 'name = "Taknoor"\nprint(name)',
         "example_spoken": (
-            "Here is an example. First line: name, space, equals, space, quote, "
-            "Aman, quote. Second line: print, bracket, name, bracket. That "
-            "stores the word Aman in a variable called name, then prints it."
+            "For example, to store your name you would say: insert a variable "
+            "named name and give it the value Taknoor. Then to show it: insert "
+            "print name."
         ),
         "task": (
-            "Now you try. On the first line, store any word or number in a "
-            "variable using equals. On the next line, print that variable. Pick "
-            "any name you like. Then press Control and Enter to run. Say give me "
-            "an example if you would like me to fill one in."
+            "We will build it in two steps: first create the variable, then "
+            "print what is inside it. I will tell you each command to say."
         ),
         "hints": [
-            "On line one, choose a name, then equals, then a value. For a word, "
-            "wrap it in quotes. For a number, no quotes are needed.",
-            "On line two, print your variable by name, with no quotes, like: "
-            "print, bracket, your name, bracket.",
-            "For example: score equals 10, then print, bracket, score, bracket.",
+            "First say: insert a variable named name and give it the value Taknoor.",
+            "Then say: insert print name.",
+            "You may choose any name and any value; a word becomes text, a number "
+            "stays a number.",
         ],
         "success": "Well done. You stored a value in a variable and printed it back.",
         "recap": (
-            "Quick recap. A variable is a name, an equals sign, and a value. "
-            "You can print the variable by writing its name inside print."
+            "Quick recap. A variable is a named box. Say insert a variable named, "
+            "a name, and give it the value, then a value. Print it by saying "
+            "insert print and the name."
         ),
     },
     "if": {
@@ -108,34 +104,31 @@ MODULES: Dict[str, Dict] = {
         "order": 3,
         "title": "If statements",
         "concept": (
-            "An if statement lets your program make a choice. It checks whether "
-            "something is true, and only then runs the lines underneath it. "
-            "Those lines must be indented, which means they start with four "
-            "spaces."
+            "An if statement lets a program make a decision. Python checks "
+            "whether something is true, and only then runs the indented action "
+            "underneath it. Indentation, four spaces, is how Python knows the "
+            "action belongs to the if."
         ),
-        "example_code": 'age = 18\nif age >= 18:\n    print("You can vote")',
+        "example_code": 'age = 12\nif age > 10:\n    print("you can vote")',
         "example_spoken": (
-            "Here is an example. Line one: age equals 18. Line two: if, space, "
-            "age, greater-than-or-equal, 18, colon. Line three is indented with "
-            "four spaces: print, bracket, quote, You can vote, quote, bracket."
+            "For example: insert a variable named age and give it the value 12. "
+            "Then: insert an if statement checking age is greater than 10. Then: "
+            "insert an indented print saying you can vote."
         ),
         "task": (
-            "Now you try. First set a variable to a number or a word. Then write "
-            "an if statement that checks a condition, ending the if line with a "
-            "colon. On the next line, indented by four spaces, print a message. "
-            "Press Control and Enter to run. Say give me an example for help."
+            "We will build it line by line: a variable to test, then the if "
+            "decision, then an indented action. I will tell you each command."
         ),
         "hints": [
-            "Set a variable first, for example: x equals 10.",
-            "The if line ends with a colon, for example: if x is greater than 5 "
-            "colon. In code that is: if x greater-than 5 colon.",
-            "The print line under the if must be indented with four spaces. You "
-            "can say: read line 3, to hear a line and its indentation.",
+            "First the variable: insert a variable named age and give it the value 12.",
+            "Then the decision: insert an if statement checking age is greater than 10.",
+            "Then the action: insert an indented print saying you can vote. The "
+            "word indented adds the four spaces for you.",
         ],
         "success": "Great work. Your if statement made a decision and printed when the condition was true.",
         "recap": (
             "Quick recap. An if statement checks a condition and ends with a "
-            "colon. The lines that run when it is true are indented four spaces."
+            "colon. The line that runs when it is true is indented underneath."
         ),
     },
     "for": {
@@ -143,34 +136,29 @@ MODULES: Dict[str, Dict] = {
         "order": 4,
         "title": "For loops",
         "concept": (
-            "A for loop repeats an action a set number of times, or once for "
-            "every item in a group. The repeated lines are indented with four "
-            "spaces underneath the for line."
+            "A for loop repeats an action a known number of times. The repeated "
+            "line is indented underneath the for line, which is how Python knows "
+            "it is the action to repeat."
         ),
-        "example_code": 'for number in range(3):\n    print(number)',
+        "example_code": 'for i in range(3):\n    print(i)',
         "example_spoken": (
-            "Here is an example. Line one: for, space, number, space, in, space, "
-            "range, bracket, 3, bracket, colon. Line two is indented four "
-            "spaces: print, bracket, number, bracket. That prints 0, 1, then 2."
+            "For example: insert for i in range 3. Then: insert an indented "
+            "print i. That repeats three times, reading out 0, then 1, then 2."
         ),
         "task": (
-            "Now you try. Write a for loop that prints something several times. "
-            "Using range, bracket, 3, bracket, repeats three times. Remember the "
-            "colon at the end of the for line, and indent the print line by four "
-            "spaces. Press Control and Enter to run. Say give me an example for help."
+            "We will build it in two steps: the loop line, then the indented "
+            "action it repeats. I will tell you each command to say."
         ),
         "hints": [
-            "Start with: for, a loop name, in, range, bracket, a number, bracket, "
-            "then a colon. For example: for i in range 3 colon.",
-            "The line you want repeated must be indented four spaces under the "
-            "for line.",
-            "For example: for i in range 3 colon, then on the next line, four "
-            "spaces, print, bracket, i, bracket.",
+            "First say: insert for i in range 3. CodeUp adds the brackets and the "
+            "colon for you.",
+            "Then say: insert an indented print i.",
+            "The word indented adds the four spaces that put the line inside the loop.",
         ],
         "success": "Excellent. Your for loop repeated the action and printed each time.",
         "recap": (
             "Quick recap. A for loop with range repeats a set number of times. "
-            "The for line ends with a colon and the repeated lines are indented."
+            "The repeated line is indented underneath."
         ),
     },
     "while": {
@@ -178,30 +166,26 @@ MODULES: Dict[str, Dict] = {
         "order": 5,
         "title": "While loops",
         "concept": (
-            "A while loop keeps repeating as long as a condition stays true. To "
-            "stop safely, you use a counter that changes each time until the "
-            "condition becomes false."
+            "A while loop repeats an action while a condition stays true. "
+            "Because the condition could stay true forever, a while loop must "
+            "change something each time so it can eventually stop."
         ),
         "example_code": "count = 1\nwhile count <= 3:\n    print(count)\n    count = count + 1",
         "example_spoken": (
-            "Here is an example. Line one: count equals 1. Line two: while, "
-            "space, count, less-than-or-equal, 3, colon. Line three, indented: "
-            "print, bracket, count, bracket. Line four, also indented: count "
-            "equals count plus 1. The counter grows until it passes 3, then the "
-            "loop stops."
+            "For example: insert a variable named count and give it the value 1. "
+            "Then: insert while count is less than or equal to 3. Then: insert "
+            "an indented print count. Then: insert an indented count equals "
+            "count plus 1. The counter grows until it passes 3, then the loop stops."
         ),
         "task": (
-            "Now you try. Start a counter variable. Write a while loop that runs "
-            "while the counter is below a limit. Inside the loop, print the "
-            "counter and then increase it so the loop will end. Press Control "
-            "and Enter to run. Say give me an example if you would like help."
+            "We will build a safe counter loop in four steps, ending with the "
+            "line that lets it stop. I will tell you each command to say."
         ),
         "hints": [
-            "Set a counter first, for example: count equals 1.",
-            "The while line ends with a colon, for example: while count less-than "
-            "or equal 3 colon.",
-            "Most important: inside the loop, change the counter each time, for "
-            "example: count equals count plus 1. Without that, the loop never ends.",
+            "Start the counter: insert a variable named count and give it the value 1.",
+            "The loop: insert while count is less than or equal to 3.",
+            "Most important, the update: insert an indented count equals count "
+            "plus 1. Without it, the loop would run forever.",
         ],
         "success": "Brilliant. Your while loop counted up and stopped safely. That completes the last topic.",
         "recap": (

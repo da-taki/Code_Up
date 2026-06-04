@@ -3810,15 +3810,13 @@ function resumeVoiceRecognition() {
 
 // ---------- VOICE COMMAND HANDLER ----------
 async function handleVoiceCommand(rawText) {
-  // BARGE-IN: cancel any ongoing legacy speech (VoiceEngine handles its own
-  // barge-in in _handleInput before calling this function, so we only need
-  // to cancel the legacy SpeechManager here)
-  if (typeof VoiceEngine !== 'undefined') {
-    SpeechManager.cancelAll();
-  }
-
-  // FAST PATH: if step narration is running, intercept "stop" / "shut up" /
-  // "be quiet" / "cancel" client-side BEFORE the /voice-command round trip.
+  // SELF-ECHO GUARD: while Step Narration is speaking, the microphone can pick
+  // up the narration's own audio and re-submit it as a command. This is handled
+  // BEFORE the barge-in cancel below so narrated speech is never cancelled or
+  // interrupted by an "I didn't understand that command" reply. A stop-class
+  // word interrupts narration; any other input while narrating is ignored as
+  // echo. (_stepNarrationJob is cleared when narration finishes, so normal
+  // commands resume immediately afterwards.)
   if (_stepNarrationJob && !_stepNarrationJob.cancelled) {
     const t = rawText.toLowerCase().trim();
     const stopWords = ['stop', 'stop it', 'shut up', 'be quiet', 'silence',
@@ -3832,8 +3830,15 @@ async function handleVoiceCommand(rawText) {
       out('Stopped.');
       SonificationManager.playTone(400, 0.08, 0.08);
       srAnnounce('Stopped');
-      return;
     }
+    return;
+  }
+
+  // BARGE-IN: cancel any ongoing legacy speech (VoiceEngine handles its own
+  // barge-in in _handleInput before calling this function, so we only need
+  // to cancel the legacy SpeechManager here)
+  if (typeof VoiceEngine !== 'undefined') {
+    SpeechManager.cancelAll();
   }
 
   const _ts = tabState();

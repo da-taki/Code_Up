@@ -36,6 +36,12 @@ Groq (Llama 3.3 70B) enhances explanations for clarity and beginner-friendliness
 
 Typed commands, keyboard-accessible controls, spoken output and narration, and voice-command routing in English and Hindi. All buttons have ARIA labels and are keyboard-reachable. Output appears in `aria-live` regions. Press `Escape` at any time to stop speech.
 
+### Guided Tutorial (audio-first, opt-in)
+
+A spoken, conversational, activity-based tutorial that lets a blind beginner learn basic Python independently. It teaches five modules in order — **print statements → variables → if statements → for loops → while loops** — but is fully **opt-in and modular**: after *every* module the learner is asked whether to continue, practise again, hear a recap, or stop and start coding. Finishing one topic never forces the next.
+
+Each module is short: a spoken explanation, a spoken example, then a real hands-on activity where the learner writes and runs actual code in the editor. Their attempt is validated structurally (so many different correct answers are accepted, not one scripted string), and they get spoken success feedback or spoken hints. Every essential event — welcome, explanation, task, success, errors, hints, choices, module completion, and exit — is spoken through CodeUp's real, proven speech pipeline (the same one that speaks program output), not just shown on screen. See [Guided Tutorial](#guided-tutorial) below for commands and design.
+
 ---
 
 ## Flagship Demo Flow
@@ -75,9 +81,66 @@ Many natural variations work because the intent parser is grammar-based, not exa
 | Navigate code | `go to line twenty five`, `read line three`, `find variable x`, `where am i` |
 | Audio features | `sonify block`, `tell the story`, `what's different` |
 | AI assistance | `fix`, `analyze`, `explain simply`, `generate code for fibonacci`, `learning mode`, `quiz me on loops` |
+| Guided tutorial | `start tutorial`, `practise for loops`, and (while in the tutorial) `continue`, `try again`, `recap`, `hint`, `give me an example`, `repeat`, `exit tutorial` |
 | Hindi | `चलाओ` (run), `कोड समझाओ` (analyze), `कोड ठीक करो` (fix), `लाइन बीस पर जाओ` (go to line 20), `मदद` (help) |
 
 Hindi number words 0–100 are recognized in line-navigation commands.
+
+---
+
+## Guided Tutorial
+
+A spoken, activity-based tutorial that walks a blind beginner through writing and running their first Python programs, entirely by ear and keyboard.
+
+### What it does
+
+It teaches five modules **in order** — print statements, variables, if statements, for loops, while loops — but progression is **always opt-in**. After every module you are asked what to do next; finishing print statements never forces you into variables. Each module is a short spoken explanation, a spoken example, then a hands-on activity where you write and run real code. Your attempt is validated by structure (using Python's AST), so many different correct answers are accepted — `print("hi")`, `print("hello world")`, `name = "Aman"; print(name)`, `score = 10; print(score)`, and so on all work. You hear spoken success feedback when it works and spoken hints when it doesn't.
+
+### How to start
+
+- **Keyboard / mouse:** press the **📖 Tutorial** button in the header (Tab reaches it after the start screen).
+- **Voice or typed command:** say or type `start tutorial` (or just `tutorial`). Jump to one topic with `practise for loops`, `practise variables`, etc.
+
+### Commands during the tutorial
+
+All of these work by voice **or** the typed command box, and each also has a keyboard-reachable button in the tutorial panel:
+
+| You can say / type | What happens |
+|---|---|
+| `continue` / `next` | Move on to the next topic (only offered after you succeed) |
+| `try again` / `practise again` | Repeat the current activity |
+| `recap` | Hear a short summary of the current topic |
+| `hint` | Hear the next hint |
+| `give me an example` | Fill a worked example into the editor for you to run |
+| `repeat` | Hear the current instructions again |
+| `run` (or `Ctrl+Enter`) | Run your code (normal IDE command, works as always) |
+| `exit tutorial` / `start coding` | Leave the tutorial cleanly and return to free coding |
+
+Regular IDE commands (`run`, `read line 2`, `what variables`, …) keep working throughout — the tutorial only intercepts its own navigation words.
+
+### Modules and optional progression
+
+`print → variables → if → for → while`. After each module you choose **continue / practise again / recap / exit**. Completed modules are remembered in `localStorage`, and you can restart from the beginning (`start tutorial`) or jump to any topic (`practise <topic>`) at any time. The final while-loop module includes a static safety check that warns about obviously non-terminating loops before running; the sandbox's 3-second wall-clock timeout is the real backstop.
+
+### Accessibility design
+
+- **Speech is the primary channel.** Every essential event is spoken through the same proven `speak()` → Web Speech API path that speaks program output — never text-only. Examples are loaded with `{preserveSpeech: true}` so narration is never silently cancelled.
+- **Keyboard is a first-class fallback.** The panel uses semantic HTML (`role="complementary"`, `aria-live` status), every control is a real focusable `<button>` with a visible focus ring, and the whole flow can be completed without a mouse or microphone.
+- **The visual panel is supportive, never required.** A sighted teacher can follow along on screen, but nothing in it is needed to understand or finish the tutorial.
+
+### How developers test it
+
+- Backend lesson content + AST validators + while-loop safety: `tests/test_tutorial_engine.py`
+- Routes (`/tutorial/modules`, `/tutorial/validate`) and command routing: `tests/test_tutorial_routes.py`
+- Pure state-machine transitions (run with Node): `tests/tutorial_model.test.js`
+- Frontend wiring + proof the tutorial speaks via the real path: `tests/test_tutorial_frontend.py`
+
+```
+python -m pytest tests/test_tutorial_engine.py tests/test_tutorial_routes.py tests/test_tutorial_frontend.py -q
+node tests/tutorial_model.test.js
+```
+
+The lesson content and validators live in `tutorial_engine.py` (one source of truth, served to the frontend by `/tutorial/modules`). The frontend controller is `static/tutorial.js`.
 
 ---
 
@@ -172,7 +235,7 @@ Tests are fully isolated. Snippet storage redirects to a temp directory and no r
 
 | Check | Result |
 |-------|--------|
-| Automated tests | 423 passed, 1 skipped |
+| Automated tests | 699 passed, 1 skipped |
 | Python compile check | Clean |
 | Ruff lint | Clean |
 | JavaScript syntax checks | Clean |
@@ -232,6 +295,7 @@ Monaco Editor (vendored locally, no CDN dependency), JavaScript using the Web Sp
 |---|---|
 | `intent_parser.py` | Natural language to structured intent and slots, with Hindi number support |
 | `structure_parser.py` | AST-based code structure extraction (functions, classes, loops, async detection, parent class tracking) |
+| `tutorial_engine.py` | Guided-tutorial lesson content + AST-based activity validators + while-loop safety check |
 | `sandboxed_fs.py` | Per-session restricted workspace file system |
 
 ---
@@ -341,6 +405,7 @@ This produces `static/vendor/react/*.min.js` and `static/landing/dist/bundle.js`
 
 ## What's New in 0.8.0
 
+- **Guided Tutorial**: spoken, opt-in, activity-based lessons (print → variables → if → for → while) with structural answer validation, spoken hints, and per-module continue/practise/recap/exit choices — see [Guided Tutorial](#guided-tutorial)
 - **Audio Code Map**: hear program structure from deterministic AST analysis
 - **Variable Watch + Step Narration**: trace verified runtime variable changes during execution
 - **Mistake Replay**: compare broken and fixed code with structural diff explanation

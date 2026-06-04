@@ -25,6 +25,7 @@ from rapidfuzz import fuzz
 from intent_parser import parse_intent
 from sandboxed_fs import cleanup_sandbox, cleanup_stale_sandboxes, get_sandbox
 from structure_parser import CodeAnalyzer
+import tutorial_engine
 
 load_dotenv(override=True)
 
@@ -1100,6 +1101,54 @@ def get_demo_preset(preset_id):
         "title": preset["title"],
         "description": preset["description"],
         "code": preset["code"],
+    })
+
+
+# ==========================
+# GUIDED TUTORIAL
+# ==========================
+
+@app.route("/tutorial/modules", methods=["GET"])
+def tutorial_modules():
+    """Return the spoken lesson pack (ordered modules + content).
+
+    The frontend tutorial fetches this once and narrates it through the proven
+    audible speech path. Content lives in tutorial_engine.py so it has a single
+    source of truth and stays unit-testable.
+    """
+    return jsonify({"success": True, **tutorial_engine.module_pack()})
+
+
+@app.route("/tutorial/validate", methods=["POST"])
+def tutorial_validate():
+    """Validate one tutorial activity attempt.
+
+    Body: {module, code, ran_ok, output}. Returns a deterministic verdict with
+    spoken feedback and an optional hint. Validation is AST-based (many valid
+    answers accepted) and the while module gets a static safety pre-check.
+    """
+    body = safejson()
+    module_id = _safe_text(body.get("module"), "", limit=40).strip()
+    code = _safe_text(body.get("code"), "", limit=MAX_CODE_SIZE + 1)
+    if len(code) > MAX_CODE_SIZE:
+        return jsonify({"success": False, "error": "Code too large"}), 413
+    ran_ok = bool(body.get("ran_ok", True))
+    output = _safe_text(body.get("output"), "", limit=MAX_NARRATION_OUTPUT_SIZE)
+
+    if not module_id or tutorial_engine.get_module(module_id) is None:
+        return jsonify({"success": False, "error": "Unknown tutorial module"}), 400
+
+    result = tutorial_engine.validate_attempt(
+        module_id, code, ran_ok=ran_ok, output=output
+    )
+    return jsonify({
+        "success": True,
+        "module": module_id,
+        "passed": result["passed"],
+        "safe": result["safe"],
+        "feedback": result["feedback"],
+        "hint": result["hint"],
+        "next_module": tutorial_engine.next_module_id(module_id),
     })
 
 # ==========================
@@ -6335,8 +6384,16 @@ def voice():
             return _store_and_return({"success": True, "action": "why_fixed_works", "confidence": confidence})
         if intent == "show_changed_lines":
             return _store_and_return({"success": True, "action": "show_changed_lines", "confidence": confidence})
+        if intent == "start_tutorial":
+            return _store_and_return({"success": True, "action": "start_tutorial", "confidence": confidence})
+        if intent == "skip_tutorial":
+            return _store_and_return({"success": True, "action": "skip_tutorial", "confidence": confidence})
+        if intent == "tutorial_next":
+            return _store_and_return({"success": True, "action": "tutorial_next", "confidence": confidence})
         if intent == "restart_tutorial":
             return _store_and_return({"success": True, "action": "restart_tutorial", "confidence": confidence})
+        if intent == "tutorial_practice":
+            return _store_and_return({"success": True, "action": "tutorial_practice", "module": slots.get("module"), "confidence": confidence})
         if intent == "set_color_mode":
             return _store_and_return({"success": True, "action": "set_color_mode", "mode": slots.get("mode", "default"), "confidence": confidence})
 

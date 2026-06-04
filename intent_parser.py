@@ -961,9 +961,24 @@ class IntentParser:
         r"^tutorial\s+(?:बंद\s+करो|छोड़ो)$",
     ]
 
+    # Only the unambiguous "tutorial next". The bare Hindi "आगे बढ़ो" / "next करो"
+    # belong to next_step (execution playback) and must not be claimed here —
+    # in-tutorial advancement is handled by the panel buttons and the frontend
+    # utterance handler ("continue").
     TUTORIAL_NEXT_PATTERNS = [
         r"^tutorial\s+next$",
-        r"^(?:आगे\s+बढ़ो|next\s+करो)$",
+    ]
+
+    # "practise for loops", "let me practice variables again" — jump the guided
+    # tutorial straight to one topic. The captured group is normalised to a
+    # module id in _extract_slots.
+    TUTORIAL_PRACTICE_PATTERNS = [
+        r"^(?:let\s+me\s+|i\s+want\s+to\s+)?practi[sc]e\s+(?:the\s+)?"
+        r"(print(?:ing)?(?:\s+statements?)?|variables?|if(?:\s+statements?)?|"
+        r"conditionals?|for(?:\s+loops?)?|while(?:\s+loops?)?)"
+        r"(?:\s+(?:statements?|loops?))?(?:\s+(?:again|module|topic|lesson))?$",
+        r"^practi[sc]e\s+(?:the\s+)?(print(?:ing)?|variables?|if|for|while)"
+        r"\s+(?:module|topic|lesson)$",
     ]
 
     # -----------------------------------------------------------------------
@@ -1051,6 +1066,15 @@ class IntentParser:
             "insert_loop":         self.INSERT_LOOP_PATTERNS,
             "insert_if":           self.INSERT_IF_PATTERNS,
             "append_line":         self.APPEND_LINE_PATTERNS,
+            # Tutorial intents must come before choose_suggestion, whose
+            # ^(\w+)$ pattern would otherwise swallow the bare word "tutorial".
+            # tutorial_practice precedes start_tutorial so "practise print"
+            # routes to the specific module, not the generic opener.
+            "tutorial_practice":   self.TUTORIAL_PRACTICE_PATTERNS,
+            "restart_tutorial":    self.RESTART_TUTORIAL_PATTERNS,
+            "start_tutorial":      self.START_TUTORIAL_PATTERNS,
+            "skip_tutorial":       self.SKIP_TUTORIAL_PATTERNS,
+            "tutorial_next":       self.TUTORIAL_NEXT_PATTERNS,
             # repeat MUST come before choose_suggestion — ^(\w+)$ matches "repeat" too
             "repeat":              self.REPEAT_PATTERNS,
             "help":                self.HELP_PATTERNS,
@@ -1088,10 +1112,6 @@ class IntentParser:
             "explain_concept":     self.EXPLAIN_CONCEPT_PATTERNS,
             "bug_challenge":       self.BUG_CHALLENGE_PATTERNS,
             "explain_diff":        self.EXPLAIN_DIFF_PATTERNS,
-            "restart_tutorial":    self.RESTART_TUTORIAL_PATTERNS,
-            "start_tutorial":      self.START_TUTORIAL_PATTERNS,
-            "skip_tutorial":       self.SKIP_TUTORIAL_PATTERNS,
-            "tutorial_next":       self.TUTORIAL_NEXT_PATTERNS,
             # Input mechanisms
             "set_inputs":          self.SET_INPUTS_PATTERNS,
             "clear_inputs":        self.CLEAR_INPUTS_PATTERNS,
@@ -1120,6 +1140,21 @@ class IntentParser:
     # -----------------------------------------------------------------------
     # Number parsing
     # -----------------------------------------------------------------------
+
+    def _normalize_tutorial_module(self, raw: str) -> Optional[str]:
+        """Map a spoken topic ('for loops', 'variable') to a tutorial module id."""
+        text = (raw or "").lower().strip()
+        if text.startswith("print"):
+            return "print"
+        if text.startswith("variable"):
+            return "variables"
+        if text.startswith("if") or text.startswith("conditional"):
+            return "if"
+        if text.startswith("for"):
+            return "for"
+        if text.startswith("while"):
+            return "while"
+        return None
 
     def _word_to_number(self, word: str) -> Optional[int]:
         """Convert a spoken or written number into an integer.
@@ -1223,6 +1258,8 @@ class IntentParser:
                 if intent == "set_audio_breakpoint" and "condition" not in slots:
                     continue
                 if intent == "explain_concept" and "concept" not in slots:
+                    continue
+                if intent == "tutorial_practice" and "module" not in slots:
                     continue
                 if intent == "set_inputs" and "values" not in slots:
                     continue
@@ -1357,6 +1394,12 @@ class IntentParser:
         elif intent in ("watch_var", "stop_watching"):
             if match.groups() and match.group(1):
                 slots["variable"] = match.group(1).strip()
+
+        elif intent == "tutorial_practice":
+            if match.groups() and match.group(1):
+                module = self._normalize_tutorial_module(match.group(1))
+                if module:
+                    slots["module"] = module
 
         elif intent == "quiz_me":
             if match.groups() and match.group(1):

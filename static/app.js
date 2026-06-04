@@ -755,7 +755,7 @@ async function showHelp() {
   if (lang === 'hi') {
     msg = 'मुख्य commands: चलाओ कोड चलाने के लिए, कोड समझाओ analysis के लिए, कोड ठीक करो fix के लिए, सारांश दो summary के लिए, लाइन पांच पर जाओ navigate करने के लिए, tutorial खोलने के लिए "tutorial" कहें, "quiz करो" practice के लिए, "bug challenge" debugging के लिए, "मदद और" पूरी list के लिए।';
   } else {
-    msg = 'Top commands: run to execute code, analyze for AI review, fix to repair errors, summarize for a quick overview, go to line five to navigate, save snippet to keep your work, tutorial to learn Python, quiz me to practice, bug challenge to debug, sonify block to hear code structure, what variables to list current variables, set inputs to provide input values, night mode to toggle dark theme. Say "more help" for the complete list of every command.';
+    msg = 'Top commands: run to execute code, analyze for AI review, fix to repair errors, summarize for a quick overview, go to line five to navigate, save snippet to keep your work, start tutorial to learn Python step by step with spoken lessons, quiz me to practice, bug challenge to debug, sonify block to hear code structure, what variables to list current variables, set inputs to provide input values, night mode to toggle dark theme. Say "more help" for the complete list of every command.';
   }
   out(msg);
   speak(msg);
@@ -799,8 +799,13 @@ EDITING:
 - "insert function called [name]"
 - "insert a for loop"
 
+GUIDED TUTORIAL (spoken, step by step):
+- "start tutorial" — begin guided lessons: print, variables, if, for, while
+- "practise for loops" — jump straight to one topic
+- While in the tutorial say: "continue", "try again", "recap", "hint",
+  "give me an example", "repeat", or "exit tutorial". Every step is spoken.
+
 LEARNING:
-- "tutorial" — restart tutorial
 - "learning mode" — quiz/mentor mode
 - "quiz me on [topic]"
 - "explain [concept]"
@@ -1294,6 +1299,11 @@ async function runCode() {
         speak(data.inputs_hint);
       }
       maybeOfferSlowWalkthroughAfterErrors();
+      // Tutorial: let the guided tutorial offer a spoken hint after a failed
+      // attempt. Fires after the error has been spoken so they don't collide.
+      if (typeof window._tutorialOnRunError === 'function') {
+        setTimeout(function () { window._tutorialOnRunError(); }, 1500);
+      }
     }
   } catch (e) {
     out('System error.'); console.error(e); cueError(); speak('System error.');
@@ -2416,8 +2426,16 @@ async function handleConfirmedAction(action, payload) {
   }
   else if (action === 'list_variables_voice') await listVariablesWithValues();
   else if (action === 'start_tutorial')     { if (window.TutorialController) window.TutorialController.open(); }
-  else if (action === 'skip_tutorial')      { if (window.TutorialController) window.TutorialController.close(); }
+  else if (action === 'skip_tutorial')      {
+    if (window.TutorialController && window.TutorialController.active) window.TutorialController.exit(true);
+    else speak('The tutorial is not open right now. Say start tutorial to begin.');
+  }
   else if (action === 'tutorial_next')      { if (window.TutorialController && window.TutorialController.active) window.TutorialController.next(); }
+  else if (action === 'tutorial_practice')  {
+    if (window.TutorialController && typeof window.TutorialController.practice === 'function') {
+      window.TutorialController.practice(payload && payload.module);
+    }
+  }
   else if (action === 'insert_function')    insertFunctionVoice(payload && payload.function_name);
   else if (action === 'insert_class')       insertClassVoice(payload && payload.class_name);
   else if (action === 'insert_loop')        insertLoopVoice(payload && payload.loop_var, payload && payload.iterable);
@@ -3291,6 +3309,15 @@ async function handleCommandText(txt) {
   const field = document.getElementById('voiceText');
   if (field) field.value = txt;
 
+  // GUIDED TUTORIAL intercept (mirrors handleVoiceCommand) — consume tutorial
+  // navigation words while active; everything else falls through unchanged.
+  if (window.TutorialController && window.TutorialController.active &&
+      typeof window.TutorialController.handleUtterance === 'function') {
+    try {
+      if (window.TutorialController.handleUtterance(txt)) return;
+    } catch (e) { console.error('Tutorial utterance error:', e); }
+  }
+
   // Quiz answer intercept (mirrors handleVoiceCommand) — per-tab state
   const _ts = tabState();
   if (_ts._pendingQuizAnswer && document.hidden) return false;
@@ -3832,6 +3859,17 @@ async function handleVoiceCommand(rawText) {
       srAnnounce('Stopped');
     }
     return;
+  }
+
+  // GUIDED TUTORIAL: while the tutorial is active, let it consume its own
+  // navigation words (continue, repeat, recap, hint, give me an example, try
+  // again, exit tutorial). handleUtterance returns false for anything else, so
+  // normal IDE commands like "run" or "read line 2" still flow through.
+  if (window.TutorialController && window.TutorialController.active &&
+      typeof window.TutorialController.handleUtterance === 'function') {
+    try {
+      if (window.TutorialController.handleUtterance(rawText)) return;
+    } catch (e) { _debugLog('Tutorial utterance error:', e); }
   }
 
   // BARGE-IN: cancel any ongoing legacy speech (VoiceEngine handles its own
@@ -5206,9 +5244,10 @@ async function bugChallenge() {
 }
 
 function restartTutorial() {
+  // open() always (re)starts from the first module and speaks the welcome, so
+  // it already conveys "restarted"; no extra speak() that would queue oddly.
   if (window.TutorialController) {
     window.TutorialController.open();
-    speak('Tutorial restarted from the beginning.');
   }
 }
 

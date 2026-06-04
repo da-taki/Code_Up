@@ -95,24 +95,19 @@
 }
 .command-palette-results > *:last-child { border-bottom: 0; }
 
-/* ------- Tutorial overlay ------- */
+/* ------- Guided tutorial panel ------- */
+/* Id selector keeps these authoritative over generic panel styles. The full
+   layout lives in the ".cu-tutorial-panel" block lower in this file. */
 #tutorialOverlay {
   background: var(--bg-panel) !important;
-  border: 1px solid var(--border-strong) !important;
-  border-bottom-width: 2px !important;
+  border: 2px solid var(--accent) !important;
   box-shadow: 0 18px 50px -18px rgba(21, 10, 2, 0.45) !important;
-}
-#tutorialStepLabel {
-  font-family: var(--font-mono); font-weight: 700;
-  letter-spacing: 0.14em; text-transform: uppercase;
-  font-size: 0.7rem !important; color: var(--text-dim) !important;
 }
 #tutorialText {
   font-size: 0.92rem !important;
-  line-height: 1.65 !important;
+  line-height: 1.6 !important;
   color: var(--text-main) !important;
 }
-#tutorialSkipBtn:hover { color: var(--accent) !important; }
 
 /* ------- Start gate (language picker) ------- */
 #startGate {
@@ -225,3 +220,106 @@
   font-size: 0.8rem;
   padding: 4px 8px;
 }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Guided tutorial panel
+   Accessible, keyboard-reachable card. Speech is the primary channel; this
+   panel is supportive (for sighted helpers) and never required to complete
+   the tutorial. Fixed bottom-right on wide screens, full-width on narrow.
+   ────────────────────────────────────────────────────────────────────────── */
+.cu-tutorial-panel {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  width: 360px;
+  max-width: calc(100vw - 32px);
+  background: var(--bg-panel);
+  border: 2px solid var(--accent);
+  border-radius: var(--radius-md, 8px);
+  padding: 16px;
+  z-index: 9000;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+  color: var(--text-main);
+  font-family: var(--font-main);
+}
+.cu-tutorial-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.cu-tutorial-topic {
+  font-weight: 700;
+  font-size: 1rem;
+  flex: 1;
+  color: var(--text-main);
+}
+.cu-tutorial-progress {
+  font-size: 0.72rem;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+.cu-tutorial-exit {
+  background: none;
+  border: 1px solid var(--border-strong);
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-family: var(--font-main);
+  border-radius: var(--radius-sm, 6px);
+  padding: 3px 8px;
+}
+.cu-tutorial-exit:hover { color: var(--accent); border-color: var(--accent); }
+.cu-tutorial-status {
+  font-size: 0.74rem;
+  color: var(--text-dim);
+  margin: 0 0 8px;
+  font-style: italic;
+}
+.cu-tutorial-text {
+  font-size: 0.9rem;
+  line-height: 1.55;
+  color: var(--text-main);
+  margin: 0 0 12px;
+  max-height: 9.5em;
+  overflow-y: auto;
+}
+.cu-tutorial-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+/* The flex display above otherwise beats the UA [hidden] rule, so a hidden
+   control group would still show. Make hidden authoritative — the activity and
+   decision button groups must be mutually exclusive. */
+.cu-tutorial-controls[hidden] { display: none !important; }
+.cu-tutorial-controls .cu-button {
+  font-size: 0.8rem;
+  padding: 7px 10px;
+  flex: 1 1 auto;
+}
+.cu-tutorial-help {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  margin: 4px 0 0;
+  line-height: 1.4;
+}
+/* Strong, always-visible focus ring for keyboard users inside the panel. */
+.cu-tutorial-panel button:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+@media (max-width: 720px) {
+  .cu-tutorial-panel {
+    left: 16px;
+    right: 16px;
+    width: auto;
+    bottom: 8px;
+  }
+}
+/* Respect reduced-motion: nothing animates here, but keep shadows subtle. */
+body.theme-reduced-motion .cu-tutorial-panel { box-shadow: 0 4px 12px rgba(0,0,0,0.2); }

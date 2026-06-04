@@ -288,26 +288,30 @@
       </div>
     </div>
   </div>
-  <div id="tutorialOverlay" hidden
-       role="complementary" aria-label="Interactive tutorial"
-       style="position:fixed;bottom:20px;right:20px;width:340px;max-width:92vw;
-              background:var(--bg-panel);border:1px solid var(--border-strong);
-              border-radius:var(--radius-md);padding:20px;z-index:9000;
-              box-shadow:0 10px 30px rgba(0,0,0,0.15);color:var(--text-main);">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-      <span id="tutorialStepLabel" style="font-size:0.75rem;color:var(--text-dim);">Step 1 of 6</span>
-      <button id="tutorialSkipBtn" aria-label="Skip tutorial"
-              style="background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:0.85rem;font-family:var(--font-main);">
-        ✕ Skip
-      </button>
+  <aside id="tutorialOverlay" hidden
+       role="complementary" aria-labelledby="tutorialTopic"
+       class="cu-tutorial-panel">
+    <div class="cu-tutorial-head">
+      <span id="tutorialTopic" class="cu-tutorial-topic">Guided tutorial</span>
+      <span id="tutorialProgress" class="cu-tutorial-progress" aria-live="polite" aria-atomic="true"></span>
+      <button id="tutorialExitBtn" class="cu-tutorial-exit" aria-label="Exit tutorial and start coding">✕ Exit</button>
     </div>
-    <p id="tutorialText" style="color:var(--text-main);font-size:0.9rem;line-height:1.65;margin-bottom:14px;min-height:80px;"></p>
-    <div style="display:flex;gap:8px;">
-      <button id="tutorialNextBtn" class="cu-button cu-button-primary" style="flex:1;font-size:0.85rem;padding:9px 12px;">
-        Next →
-      </button>
+    <p id="tutorialStatus" class="cu-tutorial-status" role="status" aria-live="polite" aria-atomic="true"></p>
+    <p id="tutorialText" class="cu-tutorial-text"></p>
+    <div id="tutorialActivityControls" class="cu-tutorial-controls" role="group" aria-label="Activity controls">
+      <button id="tutorialRunBtn" class="cu-button cu-button-primary" aria-label="Run your code (Control Enter)">▶ Run</button>
+      <button id="tutorialExampleBtn" class="cu-button" aria-label="Fill in an example for me">Example</button>
+      <button id="tutorialHintBtn" class="cu-button" aria-label="Give me a hint">Hint</button>
+      <button id="tutorialRepeatBtn" class="cu-button" aria-label="Repeat the instructions">Repeat</button>
     </div>
-  </div>
+    <div id="tutorialDecisionControls" class="cu-tutorial-controls" role="group" aria-label="What next" hidden>
+      <button id="tutorialContinueBtn" class="cu-button cu-button-primary" aria-label="Continue to the next topic">Continue to next topic</button>
+      <button id="tutorialAgainBtn" class="cu-button" aria-label="Practise this topic again">Practise again</button>
+      <button id="tutorialRecapBtn" class="cu-button" aria-label="Hear a recap of this topic">Recap</button>
+      <button id="tutorialStopBtn" class="cu-button cu-button-secondary" aria-label="Stop the tutorial and start coding">Stop &amp; code</button>
+    </div>
+    <p class="cu-tutorial-help">Say or type: continue, repeat, recap, hint, give me an example, try again, or exit tutorial.</p>
+  </aside>
   <!-- React + pre-built landing bundle, vendored locally. No CDN, no Babel-in-browser.
      To regenerate after editing any landing/*.jsx file:
          npm install      (first time only)
@@ -327,191 +331,10 @@
       // ── Tutorial state machine ───────────────────────────────────────────
       var LANG_KEY = 'codeup_language';
 
-      var TUTORIAL_STEPS = {
-        en: [
-          {
-            label: 'Step 1 of 6',
-            text: 'Welcome to CodeUp! This tutorial walks you through Python basics. Each step loads an example into the editor. Press Enter or say "next" to advance. Say "skip tutorial" at any time to exit.',
-            code: null,
-          },
-          {
-            label: 'Step 2 of 6',
-            text: 'print() sends output to the panel below the editor. Run this example with Ctrl+Enter and watch the output appear.',
-            code: 'print("Hello, CodeUp!")\nprint(42)\nprint(3.14)',
-          },
-          {
-            label: 'Step 3 of 6',
-            text: 'Variables are named boxes that hold values. Important: CodeUp does not use input() — you assign values directly with the equals sign, like the example below. Run this to see all three values printed.',
-            code: 'name = "Alice"\nage = 17\nheight = 5.6\n\nprint(name)\nprint(age)\nprint(height)',
-          },
-          {
-            label: 'Step 4 of 6',
-            text: 'A for loop repeats code. range(5) gives 0 through 4. After running, try the voice command "replace line 1 with x = 5" to edit a line by voice. You can also use the keyboard normally.',
-            code: 'for i in range(5):\n    print(i)\n\nfruits = ["apple", "banana", "mango"]\nfor fruit in fruits:\n    print(fruit)',
-          },
-          {
-            label: 'Step 5 of 6',
-            text: 'if / elif / else runs different code depending on a condition. Try changing line 1 to x = 5 (by voice or keyboard), then run again to see a different branch trigger.',
-            code: 'x = 10\n\nif x > 10:\n    print("x is greater than ten")\nelif x == 10:\n    print("x is exactly ten")\nelse:\n    print("x is less than ten")',
-          },
-          {
-            label: 'Step 6 of 6',
-            text: 'Tutorial complete! The editor is yours. Say "help" to hear all voice commands, or just start writing code.',
-            code: null,
-          },
-        ],
-        hi: [
-          {
-            label: 'कदम  1 / 6',
-            text: 'CodeUp में आपका स्वागत है! यह tutorial Python की बेसिक्स सिखाएगा। हर step editor में example लोड करेगा। आगे बढ़ने के लिए Enter दबाएं या "next" कहें। कभी भी "skip tutorial" कहकर बाहर निकल सकते हैं।',
-            code: null,
-          },
-          {
-            label: 'कदम  2 / 6',
-            text: 'print() output panel में कुछ भी दिखाता है। इस example को Ctrl+Enter से run करें।',
-            code: 'print("Namaste, CodeUp!")\nprint(42)\nprint(3.14)',
-          },
-          {
-            label: 'कदम 3 / 6',
-            text: 'चर (variable) एक नामित डिब्बे की तरह है जो कोई भी मान रख सकता है। ज़रूरी बात: CodeUp में input() काम नहीं करता — मान सीधे बराबर के निशान से दें, जैसे नीचे दिखाया है। Ctrl+Enter से चलाएं।',
-            code: 'name = "Alice"\nage = 17\n\nprint(name)\nprint(age)',
-          },
-          {
-            label: 'कदम 4 / 6',
-            text: 'for लूप कोड को बार-बार दोहराता है। range(5) से 0 से 4 तक गिनती मिलती है। चलाने के बाद, voice command "replace line 1 with x = 5" से लाइन बदलकर देखें। Keyboard भी सामान्य रूप से काम करता है।',
-            code: 'for i in range(5):\n    print(i)\n\nfruits = ["apple", "banana", "mango"]\nfor fruit in fruits:\n    print(fruit)',
-          },
-          {
-            label: 'कदम 5 / 6',
-            text: 'if / elif / else शर्त के आधार पर अलग-अलग कोड चलाता है। line 1 को x = 5 में बदलें (voice से या keyboard से), फिर दोबारा चलाएं।',
-            code: 'x = 10\n\nif x > 10:\n    print("x dus se bada hai")\nelif x == 10:\n    print("x theek dus hai")\nelse:\n    print("x dus se chota hai")',
-          },
-          {
-            label: 'कदम 6 / 6',
-            text: 'Tutorial पूरा हुआ! Editor अब आपका है। सभी voice commands सुनने के लिए "मदद" कहें, या बस कोड लिखना शुरू करें।',
-            code: null,
-          },
-        ],
-      };
+      // The guided tutorial (spoken, activity-based, opt-in) lives in
+      // static/tutorial.js. It defines window.TutorialController and the
+      // window._tutorialOnRunSuccess / _tutorialOnRunError run hooks.
 
-      var Tutorial = {
-        active: false,
-        step: 0,
-
-        steps: function () {
-          var lang = (document.getElementById('languageSelector') || {}).value || 'en';
-          return TUTORIAL_STEPS[lang] || TUTORIAL_STEPS.en;
-        },
-
-        open: function () {
-          this.active = true;
-          this.step = 0;
-          var overlay = document.getElementById('tutorialOverlay');
-          if (overlay) overlay.removeAttribute('hidden');
-          var lang = (document.getElementById('languageSelector') || {}).value || 'en';
-          var intro = lang === 'hi'
-            ? 'Tutorial शुरू हो गया है। कुल 6 कदम हैं। हर कदम के बाद Enter दबाएं या "next" कहें आगे बढ़ने के लिए। कभी भी "skip tutorial" कहकर बाहर निकलें। कोड वाले कदम में Ctrl+Enter से कोड चलाएं।'
-            : 'Tutorial started. There are 6 steps total. After each step, press Enter or say "next" to advance. Say "skip tutorial" anytime to exit. On steps that load code, press Ctrl+Enter to run it.';
-          if (typeof srAnnounce === 'function') srAnnounce('Tutorial opened, step 1 of 6');
-          speak(intro);
-          var self = this;
-          setTimeout(function () { self.render(); }, 15000);
-        },
-
-        close: function () {
-          this.active = false;
-          // Cancel any pending auto-advance so it doesn't fire after close
-          if (this._pendingAdvance) {
-            clearTimeout(this._pendingAdvance);
-            this._pendingAdvance = null;
-          }
-          var overlay = document.getElementById('tutorialOverlay');
-          if (overlay) overlay.setAttribute('hidden', '');
-          if (typeof srAnnounce === 'function') srAnnounce('Tutorial closed.');
-          speak('Tutorial closed. Say start tutorial any time to reopen it.');
-        },
-
-        render: function () {
-          var steps = this.steps();
-          var s = steps[this.step];
-          if (!s) return;
-
-          document.getElementById('tutorialStepLabel').textContent = s.label;
-          document.getElementById('tutorialText').textContent = s.text;
-          if (typeof srAnnounce === 'function') srAnnounce(s.label);
-          
-          if (typeof setCode === 'function') {
-            var hasUserContent = (typeof getCode === 'function') &&
-                                 getCode().trim().length > 0 &&
-                                 getCode().trim() !== 'print("Hello CodeUp!")';
-            if (s.code) {
-              if (hasUserContent) {
-                speak('Loading the next example. This will replace your current code.');
-              }
-              if (window._editorReady) { setCode(s.code); }
-              else { window._editorReadyQueue.push(function () { setCode(s.code); }); }
-            }
-            // Removed: don't clear editor on step 0, it cancels the speech
-          }
-
-          var nextBtn = document.getElementById('tutorialNextBtn');
-          if (nextBtn) {
-            nextBtn.textContent = this.step === steps.length - 1 ? 'Finish ✓' : 'Next →';
-          }
-
-          speak(s.text);
-        },
-
-        next: function () {
-          // Cancel any pending auto-advance so we don't double-advance
-          if (this._pendingAdvance) {
-            clearTimeout(this._pendingAdvance);
-            this._pendingAdvance = null;
-          }
-          var steps = this.steps();
-          if (this.step >= steps.length - 1) {
-            this.close();
-            return;
-          }
-          this.step++;
-          this.render();
-        },
-      };
-
-      /// Expose for voice commands in app.js
-      window.TutorialController = Tutorial;
-      window._tutorialOnRunSuccess = function () {
-        // Only auto-advance if the tutorial is open AND the current step had code to run.
-        // Steps without code (intro, outro) advance only on Enter / Next button.
-        if (!Tutorial.active) return;
-        var steps = Tutorial.steps();
-        var current = steps[Tutorial.step];
-        if (!current || !current.code) return;
-        // Don't auto-advance the final step
-        if (Tutorial.step >= steps.length - 1) return;
-
-        // Capture the step we were on when run succeeded — if the user
-        // manually advances before our timer fires, don't double-advance.
-        var stepWhenScheduled = Tutorial.step;
-
-        // Cancel any earlier pending auto-advance so rapid re-runs don't queue up
-        if (Tutorial._pendingAdvance) {
-          clearTimeout(Tutorial._pendingAdvance);
-          Tutorial._pendingAdvance = null;
-        }
-
-        // Give the user a moment to hear the program output before moving on
-        Tutorial._pendingAdvance = setTimeout(function () {
-          Tutorial._pendingAdvance = null;
-          // Re-check everything — user may have skipped, advanced, or stopped tutorial
-          if (!Tutorial.active) return;
-          if (Tutorial.step !== stepWhenScheduled) return;
-          if (Tutorial.step >= Tutorial.steps().length - 1) return;
-          var lang = (document.getElementById('languageSelector') || {}).value || 'en';
-          speak(lang === 'hi' ? 'बढ़िया। अगले कदम पर चलते हैं।' : 'Nice. Moving to the next step.');
-          Tutorial.next();
-        }, 4000);
-      };
 
     
       // ── Combined start gate: pick language AND unlock audio in one step ──
@@ -639,25 +462,9 @@
           }, 3500);
         }
 
-        // Tutorial buttons
-        var tutorialBtn = document.getElementById('tutorialBtn');
-        if (tutorialBtn) tutorialBtn.addEventListener('click', function () { Tutorial.open(); });
+        // Tutorial open/close/next + panel buttons are wired in
+        // static/tutorial.js (TutorialController._bind). Nothing to do here.
 
-        var skipBtn = document.getElementById('tutorialSkipBtn');
-        if (skipBtn) skipBtn.addEventListener('click', function () { Tutorial.close(); });
-
-        var nextBtn = document.getElementById('tutorialNextBtn');
-        if (nextBtn) nextBtn.addEventListener('click', function () { Tutorial.next(); });
-
-        document.addEventListener('keydown', function (e) {
-          if (e.key === 'Enter' && Tutorial.active) {
-            var id = document.activeElement.id;
-            var tag = document.activeElement.tagName;
-            var inMonaco = document.activeElement.closest && document.activeElement.closest('#editor');
-            if (id === 'voiceText' || id === 'snippetNameInput' || id === 'commandPaletteInput' || inMonaco || tag === 'TEXTAREA' || tag === 'INPUT') return;
-            Tutorial.next();
-          }
-        });
 
         // Accessibility preferences
         loadAccessibilityPreferences();
@@ -873,6 +680,7 @@
   <script src="/static/vendor/monaco/min/vs/loader.js"></script>
   <script src="/static/voice-engine.js"></script>
   <script src="/static/app.js"></script>
+  <script src="/static/tutorial.js"></script>
 
 </body>
 </html>

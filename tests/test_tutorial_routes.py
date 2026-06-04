@@ -108,6 +108,23 @@ class TestTutorialCommandRouting:
     def test_bare_tutorial_word_opens(self, client):
         assert _action(client, "tutorial")["action"] == "start_tutorial"
 
+    @pytest.mark.parametrize("text", [
+        "start tutorial", "open tutorial", "begin tutorial", "launch tutorial",
+        "the tutorial", "go to the tutorial",
+        "start the tutorial", "open the tutorial", "start a tutorial",
+        "let's start the tutorial", "can you start the tutorial",
+        "i want to start the tutorial", "take me to the tutorial",
+        "start tutorial please",
+    ])
+    def test_start_tutorial_natural_phrasings(self, client, text):
+        # The voice command must accept natural English, not only the exact
+        # words "start tutorial" — otherwise learners fall back to the button.
+        assert _action(client, text)["action"] == "start_tutorial", text
+
+    def test_start_tutorial_again_still_restarts(self, client):
+        # Broadening start-tutorial must not swallow "start tutorial again".
+        assert _action(client, "start tutorial again")["action"] == "restart_tutorial"
+
     def test_restart_tutorial(self, client):
         assert _action(client, "restart tutorial")["action"] == "restart_tutorial"
 

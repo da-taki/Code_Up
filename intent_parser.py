@@ -975,8 +975,16 @@ class IntentParser:
     ]
 
     START_TUTORIAL_PATTERNS = [
-        r"^(?:start|open|begin|launch)\s+tutorial$",
-        r"^tutorial$",
+        # Natural phrasings: an optional lead-in ("let's", "can you", "i want
+        # to", "please"), a start verb, an optional article, then "tutorial".
+        # Matches "start tutorial", "open the tutorial", "let's begin the
+        # tutorial", "can you start the tutorial", "i want to start a tutorial".
+        r"^(?:(?:hey|ok|okay|please|let'?s|lets|can\s+you|could\s+you|"
+        r"will\s+you|i\s+(?:want|would\s+like|wanna)\s+to|i'?d\s+like\s+to)\s+){0,3}"
+        r"(?:start|open|begin|launch|take\s+me\s+to)\s+(?:the\s+|a\s+)?tutorial"
+        r"(?:\s+please)?$",
+        # Bare / minimal: "tutorial", "the tutorial", "go to the tutorial".
+        r"^(?:go\s+to\s+)?(?:the\s+)?tutorial$",
         r"^tutorial\s+(?:शुरू\s+करो|खोलो)$",
     ]
 

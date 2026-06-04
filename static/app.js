@@ -287,6 +287,16 @@ const SpeechManager = (function () {
     }
 
     function enqueue(text, opts = {}) {
+      // Canonical speech path: delegate to VoiceEngine when present so every
+      // spoken line — including Step Narration — uses the one resolved
+      // preferred English voice and VoiceEngine's listen-pause / self-echo
+      // handling (which stops the narration from being cancelled by its own
+      // audio). cancelAll() already delegates to VoiceEngine.cancelSpeech, so
+      // this keeps a single speech manager. The legacy direct-synthesis queue
+      // below is only used when VoiceEngine is unavailable.
+      if (typeof VoiceEngine !== 'undefined' && VoiceEngine.speak) {
+        return VoiceEngine.speak(text, opts);
+      }
       return new Promise(resolve => {
         const chunks = splitSpeechText(text);
         if (!chunks.length) {

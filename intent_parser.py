@@ -225,7 +225,7 @@ class IntentParser:
 
     CLEAR_EDITOR_PATTERNS = [
         r"^(?:clear|reset)\s+(?:editor|code|file|the\s+editor)$",
-        r"^editor\s+clear\s+karo$",
+        r"^(?:editor|code)\s+clear\s+karo$",
         r"^code\s+hata\s+do$",
         r"^naya\s+code\s+shuru\s+karo$",
         # Hindi: "एडिटर साफ करो" / "कोड हटाओ"
@@ -271,6 +271,11 @@ class IntentParser:
         r"^explain\s+what\s+(?:this\s+|the\s+)?(?:code|program)\s+does$",
         r"^explain\s+(?:this\s+|the\s+)?(?:code|program)(?:\s+step\s+by\s+step)?$",
         r"^step\s+by\s+step\s+explanation(?:\s+of\s+(?:this\s+|the\s+)?(?:code|program))?$",
+        # Hinglish: explain the whole program (kept specific to code/program so
+        # concept questions like "print function kya karta hai" stay concept Q&A).
+        r"^(?:is|ye|yeh)\s+(?:program|code)\s+(?:ko\s+)?samjhao$",
+        r"^(?:ye|yeh|is)\s+(?:code|program)\s+kya\s+karta\s+hai(?:\s+batao)?$",
+        r"^(?:code|program)\s+(?:ko\s+)?step\s+by\s+step\s+samjhao$",
     ]
 
     DEMO_LIST_PATTERNS = [
@@ -699,7 +704,6 @@ class IntentParser:
 
     MENTOR_CODE_MAP_PATTERNS = [
         r"^(?:give\s+me\s+)?(?:a\s+)?map\s+of\s+my\s+code$",
-        r"^map\s+my\s+code$",
         r"^summarize\s+my\s+code\s+structure$",
     ]
 
@@ -716,7 +720,12 @@ class IntentParser:
         r"^what\s+is\s+(?:the\s+)?structure$",
         r"^(?:show|describe)\s+(?:the\s+)?(?:code\s+)?structure$",
         r"^(?:audio\s+)?code\s+map$",
-        r"^map\s+(?:the\s+)?code$",
+        r"^map\s+(?:the\s+|my\s+|this\s+)?code$",
+        # Robust spoken synonyms (speech recognition often mis-hears "code map").
+        r"^show\s+(?:me\s+)?(?:the\s+)?code\s+map$",
+        r"^give\s+me\s+(?:a\s+)?map\s+of\s+(?:the|this)\s+code$",
+        r"^(?:explain|show|describe)\s+(?:me\s+)?(?:the\s+)?structure\s+of\s+(?:my|this|the)\s+(?:code|program)$",
+        r"^mere\s+code\s+ka\s+(?:map|structure)\s+(?:batao|dikhao|samjhao)$",
     ]
 
     INSIDE_LOOP_PATTERNS = [

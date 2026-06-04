@@ -59,6 +59,21 @@ class TestWalkthroughRouting:
         assert data["action"] != "walk_through"
 
     @pytest.mark.parametrize("phrase", [
+        "read my code", "read my program", "read my whole code",
+        "read all my code", "read back my code", "read my code out loud",
+    ])
+    def test_read_my_code_is_a_deterministic_read_back(self, client, phrase):
+        # "read my code" must do a local, non-AI line-by-line read-back — never
+        # the AI fix/edit it previously misrouted to.
+        data = client.post("/voice-command", json={"text": phrase}).get_json()
+        assert data["action"] == "read_code", f"{phrase!r} -> {data['action']}"
+
+    def test_read_my_code_does_not_steal_plain_read_code(self, client):
+        # Regression guard: broadening must not change "read code"/"read the code".
+        assert client.post("/voice-command", json={"text": "read code"}).get_json()["action"] == "narrate_file"
+        assert client.post("/voice-command", json={"text": "read the code"}).get_json()["action"] == "narrate_file"
+
+    @pytest.mark.parametrize("phrase", [
         "walk through code",
         "walk me through this program",
         "explain what this code does",

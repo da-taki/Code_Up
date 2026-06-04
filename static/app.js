@@ -1614,6 +1614,31 @@ async function loadDemoById(id) {
 }
 
 // ---------- NARRATE FULL FILE ----------
+// Deterministic, local read-back of the whole editor — line by line, with
+// indentation announced. No AI/network, so "read my code" works even when the
+// cloud AI is busy. (narrateFile() below is the richer LLM narration of
+// "read the code".)
+function readMyCodeAloud() {
+  SpeechManager.cancelAll();
+  const trimmed = String(getCode() || '').replace(/\s+$/, '');
+  if (!trimmed.trim()) {
+    out('The editor is empty.');
+    speak('The editor is empty. There is nothing to read yet.');
+    srAnnounce('Editor empty');
+    return;
+  }
+  const lines = trimmed.split('\n');
+  out(trimmed);
+  speak(`Your program has ${lines.length} line${lines.length === 1 ? '' : 's'}.`);
+  for (let i = 0; i < lines.length; i++) {
+    const lead = (lines[i].match(/^[ \t]*/) || [''])[0].replace(/\t/g, '    ');
+    const note = lead.length >= 4 ? 'indented, ' : '';
+    const body = lines[i].trim();
+    speak(`Line ${i + 1}. ${note}${body || 'blank'}.`);
+  }
+  srAnnounce('Read your code');
+}
+
 async function narrateFile() {
   if (!ensureNotExecuting(() => narrateFile(), 'narrate file')) return;
   SpeechManager.cancelAll();
@@ -2367,6 +2392,7 @@ async function handleConfirmedAction(action, payload) {
   else if (action === 'delete_line')     deleteLine(payload && payload.line ? payload.line : 1);
   else if (action === 'read_function')   readFunction(payload && payload.function_name ? payload.function_name : '');
   else if (action === 'summarize')       await summarizeFile();
+  else if (action === 'read_code')       readMyCodeAloud();
   else if (action === 'narrate_file')    await narrateFile();
   else if (action === 'demo_list')       await listDemos();
   else if (action === 'demo_run')        await runDemo(payload && payload.preset ? payload.preset : '');

@@ -251,6 +251,15 @@ class IntentParser:
         # Hindi: "कोड का सारांश दो" / "सारांश बताओ"
         r"^(?:कोड\s+(?:का\s+)?)?सारांश\s*(?:दो|बताओ|दीजिए)?$",
     ]
+    # "read my code" / "read my program" / "read back my code": a deterministic,
+    # line-by-line read-back of the editor (no AI). Distinct from narrate_file
+    # ("read the code" -> LLM narration). Scoped to "my"/"back" so it never
+    # steals the tested "read code" / "read the code" -> narrate_file commands.
+    READ_CODE_PATTERNS = [
+        r"^read\s+(?:me\s+)?my\s+(?:whole\s+|entire\s+|full\s+|complete\s+)?(?:code|program|script)(?:\s+back)?(?:\s+to\s+me)?(?:\s+(?:out\s+loud|aloud))?$",
+        r"^read\s+(?:all\s+(?:of\s+)?)?my\s+(?:code|program|script)$",
+        r"^read\s+back\s+(?:my\s+|the\s+)?(?:code|program|script)$",
+    ]
     NARRATE_FILE_PATTERNS = [
         r"^narrate(?:\s+(?:the\s+)?(?:file|code|whole\s+file))?$",
         r"^read\s+(?:me\s+)?(?:the\s+)?(?:file|code)$",
@@ -1082,6 +1091,9 @@ class IntentParser:
             # Holistic walkthrough explanation — must precede narrate_file so a
             # "walk through the code" request explains rather than literal-reads.
             "walk_through":   self.WALK_THROUGH_PATTERNS,
+            # read_code (literal line-by-line read-back) must precede narrate_file
+            # so "read my code" gets a deterministic read-back, not LLM narration.
+            "read_code":      self.READ_CODE_PATTERNS,
             "narrate_file":   self.NARRATE_FILE_PATTERNS,
             "demo_run":       self.DEMO_RUN_PATTERNS,
             "demo_list":      self.DEMO_LIST_PATTERNS,

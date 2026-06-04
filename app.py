@@ -6219,6 +6219,8 @@ def voice():
             return _store_and_return({"success": True, "action": "advise", "confidence": confidence})
         if intent == "summarize":
             return _store_and_return({"success": True, "action": "summarize", "confidence": confidence})
+        if intent == "read_code":
+            return _store_and_return({"success": True, "action": "read_code", "confidence": confidence})
         if intent == "narrate_file":
             return _store_and_return({"success": True, "action": "narrate_file", "confidence": confidence})
         if intent == "walk_through":

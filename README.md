@@ -88,6 +88,27 @@ Hindi number words 0–100 are recognized in line-navigation commands.
 
 ---
 
+## Multi-File Projects
+
+CodeUp can run either the original single-file editor flow or a session-scoped multi-file project. A project is stored in the sandbox workspace under a clear `project/` root with a lightweight `codeup.project.json` manifest, an entry file such as `main.py`, a current active file, a file list, and inferred requirements.
+
+Useful project commands work by voice or by typing in the command box:
+
+| Purpose | Example commands |
+|---|---|
+| Generate a project | `create a quiz game split into multiple files`, `make a student marks analysis project using pandas`, `make a numpy statistics project with tests` |
+| Read files | `read project files`, `file tree`, `explain project structure` |
+| Open files | `open main dot py`, `open utils dot py`, `open data slash marks dot csv` |
+| Edit files | `create file data loader dot py`, `rename this file to analysis dot py`, `delete this file` |
+| Run files | `run main dot py`, `run tests slash test main dot py` |
+| Dependencies | `explain requirements` |
+
+Running a project file executes from the project root, so imports like `from utils import helper` work naturally. The sandbox allows safe beginner imports such as `math`, `random`, `statistics`, `datetime`, `json`, `csv`, `pathlib`, `typing`, `collections`, `itertools`, plus `numpy`, `pandas`, and `matplotlib` when installed. High-risk imports such as `os`, `sys`, `subprocess`, `importlib`, shell execution, and outside-root file paths remain blocked.
+
+When a generated project uses third-party packages, CodeUp writes or updates `requirements.txt` and includes those packages in the project manifest. If a package is missing, the run error says which dependency is missing and points the student to `requirements.txt`. To return to the original demo-safe single-file flow, load a demo or snippet, clear the editor, or start with the default `print("Hello CodeUp!")` code without creating a project.
+
+---
+
 ## Guided Tutorial
 
 A spoken, activity-based tutorial that walks a blind beginner through writing and running their first Python programs, entirely by ear and keyboard.

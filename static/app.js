@@ -1321,7 +1321,28 @@ function readProjectFiles() {
 }
 
 function explainProjectStructure() {
-  readProjectFiles();
+  syncActiveProjectFileLocal();
+  const names = Object.keys(ProjectState.files || {}).sort();
+  if (!ProjectState.active || names.length === 0) {
+    const msg = 'Single-file mode is active. There is only the current editor file.';
+    out(msg); speak(msg);
+    return;
+  }
+  const roles = names.map(name => {
+    const lower = name.toLowerCase();
+    if (name === ProjectState.activeFile || lower === 'main.py') return `${name} is the entry point you run.`;
+    if (lower.endsWith('requirements.txt')) return `${name} lists the packages this project needs.`;
+    if (lower.endsWith('readme.md')) return `${name} explains the project for the learner.`;
+    if (lower.startsWith('tests/') || lower.includes('/test_') || lower.startsWith('test_')) return `${name} contains tests for the project.`;
+    if (lower.endsWith('.csv') || lower.endsWith('.json')) return `${name} stores data used by the code.`;
+    if (lower.endsWith('.py')) return `${name} contains helper Python code imported by another file.`;
+    return `${name} is a project file.`;
+  });
+  const reqs = ProjectState.requirements && ProjectState.requirements.length
+    ? ` Requirements: ${ProjectState.requirements.join(', ')}.`
+    : '';
+  const msg = `Project structure: ${roles.join(' ')}${reqs}`;
+  out(msg); speak(msg); srAnnounce('Project structure explained');
 }
 
 async function explainProjectRequirements() {
@@ -2217,6 +2238,13 @@ function clearEditor() {
   // Full reset including navigation history on explicit user clear
   navigationHistory = [];
   historyIndex = -1;
+  ProjectState.active = false;
+  ProjectState.files = {};
+  ProjectState.activeFile = '';
+  ProjectState.entry = 'main.py';
+  ProjectState.requirements = [];
+  ProjectState.manifest = {};
+  renderProjectFiles();
   try { localStorage.removeItem(AUTOSAVE_KEY); } catch (e) {}
   _autosaveLastCode = '';
   setCode('');

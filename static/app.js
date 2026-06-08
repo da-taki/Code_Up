@@ -1075,6 +1075,7 @@ function getModel() { return editor && editor.getModel(); }
 function getCode()  { return (editor && editor.getValue()) || ''; }
 function getLanguage() { return (document.getElementById('languageSelector') || {}).value || 'en'; }
 
+// ==== PROJECT-FILE-ALIASES-START
 function normalizeProjectPath(path) {
   let raw = String(path || '').trim().replace(/\\/g, '/');
   raw = raw.replace(/\s+dot\s+/gi, '.').replace(/\s+slash\s+/gi, '/');
@@ -1084,6 +1085,73 @@ function normalizeProjectPath(path) {
   if (!/^[A-Za-z0-9._/-]+$/.test(raw)) return '';
   return raw;
 }
+
+function projectPathParts(path) {
+  const clean = normalizeProjectPath(path);
+  const pieces = clean.split('/');
+  const basename = pieces[pieces.length - 1] || '';
+  const dot = basename.lastIndexOf('.');
+  const stem = dot > 0 ? basename.slice(0, dot) : basename;
+  const pathStem = dot > 0 ? clean.slice(0, clean.length - (basename.length - dot)) : clean;
+  return { clean, basename, stem, pathStem };
+}
+
+function projectAliasKey(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\\/g, '/')
+    .replace(/\s+dot\s+/g, '.')
+    .replace(/\s+slash\s+/g, '/')
+    .replace(/\.[a-z0-9_]+$/i, '')
+    .replace(/[._/-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function uniqueProjectFileMatch(files, predicate) {
+  const matches = files.filter(predicate);
+  if (matches.length === 1) return { path: matches[0] };
+  if (matches.length > 1) {
+    return { error: 'I found multiple matching files. Please say the full file name.' };
+  }
+  return null;
+}
+
+function resolveProjectFileAlias(path, files) {
+  const clean = normalizeProjectPath(path);
+  if (!clean) return { path: '' };
+  const names = (Array.isArray(files) ? files : Object.keys(files || {}))
+    .map(name => normalizeProjectPath(name))
+    .filter(Boolean)
+    .sort();
+  if (!names.length) return { path: clean };
+
+  const cleanLower = clean.toLowerCase();
+  const queryKey = projectAliasKey(path);
+  const cleanKey = projectAliasKey(clean);
+  const candidates = names.map(name => Object.assign({ name }, projectPathParts(name)));
+
+  const stages = [
+    item => item.clean.toLowerCase() === cleanLower,
+    item => item.basename.toLowerCase() === cleanLower,
+    item => item.stem.toLowerCase() === cleanLower,
+    item => projectAliasKey(item.stem) === queryKey || projectAliasKey(item.stem) === cleanKey,
+    item => projectAliasKey(item.basename) === queryKey || projectAliasKey(item.basename) === cleanKey,
+    item => {
+      const pathKey = projectAliasKey(item.pathStem);
+      return pathKey === queryKey || pathKey.endsWith(` ${queryKey}`) ||
+        pathKey === cleanKey || pathKey.endsWith(` ${cleanKey}`);
+    },
+  ];
+
+  for (const predicate of stages) {
+    const result = uniqueProjectFileMatch(candidates, item => predicate(item));
+    if (result) return result.error ? result : { path: result.path.name };
+  }
+  return { path: clean };
+}
+// ==== PROJECT-FILE-ALIASES-END
 
 function syncActiveProjectFileLocal() {
   if (!ProjectState.active || !ProjectState.activeFile) return;
@@ -1191,7 +1259,9 @@ async function saveProjectFile(path, content, active = true) {
 }
 
 async function openProjectFile(path) {
-  const clean = normalizeProjectPath(path);
+  const resolved = resolveProjectFileAlias(path, ProjectState.files);
+  if (resolved.error) { out(resolved.error); speak(resolved.error); return; }
+  const clean = resolved.path;
   if (!clean) { speak('Please give a valid file name.'); return; }
   syncActiveProjectFileLocal();
   if (ProjectState.files[clean] != null) {
@@ -1365,7 +1435,9 @@ async function explainProjectRequirements() {
 }
 
 async function runProjectFile(path) {
-  const clean = normalizeProjectPath(path || ProjectState.activeFile || 'main.py');
+  const resolved = resolveProjectFileAlias(path || ProjectState.activeFile || 'main.py', ProjectState.files);
+  if (resolved.error) { out(resolved.error); speak(resolved.error); return; }
+  const clean = resolved.path;
   if (!clean) { speak('Please give a valid file name to run.'); return; }
   if (ProjectState.files[clean] != null && ProjectState.activeFile !== clean) {
     await openProjectFile(clean);
@@ -1522,9 +1594,16 @@ async function runCode(runFile) {
   AppState.isExecuting = true;
   cueSuccess();
   startHeartbeat();
-  const _runMsgOut = getLanguage() === 'hi' ? 'Code run ho raha hai...' : 'Running...';
-  const _runMsgSpoken = getLanguage() === 'hi' ? 'Code run ho raha hai.' : 'Running code.';
-  const _runMsgAI = getLanguage() === 'hi' ? 'Code run ho raha hai...' : 'Running code...';
+  const runFileLabel = normalizeProjectPath(runFile || '');
+  const _runMsgOut = runFileLabel
+    ? `Running ${runFileLabel}...`
+    : (getLanguage() === 'hi' ? 'Code run ho raha hai...' : 'Running...');
+  const _runMsgSpoken = runFileLabel
+    ? `Running ${runFileLabel}.`
+    : (getLanguage() === 'hi' ? 'Code run ho raha hai.' : 'Running code.');
+  const _runMsgAI = runFileLabel
+    ? `Running ${runFileLabel}...`
+    : (getLanguage() === 'hi' ? 'Code run ho raha hai...' : 'Running code...');
   if (!usesInput) out(_runMsgOut);
   showAI(_runMsgAI);
   speak(_runMsgSpoken);

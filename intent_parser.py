@@ -402,6 +402,8 @@ class IntentParser:
     OPEN_PROJECT_FILE_PATTERNS = [
         r"^open\s+(?:the\s+)?(?:file\s+)?([a-zA-Z0-9_./\-\s]+(?:\s+dot\s+[a-zA-Z0-9_]+|\.[a-zA-Z0-9_]+))$",
         r"^switch\s+to\s+(?:the\s+)?(?:file\s+)?([a-zA-Z0-9_./\-\s]+(?:\s+dot\s+[a-zA-Z0-9_]+|\.[a-zA-Z0-9_]+))$",
+        r"^open\s+(?!(?:the\s+)?tutorial$)(?:the\s+)?(?:file\s+)?([a-zA-Z0-9_./\-\s]+)$",
+        r"^switch\s+to\s+(?:the\s+)?(?:file\s+)?([a-zA-Z0-9_./\-\s]+)$",
     ]
 
     CREATE_PROJECT_FILE_PATTERNS = [
@@ -422,6 +424,8 @@ class IntentParser:
     RUN_PROJECT_FILE_PATTERNS = [
         r"^run\s+(?:the\s+)?(?:file\s+)?([a-zA-Z0-9_./\-\s]+(?:\s+dot\s+[a-zA-Z0-9_]+|\.[a-zA-Z0-9_]+))$",
         r"^execute\s+(?:the\s+)?(?:file\s+)?([a-zA-Z0-9_./\-\s]+(?:\s+dot\s+[a-zA-Z0-9_]+|\.[a-zA-Z0-9_]+))$",
+        r"^run\s+(?:the\s+)?(?:file\s+)?([a-zA-Z0-9_./\-\s]+)$",
+        r"^execute\s+(?:the\s+)?(?:file\s+)?([a-zA-Z0-9_./\-\s]+)$",
     ]
 
     EXPLAIN_PROJECT_STRUCTURE_PATTERNS = [

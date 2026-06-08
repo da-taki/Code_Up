@@ -247,10 +247,9 @@ _tracer_lock = threading.Lock()
 
 # Subprocess resource limits — POSIX only. Defined at module scope so each
 # subprocess.Popen call doesn't pay the cost of redefining + importing.
-SUBPROCESS_MEMORY_LIMIT_MB = int(os.environ.get("CODEUP_SUBPROCESS_MEMORY_MB", "128"))
+SUBPROCESS_MEMORY_LIMIT_MB = int(os.environ.get("CODEUP_SUBPROCESS_MEMORY_MB", "512"))
 SUBPROCESS_CPU_LIMIT_SECONDS = int(os.environ.get("CODEUP_SUBPROCESS_CPU_SECONDS", "3"))
-SUBPROCESS_WALL_TIMEOUT_SECONDS = int(os.environ.get("CODEUP_SUBPROCESS_WALL_SECONDS", "3"))
-
+SUBPROCESS_WALL_TIMEOUT_SECONDS = int(os.environ.get("CODEUP_SUBPROCESS_WALL_SECONDS", "8"))
 if sys.platform != "win32":
     import resource as _resource
 

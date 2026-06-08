@@ -37,6 +37,22 @@ vm.runInContext(
 );
 const N = sandbox;
 
+const ALIAS_START = '// ==== PROJECT-FILE-ALIASES-START';
+const ALIAS_END = '// ==== PROJECT-FILE-ALIASES-END';
+const as = src.indexOf(ALIAS_START);
+const ae = src.indexOf(ALIAS_END);
+assert(as !== -1 && ae !== -1 && ae > as, 'project file alias markers not found in static/app.js');
+
+const aliasSandbox = {};
+vm.createContext(aliasSandbox);
+vm.runInContext(
+  src.slice(as, ae) +
+  '\nthis.normalizeProjectPath = normalizeProjectPath;' +
+  '\nthis.resolveProjectFileAlias = resolveProjectFileAlias;',
+  aliasSandbox
+);
+const A = aliasSandbox;
+
 let groups = 0;
 function check(name, fn) {
   try { fn(); groups++; }
@@ -120,6 +136,33 @@ check('canonical tutorial commands build the example programs', () => {
     [variable('count', '1'), whileHeader('count is less than or equal to 3'),
      line('an indented print count'), line('an indented count equals count plus 1')].join('\n'),
     'count = 1\nwhile count <= 3:\n    print(count)\n    count = count + 1');
+});
+
+check('project file aliases resolve friendly spoken names', () => {
+  const files = [
+    'README.md', 'main.py', 'questions.py', 'requirements.txt', 'score.py',
+    'data/marks.csv', 'data_loader.py', 'stats_utils.py', 'tests/test_main.py',
+  ];
+  assert.strictEqual(A.resolveProjectFileAlias('main', files).path, 'main.py');
+  assert.strictEqual(A.resolveProjectFileAlias('main dot py', files).path, 'main.py');
+  assert.strictEqual(A.resolveProjectFileAlias('questions', files).path, 'questions.py');
+  assert.strictEqual(A.resolveProjectFileAlias('score', files).path, 'score.py');
+  assert.strictEqual(A.resolveProjectFileAlias('data loader', files).path, 'data_loader.py');
+  assert.strictEqual(A.resolveProjectFileAlias('marks', files).path, 'data/marks.csv');
+  assert.strictEqual(A.resolveProjectFileAlias('test main', files).path, 'tests/test_main.py');
+  assert.strictEqual(A.resolveProjectFileAlias('tests slash test main dot py', files).path, 'tests/test_main.py');
+});
+
+check('project file aliases refuse ambiguous matches', () => {
+  const files = ['main.py', 'folder/main.py'];
+  assert.strictEqual(
+    A.resolveProjectFileAlias('main', files).error,
+    'I found multiple matching files. Please say the full file name.'
+  );
+});
+
+check('project file aliases keep safe fallback for missing files', () => {
+  assert.strictEqual(A.resolveProjectFileAlias('missing file', ['main.py']).path, 'missing_file');
 });
 
 console.log('spoken_code.test.js: ' + groups + ' groups passed');

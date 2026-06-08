@@ -187,10 +187,22 @@ def test_voice_project_commands_route(client):
     open_data = client.post("/voice-command", json={"text": "open main dot py"}).get_json()
     assert open_data["action"] == "open_project_file"
     assert open_data["path"] == "main dot py"
+    open_alias = client.post("/voice-command", json={"text": "open main"}).get_json()
+    assert open_alias["action"] == "open_project_file"
+    assert open_alias["path"] == "main"
+    assert client.post("/voice-command", json={"text": "open questions"}).get_json()["action"] == "open_project_file"
+    assert client.post("/voice-command", json={"text": "open score"}).get_json()["action"] == "open_project_file"
+    assert client.post("/voice-command", json={"text": "open data loader"}).get_json()["action"] == "open_project_file"
+    assert client.post("/voice-command", json={"text": "open marks"}).get_json()["action"] == "open_project_file"
+    assert client.post("/voice-command", json={"text": "open test main"}).get_json()["action"] == "open_project_file"
     create_data = client.post("/voice-command", json={"text": "create file data loader dot py"}).get_json()
     assert create_data["action"] == "create_project_file"
     run_data = client.post("/voice-command", json={"text": "run main dot py"}).get_json()
     assert run_data["action"] == "run_project_file"
+    run_alias = client.post("/voice-command", json={"text": "run main"}).get_json()
+    assert run_alias["action"] == "run_project_file"
+    assert run_alias["path"] == "main"
+    assert client.post("/voice-command", json={"text": "run test main"}).get_json()["action"] == "run_project_file"
 
 
 @pytest.mark.parametrize(

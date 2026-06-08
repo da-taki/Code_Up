@@ -158,6 +158,13 @@ class TestAppJsIntegration:
         assert "_TUTORIAL_EDIT_ACTIONS" in src
         assert "TutorialController.onInsert" in src
 
+    def test_clear_editor_exits_project_mode(self, src):
+        start = src.index("function clearEditor()")
+        block = src[start:start + 800]
+        assert "ProjectState.active = false" in block
+        assert "ProjectState.files = {}" in block
+        assert "renderProjectFiles()" in block
+
 
 # ---------------------------------------------------------------------------
 # 2c. index.html accessible panel

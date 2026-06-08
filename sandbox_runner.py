@@ -19,25 +19,132 @@ Never imported by the parent app — only ever executed via
 """
 import ast as _ast
 import builtins as _builtins
+import collections as _collections
+import csv as _csv
 import datetime as _datetime
+import itertools as _itertools
 import json
 import math as _math
 import os
+import pathlib as _pathlib
 import random as _random
+import statistics as _statistics
 import string as _string
 import sys
 import time
 import traceback
+import types as _types
+import typing as _typing
 
 _MODULE_OBJECTS = {
     'math': _math,
     'random': _random,
     'string': _string,
     'datetime': _datetime,
+    'statistics': _statistics,
+    'json': json,
+    'csv': _csv,
+    'pathlib': None,
+    'typing': _typing,
+    'collections': _collections,
+    'itertools': _itertools,
 }
-ALLOWED_MODULES = frozenset(_MODULE_OBJECTS)
+_THIRD_PARTY_MODULES = {'numpy', 'pandas', 'matplotlib'}
+ALLOWED_MODULES = frozenset(set(_MODULE_OBJECTS) | _THIRD_PARTY_MODULES)
 _PRELOADED = dict(_MODULE_OBJECTS)
 _ALLOWED_RUNTIME_IMPORTS = {'_strptime'}
+_SAFE_OPEN_ROOT = os.path.abspath(os.environ.get('CODEUP_SAFE_OPEN_ROOT') or os.getcwd())
+_PROJECT_ROOT = os.path.abspath(os.environ.get('CODEUP_PROJECT_ROOT') or _SAFE_OPEN_ROOT)
+try:
+    _PROJECT_FILES = set(json.loads(os.environ.get('CODEUP_PROJECT_FILES') or '[]'))
+except json.JSONDecodeError:
+    _PROJECT_FILES = set()
+_LOCAL_MODULES = {m for m in os.environ.get('CODEUP_LOCAL_MODULES', '').split(',') if m}
+_LOCAL_MODULE_CACHE = {}
+_LOCAL_MODULE_LOADING = set()
+
+
+def _resolve_safe_path(file):
+    if isinstance(file, int):
+        raise PermissionError("File descriptors are not available in the CodeUp sandbox.")
+    raw = os.fspath(file)
+    candidate = raw if os.path.isabs(raw) else os.path.join(_SAFE_OPEN_ROOT, raw)
+    resolved = os.path.abspath(candidate)
+    root = os.path.abspath(_SAFE_OPEN_ROOT)
+    try:
+        common = os.path.commonpath([root, resolved])
+    except ValueError:
+        common = ""
+    if common != root:
+        raise PermissionError("File access is limited to this CodeUp project root.")
+    return resolved
+
+
+def _safe_open(file, mode='r', buffering=-1, encoding=None, errors=None, newline=None, closefd=True, opener=None):
+    if opener is not None:
+        raise PermissionError("Custom file openers are not available in the CodeUp sandbox.")
+    mode = str(mode or 'r')
+    if any(flag in mode for flag in ('+',)):
+        raise PermissionError("Read-write file mode is not available in the CodeUp sandbox.")
+    if not set(mode) <= set('rwaxtbU'):
+        raise PermissionError("That file mode is not available in the CodeUp sandbox.")
+    resolved = _resolve_safe_path(file)
+    if any(flag in mode for flag in ('w', 'a', 'x')):
+        os.makedirs(os.path.dirname(resolved), exist_ok=True)
+    return _builtins.open(resolved, mode, buffering=buffering, encoding=encoding, errors=errors, newline=newline, closefd=closefd)
+
+
+class _SafePath:
+    def __init__(self, *parts):
+        raw = os.path.join(*(os.fspath(part) for part in parts)) if parts else "."
+        self._path = _resolve_safe_path(raw)
+
+    def __fspath__(self):
+        return self._path
+
+    def __str__(self):
+        try:
+            return os.path.relpath(self._path, _SAFE_OPEN_ROOT)
+        except ValueError:
+            return self._path
+
+    def __truediv__(self, other):
+        return _SafePath(os.path.join(self._path, os.fspath(other)))
+
+    @property
+    def name(self):
+        return os.path.basename(self._path)
+
+    @property
+    def suffix(self):
+        return os.path.splitext(self._path)[1]
+
+    @property
+    def parent(self):
+        return _SafePath(os.path.dirname(self._path))
+
+    def exists(self):
+        return os.path.exists(self._path)
+
+    def is_file(self):
+        return os.path.isfile(self._path)
+
+    def is_dir(self):
+        return os.path.isdir(self._path)
+
+    def read_text(self, encoding='utf-8'):
+        with _safe_open(self._path, 'r', encoding=encoding) as handle:
+            return handle.read()
+
+    def write_text(self, data, encoding='utf-8'):
+        with _safe_open(self._path, 'w', encoding=encoding) as handle:
+            return handle.write(str(data))
+
+    def open(self, mode='r', *args, **kwargs):
+        return _safe_open(self._path, mode, *args, **kwargs)
+
+
+_PRELOADED['pathlib'] = _types.SimpleNamespace(Path=_SafePath, PurePath=_pathlib.PurePath)
 
 
 class SafeFunction:
@@ -59,7 +166,7 @@ _FORBIDDEN_NAMES = {
 }
 _FORBIDDEN_GETATTR_FUNCS = {
     'getattr', 'setattr', 'delattr', 'hasattr', 'vars', 'globals', 'locals',
-    'eval', 'exec', 'compile', 'open', '__import__',
+    'eval', 'exec', 'compile', '__import__',
 }
 
 
@@ -72,13 +179,13 @@ def _audit_ast(source):
         if isinstance(node, _ast.Import):
             for alias in node.names:
                 top_level = _top_level_module(alias.name)
-                if top_level not in ALLOWED_MODULES:
+                if top_level not in ALLOWED_MODULES and top_level not in _LOCAL_MODULES:
                     raise SyntaxError(f"Module '{alias.name}' is not allowed in the sandbox")
         if isinstance(node, _ast.ImportFrom):
             if node.level:
                 raise SyntaxError("Relative imports are not allowed in the sandbox")
             top_level = _top_level_module(node.module or '')
-            if top_level not in ALLOWED_MODULES:
+            if top_level not in ALLOWED_MODULES and top_level not in _LOCAL_MODULES:
                 raise SyntaxError(f"Module '{node.module}' is not allowed in the sandbox")
             for alias in node.names:
                 if alias.name.startswith('_') or alias.name in _FORBIDDEN_NAMES:
@@ -108,8 +215,65 @@ def _top_level_module(name):
     return str(name).split('.', 1)[0]
 
 
+def _local_module_path(name):
+    if not _LOCAL_MODULES:
+        return None
+    candidates = []
+    module_path = str(name).replace('.', '/') + '.py'
+    candidates.append(module_path)
+    top = _top_level_module(name) + '.py'
+    candidates.append(top)
+    for rel in candidates:
+        if rel in _PROJECT_FILES:
+            abs_path = os.path.abspath(os.path.join(_PROJECT_ROOT, rel))
+            try:
+                common = os.path.commonpath([_PROJECT_ROOT, abs_path])
+            except ValueError:
+                common = ""
+            if common == _PROJECT_ROOT and os.path.exists(abs_path):
+                return rel, abs_path
+    return None
+
+
+def _load_local_module(name):
+    top_level = _top_level_module(name)
+    if top_level not in _LOCAL_MODULES:
+        raise ImportError(f"Module '{name}' is not allowed.")
+    cached = _LOCAL_MODULE_CACHE.get(name) or _LOCAL_MODULE_CACHE.get(top_level)
+    if cached is not None:
+        return cached
+    if name in _LOCAL_MODULE_LOADING:
+        raise ImportError(f"Circular import involving '{name}' is not supported in this sandbox.")
+    resolved = _local_module_path(name) or _local_module_path(top_level)
+    if not resolved:
+        raise ImportError(f"Local module '{name}' was not found in this project.")
+    rel_path, abs_path = resolved
+    _LOCAL_MODULE_LOADING.add(name)
+    try:
+        with _builtins.open(abs_path, encoding='utf-8') as handle:
+            source = handle.read()
+        _audit_ast(source)
+        module_name = name if rel_path.replace('/', '.').endswith(name + '.py') else top_level
+        module = _types.ModuleType(module_name)
+        module.__file__ = abs_path
+        module.__package__ = ""
+        namespace = _make_execution_namespace(module_name)
+        namespace['__file__'] = abs_path
+        module.__dict__.update(namespace)
+        sys.modules[module_name] = module
+        _LOCAL_MODULE_CACHE[module_name] = module
+        _LOCAL_MODULE_CACHE[top_level] = module
+        compiled = compile(source, rel_path, 'exec')
+        exec(compiled, module.__dict__, module.__dict__)
+        return module
+    finally:
+        _LOCAL_MODULE_LOADING.discard(name)
+
+
 def restricted_import(name, *args, **kwargs):
     top_level = _top_level_module(name)
+    if top_level in _LOCAL_MODULES:
+        return _load_local_module(name)
     if top_level not in ALLOWED_MODULES:
         raise ImportError(f"Module '{name}' is not allowed.")
     if top_level in _PRELOADED:
@@ -128,6 +292,9 @@ def _strict_import(name, globals_arg=None, locals_arg=None, fromlist=(), level=0
 
     if top_level in ALLOWED_MODULES:
         return restricted_import(name, globals_arg, locals_arg, fromlist, level)
+
+    if top_level in _LOCAL_MODULES:
+        return _load_local_module(name)
 
     if top_level in _ALLOWED_RUNTIME_IMPORTS:
         return _builtins.__import__(name, globals_arg, locals_arg, fromlist, level)
@@ -253,20 +420,28 @@ SAFE_GLOBALS = {
         'staticmethod': staticmethod, 'classmethod': classmethod, 'property': property,
         '__build_class__': _builtins.__build_class__,
         '__import__': _strict_import,
+        'open': _safe_open,
     },
     '__import__': _strict_import,
+    'open': SafeFunction(_safe_open),
     'input': _select_input_func(),
     'math': _math,
     'random': _random,
     'string': _string,
     'datetime': _datetime,
+    'statistics': _statistics,
+    'json': json,
+    'csv': _csv,
+    'pathlib': _PRELOADED['pathlib'],
+    'collections': _collections,
+    'itertools': _itertools,
 }
 
 
-def _make_execution_namespace():
+def _make_execution_namespace(module_name='__main__'):
     namespace = dict(SAFE_GLOBALS)
     namespace['__builtins__'] = dict(SAFE_GLOBALS['__builtins__'])
-    namespace['__name__'] = '__main__'
+    namespace['__name__'] = module_name
     return namespace
 
 
@@ -311,7 +486,11 @@ def main():
     start = time.time()
     MAX_TRACE_EVENTS = 5000
     overflow_logged = [False]
-    execution_namespace = _make_execution_namespace()
+    main_file_label = os.environ.get('CODEUP_MAIN_FILE') or '<user>'
+    trace_filenames = {'<user>', main_file_label}
+    trace_filenames.update(_PROJECT_FILES)
+    execution_namespace = _make_execution_namespace('__main__')
+    execution_namespace['__file__'] = os.path.abspath(code_file) if code_file else main_file_label
     initial_names = set(execution_namespace)
 
     def _traceable_locals(frame):
@@ -326,7 +505,8 @@ def main():
         return current
 
     def tracer(frame, event, arg):
-        if frame.f_code.co_filename != '<user>':
+        frame_file = frame.f_code.co_filename
+        if frame_file not in trace_filenames:
             return tracer
 
         if len(trace) >= MAX_TRACE_EVENTS:
@@ -337,7 +517,7 @@ def main():
 
         if event == 'line':
             line = frame.f_lineno
-            trace.append({'type': 'line_exec', 'line': line})
+            trace.append({'type': 'line_exec', 'line': line, 'file': frame_file})
             frame_key = id(frame)
             last_locals = last_locals_by_frame.get(frame_key, {})
             current = _traceable_locals(frame)
@@ -355,12 +535,12 @@ def main():
                 if k not in current:
                     changes.append(k + " went out of scope")
             if changes:
-                trace.append({'type': 'state_change', 'line': line, 'changes': changes})
+                trace.append({'type': 'state_change', 'line': line, 'file': frame_file, 'changes': changes})
             last_locals_by_frame[frame_key] = current
         elif event == 'call':
-            trace.append({'type': 'call', 'function': frame.f_code.co_name, 'line': frame.f_lineno})
+            trace.append({'type': 'call', 'function': frame.f_code.co_name, 'line': frame.f_lineno, 'file': frame_file})
         elif event == 'return':
-            trace.append({'type': 'return', 'value': _safe_repr(arg)})
+            trace.append({'type': 'return', 'file': frame_file, 'value': _safe_repr(arg)})
             last_locals_by_frame.pop(id(frame), None)
         return tracer
 
@@ -368,7 +548,7 @@ def main():
         if _INPUT_LOAD_ERROR[0]:
             raise RuntimeError(_INPUT_LOAD_ERROR[0])
         _audit_ast(code)
-        compiled = compile(code, '<user>', 'exec')
+        compiled = compile(code, main_file_label, 'exec')
         sys.settrace(tracer)
         exec(compiled, execution_namespace, execution_namespace)
     except Exception:

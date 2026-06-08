@@ -23,6 +23,22 @@ from flask import Flask, Response, g, has_request_context, jsonify, render_templ
 from rapidfuzz import fuzz
 
 from intent_parser import parse_intent
+from project_support import (
+    PROJECT_MANIFEST,
+    PROJECT_ROOT_DIR,
+    PROJECT_TEMPLATES,
+    ProjectPathError,
+    build_template,
+    choose_template_for_prompt,
+    extract_project_json,
+    infer_requirements,
+    local_module_names,
+    looks_like_multifile_prompt,
+    make_manifest,
+    normalize_file_map,
+    normalize_project_path,
+    project_summary,
+)
 from sandboxed_fs import cleanup_sandbox, cleanup_stale_sandboxes, get_sandbox
 from structure_parser import CodeAnalyzer
 import tutorial_engine
@@ -538,6 +554,128 @@ def _safe_text(value: Any, default: str = "", limit: Optional[int] = None) -> st
     if limit is not None:
         return text[:limit]
     return text
+
+
+def _project_rel(path: str = "") -> str:
+    clean = str(path or "").strip("/")
+    return f"{PROJECT_ROOT_DIR}/{clean}" if clean else PROJECT_ROOT_DIR
+
+
+def _project_root_abs(sandbox) -> str:
+    root = sandbox._validate_path(PROJECT_ROOT_DIR)
+    os.makedirs(root, exist_ok=True)
+    return root
+
+
+def _load_project_files(sandbox) -> Dict[str, str]:
+    root = _project_root_abs(sandbox)
+    files: Dict[str, str] = {}
+    for dirpath, _, filenames in os.walk(root):
+        for filename in filenames:
+            abs_path = os.path.join(dirpath, filename)
+            rel = os.path.relpath(abs_path, root).replace("\\", "/")
+            if rel == PROJECT_MANIFEST:
+                continue
+            try:
+                with open(abs_path, "r", encoding="utf-8") as handle:
+                    files[rel] = handle.read()
+            except (OSError, UnicodeDecodeError):
+                continue
+    return dict(sorted(files.items()))
+
+
+def _load_project_manifest(sandbox) -> Dict[str, Any]:
+    result = sandbox.read(_project_rel(PROJECT_MANIFEST))
+    if not result.get("success"):
+        files = _load_project_files(sandbox)
+        return make_manifest(files) if files else {}
+    try:
+        manifest = json.loads(result.get("content") or "{}")
+    except json.JSONDecodeError:
+        files = _load_project_files(sandbox)
+        return make_manifest(files) if files else {}
+    if not isinstance(manifest, dict):
+        return {}
+    files = _load_project_files(sandbox)
+    if files:
+        manifest = make_manifest(
+            files,
+            name=manifest.get("name") or "CodeUp Project",
+            entry=manifest.get("entry") or "main.py",
+            active_file=manifest.get("active_file") or manifest.get("entry") or "main.py",
+            requirements=manifest.get("requirements") or infer_requirements(files),
+        )
+    return manifest
+
+
+def _write_project_manifest(sandbox, manifest: Dict[str, Any]) -> None:
+    manifest = dict(manifest)
+    manifest["updated_at"] = int(time.time())
+    sandbox.write(_project_rel(PROJECT_MANIFEST), json.dumps(manifest, indent=2))
+
+
+def _write_project_files(sandbox, files: Dict[str, str], manifest: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = normalize_file_map(files)
+    for path, content in normalized.items():
+        result = sandbox.write(_project_rel(path), content)
+        if not result.get("success"):
+            raise ProjectPathError(result.get("error") or f"Could not write {path}.")
+    manifest = make_manifest(
+        normalized,
+        name=manifest.get("name") or "CodeUp Project",
+        entry=manifest.get("entry") or "main.py",
+        active_file=manifest.get("active_file") or manifest.get("entry") or "main.py",
+        requirements=manifest.get("requirements") or infer_requirements(normalized),
+    )
+    _write_project_manifest(sandbox, manifest)
+    return manifest
+
+
+def _project_response(sandbox, manifest: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    files = _load_project_files(sandbox)
+    manifest = manifest or _load_project_manifest(sandbox)
+    if not manifest and files:
+        manifest = make_manifest(files)
+    return {
+        "success": True,
+        "manifest": manifest,
+        "files": files,
+        "speech": project_summary(manifest) if manifest else "No multi-file project is open.",
+    }
+
+
+def _prepare_project_run(body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    payload = body.get("project")
+    if not isinstance(payload, dict):
+        return None
+
+    files = normalize_file_map(payload.get("files"))
+    if not files:
+        return None
+    entry = normalize_project_path(body.get("file") or payload.get("entry") or payload.get("active_file") or "main.py")
+    if entry not in files:
+        raise ProjectPathError(f"{entry} is not in the current project.")
+
+    sandbox = get_sandbox(get_session_id())
+    manifest = make_manifest(
+        files,
+        name=payload.get("name") or (payload.get("manifest") or {}).get("name") or "CodeUp Project",
+        entry=entry,
+        active_file=payload.get("active_file") or entry,
+        requirements=payload.get("requirements") or (payload.get("manifest") or {}).get("requirements") or infer_requirements(files),
+    )
+    manifest = _write_project_files(sandbox, files, manifest)
+    project_root = _project_root_abs(sandbox)
+    entry_abs = sandbox._validate_path(_project_rel(entry))
+    return {
+        "sandbox": sandbox,
+        "project_root": project_root,
+        "entry": entry,
+        "entry_abs": entry_abs,
+        "files": files,
+        "manifest": manifest,
+        "local_modules": local_module_names(files.keys()),
+    }
 
 def _looks_like_non_python_code(code: str) -> bool:
     """Reject whole-document HTML/CSS/JS accidentally pasted into the Python IDE."""
@@ -1233,11 +1371,16 @@ def _syntax_error_message(error: SyntaxError, code: str) -> str:
     return " ".join(parts)
 
 
-def _extract_error_summary(error_text: str) -> Tuple[Optional[int], str, str]:
+def _extract_error_summary(error_text: str) -> Tuple[Optional[int], Optional[str], str, str]:
     safe_text = sanitize_traceback(error_text)
     line_no = None
-    for match in re.finditer(r'File\s+"<user>",\s+line\s+(\d+)', safe_text):
-        line_no = int(match.group(1))
+    file_label = None
+    for match in re.finditer(r'File\s+"([^"]+)",\s+line\s+(\d+)', safe_text):
+        candidate = match.group(1)
+        if candidate == "<path>" or candidate.endswith("sandbox_runner.py"):
+            continue
+        file_label = candidate if candidate != "<user>" else None
+        line_no = int(match.group(2))
     if line_no is None:
         non_frame_text = "\n".join(
             line for line in safe_text.splitlines()
@@ -1252,8 +1395,8 @@ def _extract_error_summary(error_text: str) -> Tuple[Optional[int], str, str]:
             continue
         match = re.match(r'([A-Za-z_][A-Za-z0-9_]*Error|Exception|KeyboardInterrupt|SystemExit):\s*(.*)', raw_line)
         if match:
-            return line_no, match.group(1), match.group(2).strip()
-    return line_no, "PythonError", "Python could not run this code."
+            return line_no, file_label, match.group(1), match.group(2).strip()
+    return line_no, file_label, "PythonError", "Python could not run this code."
 
 
 def user_facing_error(error_text: str) -> str:
@@ -1266,8 +1409,13 @@ def user_facing_error(error_text: str) -> str:
         return "Execution timed out before it could finish."
     if re.search(r'\b(?:resource limit|memory limit|cpu limit|killed)\b', safe_text, flags=re.IGNORECASE):
         return "Execution stopped because it exceeded a safe runtime or resource limit."
-    line_no, err_type, message = _extract_error_summary(error_text)
-    prefix = f"Line {line_no}: " if line_no else ""
+    line_no, file_label, err_type, message = _extract_error_summary(error_text)
+    if file_label and line_no:
+        prefix = f"{file_label} line {line_no}: "
+    elif line_no:
+        prefix = f"Line {line_no}: "
+    else:
+        prefix = ""
     message = sanitize_traceback(message).strip() or "Python could not run this code."
     return f"{prefix}{err_type}: {message}"
 
@@ -1326,6 +1474,8 @@ def _local_error_explanation(code: str, err_text: str, language: str = "en", beg
         return "Python saw a name it does not know yet. Check the spelling, or create that variable before you use it."
     if "zerodivisionerror" in lower:
         return "The code tried to divide by zero. Change the divisor or add a check so the divisor is not zero."
+    if "missing dependency" in lower or "modulenotfounderror" in lower or "no module named" in lower:
+        return "This project needs a package that is not installed. Add it to requirements.txt, install the requirements, then run again."
     if "codeupinputerror" in lower or "input()" in lower:
         return "Your code asks for input. Add pre-flight inputs in the inputs panel, add a '# inputs:' comment, or switch to live input mode."
 
@@ -3710,6 +3860,12 @@ def _compute_output_diff(prev: str, curr: str) -> dict:
 def run_code():
     body = safejson()
     code = safe(body.get("code"), "")
+    try:
+        project_run = _prepare_project_run(body)
+    except ProjectPathError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+    if project_run:
+        code = project_run["files"][project_run["entry"]]
     # Mechanism A: pre-flight inputs. List of strings. Body wins; magic
     # comment is the fallback so students can ship reproducible examples.
     inputs_from_body = body.get("inputs")
@@ -3729,7 +3885,7 @@ def run_code():
         return blocked
 
     try:
-        compile(code, "<user>", "exec")
+        compile(code, project_run["entry"] if project_run else "<user>", "exec")
     except SyntaxError as e:
         safe_error = _syntax_error_message(e, code)
         _save_mistake_snapshot(get_session_id(), code, safe_error, success=False)
@@ -3769,16 +3925,22 @@ def run_code():
 
     try:
         execution_start = time.time()
-        sandbox = get_sandbox(get_session_id())
+        sandbox = project_run["sandbox"] if project_run else get_sandbox(get_session_id())
         workspace_dir = sandbox.workspace_dir
+        run_cwd = project_run["project_root"] if project_run else workspace_dir
         trace_file = os.path.join(workspace_dir, f"trace_{uuid.uuid4().hex}.json")
 
         _runner_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sandbox_runner.py')
 
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False,
-                                          encoding='utf-8', dir=workspace_dir) as code_file:
-            code_file.write(code)
-            code_file_path = code_file.name
+        cleanup_code_file = False
+        if project_run:
+            code_file_path = project_run["entry_abs"]
+        else:
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False,
+                                              encoding='utf-8', dir=workspace_dir) as code_file:
+                code_file.write(code)
+                code_file_path = code_file.name
+            cleanup_code_file = True
 
         # Write inputs queue to its own file. Empty file if no inputs — the
         # subprocess handles that gracefully.
@@ -3796,6 +3958,12 @@ def run_code():
             env = os.environ.copy()
             env['CODEUP_CODE_FILE'] = code_file_path
             env['CODEUP_TRACE_FILE'] = trace_file
+            env['CODEUP_SAFE_OPEN_ROOT'] = run_cwd
+            if project_run:
+                env['CODEUP_PROJECT_ROOT'] = project_run["project_root"]
+                env['CODEUP_MAIN_FILE'] = project_run["entry"]
+                env['CODEUP_PROJECT_FILES'] = json.dumps(sorted(project_run["files"].keys()))
+                env['CODEUP_LOCAL_MODULES'] = ",".join(project_run["local_modules"])
             if inputs_file_path:
                 env['CODEUP_INPUTS_FILE'] = inputs_file_path
             # Make sure interactive mode is OFF for the standard /run path
@@ -3811,7 +3979,7 @@ def run_code():
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 env=env,
-                cwd=workspace_dir,
+                cwd=run_cwd,
                 text=True,
             )
             if sys.platform != "win32":
@@ -3837,7 +4005,7 @@ def run_code():
                     _debug_log(f"Timed-out run did not exit after kill: {e}")
                 stderr_buf.write(f"Execution timed out after {time_limit}s (subprocess)")
         finally:
-            for _tmp in (code_file_path, inputs_file_path):
+            for _tmp in ((code_file_path if cleanup_code_file else None), inputs_file_path):
                 if _tmp:
                     try:
                         os.unlink(_tmp)
@@ -5034,11 +5202,78 @@ def generate_code():
     body = safejson()
     prompt = safe(body.get("prompt"), "")
     language = safe(body.get("language"), "en")
+    requested_mode = safe(body.get("mode"), "")
 
     if len(prompt) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": f"Prompt too large (max {MAX_CODE_SIZE} bytes)"}), 413
     if not prompt.strip():
         return jsonify({"success": False, "error": "Prompt cannot be empty"}), 400
+
+    if requested_mode == "project" or looks_like_multifile_prompt(prompt):
+        template_id = choose_template_for_prompt(prompt)
+        if template_id:
+            project = build_template(template_id)
+            sandbox = get_sandbox(get_session_id())
+            manifest = _write_project_files(sandbox, project["files"], project["manifest"])
+            project["manifest"] = manifest
+            project["speech"] = project_summary(manifest)
+            return jsonify({"success": True, "project": True, "source": "template", **project})
+
+        system = (
+            "You generate accessible multi-file Python projects for CodeUp, a blind-first IDE.\n"
+            "Return only JSON with keys: name, entry, active_file, requirements, speech, files.\n"
+            "files must be an object mapping relative paths to complete file contents.\n"
+            "Use safe imports only: math, random, statistics, datetime, json, csv, pathlib, typing, collections, itertools, numpy, pandas, matplotlib.\n"
+            "Do not use os, sys, subprocess, sockets, shell commands, eval, exec, or network calls.\n"
+            "For file access, use paths relative to the project root. Include requirements.txt when third-party packages are used.\n"
+            "Include beginner-friendly comments and print output that can be spoken aloud.\n"
+            "Avoid visual-only phrases like 'look at the left pane'; describe files by name and keyboard or command actions."
+        )
+        user = f"Create this as a CodeUp multi-file project:\n{prompt}"
+        raw = call_gemini(system, user, temperature=0.2, language=language, max_tokens=4096)
+        parsed_project = extract_project_json(raw)
+        if not parsed_project:
+            if _is_ai_service_message(raw):
+                return jsonify({"success": False, "error": raw.strip(), "code": ""})
+            starter_message = json.dumps(f"Starter project for: {prompt[:80]}")
+            files = {
+                "main.py": (
+                    "from utils import describe_project\n\n"
+                    "def main():\n"
+                    "    # This generated starter is split into two files.\n"
+                    "    print(describe_project())\n\n"
+                    "if __name__ == \"__main__\":\n"
+                    "    main()\n"
+                ),
+                "utils.py": (
+                    "def describe_project():\n"
+                    f"    return {starter_message}\n"
+                ),
+                "README.md": "# Generated CodeUp Project\n\nRun `main.py`.\n",
+                "requirements.txt": "",
+            }
+            manifest = make_manifest(files, name="Generated CodeUp Project", entry="main.py")
+            parsed_project = {
+                "files": files,
+                "entry": "main.py",
+                "active_file": "main.py",
+                "requirements": [],
+                "manifest": manifest,
+                "speech": project_summary(manifest),
+            }
+        sandbox = get_sandbox(get_session_id())
+        manifest = _write_project_files(sandbox, parsed_project["files"], parsed_project["manifest"])
+        return jsonify({
+            "success": True,
+            "project": True,
+            "source": "ai_project",
+            "files": parsed_project["files"],
+            "entry": manifest["entry"],
+            "active_file": manifest["active_file"],
+            "requirements": manifest.get("requirements", []),
+            "manifest": manifest,
+            "speech": parsed_project.get("speech") or project_summary(manifest),
+        })
 
     if language == "hi":
         system = (
@@ -5105,6 +5340,182 @@ def generate_code():
                 return jsonify({"success": False, "error": raw_retry.strip(), "code": ""})
             return jsonify({"success": False, "error": "AI returned invalid Python code. Please try rephrasing your request.", "code": ""})
     return jsonify({"success": True, "code": code})
+
+
+# ==========================
+# MULTI-FILE PROJECTS
+# ==========================
+
+@app.route("/project", methods=["GET", "POST"])
+def project_workspace():
+    sandbox = get_sandbox(get_session_id())
+    if request.method == "GET":
+        return jsonify(_project_response(sandbox))
+
+    body = safejson()
+    try:
+        files = normalize_file_map(body.get("files") or {"main.py": safe(body.get("code"), 'print("Hello CodeUp!")\n')})
+        manifest = make_manifest(
+            files,
+            name=safe(body.get("name"), "CodeUp Project"),
+            entry=safe(body.get("entry"), "main.py"),
+            active_file=safe(body.get("active_file"), safe(body.get("entry"), "main.py")),
+            requirements=body.get("requirements") if isinstance(body.get("requirements"), list) else infer_requirements(files),
+        )
+        manifest = _write_project_files(sandbox, files, manifest)
+        return jsonify({**_project_response(sandbox, manifest), "speech": project_summary(manifest)})
+    except ProjectPathError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+
+
+@app.route("/project/files", methods=["POST"])
+def project_file_write():
+    body = safejson()
+    sandbox = get_sandbox(get_session_id())
+    try:
+        path = normalize_project_path(body.get("path"))
+        content = _safe_text(body.get("content"), "", limit=MAX_CODE_SIZE + 1)
+        if len(content) > MAX_CODE_SIZE:
+            return jsonify({"success": False, "error": f"File too large (max {MAX_CODE_SIZE} bytes)"}), 413
+        result = sandbox.write(_project_rel(path), content)
+        if not result.get("success"):
+            return jsonify({"success": False, "error": result.get("error") or "Could not save file."}), 400
+        files = _load_project_files(sandbox)
+        previous = _load_project_manifest(sandbox)
+        manifest = make_manifest(
+            files,
+            name=previous.get("name") or "CodeUp Project",
+            entry=previous.get("entry") or path,
+            active_file=path if body.get("active", True) else previous.get("active_file") or path,
+            requirements=previous.get("requirements") or infer_requirements(files),
+        )
+        _write_project_manifest(sandbox, manifest)
+        speech = f"Saved {path}."
+        return jsonify({"success": True, "path": path, "manifest": manifest, "speech": speech})
+    except ProjectPathError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+
+
+@app.route("/project/open", methods=["POST"])
+def project_file_open():
+    body = safejson()
+    sandbox = get_sandbox(get_session_id())
+    try:
+        path = normalize_project_path(body.get("path"))
+        result = sandbox.read(_project_rel(path))
+        if not result.get("success"):
+            return jsonify({"success": False, "error": result.get("error") or f"{path} was not found."}), 404
+        files = _load_project_files(sandbox)
+        previous = _load_project_manifest(sandbox)
+        manifest = make_manifest(
+            files,
+            name=previous.get("name") or "CodeUp Project",
+            entry=previous.get("entry") or path,
+            active_file=path,
+            requirements=previous.get("requirements") or infer_requirements(files),
+        )
+        _write_project_manifest(sandbox, manifest)
+        return jsonify({
+            "success": True,
+            "path": path,
+            "content": result.get("content", ""),
+            "manifest": manifest,
+            "speech": f"Opened {path}.",
+        })
+    except ProjectPathError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+
+
+@app.route("/project/rename", methods=["POST"])
+def project_file_rename():
+    body = safejson()
+    sandbox = get_sandbox(get_session_id())
+    try:
+        old_path = normalize_project_path(body.get("old_path") or body.get("path"))
+        new_path = normalize_project_path(body.get("new_path"))
+        read = sandbox.read(_project_rel(old_path))
+        if not read.get("success"):
+            return jsonify({"success": False, "error": read.get("error") or f"{old_path} was not found."}), 404
+        write = sandbox.write(_project_rel(new_path), read.get("content", ""))
+        if not write.get("success"):
+            return jsonify({"success": False, "error": write.get("error") or f"Could not write {new_path}."}), 400
+        sandbox.delete(_project_rel(old_path))
+        files = _load_project_files(sandbox)
+        previous = _load_project_manifest(sandbox)
+        entry = new_path if previous.get("entry") == old_path else previous.get("entry") or new_path
+        active = new_path if previous.get("active_file") == old_path else previous.get("active_file") or new_path
+        manifest = make_manifest(
+            files,
+            name=previous.get("name") or "CodeUp Project",
+            entry=entry,
+            active_file=active,
+            requirements=previous.get("requirements") or infer_requirements(files),
+        )
+        _write_project_manifest(sandbox, manifest)
+        return jsonify({"success": True, "path": new_path, "manifest": manifest, "speech": f"Renamed {old_path} to {new_path}."})
+    except ProjectPathError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+
+
+@app.route("/project/delete", methods=["POST"])
+def project_file_delete():
+    body = safejson()
+    sandbox = get_sandbox(get_session_id())
+    try:
+        path = normalize_project_path(body.get("path"))
+        result = sandbox.delete(_project_rel(path))
+        if not result.get("success"):
+            return jsonify({"success": False, "error": result.get("error") or f"Could not delete {path}."}), 404
+        files = _load_project_files(sandbox)
+        previous = _load_project_manifest(sandbox)
+        next_file = next((p for p in files if p.endswith(".py")), next(iter(files), "main.py"))
+        manifest = make_manifest(
+            files or {"main.py": 'print("Hello CodeUp!")\n'},
+            name=previous.get("name") or "CodeUp Project",
+            entry=next_file if previous.get("entry") == path else previous.get("entry") or next_file,
+            active_file=next_file if previous.get("active_file") == path else previous.get("active_file") or next_file,
+            requirements=previous.get("requirements") or infer_requirements(files),
+        )
+        _write_project_manifest(sandbox, manifest)
+        return jsonify({"success": True, "manifest": manifest, "speech": f"Deleted {path}."})
+    except ProjectPathError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+
+
+@app.route("/project/templates", methods=["GET"])
+def project_templates():
+    return jsonify({
+        "success": True,
+        "templates": [
+            {"id": key, "title": value["title"], "description": value["description"]}
+            for key, value in PROJECT_TEMPLATES.items()
+        ],
+    })
+
+
+@app.route("/project/templates/<template_id>", methods=["POST"])
+def project_template_load(template_id):
+    try:
+        project = build_template(template_id)
+    except KeyError:
+        return jsonify({"success": False, "error": "Project template not found."}), 404
+    sandbox = get_sandbox(get_session_id())
+    manifest = _write_project_files(sandbox, project["files"], project["manifest"])
+    project["manifest"] = manifest
+    project["speech"] = project_summary(manifest)
+    return jsonify({"success": True, "project": True, **project})
+
+
+@app.route("/project/requirements", methods=["GET"])
+def project_requirements():
+    sandbox = get_sandbox(get_session_id())
+    manifest = _load_project_manifest(sandbox)
+    requirements = manifest.get("requirements") or []
+    if requirements:
+        speech = f"This project needs: {', '.join(requirements)}. They are listed in requirements.txt."
+    else:
+        speech = "This project does not need third-party packages."
+    return jsonify({"success": True, "requirements": requirements, "speech": speech})
 
 # ==========================
 # SNIPPETS
@@ -5247,6 +5658,9 @@ COMMANDS = {
     "sonify_block": ["sonify block", "sonify", "audio structure", "hear structure", "play code structure", "sound out code", "play this", "play code"],
     "sonify_file": ["sonify whole file", "sonify file", "sonify code", "sonify indent profile"],
     "read_outline": ["read outline", "read structure", "speak outline", "code outline"],
+    "read_project_files": ["read project files", "list project files", "show project files", "file map", "file tree"],
+    "explain_project_structure": ["explain project structure", "describe project structure", "read project structure"],
+    "explain_requirements": ["explain requirements", "what requirements are needed", "project requirements"],
     "explain_diff": ["why is the output different", "why did this run differently", "explain output diff"],
     "list_variables": ["what variables", "list variables", "show variables", "what variables are available", "variables in scope"],
     "check_errors": ["check for errors", "check syntax", "find errors", "are there errors", "syntax check"],
@@ -6233,6 +6647,22 @@ def voice():
             return _store_and_return({"success": True, "action": "pause_voice", "confidence": confidence})
         if intent == "resume_voice":
             return _store_and_return({"success": True, "action": "resume_voice", "confidence": confidence})
+        if intent == "read_project_files":
+            return _store_and_return({"success": True, "action": "read_project_files", "confidence": confidence})
+        if intent == "open_project_file":
+            return _store_and_return({"success": True, "action": "open_project_file", "path": slots.get("path", ""), "confidence": confidence})
+        if intent == "create_project_file":
+            return _store_and_return({"success": True, "action": "create_project_file", "path": slots.get("path", ""), "confidence": confidence})
+        if intent == "rename_project_file":
+            return _store_and_return({"success": True, "action": "rename_project_file", "path": slots.get("path", ""), "old_path": slots.get("old_path", ""), "confidence": confidence})
+        if intent == "delete_project_file":
+            return _store_and_return({"success": True, "action": "delete_project_file", "path": slots.get("path", ""), "confidence": confidence})
+        if intent == "run_project_file":
+            return _store_and_return({"success": True, "action": "run_project_file", "path": slots.get("path", ""), "confidence": confidence})
+        if intent == "explain_project_structure":
+            return _store_and_return({"success": True, "action": "explain_project_structure", "confidence": confidence})
+        if intent == "explain_requirements":
+            return _store_and_return({"success": True, "action": "explain_requirements", "confidence": confidence})
         if intent == "generate_code":
             return _store_and_return({"success": True, "action": "generate_code", "prompt": slots.get("prompt", ""), "confidence": confidence})
         if intent == "rename_snippet":

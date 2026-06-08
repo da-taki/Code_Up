@@ -342,6 +342,7 @@ class IntentParser:
         r"^(?:please\s+)?(?:generate|write|create|make|build)\s+(?:a\s+|some\s+)?(?:python\s+)?(?:program|script|function)\s+(?:that|which|to|for)\s+(\S+(?:\s+\S+)*)",
         r"^(?:please\s+)?(?:generate|write|create|make|build)\s+(?:a\s+|some\s+)?(?:python\s+)?code\s+for\s+(\S+(?:\s+\S+)*)",
         r"^i\s+want\s+(?:python\s+)?code\s+(?:for|to|that)\s+(\S+(?:\s+\S+)*)",
+        r"^(?:please\s+)?(?:generate|write|create|make|build)\s+(?:a\s+|an\s+|some\s+)?(.+\b(?:game|project|app|application|program|script|tool|tests?|pandas|numpy|multiple\s+files|multi-file|split\s+into|csv)\b.*)$",
         # bare command — no prompt, will ask user
         r"^(?:generate|write|create|make)\s+(?:python\s+)?code$",
         # Hindi: "X के लिए कोड बनाओ" — require at least 2 words before the trigger
@@ -390,6 +391,48 @@ class IntentParser:
         r"^(?:peek|read)\s+(?:at\s+)?snippet\s+(\w+)$",
         r"^snippet\s+preview\s+(\w+)$",
         r"^snippet\s+(\w+)\s+(?:झलक|preview)$",
+    ]
+
+    READ_PROJECT_FILES_PATTERNS = [
+        r"^(?:read|list|show)\s+(?:the\s+)?project\s+files$",
+        r"^(?:what|which)\s+files\s+(?:are\s+)?(?:in\s+)?(?:this\s+)?project\??$",
+        r"^file\s+(?:map|tree|list)$",
+    ]
+
+    OPEN_PROJECT_FILE_PATTERNS = [
+        r"^open\s+(?:the\s+)?(?:file\s+)?([a-zA-Z0-9_./\-\s]+(?:\s+dot\s+[a-zA-Z0-9_]+|\.[a-zA-Z0-9_]+))$",
+        r"^switch\s+to\s+(?:the\s+)?(?:file\s+)?([a-zA-Z0-9_./\-\s]+(?:\s+dot\s+[a-zA-Z0-9_]+|\.[a-zA-Z0-9_]+))$",
+    ]
+
+    CREATE_PROJECT_FILE_PATTERNS = [
+        r"^create\s+(?:a\s+)?(?:new\s+)?file\s+([a-zA-Z0-9_./\-\s]+(?:\s+dot\s+[a-zA-Z0-9_]+|\.[a-zA-Z0-9_]+))$",
+        r"^add\s+(?:a\s+)?(?:new\s+)?file\s+([a-zA-Z0-9_./\-\s]+(?:\s+dot\s+[a-zA-Z0-9_]+|\.[a-zA-Z0-9_]+))$",
+    ]
+
+    RENAME_PROJECT_FILE_PATTERNS = [
+        r"^rename\s+(?:this\s+|current\s+)?file\s+to\s+([a-zA-Z0-9_./\-\s]+(?:\s+dot\s+[a-zA-Z0-9_]+|\.[a-zA-Z0-9_]+))$",
+        r"^rename\s+(?:file\s+)?([a-zA-Z0-9_./\-\s]+(?:\s+dot\s+[a-zA-Z0-9_]+|\.[a-zA-Z0-9_]+))\s+to\s+([a-zA-Z0-9_./\-\s]+(?:\s+dot\s+[a-zA-Z0-9_]+|\.[a-zA-Z0-9_]+))$",
+    ]
+
+    DELETE_PROJECT_FILE_PATTERNS = [
+        r"^delete\s+(?:this\s+|current\s+)?file$",
+        r"^delete\s+(?:the\s+)?(?:file\s+)?([a-zA-Z0-9_./\-\s]+(?:\s+dot\s+[a-zA-Z0-9_]+|\.[a-zA-Z0-9_]+))$",
+    ]
+
+    RUN_PROJECT_FILE_PATTERNS = [
+        r"^run\s+(?:the\s+)?(?:file\s+)?([a-zA-Z0-9_./\-\s]+(?:\s+dot\s+[a-zA-Z0-9_]+|\.[a-zA-Z0-9_]+))$",
+        r"^execute\s+(?:the\s+)?(?:file\s+)?([a-zA-Z0-9_./\-\s]+(?:\s+dot\s+[a-zA-Z0-9_]+|\.[a-zA-Z0-9_]+))$",
+    ]
+
+    EXPLAIN_PROJECT_STRUCTURE_PATTERNS = [
+        r"^explain\s+(?:the\s+)?project\s+structure$",
+        r"^describe\s+(?:the\s+)?project\s+structure$",
+        r"^read\s+(?:the\s+)?project\s+structure$",
+    ]
+
+    EXPLAIN_REQUIREMENTS_PATTERNS = [
+        r"^explain\s+(?:the\s+)?requirements$",
+        r"^what\s+requirements\s+(?:does\s+this\s+project\s+need|are\s+needed)\??$",
     ]
 
     # -----------------------------------------------------------------------
@@ -1101,6 +1144,14 @@ class IntentParser:
             # enough that fuzzy matching could route it to other intents otherwise.
             "pause_voice":    self.PAUSE_VOICE_PATTERNS,
             "resume_voice":   self.RESUME_VOICE_PATTERNS,
+            "read_project_files": self.READ_PROJECT_FILES_PATTERNS,
+            "open_project_file": self.OPEN_PROJECT_FILE_PATTERNS,
+            "create_project_file": self.CREATE_PROJECT_FILE_PATTERNS,
+            "rename_project_file": self.RENAME_PROJECT_FILE_PATTERNS,
+            "delete_project_file": self.DELETE_PROJECT_FILE_PATTERNS,
+            "run_project_file": self.RUN_PROJECT_FILE_PATTERNS,
+            "explain_project_structure": self.EXPLAIN_PROJECT_STRUCTURE_PATTERNS,
+            "explain_requirements": self.EXPLAIN_REQUIREMENTS_PATTERNS,
             "generate_code":  self.GENERATE_CODE_PATTERNS,
             "rename_snippet":      self.RENAME_SNIPPET_PATTERNS,
             "save_snippet_auto":   self.SAVE_SNIPPET_AUTO_PATTERNS,
@@ -1363,6 +1414,24 @@ class IntentParser:
         elif intent in ("find_class", "sonify_class"):
             if match.groups():
                 slots["class_name"] = match.group(1).strip()
+
+        elif intent in ("open_project_file", "create_project_file", "run_project_file"):
+            groups = [g for g in match.groups() if g]
+            if groups:
+                slots["path"] = groups[-1].strip()
+
+        elif intent == "rename_project_file":
+            groups = [g for g in match.groups() if g]
+            if len(groups) >= 2:
+                slots["old_path"] = groups[0].strip()
+                slots["path"] = groups[1].strip()
+            elif groups:
+                slots["path"] = groups[0].strip()
+
+        elif intent == "delete_project_file":
+            groups = [g for g in match.groups() if g]
+            if groups:
+                slots["path"] = groups[0].strip()
 
         elif intent == "generate_code":
             if match.groups() and match.group(1):

@@ -87,6 +87,15 @@ let _previousOutput = '';
 let _lastOutput = '';
 let _lastOutputDiff = null;
 
+const ProjectState = {
+  active: false,
+  files: {},
+  manifest: null,
+  activeFile: 'main.py',
+  entry: 'main.py',
+  requirements: [],
+};
+
 window.mentorHistory = [];
 window.mentorPreferences = {
   level: 'beginner',
@@ -1045,6 +1054,7 @@ require(['vs/editor/editor.main'], function () {
 
   let _structureDebounce = null;
   editor.onDidChangeModelContent(() => {
+    syncActiveProjectFileLocal();
     clearTimeout(_structureDebounce);
     _structureDebounce = setTimeout(updateStructurePanel, 600);
   });
@@ -1064,6 +1074,283 @@ require(['vs/editor/editor.main'], function () {
 function getModel() { return editor && editor.getModel(); }
 function getCode()  { return (editor && editor.getValue()) || ''; }
 function getLanguage() { return (document.getElementById('languageSelector') || {}).value || 'en'; }
+
+function normalizeProjectPath(path) {
+  let raw = String(path || '').trim().replace(/\\/g, '/');
+  raw = raw.replace(/\s+dot\s+/gi, '.').replace(/\s+slash\s+/gi, '/');
+  raw = raw.replace(/\s*\/\s*/g, '/').replace(/^\/+|\/+$/g, '');
+  if (raw.includes(' ')) raw = raw.split('/').map(part => part.trim().replace(/\s+/g, '_')).join('/');
+  if (!raw || raw.includes('..') || /^[a-zA-Z]:/.test(raw)) return '';
+  if (!/^[A-Za-z0-9._/-]+$/.test(raw)) return '';
+  return raw;
+}
+
+function syncActiveProjectFileLocal() {
+  if (!ProjectState.active || !ProjectState.activeFile) return;
+  ProjectState.files[ProjectState.activeFile] = getCode();
+}
+
+function currentProjectPayload(runFile) {
+  if (!ProjectState.active) return null;
+  syncActiveProjectFileLocal();
+  const entry = normalizeProjectPath(runFile || ProjectState.activeFile || ProjectState.entry || 'main.py') || 'main.py';
+  return {
+    name: ProjectState.manifest && ProjectState.manifest.name ? ProjectState.manifest.name : 'CodeUp Project',
+    files: Object.assign({}, ProjectState.files),
+    entry,
+    active_file: ProjectState.activeFile || entry,
+    requirements: ProjectState.requirements || [],
+    manifest: ProjectState.manifest || {},
+  };
+}
+
+function renderProjectFiles() {
+  const panel = document.getElementById('projectFileList');
+  if (!panel) return;
+  const names = Object.keys(ProjectState.files || {}).sort();
+  if (!ProjectState.active || names.length === 0) {
+    panel.innerHTML = '<div style="color:var(--text-dim);font-style:italic;padding:6px 0;font-size:0.8rem;">Single-file mode</div>';
+    return;
+  }
+  panel.innerHTML = names.map(path => {
+    const active = path === ProjectState.activeFile;
+    return `<div class="snippet-item" tabindex="0" role="button" data-project-path="${escapeHtml(path)}" aria-label="Open project file ${escapeHtml(path)}${active ? ', active' : ''}" style="${active ? 'border-color:var(--accent);' : ''}">
+      <span>${active ? '* ' : ''}${escapeHtml(path)}</span>
+    </div>`;
+  }).join('');
+  panel.querySelectorAll('[data-project-path]').forEach(item => {
+    const path = item.getAttribute('data-project-path');
+    item.addEventListener('click', () => openProjectFile(path));
+    item.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        openProjectFile(path);
+      }
+    });
+  });
+}
+
+function applyProjectData(data, opts = {}) {
+  const files = data.files || (data.project && data.project.files) || {};
+  const manifest = data.manifest || (data.project && data.project.manifest) || {};
+  const normalized = {};
+  Object.keys(files || {}).forEach(path => {
+    const clean = normalizeProjectPath(path);
+    if (clean) normalized[clean] = String(files[path] || '');
+  });
+  if (!Object.keys(normalized).length) return false;
+  ProjectState.active = true;
+  ProjectState.files = normalized;
+  ProjectState.manifest = manifest;
+  ProjectState.entry = normalizeProjectPath(data.entry || manifest.entry || 'main.py') || 'main.py';
+  ProjectState.activeFile = normalizeProjectPath(data.active_file || manifest.active_file || ProjectState.entry) || ProjectState.entry;
+  ProjectState.requirements = data.requirements || manifest.requirements || [];
+  if (!ProjectState.files[ProjectState.activeFile]) {
+    ProjectState.activeFile = Object.keys(ProjectState.files).sort()[0];
+  }
+  setCode(ProjectState.files[ProjectState.activeFile] || '', { preserveSpeech: true, projectFile: true, allowNonPython: !ProjectState.activeFile.endsWith('.py') });
+  renderProjectFiles();
+  const speech = data.speech || `${Object.keys(ProjectState.files).length} project files loaded. Active file is ${ProjectState.activeFile}.`;
+  out(speech);
+  if (!opts.silent) speak(speech);
+  srAnnounce(`Project active file ${ProjectState.activeFile}`);
+  return true;
+}
+
+async function saveProjectFile(path, content, active = true) {
+  const clean = normalizeProjectPath(path);
+  if (!clean) {
+    speak('That file name is not valid.');
+    return false;
+  }
+  try {
+    const res = await fetch('/project/files', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: clean, content: content == null ? '' : String(content), active }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      const msg = data.error || `Could not save ${clean}.`;
+      out(msg); speak(msg);
+      return false;
+    }
+    ProjectState.active = true;
+    ProjectState.files[clean] = content == null ? '' : String(content);
+    ProjectState.activeFile = active ? clean : ProjectState.activeFile || clean;
+    ProjectState.entry = data.manifest && data.manifest.entry ? data.manifest.entry : (ProjectState.entry || clean);
+    ProjectState.manifest = data.manifest || ProjectState.manifest;
+    ProjectState.requirements = (ProjectState.manifest && ProjectState.manifest.requirements) || ProjectState.requirements || [];
+    renderProjectFiles();
+    return true;
+  } catch (e) {
+    console.error(e);
+    speak('Project file save failed.');
+    return false;
+  }
+}
+
+async function openProjectFile(path) {
+  const clean = normalizeProjectPath(path);
+  if (!clean) { speak('Please give a valid file name.'); return; }
+  syncActiveProjectFileLocal();
+  if (ProjectState.files[clean] != null) {
+    ProjectState.active = true;
+    ProjectState.activeFile = clean;
+    setCode(ProjectState.files[clean], { preserveSpeech: true, projectFile: true, allowNonPython: !clean.endsWith('.py') });
+    renderProjectFiles();
+    const msg = `Opened ${clean}.`;
+    out(msg); speak(msg); srAnnounce(msg);
+    return;
+  }
+  try {
+    const res = await fetch('/project/open', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: clean }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      const msg = data.error || `${clean} was not found.`;
+      out(msg); speak(msg);
+      return;
+    }
+    ProjectState.active = true;
+    ProjectState.files[clean] = data.content || '';
+    ProjectState.activeFile = clean;
+    ProjectState.manifest = data.manifest || ProjectState.manifest;
+    setCode(ProjectState.files[clean], { preserveSpeech: true, projectFile: true, allowNonPython: !clean.endsWith('.py') });
+    renderProjectFiles();
+    out(data.speech || `Opened ${clean}.`);
+    speak(data.speech || `Opened ${clean}.`);
+  } catch (e) {
+    console.error(e);
+    speak('Open project file failed.');
+  }
+}
+
+async function createProjectFile(path) {
+  const clean = normalizeProjectPath(path);
+  if (!clean) { speak('Please give a valid file name.'); return; }
+  syncActiveProjectFileLocal();
+  if (ProjectState.files[clean] != null) {
+    await openProjectFile(clean);
+    return;
+  }
+  const starter = clean.endsWith('.py') ? '# New project file\n' : '';
+  const ok = await saveProjectFile(clean, starter, true);
+  if (!ok) return;
+  setCode(starter, { preserveSpeech: true, projectFile: true, allowNonPython: !clean.endsWith('.py') });
+  const msg = `Created ${clean}.`;
+  out(msg); speak(msg); srAnnounce(msg);
+}
+
+async function renameProjectFile(oldPath, newPath) {
+  syncActiveProjectFileLocal();
+  const oldClean = normalizeProjectPath(oldPath || ProjectState.activeFile);
+  const newClean = normalizeProjectPath(newPath);
+  if (!oldClean || !newClean) { speak('Please give a valid old and new file name.'); return; }
+  try {
+    const res = await fetch('/project/rename', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ old_path: oldClean, new_path: newClean }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      const msg = data.error || `Could not rename ${oldClean}.`;
+      out(msg); speak(msg);
+      return;
+    }
+    ProjectState.files[newClean] = ProjectState.files[oldClean] || getCode();
+    delete ProjectState.files[oldClean];
+    ProjectState.activeFile = newClean;
+    ProjectState.manifest = data.manifest || ProjectState.manifest;
+    setCode(ProjectState.files[newClean], { preserveSpeech: true, projectFile: true, allowNonPython: !newClean.endsWith('.py') });
+    renderProjectFiles();
+    out(data.speech || `Renamed ${oldClean} to ${newClean}.`);
+    speak(data.speech || `Renamed ${oldClean} to ${newClean}.`);
+  } catch (e) {
+    console.error(e);
+    speak('Rename project file failed.');
+  }
+}
+
+async function deleteProjectFile(path) {
+  const clean = normalizeProjectPath(path || ProjectState.activeFile);
+  if (!clean) { speak('Please give a valid file name to delete.'); return; }
+  try {
+    const res = await fetch('/project/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: clean }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      const msg = data.error || `Could not delete ${clean}.`;
+      out(msg); speak(msg);
+      return;
+    }
+    delete ProjectState.files[clean];
+    const next = Object.keys(ProjectState.files).sort()[0] || 'main.py';
+    ProjectState.activeFile = next;
+    ProjectState.manifest = data.manifest || ProjectState.manifest;
+    if (ProjectState.files[next] != null) {
+      setCode(ProjectState.files[next], { preserveSpeech: true, projectFile: true, allowNonPython: !next.endsWith('.py') });
+    }
+    renderProjectFiles();
+    out(data.speech || `Deleted ${clean}.`);
+    speak(data.speech || `Deleted ${clean}.`);
+  } catch (e) {
+    console.error(e);
+    speak('Delete project file failed.');
+  }
+}
+
+function readProjectFiles() {
+  syncActiveProjectFileLocal();
+  const names = Object.keys(ProjectState.files || {}).sort();
+  if (!ProjectState.active || names.length === 0) {
+    const msg = 'Single-file mode is active. There is only the current editor file.';
+    out(msg); speak(msg);
+    return;
+  }
+  const reqs = ProjectState.requirements && ProjectState.requirements.length ? ` Requirements: ${ProjectState.requirements.join(', ')}.` : '';
+  const msg = `Project files: ${names.join(', ')}. Active file is ${ProjectState.activeFile}.${reqs}`;
+  out(msg); speak(msg); srAnnounce('Project files read');
+}
+
+function explainProjectStructure() {
+  readProjectFiles();
+}
+
+async function explainProjectRequirements() {
+  if (ProjectState.active) {
+    const reqs = ProjectState.requirements || [];
+    const msg = reqs.length
+      ? `This project needs: ${reqs.join(', ')}. They are listed in requirements.txt.`
+      : 'This project does not need third-party packages.';
+    out(msg); speak(msg);
+    return;
+  }
+  try {
+    const res = await fetch('/project/requirements');
+    const data = await res.json();
+    const msg = data.speech || 'No requirements information available.';
+    out(msg); speak(msg);
+  } catch (e) {
+    speak('Could not read project requirements.');
+  }
+}
+
+async function runProjectFile(path) {
+  const clean = normalizeProjectPath(path || ProjectState.activeFile || 'main.py');
+  if (!clean) { speak('Please give a valid file name to run.'); return; }
+  if (ProjectState.files[clean] != null && ProjectState.activeFile !== clean) {
+    await openProjectFile(clean);
+  }
+  await runCode(clean);
+}
 
 function looksLikeNonPythonCode(value) {
   const text = String(value || '').trimStart();
@@ -1193,7 +1480,7 @@ function stopHeartbeat() {
 let _lastErrorContext = null;  // {code, error, language}
 
 // ---------- RUN ----------
-async function runCode() {
+async function runCode(runFile) {
   // Live input mode reroutes through the streaming endpoint
   if (_liveInputMode) {
     return runCodeStreaming();
@@ -1222,14 +1509,20 @@ async function runCode() {
   speak(_runMsgSpoken);
   srAnnounce(_runMsgSpoken);
   try {
+    const payload = {
+      code: getCode(),
+      language: getLanguage(),
+      inputs: _preflightInputs,
+    };
+    const project = currentProjectPayload(runFile);
+    if (project) {
+      payload.project = project;
+      payload.file = normalizeProjectPath(runFile || ProjectState.activeFile || project.entry);
+    }
     const res = await fetch('/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        code: getCode(),
-        language: getLanguage(),
-        inputs: _preflightInputs,
-      }),
+      body: JSON.stringify(payload),
     });
     const data = await res.json();
     window.executionTrace = data.trace || [];
@@ -1806,6 +2099,11 @@ async function generateCode(prompt) {
       body:    JSON.stringify({ prompt, language: getLanguage() }),
     });
     const data = await res.json();
+    if (data.success && data.project && data.files) {
+      applyProjectData(data);
+      cueSuccess();
+      return;
+    }
     if (data.success && data.code) {
       window.executionTrace = []; window.traceIndex = 0;
       // CRITICAL: setCode() calls SpeechManager.cancelAll() internally, which
@@ -2335,7 +2633,7 @@ async function previewSnippetById(id) {
 async function handleConfirmedAction(action, payload) {
   // Most actions should interrupt previous narration, but some need it to finish first.
   // Generate, analyze, walk: they speak feedback BEFORE the long async wait, don't kill it.
-  const _noCancelActions = new Set(['generate_code', 'analyze', 'analyze_deep', 'fix', 'summarize', 'narrate_file', 'walk_through', 'advise', 'story_mode', 'mentor_chat', 'mentor_progress', 'mentor_code_map', 'code_map', 'step_narration', 'compare_before_after', 'replay_mistake', 'why_fixed_works']);
+  const _noCancelActions = new Set(['generate_code', 'analyze', 'analyze_deep', 'fix', 'summarize', 'narrate_file', 'walk_through', 'advise', 'story_mode', 'mentor_chat', 'mentor_progress', 'mentor_code_map', 'code_map', 'step_narration', 'compare_before_after', 'replay_mistake', 'why_fixed_works', 'read_project_files', 'explain_project_structure', 'explain_requirements']);
   if (!_noCancelActions.has(action)) {
     SpeechManager.cancelAll();
   }
@@ -2375,6 +2673,14 @@ async function handleConfirmedAction(action, payload) {
     out(text); speak(text);
   }
   else if (action === 'generate_code') await generateCode(payload && payload.prompt ? payload.prompt : '');
+  else if (action === 'read_project_files') readProjectFiles();
+  else if (action === 'open_project_file') await openProjectFile(payload && payload.path);
+  else if (action === 'create_project_file') await createProjectFile(payload && payload.path);
+  else if (action === 'rename_project_file') await renameProjectFile(payload && payload.old_path, payload && payload.path);
+  else if (action === 'delete_project_file') await deleteProjectFile(payload && payload.path);
+  else if (action === 'run_project_file') await runProjectFile(payload && payload.path);
+  else if (action === 'explain_project_structure') explainProjectStructure();
+  else if (action === 'explain_requirements') await explainProjectRequirements();
   else if (action === 'save_snippet_named') await saveSnippetAccessible(payload && payload.name ? payload.name : 'Untitled');
   else if (action === 'save_snippet_auto')  await saveSnippetAccessible();
   else if (action === 'list_snippets')   await listSnippetsAccessible();
@@ -4613,6 +4919,10 @@ const COMMAND_PALETTE_COMMANDS = [
   { id: 'next_line',        title: 'Next Line',           desc: 'Move to next line',                 icon: '↓',  keys: 'Down',         action: () => nextLine() },
   { id: 'prev_line',        title: 'Previous Line',       desc: 'Move to previous line',             icon: '↑',  keys: 'Up',           action: () => prevLine() },
   { id: 'show_structure',   title: 'Show Structure',      desc: 'Display code navigation map',       icon: '🗺️', keys: 'Ctrl+Shift+S', action: () => toggleStructurePanel() },
+  { id: 'project_files',    title: 'Project Files',       desc: 'Read active project file list',     icon: 'Files', keys: '',          action: () => readProjectFiles() },
+  { id: 'open_project_file',title: 'Open Project File',   desc: 'Open a file by name',               icon: 'Open', keys: '',           action: () => showInputDialog('File name:', openProjectFile) },
+  { id: 'create_project_file', title: 'Create Project File', desc: 'Create a file in this project',  icon: 'New', keys: '',            action: () => showInputDialog('New file name:', createProjectFile) },
+  { id: 'requirements',     title: 'Requirements',        desc: 'Explain project dependencies',      icon: 'Req', keys: '',            action: () => explainProjectRequirements() },
   { id: 'sonify_block',     title: 'Sonify Block',        desc: 'Hear current code block',           icon: '🔊', keys: 'Alt+S',        action: () => sonifyCurrentBlock() },
   { id: 'next_step',        title: 'Next step',           desc: 'Step forward in execution trace',   icon: '⏭',  keys: 'Alt+N',        action: () => speakNextStep() },
   { id: 'prev_step',        title: 'Previous step',       desc: 'Step back in execution trace',      icon: '⏮',  keys: '',             action: () => handleCommandText('previous step') },

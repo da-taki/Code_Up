@@ -596,10 +596,6 @@ def test_fix_code_surfaces_ai_service_error(client, monkeypatch):
         ["not allowed", "subprocess"],
     ),
     (
-        "import pathlib\nprint(pathlib.Path('.'))",
-        ["not allowed", "pathlib"],
-    ),
-    (
         "import importlib\nprint(importlib)",
         ["not allowed", "importlib"],
     ),
@@ -621,7 +617,7 @@ def test_fix_code_surfaces_ai_service_error(client, monkeypatch):
     ),
     (
         "open('../outside.txt', 'w').write('x')",
-        ["not defined", "open"],
+        ["project root", "limited"],
     ),
     (
         "eval('import os')",
@@ -746,7 +742,9 @@ def test_sandbox_module_allowlist_and_preload_are_consistent():
     import sandbox_runner
 
     assert "date" not in sandbox_runner.ALLOWED_MODULES
-    assert set(sandbox_runner._PRELOADED) == set(sandbox_runner.ALLOWED_MODULES)
+    lazy_third_party = {"numpy", "pandas", "matplotlib"}
+    assert lazy_third_party.issubset(sandbox_runner.ALLOWED_MODULES)
+    assert set(sandbox_runner._PRELOADED) == set(sandbox_runner.ALLOWED_MODULES) - lazy_third_party
 
 
 @pytest.mark.timeout(15)

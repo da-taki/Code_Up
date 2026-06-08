@@ -4396,8 +4396,10 @@ def walkthrough():
             "Under 8 sentences. Spoken English only. No markdown. No code blocks."
         )
 
-    user = f"Python code:\n```python\n{code}\n```"
-    explanation = call_gemini(system, user, temperature=0.2, language=language)
+    explanation = _canonical_loop_walkthrough(code, language)
+    if not explanation:
+        user = f"Python code:\n```python\n{code}\n```"
+        explanation = call_gemini(system, user, temperature=0.2, language=language)
 
     if _ai_unavailable(explanation):
         explanation = _deterministic_walkthrough(code, language)

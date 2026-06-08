@@ -109,6 +109,15 @@ class TestWalkthroughRoute:
         assert "```" not in expl  # no code blocks in spoken text
         assert data.get("auto_speak") is True
 
+    def test_canonical_loop_does_not_call_ai(self, client, monkeypatch):
+        def fail_if_called(*args, **kwargs):
+            raise AssertionError("canonical loop walkthrough should be deterministic")
+
+        monkeypatch.setattr(app_module, "call_gemini", fail_if_called)
+        data = client.post("/walkthrough", json={"code": LOOP}).get_json()
+        assert data["success"] is True
+        assert "0, 1, 2" in data["explanation"]
+
     def test_simple_variables(self, client):
         code = 'name = "Arun"\nprint("Hello", name)\n'
         data = client.post("/walkthrough", json={"code": code}).get_json()

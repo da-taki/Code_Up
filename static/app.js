@@ -2911,7 +2911,7 @@ async function handleConfirmedAction(action, payload) {
     out(text); speak(text);
   }
   else if (action === 'generate_code') await generateCode(payload && payload.prompt ? payload.prompt : '', payload || {});
-  else if (action === 'exact_symbol_clarification' || action === 'orchestrator_clarification' || action === 'deterministic_message') {
+  else if (action === 'exact_symbol_clarification' || action === 'orchestrator_clarification' || action === 'deterministic_message' || action === 'clarify') {
     const message = (payload && (payload.message || payload.speech)) || 'No guidance available.';
     out(message);
     srAnnounce('Guidance shown');

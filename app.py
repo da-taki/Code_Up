@@ -5670,7 +5670,11 @@ COMMANDS = {
     "go_back": ["go back", "navigate back", "back", "previous position"],
     "go_forward": ["go forward", "navigate forward", "forward", "next position"],
     "show_history": ["show history", "navigation history", "where have i been"],
-    "help": ["help", "show help", "what can you do", "list commands"],
+    "help": [
+        "help", "show help", "what can you do", "what can i do",
+        "what can i do here", "show commands", "what commands can i try",
+        "how do i use this", "what should i say", "guide me", "list commands",
+    ],
     "walk_through": ["walk through", "walk to", "walk through code", "walk me through", "walk through the code", "explain line by line", "narrate each line", "go through code", "explain the code line by line"],
     "file_stats": ["file stats", "how many lines", "file statistics", "code stats"],
     "go_to_top": ["go to top", "jump to top", "top of file"],

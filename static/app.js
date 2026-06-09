@@ -757,6 +757,31 @@ function stopErrorBeacon() {
 function locateError() { checkSyntaxErrors(); }
 
 // ---------- HELP ----------
+const BEGINNER_COMMAND_GUIDE_SPEECH = 'You can type or speak commands. Try: clear editor. Put a loop from zero to two that prints each number in the editor. Run. Walk me through this program. Map my code. Sonify block. To start guided learning, say start tutorial. To try a project, say create a quiz game split into multiple files.';
+const BEGINNER_COMMAND_GUIDE_VISIBLE = `You can type or speak natural commands.
+
+Beginner flow:
+clear editor
+put a loop from zero to two that prints each number in the editor
+run
+walk me through this program
+What does range three mean?
+map my code
+sonify block
+
+Error recovery:
+remove the indentation before the print statement so I can see the error
+fix the indentation issue
+
+Guided tutorial:
+start tutorial
+
+Multi-file project:
+create a quiz game split into multiple files
+read project files
+open main
+run main`;
+
 async function showHelp() {
   if (!ensureNotExecuting(() => showHelp(), 'show help')) return;
   const lang = getLanguage();
@@ -764,10 +789,12 @@ async function showHelp() {
   if (lang === 'hi') {
     msg = 'मुख्य commands: चलाओ कोड चलाने के लिए, कोड समझाओ analysis के लिए, कोड ठीक करो fix के लिए, सारांश दो summary के लिए, लाइन पांच पर जाओ navigate करने के लिए, tutorial खोलने के लिए "tutorial" कहें, "quiz करो" practice के लिए, "bug challenge" debugging के लिए, "मदद और" पूरी list के लिए।';
   } else {
-    msg = 'Top commands: run to execute code, analyze for AI review, fix to repair errors, summarize for a quick overview, go to line five to navigate, save snippet to keep your work, start tutorial to learn Python step by step with spoken lessons, quiz me to practice, bug challenge to debug, sonify block to hear code structure, what variables to list current variables, set inputs to provide input values, night mode to toggle dark theme. Say "more help" for the complete list of every command.';
+    msg = BEGINNER_COMMAND_GUIDE_VISIBLE;
   }
+  const speech = lang === 'hi' ? msg : BEGINNER_COMMAND_GUIDE_SPEECH;
   out(msg);
-  speak(msg);
+  speak(speech);
+  srAnnounce('Beginner command guide shown');
 }
 
 function showFullHelp() {

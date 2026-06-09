@@ -757,8 +757,24 @@ function stopErrorBeacon() {
 function locateError() { checkSyntaxErrors(); }
 
 // ---------- HELP ----------
-const BEGINNER_COMMAND_GUIDE_SPEECH = 'You can type or speak commands. Try: clear editor. Put a loop from zero to two that prints each number in the editor. Run. Walk me through this program. Map my code. Sonify block. To start guided learning, say start tutorial. To try a project, say create a quiz game split into multiple files.';
+const BEGINNER_COMMAND_GUIDE_SPEECH = 'You can type or speak commands. Voice works well for run, map my code, walk me through this program, open main, run main, and start tutorial. For exact symbols, patterns, quotes, or long prompts, typing is more reliable. Try: print five stars. Make a 5 by 5 star pattern where row 3 has 6 stars. Clear editor. Put a loop from zero to two that prints each number in the editor. Run.';
 const BEGINNER_COMMAND_GUIDE_VISIBLE = `You can type or speak natural commands.
+
+Voice works well for:
+run
+map my code
+walk me through this program
+open main
+run main
+start tutorial
+
+For exact symbols, patterns, quotes, or long prompts, typing is more reliable.
+
+Exact examples:
+print five stars
+make a 5 by 5 star pattern
+make a 5 by 5 star pattern where row 3 has 6 stars
+make a 4 by 6 hash pattern
 
 Beginner flow:
 clear editor
@@ -934,7 +950,7 @@ function repeatLastSpeech() {
   speak(lastSpokenText || 'There is nothing to repeat yet.', { forceFull: true });
 }
 
-function buildVoiceCommandPayload(text) {
+function buildVoiceCommandPayload(text, source = 'typed') {
   const pos = editor && editor.getPosition ? editor.getPosition() : null;
   const errorText = window.lastRunError || (_lastErrorContext && _lastErrorContext.error) || '';
   return {
@@ -942,6 +958,7 @@ function buildVoiceCommandPayload(text) {
     code: getCode(),
     error: errorText,
     language: getLanguage(),
+    source,
     cursor_line: pos && pos.lineNumber ? pos.lineNumber : null,
   };
 }
@@ -2201,7 +2218,7 @@ async function describeLine(line) {
 }
 
 // ---------- GENERATE CODE ----------
-async function generateCode(prompt) {
+async function generateCode(prompt, context = {}) {
   if (!prompt) {
     SpeechManager.cancelAll();
     speak('Please provide a description of what you want to generate.');
@@ -2223,7 +2240,7 @@ async function generateCode(prompt) {
     const res = await fetch('/generate-code', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ prompt, language: getLanguage() }),
+      body:    JSON.stringify({ prompt, language: getLanguage(), source: context.input_source || context.source || 'typed' }),
     });
     const data = await res.json();
     if (data.success && data.project && data.files) {
@@ -2242,7 +2259,12 @@ async function generateCode(prompt) {
       cueSuccess();
 
       const usesInput = /\binput\s*\(/.test(data.code);
-      if (usesInput) {
+      if (data.exact_symbol) {
+        const message = data.message || 'Exact-symbol code generated and inserted into editor. Press Control Enter to run.';
+        out(message + '\n\nCode inserted. Press Control Enter to run.');
+        srAnnounce('Exact symbol code generated');
+        speak(data.speech || message);
+      } else if (usesInput) {
         const inputCount = (data.code.match(/\binput\s*\(/g) || []).length;
         out(`Code generated with ${inputCount} input() call${inputCount === 1 ? '' : 's'}.\n\nBefore running, declare your inputs by saying:\n  "set inputs to value1 and value2"`);
         srAnnounce('Code generated');
@@ -2252,6 +2274,11 @@ async function generateCode(prompt) {
         srAnnounce('Code generated');
         speak('Code is ready in the editor. Press Control Enter to run it, or say "walk through code" to hear it explained.');
       }
+    } else if (data.clarification) {
+      const reason = data.message || data.error || 'Please type a more precise command.';
+      out(reason);
+      srAnnounce('Clarification needed');
+      speak(data.speech || reason);
     } else {
       const reason = data.error || 'the AI returned an empty response. Please try rephrasing your request.';
       out('Code generation failed: ' + reason);
@@ -2806,7 +2833,13 @@ async function handleConfirmedAction(action, payload) {
     const text = (payload && (payload.speech || payload.message)) || 'No trace event available.';
     out(text); speak(text);
   }
-  else if (action === 'generate_code') await generateCode(payload && payload.prompt ? payload.prompt : '');
+  else if (action === 'generate_code') await generateCode(payload && payload.prompt ? payload.prompt : '', payload || {});
+  else if (action === 'exact_symbol_clarification' || action === 'deterministic_message') {
+    const message = (payload && (payload.message || payload.speech)) || 'No guidance available.';
+    out(message);
+    srAnnounce('Guidance shown');
+    speak((payload && payload.speech) || message);
+  }
   else if (action === 'read_project_files') readProjectFiles();
   else if (action === 'open_project_file') await openProjectFile(payload && payload.path);
   else if (action === 'create_project_file') await createProjectFile(payload && payload.path);
@@ -3863,7 +3896,7 @@ async function handleCommandText(txt) {
     const res  = await fetch('/voice-command', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify(buildVoiceCommandPayload(txt)),
+      body:    JSON.stringify(buildVoiceCommandPayload(txt, 'typed')),
     });
     const data = await res.json();
 
@@ -4429,7 +4462,7 @@ async function handleVoiceCommand(rawText) {
     const res  = await fetch('/voice-command', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify(buildVoiceCommandPayload(cleaned)),
+      body:    JSON.stringify(buildVoiceCommandPayload(cleaned, 'voice')),
     });
     const data = await res.json();
 

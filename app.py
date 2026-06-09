@@ -40,6 +40,7 @@ from project_support import (
     project_summary,
 )
 from sandboxed_fs import cleanup_sandbox, cleanup_stale_sandboxes, get_sandbox
+from symbolic_specs import build_exact_symbol_generation, constraint_summary, validate_exact_output
 from structure_parser import CodeAnalyzer
 import tutorial_engine
 
@@ -50,6 +51,26 @@ __version__ = "0.8.0"
 
 def _debug_log(message: str):
     print(f"[CodeUp] {message}", file=sys.stderr)
+
+
+def _codeup_positioning_message() -> str:
+    return (
+        "CodeUp is not a replacement for VS Code. VS Code with NVDA and tools "
+        "like Copilot or Codex is powerful for advanced users. CodeUp focuses "
+        "on the earlier beginner stage: learning indentation, loops, errors, "
+        "execution flow, file structure, and confidence in an audio-native, "
+        "command-first environment before moving to professional IDEs."
+    )
+
+
+def _codeup_transition_message() -> str:
+    return (
+        "After CodeUp, students should be ready to move into professional tools "
+        "such as VS Code with a screen reader, keyboard shortcuts, terminals, "
+        "Git, and Braille displays or input devices where available. CodeUp's "
+        "job is to make the first programming stage less overwhelming and help "
+        "students understand the structure before that transition."
+    )
 
 
 def _truthy_env(name: str) -> bool:
@@ -5210,6 +5231,13 @@ def generate_code():
     if not prompt.strip():
         return jsonify({"success": False, "error": "Prompt cannot be empty"}), 400
 
+    input_source = safe(body.get("source"), "typed").strip().lower() or "typed"
+    if input_source not in {"typed", "voice"}:
+        input_source = "typed"
+    exact_result = build_exact_symbol_generation(prompt, source=input_source)
+    if exact_result:
+        return jsonify(exact_result)
+
     if requested_mode == "project" or looks_like_multifile_prompt(prompt):
         template_id = choose_template_for_prompt(prompt)
         if template_id:
@@ -5307,7 +5335,11 @@ def generate_code():
             "Return ONLY Python code. No markdown fences. No prose outside code comments."
         )
 
-    user = f"Task description:\n{prompt}"
+    constraints = constraint_summary(prompt)
+    constraint_text = ""
+    if constraints:
+        constraint_text = "Important exact constraints:\n" + "\n".join(f"- {item}" for item in constraints) + "\n\n"
+    user = f"{constraint_text}Task description:\n{prompt}"
     raw = call_gemini(system, user, temperature=0.2, language=language)
     code = extract_code(raw)
     # Llama sometimes returns code without ``` fences. If extract_code came back empty,
@@ -5325,6 +5357,12 @@ def generate_code():
     # If the LLM returned an explanation paragraph by mistake, this catches it.
     try:
         compile(code, "<generated>", "exec")
+        if not validate_exact_output(code, prompt):
+            return jsonify({
+                "success": False,
+                "error": "Generated code did not match the exact symbol constraints. Please type a precise command like: generate code to make a 5 by 5 star pattern where row 3 has 6 stars.",
+                "code": "",
+            })
     except SyntaxError:
         # One retry with a stricter system message
         retry_system = system + "\n\nIMPORTANT: Return ONLY syntactically valid Python. No prose. No markdown."
@@ -5332,6 +5370,12 @@ def generate_code():
         retry_code = extract_code(raw_retry) or (raw_retry.strip() if raw_retry and not _is_ai_service_message(raw_retry) else "")
         try:
             compile(retry_code, "<generated>", "exec")
+            if not validate_exact_output(retry_code, prompt):
+                return jsonify({
+                    "success": False,
+                    "error": "Generated code did not match the exact symbol constraints. Please type a precise command like: generate code to make a 5 by 5 star pattern where row 3 has 6 stars.",
+                    "code": "",
+                })
             code = retry_code
         except SyntaxError:
             fallback = _local_code_generation_fallback(prompt)
@@ -6551,6 +6595,9 @@ def voice():
     current_code = _safe_text(body.get("code"), limit=MAX_CONVERSATIONAL_CONTEXT_SIZE + 1)
     error_context = _safe_text(body.get("error"), limit=MAX_MENTOR_CONTEXT_SIZE + 1)
     language = _safe_text(body.get("language"), "en", limit=20) or "en"
+    input_source = _safe_text(body.get("source"), "typed", limit=20).strip().lower() or "typed"
+    if input_source not in {"typed", "voice"}:
+        input_source = "typed"
     cursor_line = _as_optional_int(body.get("cursor_line"))
     parsed = parse_intent(text)
     intent = parsed.get("intent")
@@ -6575,6 +6622,28 @@ def voice():
         with _session_traces_lock:
             storage['last_voice_action'] = (response_dict, status_code)
         return jsonify(response_dict), status_code
+
+    exact_result = build_exact_symbol_generation(text, source=input_source)
+    if exact_result:
+        if exact_result.get("success"):
+            return _store_and_return({
+                "success": True,
+                "action": "generate_code",
+                "prompt": text,
+                "confidence": 0.95,
+                "source": "deterministic_exact",
+                "input_source": input_source,
+                "exact_symbol": True,
+            })
+        return _store_and_return({
+            "success": True,
+            "action": "exact_symbol_clarification",
+            "message": exact_result.get("message") or exact_result.get("error"),
+            "speech": exact_result.get("speech") or exact_result.get("message") or exact_result.get("error"),
+            "confidence": 0.95,
+            "source": "deterministic_exact",
+            "exact_symbol": True,
+        })
 
     if (
         intent == "mentor_chat"
@@ -6621,6 +6690,12 @@ def voice():
             return _store_and_return({"success": True, "action": "mentor_chat", "message": slots.get("message", ""), "mode": slots.get("mode", "shorter"), "confidence": confidence})
         if intent == "mentor_preference":
             return _store_and_return({"success": True, "action": "mentor_preference", "key": slots.get("key"), "value": slots.get("value"), "confidence": confidence})
+        if intent == "product_positioning":
+            message = _codeup_positioning_message()
+            return _store_and_return({"success": True, "action": "deterministic_message", "message": message, "speech": message, "confidence": confidence})
+        if intent == "professional_transition":
+            message = _codeup_transition_message()
+            return _store_and_return({"success": True, "action": "deterministic_message", "message": message, "speech": message, "confidence": confidence})
         if intent == "mentor_chat":
             return _store_and_return({"success": True, "action": "mentor_chat", "message": slots.get("message", text), "mode": slots.get("mode", "general"), "confidence": confidence})
         if intent == "concept_question":

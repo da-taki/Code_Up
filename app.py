@@ -22,7 +22,8 @@ from dotenv import load_dotenv
 from flask import Flask, Response, g, has_request_context, jsonify, render_template, request, send_from_directory, stream_with_context
 from rapidfuzz import fuzz
 
-from conversation_orchestrator import frontend_actions, action_next_label, orchestrate_command, strip_wake_phrase
+from conversation_orchestrator import frontend_actions, action_next_label, looks_like_generation_request, orchestrate_command, strip_wake_phrase
+from input_concierge import build_input_plan, concierge_request_message, detect_inputs as detect_concierge_inputs
 from intent_parser import parse_intent
 from project_support import (
     PROJECT_MANIFEST,
@@ -1102,6 +1103,80 @@ def call_conversation_orchestrator_ai(system_prompt: str, user_prompt: str) -> s
         return ""
 
 
+def _ai_coach_rephrase(base_text: str) -> str:
+    """Use Key 2 to rephrase a known teaching note into one warmer short line.
+
+    Returns "" (so the deterministic note is used) when Key 2 is missing/busy or
+    the reply looks unsafe. The model may ONLY restate the given note — guardrails
+    reject anything with code, multiple sentences of bloat, or excessive length so
+    the coach can never invent code, output, or validation results."""
+    base_text = str(base_text or "").strip()
+    if not base_text:
+        return ""
+    system = (
+        "You are CodeUp's friendly beginner coding tutor for blind learners. "
+        "Rephrase the teaching note below into ONE short, warm, encouraging sentence. "
+        "Do NOT add new facts, code, numbers, variable values, or results — only "
+        "restate the note more kindly. Plain text only, no code, under 28 words."
+    )
+    user = f"Teaching note: {base_text}\n\nRephrase it as one short, friendly sentence."
+    raw = call_conversation_orchestrator_ai(system, user)
+    coached = str(raw or "").strip().strip('"').strip()
+    if not coached:
+        return ""
+    lowered = coached.lower()
+    if (
+        len(coached) > 220
+        or len(coached.split()) > 40
+        or "\n" in coached
+        or "```" in coached
+        or any(token in lowered for token in ("print(", "import ", "def ", "input(", "()"))
+    ):
+        return ""
+    return coached
+
+
+def _concierge_ai_values(code_inputs, text):
+    """Key 2 fallback for the input concierge: map a messy spoken value phrase to
+    ordered input values. Returns a list of string values aligned to the prompts,
+    or None. Never raises — the deterministic path stays the source of truth."""
+    try:
+        labels = [str(inp.get("label") or inp.get("name") or f"Input {i + 1}") for i, inp in enumerate(code_inputs)]
+        types = [str(inp.get("type") or "str") for inp in code_inputs]
+    except Exception:
+        return None
+    if not labels:
+        return None
+    system = (
+        "You are CodeUp's input concierge. Map the user's spoken values to a Python "
+        "program's input() prompts, in order. Convert spoken numbers to digits "
+        "(sixteen -> 16, ninety two point five -> 92.5). Return ONLY a JSON array of "
+        "strings, exactly one per prompt, in order. No prose and no code."
+    )
+    user = (
+        "Prompts in order:\n"
+        + "\n".join(f"{i + 1}. {label} (type: {typ})" for i, (label, typ) in enumerate(zip(labels, types)))
+        + f"\n\nUser said: {text}\n\nReturn a JSON array of {len(labels)} string values."
+    )
+    raw = call_conversation_orchestrator_ai(system, user)
+    if not raw:
+        return None
+    cleaned = re.sub(r"```(?:json)?\s*|\s*```", "", str(raw)).strip()
+    data = None
+    try:
+        data = json.loads(cleaned)
+    except (ValueError, TypeError):
+        match = re.search(r"\[.*\]", str(raw), re.DOTALL)
+        if match:
+            try:
+                data = json.loads(match.group(0))
+            except (ValueError, TypeError):
+                data = None
+    if not isinstance(data, list):
+        return None
+    return [str(v) for v in data][:50]
+
+
 def extract_code(text: str):
     m = re.search(r"```(?:python)?\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
     if not m:
@@ -1348,6 +1423,51 @@ def tutorial_validate():
         "feedback": result["feedback"],
         "hint": result["hint"],
         "next_module": tutorial_engine.next_module_id(module_id),
+    })
+
+
+@app.route("/tutorial/coach", methods=["POST"])
+def tutorial_coach():
+    """AI-assisted tutorial coaching (friendlier phrasing, hints, encouragement).
+
+    Body: {module, request|text, attempts}. The deterministic engine produces a
+    known-fact answer; Key 2 may only rephrase it more warmly. If Key 2 is
+    missing/busy the deterministic note is returned, so the tutorial never
+    depends on AI. The coach never validates code or invents program state.
+    """
+    body = safejson()
+    module_id = _safe_text(body.get("module"), "", limit=40).strip()
+    raw_text = _safe_text(body.get("text"), "", limit=300)
+    request_type = _safe_text(body.get("request"), "", limit=40).strip()
+    try:
+        attempts = int(body.get("attempts") or 0)
+    except (TypeError, ValueError):
+        attempts = 0
+    attempts = max(0, min(attempts, 20))
+
+    if request_type not in tutorial_engine.COACH_REQUESTS:
+        request_type = tutorial_engine.classify_coach_request(raw_text) or ""
+    if not request_type:
+        # Not a coach phrase — let the frontend fall back to its normal handling.
+        return jsonify({"success": True, "handled": False})
+
+    base = tutorial_engine.coach_response(module_id, request_type, attempts=attempts)
+    spoken = base["text"]
+    source = "deterministic"
+    if spoken:
+        coached = _ai_coach_rephrase(spoken)
+        if coached:
+            spoken = coached
+            source = "ai_coached"
+
+    return jsonify({
+        "success": True,
+        "handled": True,
+        "request": request_type,
+        "module": module_id,
+        "text": spoken,
+        "speech": spoken,
+        "source": source,
     })
 
 # ==========================
@@ -3973,13 +4093,19 @@ def run_code():
     uses_input = bool(input_prompts) or bool(re.search(r'\binput\s*\(', code))
     inputs_hint = None
     if uses_input and not inputs:
-        inputs_hint = (
-            "Your code uses input(), but you did not provide any pre-flight "
-            "inputs. The first input() call will fail with a clear error "
-            "telling you what to do. To fix: open the inputs panel and add "
-            "values, or add a magic comment like '# inputs: Alice, 17' at "
-            "the top of your code, or switch to live input mode."
-        )
+        concierge_inputs = detect_concierge_inputs(code)
+        if concierge_inputs:
+            # Concierge phrasing names the fields and the spoken commands that
+            # supply them, so a beginner is never stuck guessing.
+            inputs_hint = concierge_request_message(concierge_inputs)
+        else:
+            inputs_hint = (
+                "Your code uses input(), but you did not provide any pre-flight "
+                "inputs. The first input() call will fail with a clear error "
+                "telling you what to do. To fix: open the inputs panel and add "
+                "values, or add a magic comment like '# inputs: Alice, 17' at "
+                "the top of your code, or switch to live input mode."
+            )
 
     stdout_buf = io.StringIO()
     stderr_buf = io.StringIO()
@@ -6685,11 +6811,20 @@ def voice():
 
     wake_info = strip_wake_phrase(orchestrator_text)
     lower_orchestrator_text = orchestrator_text.lower()
+    has_multi_connector = bool(re.search(r"\b(?:then|and then|after that)\b", lower_orchestrator_text))
+    # Route rough generation asks ("make a marks thing") to the Key 2 brain only
+    # when the deterministic parser could not already classify them — clean
+    # generation intents (e.g. multi-file projects) keep their fast existing path.
+    rough_generation_request = bool(
+        not intent
+        and looks_like_generation_request(wake_info.get("text") or orchestrator_text)
+    )
     should_try_orchestrator = (
         wake_info.get("wake_detected")
-        or re.search(r"\b(?:then|and then|after that)\b", lower_orchestrator_text)
+        or has_multi_connector
         or "cube" in lower_orchestrator_text
         or re.search(r"\bfix\s+it\s+and\s+run\s+it\b", lower_orchestrator_text)
+        or rough_generation_request
         or build_exact_symbol_generation(wake_info.get("text") or orchestrator_text, source=input_source) is not None
     )
     if should_try_orchestrator:
@@ -6698,7 +6833,7 @@ def voice():
             orchestrator_text,
             code=current_code,
             source=input_source,
-            ai_plan_fn=call_conversation_orchestrator_ai if (wake_info.get("wake_detected") or re.search(r"\b(?:then|and then|after that)\b", lower_orchestrator_text)) else None,
+            ai_plan_fn=call_conversation_orchestrator_ai if (wake_info.get("wake_detected") or has_multi_connector or rough_generation_request) else None,
         )
         if plan:
             if plan.get("needs_clarification"):
@@ -6762,6 +6897,47 @@ def voice():
             "source": "deterministic_exact",
             "exact_symbol": True,
         })
+
+    # ---- input() concierge --------------------------------------------------
+    # Natural value-supplying commands ("run with name Taknoor and age 16",
+    # "use sample values", "name is Taknoor and age is sixteen") feed the
+    # existing pre-flight input run path. We only override the generic run-file
+    # intent, never a specific one (e.g. "run with step narration").
+    if intent in (None, "run_project_file"):
+        concierge = build_input_plan(current_code, text, ai_value_fn=_concierge_ai_values)
+        if concierge:
+            status = concierge.get("status")
+            if status in ("ask_for_code", "type_error"):
+                message = concierge["message"]
+                return _store_and_return({
+                    "success": True,
+                    "action": "deterministic_message",
+                    "message": message,
+                    "speech": message,
+                    "heard": text,
+                    "next_action": "Waiting for input values.",
+                    "input_concierge": True,
+                })
+            if status == "ready":
+                message = concierge["message"]
+                return _store_and_return({
+                    "success": True,
+                    "action": "action_sequence",
+                    "heard": text,
+                    "normalized_text": concierge.get("summary", message),
+                    "spoken_summary": message,
+                    "speech": message,
+                    "next_action": "Setting input values.",
+                    "input_concierge": True,
+                    "actions": [
+                        {"action": "set_inputs", "values": concierge["values"], "label": "Setting input values."},
+                        {"action": "run", "label": "Running with your values."},
+                    ],
+                })
+            if status == "no_input":
+                # Values were offered but the code never calls input(): honour
+                # requirement 8 and just run the code normally.
+                return _store_and_return({"success": True, "action": "run", "heard": text, "input_concierge": True})
 
     if (
         intent == "mentor_chat"

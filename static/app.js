@@ -5374,6 +5374,12 @@ function normalizeSpokenCodeText(text) {
     raw = raw.replace(/^(?:an?\s+|the\s+)?(?:indent|indented|four\s+spaces|tab)\s+/i, '').trim();
   }
 
+  // Forgive a common mis-heard "print" keyword at the start of an insert
+  // ("prent hello world" -> "print hello world") so a slightly imperfect spoken
+  // command still becomes valid Python. Only the leading word is corrected, and
+  // only for a clear near-miss of "print" — never an arbitrary word.
+  raw = raw.replace(/^(?:prent|prnt|preent|pirnt|printt|brint|prind|prinr)\b/i, 'print');
+
   if (/^[A-Za-z_]\w*\s*=/.test(raw) || /^\s*(?:print|range)\s*\(/i.test(raw) || /:\s*$/.test(raw)) {
     return indent + raw;
   }

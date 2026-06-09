@@ -156,6 +156,117 @@ def test_ai_prompt_rewrite_plan_is_validated_and_preserved():
     assert [action["type"] for action in plan["actions"]] == ["generate_code", "explain"]
 
 
+def _marks_rewrite_plan(actions=None):
+    return json.dumps({
+        "confidence": 0.83,
+        "normalized_text": "Generate a beginner-friendly marks program.",
+        "needs_clarification": False,
+        "clarification_question": "",
+        "actions": actions or [
+            {
+                "type": "generate_code",
+                "source": "ai_orchestrated",
+                "prompt": (
+                    "Generate a beginner-friendly Python program that stores marks for "
+                    "three students in a dictionary, computes the average with a function, "
+                    "and prints who scored above average. Keep it runnable without input()."
+                ),
+                "constraints": {},
+                "requires_exact_symbols": False,
+            },
+        ],
+        "spoken_summary": "Generating a clearer marks program.",
+    })
+
+
+def test_rough_generation_is_rewritten_by_key2_before_coding_path():
+    # No wake phrase and no connector: a vague generation ask must still be sent
+    # to Key 2, which rewrites the rough prompt before the coding path runs.
+    def fake_ai(system, user):
+        assert "make a marks thing" in user
+        return _marks_rewrite_plan()
+
+    plan = orchestrate_command("make a marks thing", ai_plan_fn=fake_ai)
+    assert plan["actions"][0]["source"] == "ai_orchestrated"
+    assert "dictionary" in plan["actions"][0]["prompt"]
+    assert plan["actions"][0]["prompt"] != "a marks thing"
+
+
+def test_non_forced_multi_action_generation_is_rewritten_before_split():
+    # "make a marks thing and explain it" has no wake and no "then"; Key 2 still
+    # gets first crack so the rough prompt is rewritten rather than passed raw.
+    def fake_ai(system, user):
+        return _marks_rewrite_plan(actions=[
+            {
+                "type": "generate_code",
+                "source": "ai_orchestrated",
+                "prompt": "Generate a beginner-friendly Python marks dictionary program with an average function.",
+                "constraints": {},
+                "requires_exact_symbols": False,
+            },
+            {"type": "explain", "source": "ai_orchestrated", "prompt": "", "constraints": {}, "requires_exact_symbols": False},
+        ])
+
+    plan = orchestrate_command("make a marks thing and explain it", ai_plan_fn=fake_ai)
+    assert [action["type"] for action in plan["actions"]] == ["generate_code", "explain"]
+    assert "average" in plan["actions"][0]["prompt"]
+
+
+def test_generation_falls_back_to_deterministic_when_key2_missing():
+    # Key 2 missing/busy (no ai_plan_fn): the deterministic split still yields a
+    # safe action sequence instead of crashing or dropping the request.
+    plan = orchestrate_command("make a marks thing and explain it")
+    assert [action["type"] for action in plan["actions"]] == ["generate_code", "explain"]
+
+
+def test_simple_commands_do_not_consult_key2():
+    calls = []
+
+    def spy_ai(system, user):
+        calls.append(user)
+        return ""
+
+    for command in [
+        "run",
+        "clear editor",
+        "open main",
+        "map my code",
+        "sonify block",
+        "help",
+        "start tutorial",
+        "exit tutorial",
+    ]:
+        orchestrate_command(command, ai_plan_fn=spy_ai)
+    assert calls == []
+
+
+def test_exact_symbol_request_never_consults_key2():
+    def boom_ai(*args, **kwargs):
+        raise AssertionError("Key 2 must not be consulted for a confident exact-symbol task")
+
+    plan = orchestrate_command(
+        "make a 5 by 5 pattern where the third row has 6 stars",
+        ai_plan_fn=boom_ai,
+    )
+    assert plan["actions"][0]["requires_exact_symbols"] is True
+    assert "row 3 has 6" in plan["actions"][0]["constraints"]["understood"]
+
+
+def test_voice_route_sends_rough_generation_to_key2(client, monkeypatch):
+    def fake_orchestrator_ai(system, user):
+        assert "marks" in user
+        return _marks_rewrite_plan()
+
+    monkeypatch.setattr(app_module, "call_conversation_orchestrator_ai", fake_orchestrator_ai)
+    # The coding model (Key 1) must not be invoked during the orchestration step.
+    monkeypatch.setattr(app_module, "call_gemini", lambda *a, **k: (_ for _ in ()).throw(AssertionError("Key 1 called during orchestration")))
+    data = client.post("/voice-command", json={"text": "make a marks thing", "code": ""}).get_json()
+    assert data["action"] == "generate_code"
+    assert data["source"] == "ai_orchestrated"
+    assert "dictionary" in data["prompt"]
+    assert data["next_action"] == "Generating code."
+
+
 def test_ai_plan_rejects_unknown_action_type():
     plan = validate_plan({
         "confidence": 1,

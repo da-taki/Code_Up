@@ -411,6 +411,124 @@ def first_hint(module_id: str) -> str:
     return hints[0] if hints else "Try saying: give me an example."
 
 
+# ---------------------------------------------------------------------------
+# AI tutor coach (deterministic knowledge base)
+# ---------------------------------------------------------------------------
+# These are short, friendly restatements of facts the lesson already teaches.
+# Key 2 may rephrase them more warmly at the route layer, but it must never add
+# new facts — so this stays the single source of truth and the safe fallback.
+_COACH_SIMPLE: Dict[str, str] = {
+    "print": "A print statement tells Python to show a message on the screen.",
+    "variables": "A variable is a labelled box that remembers a value so you can use it later.",
+    "if": "An if statement runs the indented line only when something is true.",
+    "for": "A for loop repeats the indented line a set number of times.",
+    "while": "A while loop keeps repeating while something stays true, then stops.",
+}
+
+_COACH_FACTS: Dict[str, str] = {
+    "quotes": "Quotes tell Python the words inside are text to show, not the name of a variable.",
+    "indentation": "Indentation, the four spaces, means that line belongs inside the block above it.",
+}
+
+_COACH_ENCOURAGE = (
+    "Good attempt. The idea is right; only the wording needs a small fix.",
+    "You are doing fine. This part trips up everyone at first. Let us take it one small step.",
+)
+
+# Recognised coach request types. Kept as a set so the route can validate an
+# explicit ``request`` field without re-classifying free text.
+COACH_REQUESTS = {
+    "explain_simpler",
+    "dont_understand",
+    "why_quotes",
+    "why_indentation",
+    "another_hint",
+    "encourage",
+    "what_learning",
+}
+
+# Ordered (specific first) phrase triggers for free-text classification. The
+# frontend mirrors this list so it knows when to intercept and call the coach.
+_COACH_TRIGGERS: List[Tuple[str, List[str]]] = [
+    ("why_quotes", ["why do we use quotes", "why use quotes", "why the quotes", "why quotes",
+                    "what are quotes for", "what do quotes do", "purpose of quotes"]),
+    ("why_indentation", ["why do we indent", "why the indentation", "why indentation", "why indent",
+                         "what is indentation", "what does indentation do", "why four spaces"]),
+    ("another_hint", ["give me another hint", "another hint", "one more hint", "a different hint",
+                      "different hint", "more hints", "next hint"]),
+    ("what_learning", ["what am i learning", "what are we learning", "what is this teaching",
+                       "what am i doing", "what topic is this", "what is this topic", "what is this about"]),
+    ("encourage", ["encourage me", "i give up", "this is too hard", "this is hard", "i can't do this",
+                   "i cannot do this", "i am stuck", "i'm stuck", "cheer me up"]),
+    ("explain_simpler", ["say that again simpler", "say it simpler", "explain it simpler",
+                         "explain simpler", "explain that simpler", "make it simpler",
+                         "simpler please", "in simple words", "in simpler words", "simpler"]),
+    ("dont_understand", ["i don't understand", "i do not understand", "i dont understand",
+                         "i don't get it", "i dont get it", "i'm confused", "i am confused",
+                         "i don't follow", "this is confusing", "confused"]),
+]
+
+
+def classify_coach_request(text: str) -> Optional[str]:
+    """Classify free text into a coach request type, or None.
+
+    Specific topics (quotes, indentation) are matched before the generic
+    "simpler"/"confused" buckets so they win.
+    """
+    t = " ".join(str(text or "").lower().strip().rstrip(".!?").split())
+    if not t:
+        return None
+    for request_type, phrases in _COACH_TRIGGERS:
+        for phrase in phrases:
+            if t == phrase or phrase in t:
+                return request_type
+    return None
+
+
+def coach_response(module_id: str, request: str, attempts: int = 0) -> Dict:
+    """Return a short, deterministic coach line for a request.
+
+    Only restates known lesson facts for ``module_id``; never invents code,
+    output, or validation results. ``attempts`` lets encouragement and the
+    next-hint pointer adapt without any per-session state on the server.
+    """
+    module = MODULES.get(module_id or "")
+    title = module["title"] if module else "this topic"
+    simpler = _COACH_SIMPLE.get(module_id or "", "")
+    try:
+        attempts = max(0, int(attempts or 0))
+    except (TypeError, ValueError):
+        attempts = 0
+
+    if request == "explain_simpler":
+        text = simpler or (module["concept"] if module else "Let us take it one small step at a time.")
+    elif request == "dont_understand":
+        body = simpler or (module["concept"] if module else "Let us take it one small step at a time.")
+        text = "No problem. " + body
+    elif request == "why_quotes":
+        text = _COACH_FACTS["quotes"]
+    elif request == "why_indentation":
+        text = _COACH_FACTS["indentation"]
+    elif request == "another_hint":
+        hints = (module or {}).get("hints") or []
+        if hints:
+            idx = min(attempts, len(hints) - 1)
+            text = "Here is another hint. " + hints[idx]
+        else:
+            text = "Try saying: give me an example."
+    elif request == "encourage":
+        text = _COACH_ENCOURAGE[1] if attempts >= 2 else _COACH_ENCOURAGE[0]
+        hint = first_hint(module_id)
+        if hint:
+            text = text + " " + hint
+    elif request == "what_learning":
+        text = (f"Right now you are learning {title}. " + simpler).strip()
+    else:
+        return {"request": None, "text": "", "kind": "none"}
+
+    return {"request": request, "text": text.strip(), "kind": "coach"}
+
+
 def validate_attempt(
     module_id: str,
     code: str,

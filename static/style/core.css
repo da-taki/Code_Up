@@ -269,6 +269,18 @@ body.theme-night .cu-output { background: #06030a; }
   font-size: 0.82rem;
   line-height: 1.35;
 }
+.cu-command-understanding {
+  flex-basis: 100%;
+  display: grid;
+  gap: 3px;
+  color: var(--text-dim);
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+.cu-command-understanding-label {
+  color: var(--text-main);
+  font-weight: 700;
+}
 
 /* Structure */
 .cu-structure { width: 260px; min-width: 240px; display: flex; flex-direction: column; max-height: calc(100vh - 200px); }

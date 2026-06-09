@@ -594,7 +594,7 @@ const VoiceEngine = (function () {
 
       _recognition = new SR();
       _recognition.continuous = true;
-      _recognition.interimResults = false;
+      _recognition.interimResults = true;
 
       const lang = Config.language === 'auto' ? 'en'
                  : Config.language === 'hi' ? 'hi'
@@ -624,7 +624,21 @@ const VoiceEngine = (function () {
 
       _recognition.onresult = (event) => {
         if (!_enabledByUser) return;
-        const transcript = event.results[event.results.length - 1][0].transcript;
+        let finalTranscript = '';
+        let interimTranscript = '';
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const chunk = event.results[i][0].transcript;
+          if (event.results[i].isFinal) finalTranscript += chunk;
+          else interimTranscript += chunk;
+        }
+        if (interimTranscript.trim() && typeof window !== 'undefined' && window.updateTranscriptStatus) {
+          window.updateTranscriptStatus({ heard: interimTranscript.trim(), nextAction: 'Listening.' });
+        }
+        const transcript = finalTranscript.trim();
+        if (!transcript) return;
+        if (typeof window !== 'undefined' && window.updateTranscriptStatus) {
+          window.updateTranscriptStatus({ heard: transcript, nextAction: 'Interpreting voice command.' });
+        }
         _lastActivity = Date.now();
         _debug('Heard:', transcript);
 

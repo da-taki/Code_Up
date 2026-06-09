@@ -24,6 +24,7 @@ from rapidfuzz import fuzz
 
 from conversation_orchestrator import frontend_actions, action_next_label, looks_like_generation_request, orchestrate_command, strip_wake_phrase
 from input_concierge import build_input_plan, concierge_request_message, detect_inputs as detect_concierge_inputs
+import session_memory
 from intent_parser import parse_intent
 from project_support import (
     PROJECT_MANIFEST,
@@ -1444,6 +1445,12 @@ def tutorial_coach():
     except (TypeError, ValueError):
         attempts = 0
     attempts = max(0, min(attempts, 20))
+
+    if module_id:
+        try:
+            session_memory.record_tutorial(session_memory.get_memory(get_trace_storage()), module_id)
+        except Exception:
+            pass
 
     if request_type not in tutorial_engine.COACH_REQUESTS:
         request_type = tutorial_engine.classify_coach_request(raw_text) or ""
@@ -4071,6 +4078,11 @@ def run_code():
         safe_error = _syntax_error_message(e, code)
         _save_mistake_snapshot(get_session_id(), code, safe_error, success=False)
         explanation = _local_error_explanation(code, safe_error, language=safe(body.get("language"), "en"), beginner=True)
+        try:
+            session_memory.record_run(session_memory.get_memory(get_trace_storage()),
+                                      error=safe_error, inputs=inputs, ran_ok=False)
+        except Exception:
+            pass
         return jsonify({
             "success": False,
             "error": safe_error,
@@ -4249,6 +4261,11 @@ def run_code():
         if error.strip():
             _save_mistake_snapshot(get_session_id(), code, error, success=False)
             explanation = explain_error(code, error, language=safe(body.get("language"), "en"))
+            try:
+                session_memory.record_run(session_memory.get_memory(get_trace_storage()),
+                                          error=error, inputs=inputs, ran_ok=False)
+            except Exception:
+                pass
             return jsonify({
                 "success": False,
                 "error": error,
@@ -4258,6 +4275,11 @@ def run_code():
             })
 
         _save_mistake_snapshot(get_session_id(), code, "", success=True, output=output)
+        try:
+            session_memory.record_run(session_memory.get_memory(get_trace_storage()),
+                                      output=output, inputs=inputs, ran_ok=True)
+        except Exception:
+            pass
 
         return jsonify({
             "success": True,
@@ -5398,6 +5420,11 @@ def generate_code():
     if not prompt.strip():
         return jsonify({"success": False, "error": "Prompt cannot be empty"}), 400
 
+    try:
+        session_memory.record_generation(session_memory.get_memory(get_trace_storage()), prompt)
+    except Exception:
+        pass
+
     input_source = safe(body.get("source"), "typed").strip().lower() or "typed"
     if input_source not in {"typed", "voice"}:
         input_source = "typed"
@@ -5631,6 +5658,12 @@ def project_file_open():
             requirements=previous.get("requirements") or infer_requirements(files),
         )
         _write_project_manifest(sandbox, manifest)
+        try:
+            _mem = session_memory.get_memory(get_trace_storage())
+            session_memory.record_file_open(_mem, path)
+            session_memory.record_project_files(_mem, list(files.keys()))
+        except Exception:
+            pass
         return jsonify({
             "success": True,
             "path": path,
@@ -6757,6 +6790,115 @@ def get_voice_telemetry():
         })
 
 
+def _record_voice_memory(mem, text, intent, response):
+    """Record short-term working memory from a /voice-command response."""
+    action = str(response.get("action") or "")
+    session_memory.record_utterance(mem, text, intent or "", action)
+    if action == "action_sequence":
+        actions = response.get("actions") or []
+        session_memory.record_actions(mem, [a.get("action", "") for a in actions if isinstance(a, dict)])
+        for a in actions:
+            if not isinstance(a, dict):
+                continue
+            sub = a.get("action")
+            if sub == "generate_code" and a.get("prompt"):
+                session_memory.record_generation(mem, a.get("prompt"))
+            elif sub == "set_inputs" and isinstance(a.get("values"), list):
+                session_memory.record_input_values(mem, [str(v) for v in a["values"]])
+            elif sub == "open_project_file" and a.get("path"):
+                session_memory.record_file_open(mem, a.get("path"))
+            elif sub == "run_project_file" and a.get("path"):
+                session_memory.record_active_file(mem, a.get("path"))
+        return
+    if action == "generate_code" and response.get("prompt"):
+        session_memory.record_generation(mem, response.get("prompt"))
+    elif action == "open_project_file" and response.get("path"):
+        session_memory.record_file_open(mem, response.get("path"))
+    elif action == "run_project_file" and response.get("path"):
+        session_memory.record_active_file(mem, response.get("path"))
+
+
+def _ai_modify_prompt(text, mem, params):
+    """Key 2 referent resolution for a modification follow-up ("do the same with
+    10"). Returns a refined generation prompt grounded in memory, or "" to keep
+    the deterministic prompt. Key 2 may only resolve the referent — it is given
+    bounded memory context and cannot invent facts."""
+    snap = session_memory.snapshot(mem, utterance=text)
+    if not snap.get("last_gen_prompt") and not snap.get("current_file"):
+        return ""
+    system = (
+        "You are CodeUp's command interpreter. The user gave a short modification "
+        "command that refers to earlier work with words like it/that/same. Using ONLY "
+        "the provided context, rewrite it into ONE clear, beginner-friendly Python "
+        "generation prompt. Do NOT invent details not implied by the context. Plain "
+        "text only, one sentence, under 40 words."
+    )
+    user = (
+        f"Last generation request: {snap.get('last_gen_prompt') or '(none)'}\n"
+        f"Current file: {snap.get('current_file') or '(none)'}\n"
+        f"User command: {text}\n\n"
+        "Return one clear generation prompt."
+    )
+    refined = str(call_conversation_orchestrator_ai(system, user) or "").strip().strip('"').strip()
+    if not refined or len(refined) > 300 or "\n" in refined or "```" in refined:
+        return ""
+    return refined
+
+
+def _map_followup_decision(decision, text, mem):
+    """Map a session_memory follow-up decision to a /voice-command response, or
+    None to fall through to normal handling."""
+    base = {
+        "success": True,
+        "heard": text,
+        "memory": True,
+        "referent": decision.get("referent", ""),
+        "confidence": decision.get("confidence", 0.0),
+    }
+    if not decision.get("handled"):
+        msg = decision.get("clarification") or "Could you say that another way?"
+        return {**base, "action": "deterministic_message", "message": msg, "speech": msg,
+                "next_action": "Waiting for clarification.", "needs_clarification": True}
+
+    action = decision.get("resolved_action")
+    params = decision.get("params", {})
+    if action in ("explain_code",):
+        return {**base, "action": "walk_through"}
+    if action in ("explain_run", "describe_run"):
+        return {**base, "action": "read_output"}
+    if action == "explain_simpler":
+        return {**base, "action": "mentor_chat",
+                "message": "Explain the current program in simpler words.", "mode": "shorter"}
+    if action == "explain_error":
+        return {**base, "action": "explain_simply", "error": params.get("error", "")}
+    if action == "fix_error":
+        return {**base, "action": "fix", "error": params.get("error", "")}
+    if action == "run_again":
+        return {**base, "action": "run"}
+    if action == "run_same_inputs":
+        values = [str(v) for v in (params.get("inputs") or [])]
+        msg = "Running again with your saved values."
+        return {**base, "action": "action_sequence", "spoken_summary": msg, "speech": msg,
+                "next_action": "Setting input values.",
+                "actions": [
+                    {"action": "set_inputs", "values": values, "label": "Reusing saved input values."},
+                    {"action": "run", "label": "Running with the same values."},
+                ]}
+    if action == "modify_code":
+        prompt = _ai_modify_prompt(text, mem, params) or params.get("prompt", "")
+        return {**base, "action": "generate_code", "prompt": prompt, "source": "memory_followup"}
+    if action == "open_file":
+        return {**base, "action": "open_project_file", "path": params.get("path", "")}
+    if action == "run_file":
+        return {**base, "action": "run_project_file", "path": params.get("path", "")}
+    if action == "explain_project":
+        return {**base, "action": "explain_project_structure"}
+    if action == "summarize_session":
+        msg = params.get("summary", "")
+        return {**base, "action": "deterministic_message", "message": msg, "speech": msg}
+    return None
+
+
 @app.route("/voice-command", methods=["POST"])
 def voice():
     body = safejson()
@@ -6776,6 +6918,7 @@ def voice():
     confidence = parsed.get("confidence", 0.0)
 
     storage = get_trace_storage()
+    mem = session_memory.get_memory(storage)
 
     # Handle repeat command
     if intent == "repeat":
@@ -6789,9 +6932,13 @@ def voice():
         return jsonify(last_action[0]), last_action[1]
 
     def _store_and_return(response_dict, status_code=200):
-        """Helper: save action for repeat, then return the response."""
+        """Helper: save action for repeat, record working memory, then return."""
         with _session_traces_lock:
             storage['last_voice_action'] = (response_dict, status_code)
+        try:
+            _record_voice_memory(mem, text, intent, response_dict)
+        except Exception:
+            pass
         return jsonify(response_dict), status_code
 
     pending_clarification = storage.get("pending_orchestrator_clarification")
@@ -6897,6 +7044,21 @@ def voice():
             "source": "deterministic_exact",
             "exact_symbol": True,
         })
+
+    # ---- session memory: contextual follow-ups ------------------------------
+    # Short follow-ups ("explain it again", "why did it fail", "fix that",
+    # "run it again", "do the same with 10", "open that file again") are resolved
+    # against this session's working memory and routed to the existing real
+    # actions. Runs after exact-symbol/orchestrator so those still win, and
+    # before the concierge so "run with the same values" reuses saved inputs.
+    followup_category = session_memory.classify_followup(text)
+    if followup_category:
+        decision = session_memory.resolve_followup(
+            followup_category, text, mem, code=current_code, error=error_context,
+        )
+        mapped = _map_followup_decision(decision, text, mem)
+        if mapped is not None:
+            return _store_and_return(mapped)
 
     # ---- input() concierge --------------------------------------------------
     # Natural value-supplying commands ("run with name Taknoor and age 16",

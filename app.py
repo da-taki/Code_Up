@@ -25,6 +25,7 @@ from rapidfuzz import fuzz
 from conversation_orchestrator import frontend_actions, action_next_label, looks_like_generation_request, orchestrate_command, strip_wake_phrase
 from input_concierge import build_input_plan, concierge_request_message, detect_inputs as detect_concierge_inputs
 import session_memory
+import command_clarifier
 from intent_parser import parse_intent
 from project_support import (
     PROJECT_MANIFEST,
@@ -6955,6 +6956,33 @@ def voice():
         and not looks_like_new_command
     ):
         orchestrator_text = f"{pending_clarification.get('original_text', '')} {text}".strip()
+
+    # ---- confidence-aware clarification for risky/ambiguous commands --------
+    # Ask one short question before a destructive file op with a vague referent,
+    # or a sized symbol-pattern request too vague to parse cleanly. Clear
+    # commands (exact patterns, run code, inserts, tutorial) are never blocked.
+    clarification = command_clarifier.assess(
+        text,
+        intent=intent or "",
+        confidence=confidence,
+        code=current_code,
+        mem=mem,
+        exact_result=build_exact_symbol_generation(text, source=input_source),
+        ai_fn=call_conversation_orchestrator_ai,
+    )
+    if clarification and clarification.get("needs_clarification"):
+        message = clarification["message"]
+        return _store_and_return({
+            "success": True,
+            "intent": "clarify",
+            "action": "clarify",
+            "message": message,
+            "speech": message,
+            "reason": clarification.get("reason", ""),
+            "needs_clarification": True,
+            "heard": text,
+            "next_action": "Waiting for clarification.",
+        })
 
     wake_info = strip_wake_phrase(orchestrator_text)
     lower_orchestrator_text = orchestrator_text.lower()

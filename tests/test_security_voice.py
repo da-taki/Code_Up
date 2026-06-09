@@ -975,9 +975,11 @@ def test_command_input_enter_and_live_input_contracts_are_wired():
     submit_end = app_js.index("// ---------- VOICE ----------")
     submit_block = app_js[submit_start:submit_end]
     assert "sendStreamingInput(txt)" in submit_block
-    assert "buildVoiceCommandPayload(txt)" in app_js
+    assert "buildVoiceCommandPayload(txt, 'typed')" in app_js
+    assert "buildVoiceCommandPayload(cleaned, 'voice')" in app_js
     assert "code: getCode()" in app_js
     assert "error: errorText" in app_js
+    assert "source," in app_js
 
 
 def test_start_gate_is_removed_from_keyboard_order_after_language_choice():

@@ -253,7 +253,7 @@ body.theme-night .cu-output { background: #06030a; }
 .mentor-transcript-empty { color: var(--text-dim); margin: 0; }
 
 /* Voice console */
-.cu-voice-console { margin-top: 12px; display: flex; gap: 10px; align-items: center; }
+.cu-voice-console { margin-top: 12px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .cu-voice-input {
   flex: 1; padding: 10px 12px;
   border-radius: var(--radius-sm);
@@ -262,6 +262,13 @@ body.theme-night .cu-output { background: #06030a; }
   font-size: 0.9rem; font-family: var(--font-mono);
 }
 .cu-voice-input:focus { outline: none; border-color: var(--accent); background: var(--bg-panel); }
+.cu-command-tip {
+  flex-basis: 100%;
+  margin: -2px 0 0;
+  color: var(--text-dim);
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
 
 /* Structure */
 .cu-structure { width: 260px; min-width: 240px; display: flex; flex-direction: column; max-height: calc(100vh - 200px); }

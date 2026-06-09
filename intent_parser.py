@@ -749,6 +749,20 @@ class IntentParser:
         r"^explain\s+(?:the\s+)?output\s+diff(?:erence)?$",
     ]
 
+    PRODUCT_POSITIONING_PATTERNS = [
+        r"^why\s+not\s+use\s+vs\s+code\??$",
+        r"^how\s+is\s+codeup\s+different\s+from\s+vs\s+code\??$",
+        r"^is\s+codeup\s+better\s+than\s+vs\s+code\??$",
+        r"^how\s+is\s+codeup\s+different\s+from\s+codex\??$",
+        r"^how\s+is\s+codeup\s+different\s+from\s+copilot\??$",
+    ]
+
+    PROFESSIONAL_TRANSITION_PATTERNS = [
+        r"^what\s+happens\s+after\s+codeup\??$",
+        r"^how\s+do\s+students\s+move\s+to\s+vs\s+code\??$",
+        r"^when\s+do\s+students\s+use\s+professional\s+ides\??$",
+    ]
+
     MENTOR_CHAT_PATTERNS = [
         r"^(?:ask\s+mentor|codeup\s+mentor|mentor\s+(?!mode$))\s+(.+)$",
         r"^why\s+did\s+(?:this|my\s+code|it)\s+fail\??$",
@@ -1135,6 +1149,8 @@ class IntentParser:
             "mentor_walkthrough": self.MENTOR_WALKTHROUGH_PATTERNS,
             "mentor_transform": self.MENTOR_TRANSFORM_PATTERNS,
             "mentor_preference": self.MENTOR_PREFERENCE_PATTERNS,
+            "product_positioning": self.PRODUCT_POSITIONING_PATTERNS,
+            "professional_transition": self.PROFESSIONAL_TRANSITION_PATTERNS,
             "mentor_chat":     self.MENTOR_CHAT_PATTERNS,
             "analyze_deep":   self.ANALYZE_DEEP_PATTERNS,
             "analyze":        self.ANALYZE_PATTERNS,

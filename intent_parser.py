@@ -582,7 +582,13 @@ class IntentParser:
     HELP_PATTERNS = [
         r"^help$",
         r"^show\s+help$",
+        r"^show\s+commands$",
         r"^what\s+can\s+(?:i\s+)?(?:do|say)$",
+        r"^what\s+can\s+(?:i\s+)?(?:do|say)\s+here$",
+        r"^what\s+commands\s+can\s+i\s+try$",
+        r"^how\s+do\s+i\s+use\s+this$",
+        r"^what\s+should\s+i\s+say$",
+        r"^guide\s+me$",
         r"^(?:i'?m\s+)?(?:lost|stuck|confused)$",
         r"^how\s+(?:do\s+i|does\s+this)\s+work$",
         r"^what\s+now$",

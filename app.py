@@ -26,6 +26,7 @@ from conversation_orchestrator import frontend_actions, action_next_label, looks
 from input_concierge import build_input_plan, concierge_request_message, detect_inputs as detect_concierge_inputs
 import session_memory
 import command_clarifier
+import grounded_ai
 from intent_parser import parse_intent
 from project_support import (
     PROJECT_MANIFEST,
@@ -1105,6 +1106,13 @@ def call_conversation_orchestrator_ai(system_prompt: str, user_prompt: str) -> s
         return ""
 
 
+# Core concept words a coach rephrase must keep if the note states them.
+_COACH_CONCEPT_VOCAB = (
+    "quotes", "quote", "text", "variable", "indentation", "indent", "block",
+    "print", "message", "loop", "while", "for", "if", "string", "even", "average",
+)
+
+
 def _ai_coach_rephrase(base_text: str) -> str:
     """Use Key 2 to rephrase a known teaching note into one warmer short line.
 
@@ -1126,16 +1134,15 @@ def _ai_coach_rephrase(base_text: str) -> str:
     coached = str(raw or "").strip().strip('"').strip()
     if not coached:
         return ""
-    lowered = coached.lower()
-    if (
-        len(coached) > 220
-        or len(coached.split()) > 40
-        or "\n" in coached
-        or "```" in coached
-        or any(token in lowered for token in ("print(", "import ", "def ", "input(", "()"))
-    ):
-        return ""
-    return coached
+    # The rephrase must preserve the note's core concept terms (e.g. quotes/text/
+    # variable, indentation/block, print/message) and invent no code or numbers,
+    # else we keep the deterministic note.
+    concept_terms = [t for t in _COACH_CONCEPT_VOCAB if grounded_ai.fact_present(t, base_text)]
+    ok, _reason = grounded_ai.validate(
+        coached, deterministic_text=base_text, required_facts=concept_terms,
+        context=base_text, single_sentence=True, max_words=40, max_chars=220,
+    )
+    return coached if ok else ""
 
 
 def _concierge_ai_values(code_inputs, text):
@@ -6841,9 +6848,24 @@ def _ai_modify_prompt(text, mem, params):
         "Return one clear generation prompt."
     )
     refined = str(call_conversation_orchestrator_ai(system, user) or "").strip().strip('"').strip()
-    if not refined or len(refined) > 300 or "\n" in refined or "```" in refined:
+    if not refined:
         return ""
-    return refined
+    # The rewrite must keep the new count/instruction and the prior subject (e.g.
+    # "10" and "even"), and invent no new numbers/files, else keep deterministic.
+    last_prompt = snap.get("last_gen_prompt", "")
+    required = grounded_ai.numbers(text) + grounded_ai.salient_terms(text)[:2] + grounded_ai.salient_terms(last_prompt)[:2]
+    required = [f for f in dict.fromkeys(required) if f][:6]
+    deterministic_prompt = params.get("prompt", "") if isinstance(params, dict) else ""
+    # deterministic_text is left empty here: the new request legitimately changes
+    # the old count, so we only require the new facts and forbid invented ones
+    # (the allow-list context still includes the prior prompt's numbers).
+    ok, _reason = grounded_ai.validate(
+        refined, deterministic_text="",
+        required_facts=required,
+        context=f"{text} {last_prompt} {deterministic_prompt} {snap.get('current_file', '')}",
+        single_sentence=True, max_words=45, max_chars=300,
+    )
+    return refined if ok else ""
 
 
 def _map_followup_decision(decision, text, mem):

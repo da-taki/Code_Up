@@ -20,6 +20,7 @@ invent a file name, count, output, or error here.
 import re
 from typing import Any, Callable, Dict, Optional, Tuple
 
+import grounded_ai
 from intent_parser import IntentParser
 
 _PARSER = IntentParser()
@@ -98,30 +99,50 @@ def _pattern_question(pat: Dict[str, Any]) -> str:
     return question
 
 
+def _question_facts(question: str) -> list:
+    """The concrete facts a clarifying question must keep (size, line ref)."""
+    facts = []
+    size = re.search(r"\b(\d+)\s+by\s+(\d+)\b", question)
+    if size:
+        facts.append(f"{size.group(1)} by {size.group(2)}")
+    line = _ORDINAL_LINE.search(question)
+    if line:
+        facts.append(f"{line.group(1)} {line.group(2)}")
+    return facts
+
+
 def _ai_refine_question(deterministic_question: str, text: str,
                         ai_fn: Optional[Callable[[str, str], str]]) -> str:
-    """Optionally let Key 2 rephrase the clarifying question (bounded). Returns
-    "" on any problem so the deterministic question is used."""
+    """Optionally let Key 2 rephrase the clarifying question. Returns "" unless
+    the rephrase is grounded (keeps the size/line facts, invents nothing), so a
+    weaker/generic question can never replace the specific deterministic one."""
     if not ai_fn:
         return ""
     system = (
         "You are CodeUp's command clarifier for a blind beginner. The user's voice "
-        "command was ambiguous. Ask ONE short clarifying question (under 25 words) to "
-        "resolve it. Do NOT invent file names, code, numbers, or results. Plain text, "
-        "end with a question mark."
+        "command was ambiguous. Ask ONE short clarifying question (under 25 words) that "
+        "KEEPS every concrete detail from the draft question (sizes, line numbers). Do "
+        "NOT invent file names, code, numbers, or results, and do NOT make it more "
+        "generic. Plain text, end with a question mark."
     )
     user = (
         f"User command: {text}\n"
         f"Draft question: {deterministic_question}\n"
-        "Return one short clarifying question."
+        "Return one short clarifying question that keeps the same concrete details."
     )
     try:
         raw = str(ai_fn(system, user) or "").strip().strip('"').strip()
     except Exception:
         return ""
-    if not raw or len(raw) > 200 or "\n" in raw or "```" in raw or not raw.endswith("?"):
+    if not raw or not raw.endswith("?"):
         return ""
-    return raw
+    grounded = grounded_ai.ground(
+        raw, deterministic_question,
+        required_facts=_question_facts(deterministic_question),
+        context=f"{deterministic_question} {text}",
+        single_sentence=True, max_words=30, max_chars=200,
+    )
+    return grounded if grounded == raw else ""
 
 
 def assess(text: str, *, intent: str = "", confidence: float = 0.0, code: str = "",

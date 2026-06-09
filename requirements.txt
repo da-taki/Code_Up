@@ -16,3 +16,4 @@ ruff==0.4.10
 black==24.4.2
 pre-commit==3.7.1
 python-dotenv==1.0.0
+gunicorn

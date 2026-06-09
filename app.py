@@ -22,6 +22,7 @@ from dotenv import load_dotenv
 from flask import Flask, Response, g, has_request_context, jsonify, render_template, request, send_from_directory, stream_with_context
 from rapidfuzz import fuzz
 
+from conversation_orchestrator import frontend_actions, action_next_label, orchestrate_command, strip_wake_phrase
 from intent_parser import parse_intent
 from project_support import (
     PROJECT_MANIFEST,
@@ -1066,6 +1067,41 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en", max_
         _debug_log(f"AI future failed: {sanitize_traceback(str(e))}")
         return "AI service is currently unavailable. Core CodeUp features still work."
 
+
+def call_conversation_orchestrator_ai(system_prompt: str, user_prompt: str) -> str:
+    """Use GROQ_API_KEY_2 only for structured command interpretation."""
+    if _env_flag_disabled("CODEUP_AI_ENABLED") or _env_flag_disabled("AI_ENABLED") or _env_flag_disabled("GROQ_ENABLED"):
+        return ""
+    key = str(os.environ.get("GROQ_API_KEY_2", "") or "").strip()
+    if not key or key == "your_second_groq_api_key":
+        return ""
+
+    def _do_call():
+        from groq import Groq
+        client = Groq(api_key=key)
+        response = client.chat.completions.create(
+            model=os.environ.get("GROQ_ORCHESTRATOR_MODEL", GEMINI_MODEL),
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.1,
+            max_tokens=900,
+        )
+        for choice in getattr(response, "choices", []) or []:
+            message = getattr(choice, "message", None)
+            content = str(getattr(message, "content", "") or "").strip()
+            if content:
+                return content
+        return ""
+
+    try:
+        future = _get_gemini_executor().submit(_do_call)
+        return future.result(timeout=MAX_GEMINI_TIMEOUT + 1)
+    except Exception:
+        return ""
+
+
 def extract_code(text: str):
     m = re.search(r"```(?:python)?\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
     if not m:
@@ -1082,6 +1118,11 @@ def extract_code(text: str):
 def _local_code_generation_fallback(prompt: str) -> str:
     """Small deterministic fallback for common beginner prompts when AI is blank."""
     lower = (prompt or "").lower()
+    if (
+        ("zero to two" in lower or "0 to 2" in lower or "numbers zero" in lower)
+        and ("print" in lower or "loop" in lower or "numbers" in lower)
+    ):
+        return "for i in range(3):\n    print(i)\n"
     if "circle" in lower and "area" in lower:
         return (
             "# Sample radius. Change this value to test another circle.\n"
@@ -5238,6 +5279,10 @@ def generate_code():
     if exact_result:
         return jsonify(exact_result)
 
+    local_direct = _local_code_generation_fallback(prompt)
+    if local_direct and re.search(r"\b(?:zero|0)\s+to\s+(?:two|2)\b", prompt, re.IGNORECASE):
+        return jsonify({"success": True, "code": local_direct, "source": "local_fallback"})
+
     if requested_mode == "project" or looks_like_multifile_prompt(prompt):
         template_id = choose_template_for_prompt(prompt)
         if template_id:
@@ -6622,6 +6667,79 @@ def voice():
         with _session_traces_lock:
             storage['last_voice_action'] = (response_dict, status_code)
         return jsonify(response_dict), status_code
+
+    pending_clarification = storage.get("pending_orchestrator_clarification")
+    orchestrator_text = text
+    looks_like_new_command = re.match(
+        r"\s*(?:make|generate|print|create|put|write|draw|run|fix|clear|open|read|walk|map|sonify|start|help|what|why|how)\b",
+        text,
+        re.IGNORECASE,
+    )
+    if (
+        isinstance(pending_clarification, dict)
+        and time.time() - float(pending_clarification.get("timestamp", 0) or 0) < 90
+        and not intent
+        and not looks_like_new_command
+    ):
+        orchestrator_text = f"{pending_clarification.get('original_text', '')} {text}".strip()
+
+    wake_info = strip_wake_phrase(orchestrator_text)
+    lower_orchestrator_text = orchestrator_text.lower()
+    should_try_orchestrator = (
+        wake_info.get("wake_detected")
+        or re.search(r"\b(?:then|and then|after that)\b", lower_orchestrator_text)
+        or "cube" in lower_orchestrator_text
+        or re.search(r"\bfix\s+it\s+and\s+run\s+it\b", lower_orchestrator_text)
+        or build_exact_symbol_generation(wake_info.get("text") or orchestrator_text, source=input_source) is not None
+    )
+    if should_try_orchestrator:
+        pre_orchestrator_exact = build_exact_symbol_generation(wake_info.get("text") or orchestrator_text, source=input_source)
+        plan = orchestrate_command(
+            orchestrator_text,
+            code=current_code,
+            source=input_source,
+            ai_plan_fn=call_conversation_orchestrator_ai if (wake_info.get("wake_detected") or re.search(r"\b(?:then|and then|after that)\b", lower_orchestrator_text)) else None,
+        )
+        if plan:
+            if plan.get("needs_clarification"):
+                storage["pending_orchestrator_clarification"] = {
+                    "original_text": orchestrator_text,
+                    "question": plan.get("clarification_question", ""),
+                    "expected_slots": [],
+                    "timestamp": time.time(),
+                }
+                message = plan.get("clarification_question") or plan.get("spoken_summary") or "Please clarify that command."
+                return _store_and_return({
+                    "success": True,
+                    "action": "exact_symbol_clarification" if pre_orchestrator_exact is not None else "orchestrator_clarification",
+                    "message": message,
+                    "speech": message,
+                    "heard": text,
+                    "normalized_text": plan.get("normalized_text", ""),
+                    "next_action": "Waiting for clarification.",
+                    "confidence": plan.get("confidence", 0.0),
+                    "orchestrated": True,
+                })
+            storage.pop("pending_orchestrator_clarification", None)
+            planned_actions = frontend_actions(plan, input_source=input_source)
+            if planned_actions:
+                next_action = action_next_label(plan["actions"][0]) if plan.get("actions") else "Preparing the next action."
+                base = {
+                    "success": True,
+                    "heard": text,
+                    "normalized_text": plan.get("normalized_text", ""),
+                    "spoken_summary": plan.get("spoken_summary", ""),
+                    "next_action": next_action,
+                    "confidence": plan.get("confidence", 0.0),
+                    "orchestrated": True,
+                }
+                if len(planned_actions) == 1:
+                    return _store_and_return({**base, **planned_actions[0]})
+                return _store_and_return({
+                    **base,
+                    "action": "action_sequence",
+                    "actions": planned_actions,
+                })
 
     exact_result = build_exact_symbol_generation(text, source=input_source)
     if exact_result:

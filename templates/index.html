@@ -188,6 +188,18 @@
       />
       <button class="cu-button cu-button-secondary" id="sendCommandBtn" aria-label="Send command">Send</button>
       <p id="commandPrecisionTip" class="cu-command-tip">Tip: Type or speak commands. For exact symbols, patterns, quotes, or long prompts, typing is more reliable.</p>
+      <div
+        id="commandUnderstanding"
+        class="cu-command-understanding"
+        role="status"
+        aria-live="polite"
+        aria-atomic="false"
+        aria-label="Command understanding"
+      >
+        <div><span class="cu-command-understanding-label">Heard:</span> <span id="heardTranscript">Nothing heard yet.</span></div>
+        <div><span class="cu-command-understanding-label">Understood:</span> <span id="understoodCommand">Waiting for a command.</span></div>
+        <div><span class="cu-command-understanding-label">Next action:</span> <span id="nextCommandAction">None yet.</span></div>
+      </div>
     </div>
   </section>
 

@@ -1573,6 +1573,55 @@ function setCode(v, opts) {
 
 function out(t) { document.getElementById('output').textContent = t; }
 
+function updateCommandUnderstanding(update = {}) {
+  const heardEl = document.getElementById('heardTranscript');
+  const understoodEl = document.getElementById('understoodCommand');
+  const nextEl = document.getElementById('nextCommandAction');
+  if (heardEl && Object.prototype.hasOwnProperty.call(update, 'heard')) {
+    heardEl.textContent = String(update.heard || '').trim() || 'Nothing heard yet.';
+  }
+  if (understoodEl && Object.prototype.hasOwnProperty.call(update, 'understood')) {
+    understoodEl.textContent = String(update.understood || '').trim() || 'Waiting for a command.';
+  }
+  if (nextEl && Object.prototype.hasOwnProperty.call(update, 'nextAction')) {
+    nextEl.textContent = String(update.nextAction || '').trim() || 'None yet.';
+  }
+}
+window.updateTranscriptStatus = updateCommandUnderstanding;
+
+function describeCommandAction(action) {
+  const labels = {
+    action_sequence: 'Running the planned actions.',
+    run: 'Running code.',
+    run_project_file: 'Running project file.',
+    generate_code: 'Generating code.',
+    clear_editor: 'Clearing the editor.',
+    walk_through: 'Walking through the program.',
+    mentor_chat: 'Answering the question.',
+    mentor_code_map: 'Mapping the code.',
+    code_map: 'Mapping the code.',
+    sonify_block: 'Sonifying the block.',
+    read_project_files: 'Reading project files.',
+    open_project_file: 'Opening project file.',
+    start_tutorial: 'Starting tutorial.',
+    help: 'Showing command guide.',
+    exact_symbol_clarification: 'Waiting for clarification.',
+    orchestrator_clarification: 'Waiting for clarification.',
+  };
+  return labels[action] || (action ? `Action: ${String(action).replace(/_/g, ' ')}.` : '');
+}
+
+function applyCommandUnderstanding(data, heardText) {
+  if (!data) return;
+  const understood = data.normalized_text || data.understood || data.spoken_summary || heardText || '';
+  const nextAction = data.next_action || data.label || describeCommandAction(data.action);
+  updateCommandUnderstanding({
+    heard: data.heard || heardText || '',
+    understood,
+    nextAction,
+  });
+}
+
 // Convenience: write to output panel AND speak it. Removes the boilerplate
 // `out(x); speak(x);` pair that appears 30+ times in this file.
 function tellUser(text, opts) {
@@ -2791,14 +2840,42 @@ async function previewSnippetById(id) {
 }
 
 // ---------- COMMAND HANDLER ----------
+async function executeActionSequence(payload) {
+  const actions = Array.isArray(payload && payload.actions) ? payload.actions : [];
+  if (!actions.length) {
+    const message = (payload && payload.spoken_summary) || 'No safe actions were planned.';
+    out(message);
+    speak(message);
+    return;
+  }
+  const summary = (payload && payload.spoken_summary) || `I will do ${actions.length} actions.`;
+  out(summary);
+  speak(summary);
+  for (const planned of actions) {
+    if (!planned || !planned.action) continue;
+    updateCommandUnderstanding({
+      heard: payload && payload.heard,
+      understood: payload && payload.normalized_text,
+      nextAction: planned.label || planned.action,
+    });
+    await handleConfirmedAction(planned.action, planned);
+  }
+  updateCommandUnderstanding({
+    heard: payload && payload.heard,
+    understood: payload && payload.normalized_text,
+    nextAction: 'Plan complete.',
+  });
+}
+
 async function handleConfirmedAction(action, payload) {
   // Most actions should interrupt previous narration, but some need it to finish first.
   // Generate, analyze, walk: they speak feedback BEFORE the long async wait, don't kill it.
-  const _noCancelActions = new Set(['generate_code', 'analyze', 'analyze_deep', 'fix', 'summarize', 'narrate_file', 'walk_through', 'advise', 'story_mode', 'mentor_chat', 'mentor_progress', 'mentor_code_map', 'code_map', 'step_narration', 'compare_before_after', 'replay_mistake', 'why_fixed_works', 'read_project_files', 'explain_project_structure', 'explain_requirements']);
+  const _noCancelActions = new Set(['action_sequence', 'generate_code', 'analyze', 'analyze_deep', 'fix', 'summarize', 'narrate_file', 'walk_through', 'advise', 'story_mode', 'mentor_chat', 'mentor_progress', 'mentor_code_map', 'code_map', 'step_narration', 'compare_before_after', 'replay_mistake', 'why_fixed_works', 'read_project_files', 'explain_project_structure', 'explain_requirements']);
   if (!_noCancelActions.has(action)) {
     SpeechManager.cancelAll();
   }
   if (action === 'run')              await runCode();
+  else if (action === 'action_sequence') await executeActionSequence(payload || {});
   else if (action === 'mentor_stop') { SpeechManager.cancelAll(); speak('Mentor stopped.'); srAnnounce('Mentor stopped'); }
   else if (action === 'mentor_chat') {
     const _mentorMode = payload && payload.mode ? payload.mode : 'general';
@@ -2834,7 +2911,7 @@ async function handleConfirmedAction(action, payload) {
     out(text); speak(text);
   }
   else if (action === 'generate_code') await generateCode(payload && payload.prompt ? payload.prompt : '', payload || {});
-  else if (action === 'exact_symbol_clarification' || action === 'deterministic_message') {
+  else if (action === 'exact_symbol_clarification' || action === 'orchestrator_clarification' || action === 'deterministic_message') {
     const message = (payload && (payload.message || payload.speech)) || 'No guidance available.';
     out(message);
     srAnnounce('Guidance shown');
@@ -3825,6 +3902,7 @@ function tryResolveConfirmation(txt) {
 async function handleCommandText(txt) {
   const field = document.getElementById('voiceText');
   if (field) field.value = txt;
+  updateCommandUnderstanding({ heard: txt, understood: '', nextAction: 'Interpreting command.' });
 
   // GUIDED TUTORIAL intercept (mirrors handleVoiceCommand) — consume tutorial
   // navigation words while active; everything else falls through unchanged.
@@ -3899,6 +3977,7 @@ async function handleCommandText(txt) {
       body:    JSON.stringify(buildVoiceCommandPayload(txt, 'typed')),
     });
     const data = await res.json();
+    applyCommandUnderstanding(data, txt);
 
     if (!data.success) { speak(data.message || 'Command not recognized.'); return; }
 
@@ -4036,7 +4115,7 @@ function startListening() {
   _voicePaused = false;
   recognition = new SR();
   recognition.continuous      = true;
-  recognition.interimResults  = false;
+  recognition.interimResults  = true;
   recognition.lang            = getLanguage() === 'hi' ? 'hi-IN' : 'en-US';
   recognition._restartAttempts = 0;
   recognition._maxRestarts     = 5;
@@ -4109,7 +4188,19 @@ function startListening() {
 
   recognition.onresult = async (event) => {
     if (!_voiceEnabledByUser) return;
-    const transcript = event.results[event.results.length - 1][0].transcript;
+    let finalTranscript = '';
+    let interimTranscript = '';
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const chunk = event.results[i][0].transcript;
+      if (event.results[i].isFinal) finalTranscript += chunk;
+      else interimTranscript += chunk;
+    }
+    if (interimTranscript.trim()) {
+      updateCommandUnderstanding({ heard: interimTranscript.trim(), nextAction: 'Listening.' });
+    }
+    const transcript = finalTranscript.trim();
+    if (!transcript) return;
+    updateCommandUnderstanding({ heard: transcript, nextAction: 'Interpreting voice command.' });
     _debugLog('Voice heard:', transcript);
     _lastRecognitionActivity = Date.now();  // any input proves recognition is alive
 
@@ -4378,6 +4469,8 @@ async function handleVoiceCommand(rawText) {
     return;
   }
 
+  updateCommandUnderstanding({ heard: rawText, understood: '', nextAction: 'Interpreting voice command.' });
+
   // GUIDED TUTORIAL: while the tutorial is active, let it consume its own
   // navigation words (continue, repeat, recap, hint, give me an example, try
   // again, exit tutorial). handleUtterance returns false for anything else, so
@@ -4465,6 +4558,7 @@ async function handleVoiceCommand(rawText) {
       body:    JSON.stringify(buildVoiceCommandPayload(cleaned, 'voice')),
     });
     const data = await res.json();
+    applyCommandUnderstanding(data, cleaned);
 
     // Handle confirm intent before the general success branch so it isn't
     // swallowed by handleConfirmedAction (which has no 'confirm' case)

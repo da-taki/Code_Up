@@ -193,4 +193,38 @@ check('if and for step checks gate header + indented body', () => {
   assert.strictEqual(TUTORIAL_STEPS.for[1].check('for i in range(3):\n    print(i)'), true);
 });
 
+// AI-tutor coach: new phrases classify, and they are checked BEFORE the plain
+// control words (so "say that again simpler" coaches, not repeats), while the
+// existing control words and real coding commands are untouched.
+check('classifyCoachRequest recognises coach phrases', () => {
+  const K = TutorialModel.classifyCoachRequest;
+  assert.strictEqual(K('explain simpler'), 'explain_simpler');
+  assert.strictEqual(K('say that again simpler'), 'explain_simpler');
+  assert.strictEqual(K("I don't understand"), 'dont_understand');
+  assert.strictEqual(K('why do we use quotes'), 'why_quotes');
+  assert.strictEqual(K('why indentation'), 'why_indentation');
+  assert.strictEqual(K('give me another hint'), 'another_hint');
+  assert.strictEqual(K('encourage me'), 'encourage');
+  assert.strictEqual(K('what am I learning'), 'what_learning');
+});
+
+check('coach classifier never swallows control or coding commands', () => {
+  const K = TutorialModel.classifyCoachRequest;
+  // Existing control words are NOT coach phrases (so classifyDecision handles them).
+  ['continue', 'try again', 'recap', 'hint', 'repeat', 'exit tutorial',
+   'read my code', 'say that again', 'give me a hint'].forEach((w) => {
+    assert.strictEqual(K(w), null, 'should not coach: ' + w);
+  });
+  // Real coding commands are never coach phrases.
+  ['run code', 'run', 'insert print hello world',
+   'insert a variable named name and give it the value Taknoor'].forEach((w) => {
+    assert.strictEqual(K(w), null, 'should not coach: ' + w);
+  });
+  // And the existing control words still classify as before.
+  assert.strictEqual(TutorialModel.classifyDecision('say that again'), 'repeat');
+  assert.strictEqual(TutorialModel.classifyDecision('continue'), 'continue');
+  assert.strictEqual(TutorialModel.classifyDecision('hint'), 'hint');
+  assert.strictEqual(TutorialModel.classifyDecision('exit tutorial'), 'exit');
+});
+
 console.log('tutorial_model.test.js: ' + groups + ' groups passed');

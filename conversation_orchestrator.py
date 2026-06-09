@@ -36,6 +36,51 @@ NOISY_REPLACEMENTS = [
     (re.compile(r"\bcodup\b", re.IGNORECASE), "code up"),
 ]
 
+# A generation-like request asks CodeUp to build a program/snippet. Key 2 (the
+# conversation/tutor brain) rewrites these rough prompts into clearer beginner
+# prompts before the Key 1 coding model ever sees them. The patterns stay narrow
+# so simple fast commands (run, open main, map my code, ...) never match.
+_GEN_VERB = r"(?:generate|create|build|write|make)"
+_GEN_OBJECT = (
+    r"(?:code|program|programme|script|function|app|application|game|project|tool|"
+    r"class|module|thing|something|calculator|website|webpage|page|bot|quiz|"
+    r"pattern|loop)"
+)
+GENERATION_REQUEST_RES = (
+    # "generate code", "write a program", "make a simple calculator app", ...
+    re.compile(
+        rf"\b{_GEN_VERB}\s+(?:me\s+|us\s+)?(?:a\s+|an\s+|some\s+)?"
+        rf"(?:simple\s+|small\s+|basic\s+|little\s+|python\s+)*{_GEN_OBJECT}\b",
+        re.IGNORECASE,
+    ),
+    # vague "make a marks thing", "create a quiz game" -> verb + article + a noun
+    re.compile(rf"\b{_GEN_VERB}\s+(?:me\s+|us\s+)?(?:a|an)\s+\w+", re.IGNORECASE),
+    # "code something", "code me a ...", "code up a ..."
+    re.compile(r"\bcode\s+(?:me\s+|us\s+)?(?:a|an|some|something|up)\b", re.IGNORECASE),
+)
+
+# File/folder management ("create a new file main dot py") is a deterministic
+# project-file command, not a generation request — never route it to Key 2.
+_FILE_OP_RE = re.compile(
+    r"\b(?:create|make|add|new|open|rename|delete|remove)\s+"
+    r"(?:a\s+|an\s+|the\s+)?(?:new\s+|current\s+|this\s+)?(?:file|folder|directory)\b",
+    re.IGNORECASE,
+)
+
+
+def looks_like_generation_request(text: str) -> bool:
+    """True when the (wake-stripped) text asks CodeUp to generate a program.
+
+    Used to route rough generation prompts through the Key 2 orchestrator while
+    leaving simple deterministic commands and project-file management untouched.
+    """
+    cleaned = cleanup_transcript(text).strip()
+    if not cleaned:
+        return False
+    if _FILE_OP_RE.search(cleaned):
+        return False
+    return any(pattern.search(cleaned) for pattern in GENERATION_REQUEST_RES)
+
 
 def _safe_text(value: Any, limit: int = MAX_PROMPT) -> str:
     text = str(value or "").replace("\x00", "").strip()
@@ -220,18 +265,34 @@ def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
 
 def _ai_prompt(text: str, code: str) -> tuple[str, str]:
     system = (
-        "You are CodeUp's conversation orchestrator. Return only JSON. "
-        "Do not generate code. Do not execute code. Produce a safe plan using only "
-        "these action types: generate_code, run, explain, map_code, sonify, open_file, "
-        "start_tutorial, show_help, answer_question. Preserve exact counts and symbols."
+        "You are CodeUp's conversation orchestrator and beginner coding tutor. "
+        "CodeUp is a voice-first IDE for blind and beginner programmers. "
+        "Return ONLY a JSON object. Never write or run code yourself — instead turn a "
+        "rough spoken request into a clear, safe PLAN a downstream code generator can follow. "
+        "Use only these action types: generate_code, run, explain, map_code, sonify, "
+        "open_file, start_tutorial, show_help, answer_question.\n"
+        "For a generate_code action, rewrite the user's rough idea into ONE clear, "
+        "beginner-friendly Python coding prompt in the 'prompt' field: say what to build, "
+        "suggest concrete sample data, and keep it runnable without input(). "
+        "Preserve every explicit constraint exactly as spoken: counts, the number of rows "
+        "or columns, exact symbols or characters, quotes, math operators, file names, "
+        "'multiple files', and any 'instead of' / 'rather than' substitution. "
+        "If the request names exact symbols and exact per-row counts for a printed pattern, "
+        "set requires_exact_symbols true and keep the literal counts.\n"
+        "Split a simple multi-step request (for example 'make X, then run it, then explain "
+        "it') into an ordered list of actions. "
+        "Only ask for clarification when the request is genuinely ambiguous: set "
+        "needs_clarification true with a short clarification_question and an empty actions list."
     )
     user = (
         "Transcript:\n"
         f"{text}\n\n"
         f"Editor has code: {'yes' if str(code or '').strip() else 'no'}\n\n"
-        "Return JSON with keys confidence, normalized_text, needs_clarification, "
-        "clarification_question, actions, spoken_summary. Each action has type, source, "
-        "prompt, constraints, requires_exact_symbols, and optional path."
+        "Return a JSON object with keys confidence (0-1), normalized_text, "
+        "needs_clarification, clarification_question, actions, spoken_summary. "
+        "Each action has type, source ('ai_orchestrated'), prompt, constraints, "
+        "requires_exact_symbols, and optional path. "
+        "Keep generate_code prompts beginner-friendly and runnable without input()."
     )
     return system, user
 
@@ -270,9 +331,17 @@ def orchestrate_command(
     if re.search(r"\bfix\s+it\b", lower) and re.search(r"\brun\s+it\b", lower) and not str(code or "").strip():
         return _clarification(stripped["text"], stripped["text"], "There is no code to fix yet. Do you want me to generate an example?")
 
-    rough_generation = bool(re.search(r"\b(?:generate|create|make|write|build)\b", lower))
-    if force and rough_generation:
+    # Key 2 is the AI-first generation/tutor brain: when the request looks like a
+    # generation ask, let it rewrite the rough prompt into a clearer beginner
+    # prompt (and split multi-step asks) BEFORE the deterministic parser — and
+    # before Key 1 ever receives it. Exact-symbol, cube, and fix/run safety
+    # checks above still win first, so deterministic pattern handling is intact.
+    generation_like = looks_like_generation_request(stripped["text"])
+    ai: Optional[Dict[str, Any]] = None
+    ai_attempted = False
+    if generation_like:
         ai = _ai_plan(stripped["text"], code, ai_plan_fn)
+        ai_attempted = True
         if ai and (ai.get("needs_clarification") or ai.get("actions")):
             return ai
 
@@ -280,9 +349,13 @@ def orchestrate_command(
     if deterministic:
         return deterministic
 
-    ai = _ai_plan(stripped["text"], code, ai_plan_fn)
-    if ai:
-        return ai
+    # Catch-all AI only for forced or generation-like commands. Simple fast
+    # commands (run, clear editor, open main, ...) never reach Key 2.
+    if force or generation_like:
+        if not ai_attempted:
+            ai = _ai_plan(stripped["text"], code, ai_plan_fn)
+        if ai:
+            return ai
 
     if stripped["wake_detected"]:
         parsed = parse_intent(stripped["text"])

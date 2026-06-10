@@ -36,30 +36,26 @@ def _act(client, text, code=""):
 # insert_variable — the command that previously failed in the Variables lesson
 # ---------------------------------------------------------------------------
 class TestInsertVariable:
+    # Variable assignments are now built into valid Python (string quoted, numbers
+    # bare) and inserted via conversational_edit, deterministically validated.
     def test_string_variable_primary_phrasing(self, client):
         d = _act(client, "insert a variable named name and give it the value Taknoor")
-        assert d["action"] == "insert_variable"
-        assert d["name"] == "name"
-        assert d["value"] == "Taknoor"
+        assert d["action"] == "conversational_edit"
+        assert d["ai_action"]["code"] == 'name = "Taknoor"'
 
     def test_string_variable_with_value_phrasing(self, client):
         d = _act(client, "insert a variable called name with value Aman")
-        assert d["action"] == "insert_variable"
-        assert d["name"] == "name"
-        assert d["value"] == "Aman"
+        assert d["ai_action"]["code"] == 'name = "Aman"'
 
     def test_numeric_variable(self, client):
         d = _act(client, "insert a variable named score with value 7")
-        assert d["action"] == "insert_variable"
-        assert d["name"] == "score"
-        assert d["value"] == "7"
+        assert d["ai_action"]["code"] == "score = 7"
 
     @pytest.mark.parametrize("verb", ["insert", "create", "make", "add"])
     def test_verb_synonyms(self, client, verb):
         d = _act(client, f"{verb} a variable named age set to 12")
-        assert d["action"] == "insert_variable", (verb, d)
-        assert d["name"] == "age"
-        assert d["value"] == "12"
+        assert d["action"] == "conversational_edit", (verb, d)
+        assert d["ai_action"]["code"] == "age = 12"
 
 
 # ---------------------------------------------------------------------------
@@ -86,19 +82,30 @@ class TestInsertWhileIf:
 # General "insert <spoken line>" — for loops, indented prints, increments
 # ---------------------------------------------------------------------------
 class TestGeneralInsertAppends:
+    # Non-print lines (for-headers, increments) still flow through append_line and
+    # are turned into Python by the frontend normalizer.
     @pytest.mark.parametrize("text,expected", [
         ("insert for i in range 3", "for i in range 3"),
-        ("insert indented print count", "indented print count"),
-        ("insert indented print i", "indented print i"),
         ("insert indented count equals count plus 1", "indented count equals count plus 1"),
-        ("insert print name", "print name"),
-        ("insert print hello world", "print hello world"),
-        ("insert an indented print saying you can vote", "an indented print saying you can vote"),
     ])
     def test_general_insert_routes_to_append_line(self, client, text, expected):
         d = _act(client, text)
         assert d["action"] == "append_line", (text, d)
         assert d["text"] == expected
+
+    # Print inserts are now built into valid beginner Python by the backend
+    # (text quoted, defined variables left bare), inserted via conversational_edit.
+    @pytest.mark.parametrize("text,code,expected_code", [
+        ("insert print hello world", "", 'print("hello world")'),
+        ("insert print name", "", 'print("name")'),
+        ("insert indented print count", "", '    print("count")'),
+        ("insert an indented print saying you can vote", "", '    print("you can vote")'),
+        ("insert indented print i", "for i in range(3):", '    print(i)'),
+    ])
+    def test_print_inserts_build_valid_python(self, client, text, code, expected_code):
+        d = _act(client, text, code=code)
+        assert d["action"] == "conversational_edit", (text, d)
+        assert d["ai_action"]["code"] == expected_code
 
 
 # ---------------------------------------------------------------------------

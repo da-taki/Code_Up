@@ -17,6 +17,11 @@ build.log
 .DS_Store
 Thumbs.db
 
+# Editor / local tooling
+.claude/
+.vscode/
+.idea/
+
 # Per-session storage
 snippets_*.json
 macros_*.json

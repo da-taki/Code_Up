@@ -207,7 +207,7 @@ class TestRouteFollowups:
         assert _vc(client, "insert print hello world")["action"] == "conversational_edit"
 
     def test_tutorial_coach_still_works(self, client):
-        # Prompt 3 behavior preserved: the coach route is unaffected by memory.
+        # The tutorial coach route is unaffected by session memory.
         d = client.post("/tutorial/coach", json={"module": "print", "text": "why do we use quotes"}).get_json()
         assert d["handled"] is True
         assert "text" in d["text"].lower()

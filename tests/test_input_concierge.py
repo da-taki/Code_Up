@@ -1,4 +1,4 @@
-"""Focused tests for the input() concierge (Prompt 2).
+"""Focused tests for the input() concierge.
 
 Covers detection of input()/int(input())/float(input()), natural value-supplying
 commands, spoken-number normalisation, sample values, friendly type-mismatch

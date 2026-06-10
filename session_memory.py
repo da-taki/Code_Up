@@ -17,9 +17,11 @@ Design notes:
     can never invent an error, output, or file that memory does not hold.
 """
 
+import time
 from typing import Any, Dict, List, Optional
 
 MEMORY_KEY = "session_memory"
+_PENDING_TTL_SECONDS = 180
 
 _MAX_TEXT = 400
 _MAX_OUTPUT = 800
@@ -55,6 +57,7 @@ def new_memory() -> Dict[str, Any]:
         "input_values": [],
         "input_prompts": [],
         "code_map_summary": "",
+        "pending_clarification": None,
     }
 
 
@@ -135,6 +138,32 @@ def record_tutorial(mem: Dict[str, Any], module: str) -> None:
 
 def record_code_map(mem: Dict[str, Any], summary: str) -> None:
     mem["code_map_summary"] = _clip(summary, 400)
+
+
+# ---------------------------------------------------------------------------
+# Pending clarification (a real question CodeUp asked and must understand)
+# ---------------------------------------------------------------------------
+def set_pending(mem: Dict[str, Any], pending: Optional[Dict[str, Any]]) -> None:
+    if not pending:
+        mem["pending_clarification"] = None
+        return
+    record = dict(pending)
+    record["timestamp"] = time.time()
+    mem["pending_clarification"] = record
+
+
+def get_pending(mem: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    pending = mem.get("pending_clarification")
+    if not isinstance(pending, dict):
+        return None
+    if time.time() - float(pending.get("timestamp", 0) or 0) > _PENDING_TTL_SECONDS:
+        mem["pending_clarification"] = None
+        return None
+    return pending
+
+
+def clear_pending(mem: Dict[str, Any]) -> None:
+    mem["pending_clarification"] = None
 
 
 def snapshot(mem: Dict[str, Any], *, utterance: str = "", file_name: str = "") -> Dict[str, Any]:

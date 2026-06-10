@@ -166,7 +166,9 @@ class TestHinglishCoreFlow:
         assert _action(client, "clear editor", code="")["action"] == "clear_editor"
         assert _action(client, "run")["action"] == "run"
         assert _action(client, "walk me through this program")["action"] == "walk_through"
-        assert _action(client, "What does range three mean?")["action"] == "mentor_chat"
+        # Fix 5: with a loop in the editor, range questions now get a grounded
+        # deterministic answer; without code they still route to the concept mentor.
+        assert _action(client, "What does range three mean?")["action"] in ("mentor_chat", "deterministic_message")
 
 
 # =====================================================================

@@ -927,6 +927,13 @@
       var kind = TutorialModel.classifyDecision(text);
       if (!kind) return false;
 
+      // Tutorial navigation (continue, next, hint, repeat, recap, try again,
+      // exit tutorial, start coding) must not collide with narration: stop any
+      // current speech through the shared engine BEFORE doing the action.
+      if (typeof SpeechManager !== 'undefined' && SpeechManager.cancelAll) {
+        SpeechManager.cancelAll();
+      }
+
       switch (kind) {
         case 'exit':   this.exit(true); return true;
         case 'repeat': this._repeatInstruction(); return true;

@@ -115,7 +115,9 @@ def test_intentional_indentation_error(client):
 def test_normal_insert_is_not_treated_as_broken(client):
     d = _vc(client, "insert print hello")
     assert d.get("intentional_error") is not True
-    assert d["action"] == "append_line"
+    # A normal insert produces valid (quoted) Python, not a broken example.
+    assert d["action"] == "conversational_edit"
+    assert d["ai_action"]["code"] == 'print("hello")'
 
 
 # 10 + 11 — global concept Q&A outside the tutorial

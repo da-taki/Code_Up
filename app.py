@@ -6886,10 +6886,48 @@ def _spoken_insert_response(text, code):
     }
 
 
-def _route_repaired_intent(text, code):
+def _spoken_variable_response(text, code, mem, intent):
+    """Build a valid Python variable assignment from natural speech, or ask one
+    specific question (remembered as a pending clarification) when the name or
+    value is missing. Only overrides generic/unknown inserts, never a real
+    different intent such as set_inputs."""
+    if intent not in (None, "", "insert_variable", "append_line"):
+        return None
+    slots = intent_repair.parse_variable_assignment(text, code)
+    if not slots:
+        return None
+    if slots.get("missing"):
+        question = intent_repair.variable_question(slots)
+        pending = {"type": "variable"}
+        if "name" in slots["missing"]:
+            pending["missing"] = "name"
+            pending["value"] = slots.get("value")
+        else:
+            pending["name"] = slots.get("name")
+        session_memory.set_pending(mem, pending)
+        return {"success": True, "action": "clarify", "intent": "clarify",
+                "message": question, "speech": question, "reason": "variable_assignment",
+                "needs_clarification": True, "heard": text}
+    python = slots["python"]
+    try:
+        compile(python, "<insert>", "exec")
+    except SyntaxError:
+        return None
+    return {"success": True, "action": "conversational_edit",
+            "ai_action": {"action": "append_code", "code": python},
+            "heard": text, "speech": "Inserting the variable.", "spoken_code": python}
+
+
+def _route_repaired_intent(text, code, allow_ai=False):
     """Map a Key 2 / deterministic intent-repair decision onto an existing action,
-    or None to fall through. Only allowlisted actions are ever executed."""
-    decision = intent_repair.repair(text, code=code, ai_fn=call_conversation_orchestrator_ai)
+    or None to fall through. Only allowlisted actions are ever executed.
+
+    ``allow_ai`` gates the Key 2 fallback: it is False for the high-confidence
+    deterministic pass that runs *before* the fuzzy/security matcher (so Key 2 can
+    never override an existing safe route), and True only for the last-resort pass
+    that runs *after* fuzzy matching has had its say."""
+    ai_fn = call_conversation_orchestrator_ai if allow_ai else None
+    decision = intent_repair.repair(text, code=code, ai_fn=ai_fn)
     if not intent_repair.validate_decision(decision):
         return None
     action = decision.get("action")
@@ -6898,8 +6936,10 @@ def _route_repaired_intent(text, code):
             "canonical_command": decision.get("canonical_command", "")}
     if decision.get("handled") and confidence >= 0.6:
         mapping = {
+            "stop_speaking": {"action": "stop_speaking"},
             "stop_listening": {"action": "pause_voice"},
             "start_listening": {"action": "resume_voice"},
+            "stop_everything": {"action": "stop_everything"},
             "run": {"action": "run"},
             "explain_code": {"action": "walk_through"},
             "code_map": {"action": "code_map"},
@@ -6984,6 +7024,24 @@ def _resolve_pending_clarification(pending, text, mem):
             session_memory.clear_pending(mem)
             return {"success": True, "action": action, "path": fname, "heard": text}
         question = f"Which file should I {verb}? Please say the file name, for example main dot py."
+        return {"success": True, "action": "clarify", "intent": "clarify", "message": question,
+                "speech": question, "needs_clarification": True, "heard": text}
+    if ptype == "variable":
+        python = intent_repair.parse_variable_answer(text, pending)
+        if python:
+            try:
+                compile(python, "<insert>", "exec")
+            except SyntaxError:
+                python = None
+        if python:
+            session_memory.clear_pending(mem)
+            return {"success": True, "action": "conversational_edit",
+                    "ai_action": {"action": "append_code", "code": python},
+                    "heard": text, "speech": "Inserting the variable."}
+        if pending.get("missing") == "name" or not pending.get("name"):
+            question = "What should I name the variable? Please say one word, for example score."
+        else:
+            question = f"What value should {pending.get('name')} store?"
         return {"success": True, "action": "clarify", "intent": "clarify", "message": question,
                 "speech": question, "needs_clarification": True, "heard": text}
     return None
@@ -7196,6 +7254,13 @@ def voice():
     insert_response = _spoken_insert_response(text, current_code)
     if insert_response is not None:
         return _store_and_return(insert_response)
+
+    # ---- 3c. Natural variable assignments -> valid Python (or ask) ----------
+    # "set age to 16" -> age = 16; "insert a variable with the value Taki" asks
+    # "What should I name the variable?" and remembers it.
+    variable_response = _spoken_variable_response(text, current_code, mem, intent)
+    if variable_response is not None:
+        return _store_and_return(variable_response)
 
     # ---- 4. Global beginner concept Q&A (works outside the tutorial) --------
     concept_kind = concept_qa.classify_concept_question(text)
@@ -7682,10 +7747,11 @@ def voice():
     if conversational and conversational.get("action") != "unknown":
         return _store_and_return(conversational)
 
-    # Before any generic "unrecognized", let Key 2 / deterministic intent repair
-    # map messy natural speech ("alright stop listening", "could you map my code")
-    # onto a validated existing action, or ask one short clarification.
-    repaired = _route_repaired_intent(text, current_code)
+    # High-confidence DETERMINISTIC intent repair only (speech controls like
+    # "alright stop listening", plus run/explain/map/sonify/tutorial). Key 2 is
+    # NOT consulted here, so it can never override an existing fuzzy/security
+    # voice route — that fallback runs next and gets first refusal.
+    repaired = _route_repaired_intent(text, current_code, allow_ai=False)
     if repaired is not None:
         return _store_and_return(repaired)
 
@@ -7716,6 +7782,14 @@ def voice():
             "heard": text,
             "confidence": bscore / 100.0
         })
+
+    # Key 2 intent repair as the LAST resort — only now that the deterministic
+    # routes and the fuzzy/security matcher have all declined. It may map a
+    # genuinely messy command onto a validated action or ask one clarification,
+    # but by running here it can never hijack a route those layers already own.
+    repaired_ai = _route_repaired_intent(text, current_code, allow_ai=True)
+    if repaired_ai is not None:
+        return _store_and_return(repaired_ai)
 
     # Log unrecognized commands so we can iterate the vocabulary from real data
     _log_unrecognized_command(text, get_session_id())

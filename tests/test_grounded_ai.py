@@ -106,6 +106,10 @@ def test_validate_reports_reason():
 # Wiring: clarifier + coach reject weakening through the real call sites
 # ---------------------------------------------------------------------------
 class TestClarifierWiring:
+    # The deterministic question for this vague request asks only for the missing
+    # slots (symbol + the third line's count).
+    PATTERN_Q = "What symbol should I use, and how many symbols should the third line have?"
+
     def _vague(self, client):
         return client.post(
             "/voice-command",
@@ -117,20 +121,20 @@ class TestClarifierWiring:
                             lambda system, user: "What type of thing are you trying to create?")
         data = self._vague(client)
         assert data["action"] == "clarify"
-        assert data["message"] == DET_Q
+        assert data["message"] == self.PATTERN_Q  # weak/generic AI dropped "third line" -> deterministic
 
     def test_route_accepts_grounded_ai_rephrase(self, client, monkeypatch):
-        better = "Do you want a 5 by 5 pattern where the third line has a different number of symbols?"
+        better = "What symbol, and how many symbols should the third line have?"
         monkeypatch.setattr(app_module, "call_conversation_orchestrator_ai", lambda system, user: better)
         data = self._vague(client)
         assert data["action"] == "clarify"
-        assert data["message"] == better
+        assert data["message"] == better  # keeps "third line", invents nothing -> accepted
 
     def test_route_rejects_ai_that_invents_a_filename(self, client, monkeypatch):
         monkeypatch.setattr(app_module, "call_conversation_orchestrator_ai",
                             lambda system, user: "Do you want a 10 by 10 grid instead?")
         data = self._vague(client)
-        assert data["message"] == DET_Q  # invented "10" + dropped facts -> deterministic
+        assert data["message"] == self.PATTERN_Q  # invented "10" + dropped facts -> deterministic
 
 
 class TestCoachWiring:

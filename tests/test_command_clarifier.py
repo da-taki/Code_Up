@@ -42,9 +42,12 @@ class TestAssess:
     def test_vague_pattern_is_flagged_with_specific_question(self):
         d = cc.assess(VAGUE_PATTERN, exact_result=None)
         assert d["needs_clarification"] is True
-        assert "5 by 5" in d["message"]
+        # Asks only for the missing slots (symbol + the special row's count).
+        assert "symbol" in d["message"].lower()
         assert "third line" in d["message"]
         assert d["reason"] == "ambiguous_pattern"
+        assert d["pending"]["type"] == "pattern"
+        assert d["pending"]["slots"]["rows"] == 5
 
     def test_sized_but_non_pattern_generation_is_not_flagged(self):
         # A concrete non-pattern request with a size must still generate normally.
@@ -83,14 +86,14 @@ class TestAssess:
 
     def test_key2_unavailable_uses_deterministic_message(self):
         d = cc.assess(VAGUE_PATTERN, exact_result=None, ai_fn=None)
-        assert d["message"].startswith("Do you want a 5 by 5 pattern")
+        assert "third line" in d["message"] and "symbol" in d["message"].lower()
 
     def test_key2_failure_falls_back_to_deterministic(self):
         def boom(system, user):
             raise RuntimeError("service busy")
 
         d = cc.assess(VAGUE_PATTERN, exact_result=None, ai_fn=boom)
-        assert d["message"].startswith("Do you want a 5 by 5 pattern")
+        assert "third line" in d["message"] and "symbol" in d["message"].lower()
 
     def test_decision_holds_no_secrets(self, monkeypatch):
         # A clarification decision must never embed keys/secrets.
@@ -142,12 +145,20 @@ class TestRoute:
         d = _vc(client, VAGUE_PATTERN, source="voice")
         assert d["action"] == "clarify"
         assert d["reason"] == "ambiguous_pattern"
-        assert "5 by 5" in d["message"]
+        assert "symbol" in d["message"].lower() and "third line" in d["message"]
+
+    def test_vague_pattern_answer_completes_it(self, client):
+        # The remembered question is understood: the answer finishes the pattern.
+        _vc(client, VAGUE_PATTERN, source="voice")
+        d = _vc(client, "stars, six on the third line", source="voice")
+        assert d["action"] == "generate_code"
+        assert d["source"] == "deterministic_exact"
+        assert "row 3 has 6 stars" in d["prompt"]
 
     def test_key2_unavailable_still_returns_deterministic_clarification(self, client):
         d = _vc(client, VAGUE_PATTERN, source="voice")
         assert d["action"] == "clarify"
-        assert d["message"].startswith("Do you want a 5 by 5 pattern")
+        assert "third line" in d["message"] and "symbol" in d["message"].lower()
 
     def test_clarification_response_carries_no_secret(self, client, monkeypatch, capsys):
         monkeypatch.setenv("GROQ_API_KEY_2", "secret-second-key-value")

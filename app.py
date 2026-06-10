@@ -27,6 +27,8 @@ from input_concierge import build_input_plan, concierge_request_message, detect_
 import session_memory
 import command_clarifier
 import grounded_ai
+import clarification_flow
+import concept_qa
 from intent_parser import parse_intent
 from project_support import (
     PROJECT_MANIFEST,
@@ -6798,6 +6800,135 @@ def get_voice_telemetry():
         })
 
 
+_ONBOARDING_MESSAGE = (
+    "You can build Python by speaking or typing. Try saying: generate code to "
+    "print the first five even numbers. Then say: run code, explain it, or start "
+    "tutorial. Say more examples for a longer list."
+)
+_FIRST_HELP_RE = re.compile(
+    r"^\s*(?:what\s+can\s+i\s+do(?:\s+here)?|what\s+can\s+you\s+do|help\s+me\s+start|"
+    r"how\s+do\s+i\s+use\s+this|what\s+should\s+i\s+try|what\s+can\s+i\s+say|"
+    r"where\s+do\s+i\s+start|how\s+does\s+this\s+work)\s*$",
+    re.IGNORECASE,
+)
+_MORE_HELP_RE = re.compile(
+    r"^\s*(?:more\s+examples|show\s+all\s+commands|full\s+help|command\s+list|"
+    r"more\s+help|all\s+commands|list\s+commands|longer\s+list)\s*$",
+    re.IGNORECASE,
+)
+_NEW_COMMAND_RE = re.compile(
+    r"^\s*(?:make|generate|print|create|put|write|draw|run|fix|clear|open|read|walk|"
+    r"map|sonify|start|stop|help|what|why|how|insert|delete|rename|use\s+sample|"
+    r"explain|hint|continue|recap|exit|tutorial)\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_new_command(text: str) -> bool:
+    return bool(_NEW_COMMAND_RE.match(text or ""))
+
+
+def _broken_code_request(text):
+    """If the user clearly asks for a broken example, return the broken code to
+    insert. Only fires on explicit *create-an-error* requests — never when the
+    user wants to fix/correct one, and never accidentally."""
+    low = " ".join(str(text or "").lower().split())
+    # The user wants to FIX an error, not make one -> not a broken-code request.
+    if re.search(r"\b(?:fix|correct|repair|debug|solve|resolve)\b", low):
+        return None
+    quote_trigger = (
+        re.search(r"\b(?:without|missing|no)\s+(?:a\s+)?closing\s+quote\b", low)
+        or "with a missing quote" in low or "missing closing quote" in low
+        or "make a quote error" in low or "quotation error" in low
+    )
+    if quote_trigger:
+        msg = re.search(r"print\s+(.+?)\s+(?:without|with|missing|and|that)\b", low)
+        message = msg.group(1).strip() if msg else "hello world"
+        message = re.sub(r"^(?:a|an|the)\s+", "", message)
+        return f'print("{message})'
+    wants_indent_error = (
+        re.search(r"\b(?:make|create|insert|show|give|add|with)\b.*\bindentation\s+error\b", low)
+        or "remove indentation" in low or "without indentation" in low
+    )
+    if wants_indent_error:
+        cond = re.search(r"if\s+(\w+)\s+(?:is\s+)?(greater than|more than|less than|greater|less|equal to|equals?)\s+(\d+)", low)
+        if cond:
+            var, op_word, num = cond.group(1), cond.group(2), int(cond.group(3))
+            op = ">" if ("greater" in op_word or "more" in op_word) else ("<" if "less" in op_word else "==")
+            val = num + 2 if op == ">" else (num - 2 if op == "<" else num)
+            return f'{var} = {val}\nif {var} {op} {num}:\nprint("Ready")'
+        return 'age = 12\nif age > 10:\nprint("Ready")'
+    if "make a syntax error" in low or ("syntax error" in low and "insert" in low):
+        return 'print("hello)'
+    return None
+
+
+def _ground_concept_answer(answer, required_facts, code, text):
+    """Let Key 2 make a concept answer warmer/shorter, grounded so it cannot drop
+    the fact or invent code/output. Deterministic answer is the fallback."""
+    if not answer:
+        return answer
+    system = (
+        "You are CodeUp's friendly beginner tutor for a blind learner. Rephrase the "
+        "answer below into ONE short, warm sentence. Keep every concrete detail (the "
+        "exact word in quotes, the exact numbers). Do NOT invent code, output, files, "
+        "or variables. Plain text, under 30 words."
+    )
+    user = f"Question: {text}\nAnswer to rephrase: {answer}\nReturn one short sentence."
+    raw = call_conversation_orchestrator_ai(system, user)
+    return grounded_ai.ground(
+        raw, answer, required_facts=required_facts,
+        context=f"{answer} {code} {text}", single_sentence=True, max_words=40, max_chars=240,
+    )
+
+
+def _resolve_pending_clarification(pending, text, mem):
+    """Understand the user's answer to a question CodeUp asked. Returns a response
+    dict (a completed action or one more specific question), or None to fall
+    through to normal routing."""
+    ptype = pending.get("type")
+    if ptype == "pattern":
+        merged = clarification_flow.parse_pattern_answer(text, pending.get("slots", {}))
+        if clarification_flow.pattern_ready(merged):
+            command = clarification_flow.build_pattern_command(merged)
+            exact = build_exact_symbol_generation(command, source="voice")
+            if exact and exact.get("success"):
+                session_memory.clear_pending(mem)
+                return {
+                    "success": True, "action": "generate_code", "prompt": command,
+                    "confidence": 0.95, "source": "deterministic_exact", "exact_symbol": True,
+                    "resolved_from_clarification": True, "heard": text, "normalized_text": command,
+                }
+        session_memory.set_pending(mem, {"type": "pattern", "slots": merged})
+        question = clarification_flow.pattern_question(merged)
+        return {
+            "success": True, "action": "clarify", "intent": "clarify", "message": question,
+            "speech": question, "reason": "ambiguous_pattern", "needs_clarification": True, "heard": text,
+        }
+    if ptype == "file":
+        ans = " ".join(str(text or "").lower().split())
+        verb = pending.get("verb", "delete")
+        action = "rename_project_file" if verb == "rename" else "delete_project_file"
+        if ans in ("no", "cancel", "stop", "never mind", "nevermind"):
+            session_memory.clear_pending(mem)
+            msg = "Okay, I will not change any file."
+            return {"success": True, "action": "deterministic_message", "message": msg, "speech": msg, "heard": text}
+        if pending.get("file") and ans in ("yes", "yeah", "yep", "confirm", "do it", "go ahead"):
+            session_memory.clear_pending(mem)
+            return {"success": True, "action": action, "path": pending["file"], "heard": text}
+        try:
+            fname = normalize_project_path(text)
+        except Exception:
+            fname = ""
+        if fname and re.search(r"\.[a-zA-Z0-9]+$", fname):
+            session_memory.clear_pending(mem)
+            return {"success": True, "action": action, "path": fname, "heard": text}
+        question = f"Which file should I {verb}? Please say the file name, for example main dot py."
+        return {"success": True, "action": "clarify", "intent": "clarify", "message": question,
+                "speech": question, "needs_clarification": True, "heard": text}
+    return None
+
+
 def _record_voice_memory(mem, text, intent, response):
     """Record short-term working memory from a /voice-command response."""
     action = str(response.get("action") or "")
@@ -6964,6 +7095,53 @@ def voice():
             pass
         return jsonify(response_dict), status_code
 
+    # ---- 1. Pending clarification answer ------------------------------------
+    # CodeUp only asks a question it can understand the answer to. If we are
+    # waiting on one, parse this utterance as the answer (unless it is clearly a
+    # brand-new command, in which case we drop the pending question).
+    pending = session_memory.get_pending(mem)
+    if pending:
+        if _looks_like_new_command(text):
+            session_memory.clear_pending(mem)
+        else:
+            resolved = _resolve_pending_clarification(pending, text, mem)
+            if resolved:
+                return _store_and_return(resolved)
+
+    # ---- 2. Short first-help vs. full command list --------------------------
+    if _MORE_HELP_RE.match(text):
+        return _store_and_return({"success": True, "action": "more_help", "confidence": 0.95})
+    if _FIRST_HELP_RE.match(text):
+        return _store_and_return({
+            "success": True, "action": "deterministic_message",
+            "message": _ONBOARDING_MESSAGE, "speech": _ONBOARDING_MESSAGE,
+            "heard": text, "onboarding": True,
+        })
+
+    # ---- 3. Intentional broken-code examples --------------------------------
+    broken = _broken_code_request(text)
+    if broken:
+        speech = "Inserting a broken example so you can hear the error when you run it."
+        return _store_and_return({
+            "success": True, "action": "conversational_edit",
+            "ai_action": {"action": "append_code", "code": broken},
+            "intentional_error": True, "heard": text, "speech": speech,
+        })
+
+    # ---- 4. Global beginner concept Q&A (works outside the tutorial) --------
+    concept_kind = concept_qa.classify_concept_question(text)
+    if concept_kind:
+        # "what does range 3 mean" only answers when the code actually has a range;
+        # otherwise let the normal concept-mentor route handle it.
+        if concept_kind != "range" or re.search(r"\brange\s*\(", current_code or ""):
+            answer, facts = concept_qa.answer_concept(concept_kind, current_code)
+            if answer:
+                grounded = _ground_concept_answer(answer, facts, current_code, text)
+                return _store_and_return({
+                    "success": True, "action": "deterministic_message",
+                    "message": grounded, "speech": grounded, "heard": text, "concept": concept_kind,
+                })
+
     pending_clarification = storage.get("pending_orchestrator_clarification")
     orchestrator_text = text
     looks_like_new_command = re.match(
@@ -6983,17 +7161,23 @@ def voice():
     # Ask one short question before a destructive file op with a vague referent,
     # or a sized symbol-pattern request too vague to parse cleanly. Clear
     # commands (exact patterns, run code, inserts, tutorial) are never blocked.
+    # Assess on the wake-stripped, noise-cleaned text so a complete exact-symbol
+    # request (e.g. "ast risks" -> asterisks) is recognized and never clarified.
+    _clarifier_text = strip_wake_phrase(text).get("text") or text
     clarification = command_clarifier.assess(
-        text,
+        _clarifier_text,
         intent=intent or "",
         confidence=confidence,
         code=current_code,
         mem=mem,
-        exact_result=build_exact_symbol_generation(text, source=input_source),
+        exact_result=build_exact_symbol_generation(_clarifier_text, source=input_source),
         ai_fn=call_conversation_orchestrator_ai,
     )
     if clarification and clarification.get("needs_clarification"):
         message = clarification["message"]
+        # Remember the structured question so the user's next utterance is
+        # understood as the answer (see the pending-clarification block above).
+        session_memory.set_pending(mem, clarification.get("pending"))
         return _store_and_return({
             "success": True,
             "intent": "clarify",

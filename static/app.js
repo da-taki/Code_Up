@@ -2877,6 +2877,8 @@ async function handleConfirmedAction(action, payload) {
   if (action === 'run')              await runCode();
   else if (action === 'action_sequence') await executeActionSequence(payload || {});
   else if (action === 'mentor_stop') { SpeechManager.cancelAll(); speak('Mentor stopped.'); srAnnounce('Mentor stopped'); }
+  // Speech-only cancel: silence narration without touching the mic or the app.
+  else if (action === 'stop_speaking') { SpeechManager.cancelAll(); srAnnounce('Speech stopped'); }
   else if (action === 'mentor_chat') {
     const _mentorMode = payload && payload.mode ? payload.mode : 'general';
     // Conceptual questions use the non-streaming path so the backend's

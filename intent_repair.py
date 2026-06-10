@@ -21,15 +21,19 @@ from typing import Any, Callable, Dict, Optional, Set
 
 # Only these intent categories may ever be executed from a repaired decision.
 ALLOWED_ACTIONS = {
-    "stop_listening", "start_listening", "run", "generate_code", "insert_line",
-    "insert_block", "explain_code", "concept_answer", "start_tutorial",
-    "tutorial_control", "code_map", "sonify_block", "open_project_file",
-    "run_project_file", "clarify", "no_op",
+    "stop_speaking", "stop_listening", "start_listening", "stop_everything",
+    "run", "generate_code", "insert_line", "insert_block", "explain_code",
+    "concept_answer", "start_tutorial", "tutorial_control", "code_map",
+    "sonify_block", "open_project_file", "run_project_file", "clarify", "no_op",
 }
 
 _NUMBER_WORDS = {
     "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
-    "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12,
+    "thirteen": 13, "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17,
+    "eighteen": 18, "nineteen": 19, "twenty": 20, "thirty": 30, "forty": 40,
+    "fifty": 50, "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90,
+    "hundred": 100,
 }
 
 
@@ -168,6 +172,125 @@ def build_insert_python(spoken: str, code: str = "") -> Optional[str]:
     return None
 
 
+_PY_KEYWORDS = {
+    "False", "None", "True", "and", "as", "assert", "async", "await", "break",
+    "class", "continue", "def", "del", "elif", "else", "except", "finally", "for",
+    "from", "global", "if", "import", "in", "is", "lambda", "nonlocal", "not", "or",
+    "pass", "raise", "return", "try", "while", "with", "yield", "print",
+}
+_VALUE_KEYWORD = (
+    r"(?:and\s+)?(?:give\s+it\s+the\s+value|giving\s+it\s+the\s+value|give\s+the\s+value|"
+    r"with\s+the\s+value|with\s+value|set\s+to|equals?\s+to|equals?|holding|storing|"
+    r"that\s+holds|that\s+stores|that\s+is|that\s+equals|to|=)"
+)
+
+
+def _sanitize_name(name: Optional[str]) -> Optional[str]:
+    """Turn a spoken name into a valid Python identifier, or None if impossible."""
+    if not name:
+        return None
+    candidate = re.sub(r"[^0-9a-zA-Z_]+", "_", str(name).strip().lower()).strip("_")
+    if not candidate or candidate[0].isdigit():
+        return None
+    if candidate in _PY_KEYWORDS:
+        return None
+    return candidate
+
+
+def _value_python(value: str) -> "tuple[str, str]":
+    """Build the Python literal for a spoken value and report its type."""
+    v = " ".join(str(value or "").split()).strip().strip(".")
+    number = _to_number(v)
+    if number is not None:
+        return str(number), "number"
+    if v.lower() in ("true", "false"):
+        return v.capitalize(), "boolean"
+    return _quote(v), "string"
+
+
+def parse_variable_assignment(utterance: str, code: str = "") -> Optional[Dict[str, Any]]:
+    """Recognise a natural variable-assignment command and return its slots, or
+    None. Slots include name, value, value_type, missing[], and python (when
+    complete) so deterministic code can build/validate the assignment."""
+    t = " ".join(str(utterance or "").split())
+
+    set_form = re.match(r"^(?:please\s+)?set\s+([A-Za-z_]\w*)\s+(?:to|=|equals?\s+to|equals?)\s+(.+)$", t, re.IGNORECASE)
+    if set_form:
+        return _variable_slots(set_form.group(1), set_form.group(2))
+
+    phrase = re.match(
+        r"^(?:please\s+)?(?:insert|add|create|make|declare|define|put|new)\s+(?:a\s+|an\s+|new\s+)*variable\b\s*(.*)$",
+        t, re.IGNORECASE,
+    )
+    if not phrase:
+        return None
+    rest = phrase.group(1).strip()
+    if not rest:
+        return _variable_slots(None, None)
+
+    missing_name = re.match(rf"^{_VALUE_KEYWORD}\s+(.+)$", rest, re.IGNORECASE)
+    if missing_name:
+        return _variable_slots(None, missing_name.group(len(missing_name.groups())))
+
+    named = re.match(r"^(?:named\s+|called\s+)?([A-Za-z_]\w*)\s*(.*)$", rest, re.IGNORECASE)
+    if not named:
+        return None
+    name, tail = named.group(1), named.group(2).strip()
+    if not tail:
+        return _variable_slots(name, None)
+    valued = re.match(rf"^{_VALUE_KEYWORD}\s+(.+)$", tail, re.IGNORECASE)
+    if valued:
+        return _variable_slots(name, valued.group(len(valued.groups())))
+    return _variable_slots(name, None)
+
+
+def _variable_slots(name: Optional[str], value: Optional[str]) -> Dict[str, Any]:
+    py_name = _sanitize_name(name)
+    missing = []
+    if not py_name:
+        missing.append("name")
+    value_type = None
+    py_value = None
+    raw_value = " ".join(str(value or "").split()).strip().strip(".") if value else None
+    if raw_value:
+        py_value, value_type = _value_python(raw_value)
+    else:
+        missing.append("value")
+    slots: Dict[str, Any] = {
+        "construct": "variable_assignment", "name": py_name, "value": raw_value,
+        "value_type": value_type, "missing": missing,
+    }
+    if not missing:
+        slots["python"] = f"{py_name} = {py_value}"
+    return slots
+
+
+def parse_variable_answer(text: str, pending: Dict[str, Any]) -> Optional[str]:
+    """Complete a remembered variable assignment from the user's answer; returns
+    the Python line, or None if the answer is unusable (caller re-asks)."""
+    if pending.get("missing") == "name" or not pending.get("name"):
+        match = re.search(r"(?:call(?:\s+it)?|name(?:\s+it)?|named|called)\s+([A-Za-z_]\w*)", text, re.IGNORECASE)
+        candidate = match.group(1) if match else text
+        name = _sanitize_name(candidate)
+        if not name:
+            return None
+        py_value, _ = _value_python(pending.get("value") or "")
+        return f"{name} = {py_value}"
+    # Missing value: the answer is the value.
+    raw = " ".join(str(text or "").split()).strip().strip(".")
+    if not raw:
+        return None
+    py_value, _ = _value_python(raw)
+    return f"{pending['name']} = {py_value}"
+
+
+def variable_question(slots: Dict[str, Any]) -> str:
+    if "name" in slots.get("missing", []):
+        return "What should I name the variable?"
+    name = slots.get("name") or "the variable"
+    return f"What value should {name} store?"
+
+
 def extract_insert_content(utterance: str) -> Optional[str]:
     """Pull the code part out of a spoken insert command, tolerating polite
     wrappers ("can you put ... in the editor")."""
@@ -231,13 +354,23 @@ def repair(utterance: str, *, code: str = "",
     if not t:
         return _noop()
 
+    # Speech-control semantics are distinct and high priority. "Stop everything"
+    # cancels actions; "stop speaking" only cancels narration; "stop listening"
+    # turns off the mic. These must never collapse into one another.
+    if re.search(r"\bstop\s+everything\b|\bcancel\s+everything\b|\bstop\s+all\b|\bcancel\s+all\b|\babort\b|\bstop\s+all\s+actions\b", t):
+        return _decision("control", "stop_everything", 0.95, "stop everything")
+    if re.search(r"\bstop\s+(?:speaking|talking|narrating|the\s+narration|the\s+voice|the\s+speech)\b"
+                 r"|\bstop\s+narration\b|\bbe\s+quiet\b|\bpause\s+(?:the\s+)?speech\b|\bquiet\s+down\b|\bshut\s+up\b", t):
+        return _decision("control_speech", "stop_speaking", 0.95, "stop speaking")
+    if re.search(r"\bstop\s+listening\b|\bturn\s+off\s+(?:the\s+)?mic(?:rophone)?\b|\bmute\s+(?:the\s+)?mic"
+                 r"|\b(?:pause|disable|turn\s+off|stop)\s+voice\s+input\b|\bdisable\s+(?:the\s+)?mic(?:rophone)?\b|\bgo\s+silent\b", t):
+        return _decision("control_voice", "stop_listening", 0.95, "stop listening")
+    if re.search(r"\bstart\s+listening\b|\bunmute\b|\bwake\s+up\b|\bresume\s+listening\b|\bturn\s+on\s+(?:the\s+)?mic", t):
+        return _decision("control_voice", "start_listening", 0.9, "start listening")
+
     generation = _match_generation(t)
     if generation:
         return generation
-    if re.search(r"\bstop\s+listening\b|\bstop\s+(?:the\s+)?mic(?:rophone)?\b|\bgo\s+silent\b|\bmute\s+(?:the\s+)?mic", t):
-        return _decision("control_voice", "stop_listening", 0.95, "stop listening")
-    if re.search(r"\bstart\s+listening\b|\bunmute\b|\bwake\s+up\b|\bresume\s+listening\b", t):
-        return _decision("control_voice", "start_listening", 0.95, "start listening")
     if re.search(r"\bmap\s+(?:my|the|this)\s+code\b|\bcode\s+map\b|\bmap\s+(?:my|the)\s+program\b", t):
         return _decision("code_map", "code_map", 0.9, "map my code")
     if re.search(r"\bsonify\b", t):

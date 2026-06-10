@@ -36,30 +36,26 @@ def _act(client, text, code=""):
 # insert_variable — the command that previously failed in the Variables lesson
 # ---------------------------------------------------------------------------
 class TestInsertVariable:
+    # Variable assignments are now built into valid Python (string quoted, numbers
+    # bare) and inserted via conversational_edit, deterministically validated.
     def test_string_variable_primary_phrasing(self, client):
         d = _act(client, "insert a variable named name and give it the value Taknoor")
-        assert d["action"] == "insert_variable"
-        assert d["name"] == "name"
-        assert d["value"] == "Taknoor"
+        assert d["action"] == "conversational_edit"
+        assert d["ai_action"]["code"] == 'name = "Taknoor"'
 
     def test_string_variable_with_value_phrasing(self, client):
         d = _act(client, "insert a variable called name with value Aman")
-        assert d["action"] == "insert_variable"
-        assert d["name"] == "name"
-        assert d["value"] == "Aman"
+        assert d["ai_action"]["code"] == 'name = "Aman"'
 
     def test_numeric_variable(self, client):
         d = _act(client, "insert a variable named score with value 7")
-        assert d["action"] == "insert_variable"
-        assert d["name"] == "score"
-        assert d["value"] == "7"
+        assert d["ai_action"]["code"] == "score = 7"
 
     @pytest.mark.parametrize("verb", ["insert", "create", "make", "add"])
     def test_verb_synonyms(self, client, verb):
         d = _act(client, f"{verb} a variable named age set to 12")
-        assert d["action"] == "insert_variable", (verb, d)
-        assert d["name"] == "age"
-        assert d["value"] == "12"
+        assert d["action"] == "conversational_edit", (verb, d)
+        assert d["ai_action"]["code"] == "age = 12"
 
 
 # ---------------------------------------------------------------------------

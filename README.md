@@ -68,6 +68,55 @@ The student identifies the scope problem, traces `total` as it changes through l
 
 ---
 
+## Quick Demo
+
+Try these in the CodeUp IDE (`/ide`), by voice or by typing in the command box. Inserted code, output, and errors are all spoken aloud.
+
+### Basic voice coding
+
+1. `insert print hello world` → inserts `print("hello world")`
+2. `run` → runs the program and speaks the output
+
+### Variables
+
+1. `insert a variable named name with the value Taknoor` → inserts `name = "Taknoor"`
+2. `insert print name` → inserts `print(name)`
+3. `run`
+
+A spoken word becomes a quoted string (`Taknoor` → `"Taknoor"`); a number stays a number (`set age to 16` → `age = 16`).
+
+### Loops and indentation
+
+Start with a loop that is missing its indentation:
+
+```python
+for i in range(3):
+print(i)
+```
+
+1. `run` → hear a beginner explanation that the line inside the loop must be indented
+2. `sonify block` (or `Alt+S`) → hear indentation mapped to pitch
+3. Fix the indent, then `watch total` and `run with step narration` to hear each value change
+
+### Multi-file projects
+
+1. `create a quiz game split into multiple files`
+2. `read project files`
+3. `open main dot py`
+4. `run main dot py`
+
+Other starters: `make a student marks analysis project using pandas`, `make a numpy statistics project with tests`. If a package is missing, the run names it and points to `requirements.txt`.
+
+### Guided tutorial
+
+1. `start tutorial` (or jump in with `practise variables`, `practise for loops`, …)
+2. Say each `insert …` command the tutorial speaks, then `run code`
+3. After each module, choose `continue`, `try again`, `recap`, or `exit tutorial`
+
+**Evaluator note:** with AI disabled (`GEMINI_ENABLED=0`), run, trace, structure, sonification, tutorial, and typed/keyboard commands all still work — AI only rephrases verified facts, never invents them. Use Chrome or Edge for microphone input; the typed command box works everywhere.
+
+---
+
 ## Supported Commands
 
 Many natural variations work because the intent parser is grammar-based, not exact-match.
@@ -414,7 +463,7 @@ Per-session rate limit: 30 runs per 60 seconds.
 
 ## Demo and Teaching Materials
 
-- One-command demo flow: [DEMO_FLOW.md](DEMO_FLOW.md)
+- Quick demo commands: [Quick Demo](#quick-demo)
 - Accessibility test checklist: [ACCESSIBILITY_TESTING.md](ACCESSIBILITY_TESTING.md)
 - Teacher guide: [docs/teacher-guide.md](docs/teacher-guide.md)
 - Beginner lessons: [lesson 1](lessons/lesson_1_print.md), [lesson 2](lessons/lesson_2_variables.md), [lesson 3](lessons/lesson_3_loops.md)

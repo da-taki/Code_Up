@@ -11,6 +11,7 @@ import secrets
 import subprocess
 import sys
 import tempfile
+import textwrap
 import threading
 import time
 import traceback
@@ -29,6 +30,7 @@ import command_clarifier
 import grounded_ai
 import clarification_flow
 import concept_qa
+import intent_repair
 from intent_parser import parse_intent
 from project_support import (
     PROJECT_MANIFEST,
@@ -6863,6 +6865,64 @@ def _broken_code_request(text):
     return None
 
 
+def _spoken_insert_response(text, code):
+    """Build valid beginner Python for a spoken print/loop insert and return a
+    conversational_edit, or None so the existing insert pipeline handles it."""
+    content = intent_repair.extract_insert_content(text)
+    if not content:
+        return None
+    python = intent_repair.build_insert_python(content, code)
+    if not python:
+        return None
+    try:
+        compile(textwrap.dedent(python), "<insert>", "exec")
+    except SyntaxError:
+        return None
+    speech = "Inserting the line." if "\n" not in python else "Inserting the loop."
+    return {
+        "success": True, "action": "conversational_edit",
+        "ai_action": {"action": "append_code", "code": python},
+        "heard": text, "speech": speech, "spoken_code": python,
+    }
+
+
+def _route_repaired_intent(text, code):
+    """Map a Key 2 / deterministic intent-repair decision onto an existing action,
+    or None to fall through. Only allowlisted actions are ever executed."""
+    decision = intent_repair.repair(text, code=code, ai_fn=call_conversation_orchestrator_ai)
+    if not intent_repair.validate_decision(decision):
+        return None
+    action = decision.get("action")
+    confidence = float(decision.get("confidence", 0) or 0)
+    base = {"success": True, "heard": text, "repaired": True, "confidence": confidence,
+            "canonical_command": decision.get("canonical_command", "")}
+    if decision.get("handled") and confidence >= 0.6:
+        mapping = {
+            "stop_listening": {"action": "pause_voice"},
+            "start_listening": {"action": "resume_voice"},
+            "run": {"action": "run"},
+            "explain_code": {"action": "walk_through"},
+            "code_map": {"action": "code_map"},
+            "sonify_block": {"action": "sonify_block"},
+            "start_tutorial": {"action": "start_tutorial"},
+        }
+        if action in mapping:
+            return {**base, **mapping[action]}
+        if action == "generate_code":
+            return {**base, "action": "generate_code", "prompt": decision.get("slots", {}).get("prompt", "")}
+        if action in ("open_project_file", "run_project_file"):
+            return {**base, "action": action, "path": decision.get("slots", {}).get("path", "")}
+        if action == "concept_answer":
+            return {**base, "action": "mentor_chat", "message": text, "mode": "concept"}
+    if action == "clarify" or (decision.get("handled") and confidence < 0.6):
+        message = decision.get("clarification") or (
+            "Do you want me to generate code, edit the current code, or explain something?"
+        )
+        return {**base, "action": "clarify", "intent": "clarify", "message": message,
+                "speech": message, "needs_clarification": True}
+    return None
+
+
 def _ground_concept_answer(answer, required_facts, code, text):
     """Let Key 2 make a concept answer warmer/shorter, grounded so it cannot drop
     the fact or invent code/output. Deterministic answer is the fallback."""
@@ -7127,6 +7187,15 @@ def voice():
             "ai_action": {"action": "append_code", "code": broken},
             "intentional_error": True, "heard": text, "speech": speech,
         })
+
+    # ---- 3b. Spoken print/loop inserts -> valid beginner Python -------------
+    # "insert print hello" / "put print hello in the editor" become
+    # print("hello") (text quoted, numbers bare, defined variables left bare),
+    # built deterministically with editor context. Other inserts (variables, if,
+    # while, for-headers) fall through to the existing pipeline.
+    insert_response = _spoken_insert_response(text, current_code)
+    if insert_response is not None:
+        return _store_and_return(insert_response)
 
     # ---- 4. Global beginner concept Q&A (works outside the tutorial) --------
     concept_kind = concept_qa.classify_concept_question(text)
@@ -7610,9 +7679,17 @@ def voice():
         language=language,
         cursor_line=cursor_line,
     )
+    if conversational and conversational.get("action") != "unknown":
+        return _store_and_return(conversational)
+
+    # Before any generic "unrecognized", let Key 2 / deterministic intent repair
+    # map messy natural speech ("alright stop listening", "could you map my code")
+    # onto a validated existing action, or ask one short clarification.
+    repaired = _route_repaired_intent(text, current_code)
+    if repaired is not None:
+        return _store_and_return(repaired)
+
     if conversational:
-        if conversational.get("action") != "unknown":
-            return _store_and_return(conversational)
         return jsonify(conversational)
 
     # Fallback: fuzzy matching on COMMANDS

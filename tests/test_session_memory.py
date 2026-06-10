@@ -203,7 +203,8 @@ class TestRouteFollowups:
         assert _vc(client, "run", code="print(1)")["action"] == "run"
         assert _vc(client, "clear editor", code="x = 1")["action"] == "clear_editor"
         assert _vc(client, "open main")["action"] == "open_project_file"
-        assert _vc(client, "insert print hello world")["action"] == "append_line"
+        # Spoken print inserts now build valid Python via conversational_edit.
+        assert _vc(client, "insert print hello world")["action"] == "conversational_edit"
 
     def test_tutorial_coach_still_works(self, client):
         # Prompt 3 behavior preserved: the coach route is unaffected by memory.

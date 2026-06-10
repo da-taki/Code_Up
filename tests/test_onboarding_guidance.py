@@ -38,20 +38,56 @@ def test_startup_guidance_uses_spoken_commands_not_tab_only():
 @pytest.mark.parametrize("text", [
     "what can I do here",
     "what can I do",
-    "help",
-    "show commands",
-    "what commands can I try",
     "how do I use this",
-    "what should I say",
-    "guide me",
 ])
-def test_onboarding_help_phrases_route_to_help_without_cloud_ai(client, monkeypatch, text):
+def test_first_level_onboarding_returns_short_guidance_without_cloud_ai(client, monkeypatch, text):
+    # First-level onboarding phrases now return a short beginner-friendly guide
+    # (deterministic), not the old long command dump, and must not call cloud AI.
     def fail_call(*args, **kwargs):
         raise AssertionError("onboarding help must not call cloud AI")
 
     monkeypatch.setattr(app_module, "call_gemini", fail_call)
     data = _action(client, text)
+    assert data["action"] == "deterministic_message"
+    assert data["onboarding"] is True
+    msg = data["message"].lower()
+    for snippet in ("speaking or typing", "generate code", "run code",
+                    "explain it", "start tutorial", "more examples"):
+        assert snippet in msg, (text, snippet, msg)
+
+
+@pytest.mark.parametrize("text", [
+    "help",
+    "show commands",
+    "what commands can I try",
+    "what should I say",
+    "guide me",
+])
+def test_help_phrases_route_to_help_without_cloud_ai(client, monkeypatch, text):
+    # Explicit help requests still route to the command help, without cloud AI.
+    def fail_call(*args, **kwargs):
+        raise AssertionError("help must not call cloud AI")
+
+    monkeypatch.setattr(app_module, "call_gemini", fail_call)
+    data = _action(client, text)
     assert data["action"] == "help"
+
+
+@pytest.mark.parametrize("text", [
+    "more examples",
+    "show all commands",
+    "full help",
+    "command list",
+])
+def test_long_help_stays_behind_explicit_request_without_cloud_ai(client, monkeypatch, text):
+    # The long command list stays behind an explicit "more/full" request, never
+    # the first onboarding reply, and must not call cloud AI.
+    def fail_call(*args, **kwargs):
+        raise AssertionError("help must not call cloud AI")
+
+    monkeypatch.setattr(app_module, "call_gemini", fail_call)
+    data = _action(client, text)
+    assert data["action"] == "more_help"
 
 
 def test_visible_and_spoken_help_are_beginner_guides():

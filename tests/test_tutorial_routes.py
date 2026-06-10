@@ -151,6 +151,56 @@ class TestTutorialCommandRouting:
 # ---------------------------------------------------------------------------
 # Execution backstop.
 # ---------------------------------------------------------------------------
+class TestTutorialCoachRoute:
+    """/tutorial/coach — AI-assisted phrasing with a deterministic fallback.
+
+    The client fixture disables AI (CODEUP_AI_ENABLED=0), so these assert the
+    deterministic coach path that runs whenever Key 2 is missing or busy.
+    """
+
+    def _coach(self, client, **body):
+        return client.post("/tutorial/coach", json=body).get_json()
+
+    def test_i_dont_understand_returns_coach_response(self, client):
+        d = self._coach(client, module="print", text="I don't understand")
+        assert d["success"] is True and d["handled"] is True
+        assert d["request"] == "dont_understand"
+        assert "print" in d["text"].lower()
+
+    def test_explain_simpler_returns_simpler_explanation(self, client):
+        d = self._coach(client, module="print", text="explain simpler")
+        assert d["handled"] is True
+        assert d["request"] == "explain_simpler"
+        assert "print" in d["text"].lower()
+
+    def test_why_quotes_works_in_print_module(self, client):
+        d = self._coach(client, module="print", text="why do we use quotes")
+        assert d["handled"] is True
+        assert "text" in d["text"].lower()
+
+    def test_repeated_failure_encouragement_is_supportive(self, client):
+        d = self._coach(client, module="print", request="encourage", attempts=2)
+        assert d["handled"] is True
+        assert "wrong" not in d["text"].lower()
+        assert d["text"]
+
+    def test_key2_unavailable_uses_deterministic_fallback(self, client):
+        d = self._coach(client, module="print", text="why indentation")
+        assert d["handled"] is True
+        assert d["source"] == "deterministic"
+        assert "indent" in d["text"].lower()
+
+    def test_non_coach_text_is_not_handled(self, client):
+        # "run code" must not be coached — it falls through to the normal pipeline.
+        d = self._coach(client, module="print", text="run code")
+        assert d["handled"] is False
+
+    def test_unknown_module_still_answers_general_facts(self, client):
+        d = self._coach(client, module="", text="why do we use quotes")
+        assert d["handled"] is True
+        assert "quote" in d["text"].lower()
+
+
 class TestWhileExecutionBackstop:
     def test_sandbox_wall_clock_timeout_is_configured(self):
         # The tutorial blocks obviously non-terminating while loops *before*

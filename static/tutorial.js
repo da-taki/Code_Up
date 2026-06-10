@@ -198,6 +198,32 @@
     return null;
   };
 
+  // AI-tutor coach requests (friendlier explanations, adaptive hints,
+  // encouragement). Mirrors tutorial_engine.classify_coach_request on the server
+  // and is checked BEFORE classifyDecision so "say that again simpler" is coached
+  // rather than read as a plain "repeat". Specific topics win over generic ones.
+  TutorialModel.COACH_TRIGGERS = [
+    ['why_quotes', ['why do we use quotes', 'why use quotes', 'why the quotes', 'why quotes', 'what are quotes for', 'what do quotes do', 'purpose of quotes']],
+    ['why_indentation', ['why do we indent', 'why the indentation', 'why indentation', 'why indent', 'what is indentation', 'what does indentation do', 'why four spaces']],
+    ['another_hint', ['give me another hint', 'another hint', 'one more hint', 'a different hint', 'different hint', 'more hints', 'next hint']],
+    ['what_learning', ['what am i learning', 'what are we learning', 'what is this teaching', 'what am i doing', 'what topic is this', 'what is this topic', 'what is this about']],
+    ['encourage', ['encourage me', 'i give up', 'this is too hard', 'this is hard', "i can't do this", 'i cannot do this', 'i am stuck', "i'm stuck", 'cheer me up']],
+    ['explain_simpler', ['say that again simpler', 'say it simpler', 'explain it simpler', 'explain simpler', 'explain that simpler', 'make it simpler', 'simpler please', 'in simple words', 'in simpler words', 'simpler']],
+    ['dont_understand', ["i don't understand", 'i do not understand', 'i dont understand', "i don't get it", 'i dont get it', "i'm confused", 'i am confused', "i don't follow", 'this is confusing', 'confused']]
+  ];
+
+  TutorialModel.classifyCoachRequest = function (text) {
+    var t = String(text || '').toLowerCase().trim().replace(/[.!?]+$/, '').replace(/\s+/g, ' ');
+    if (!t) return null;
+    for (var i = 0; i < TutorialModel.COACH_TRIGGERS.length; i++) {
+      var phrases = TutorialModel.COACH_TRIGGERS[i][1];
+      for (var j = 0; j < phrases.length; j++) {
+        if (t === phrases[j] || t.indexOf(phrases[j]) !== -1) return TutorialModel.COACH_TRIGGERS[i][0];
+      }
+    }
+    return null;
+  };
+
   // ─── STAGED ACTIVITY MODEL (declarative, pure) ───────────────────────────
   // Each module's hands-on activity is built line by line, by voice. A step is
   // satisfied when its `check(code)` predicate matches the live editor text.
@@ -606,6 +632,8 @@
       this.model.beginActivity();
       this._hintIndex = 0;
       this._stepIndex = 0;
+      this._failCount = 0;
+      this._coachHintIndex = 0;
       var m = this._module();
       if (!m) return;
       // Fresh editor for the activity so the learner builds from a clean slate.
@@ -670,8 +698,15 @@
         // Guard: the learner may have exited or moved on while we waited.
         if (!self.model.active || self.model.stage !== 'activity') return;
         if (res.passed) {
+          self._failCount = 0;
           self._celebrateAndDecide(res.feedback);
         } else {
+          // Repeated failure on the same activity: lead with warm encouragement
+          // (deterministic, no AI needed) before the same factual hint.
+          self._failCount = (self._failCount || 0) + 1;
+          if (self._failCount >= 2) {
+            _speak('You are doing fine. This part trips up everyone at first. Let us take it one small step.');
+          }
           if (res.feedback) _speak(res.feedback);
           if (res.hint) _speak('Here is a hint. ' + res.hint);
           var cur = self._currentStep();
@@ -833,10 +868,47 @@
       this._setStatus('Choose: continue, recap, or exit.');
     },
 
+    // ── AI tutor coach ───────────────────────────────────────────────────────
+    // Asks the backend coach, which restates KNOWN lesson facts (Key 2 may
+    // rephrase them more warmly). On any failure it falls back to a deterministic
+    // local line, so the tutorial never depends on AI being reachable.
+    _coach: function (requestType, text) {
+      var self = this;
+      var attempts = (requestType === 'another_hint') ? (this._coachHintIndex || 0) : (this._failCount || 0);
+      fetch('/tutorial/coach', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ module: this.model.moduleId, request: requestType, text: text, attempts: attempts })
+      })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) {
+          if (d && d.handled && d.text) { _speak(d.text); _srAnnounce('Coach replied.'); }
+          else { self._coachLocalFallback(requestType); }
+        })
+        .catch(function () { self._coachLocalFallback(requestType); });
+      if (requestType === 'another_hint') this._coachHintIndex = (this._coachHintIndex || 0) + 1;
+    },
+
+    _coachLocalFallback: function (requestType) {
+      if (requestType === 'another_hint') { this._giveHint(); return; }
+      if (requestType === 'why_quotes') { _speak('Quotes tell Python the words inside are text to show, not the name of a variable.'); return; }
+      if (requestType === 'why_indentation') { _speak('Indentation, the four spaces, means that line belongs inside the block above it.'); return; }
+      if (requestType === 'encourage') { _speak('You are doing well. This trips up everyone at first. Let us take it one small step.'); return; }
+      var m = this._module();
+      if (requestType === 'what_learning' && m) { _speak('Right now you are learning ' + m.title + '. ' + (m.concept || '')); return; }
+      if (m && m.concept) { _speak(m.concept); } else { this._giveHint(); }
+    },
+
     // ── utterance interception (returns true if consumed) ────────────────────
     handleUtterance: function (text) {
       if (!this.model.active) return false;
       var low = String(text || '').toLowerCase().trim().replace(/[.!?]+$/, '').replace(/\s+/g, ' ');
+
+      // AI-tutor coach phrases are handled first so "say that again simpler" is
+      // coached, not read as a plain repeat. Real coding commands (insert/run)
+      // are never coach phrases, so they still flow through untouched.
+      var coachReq = TutorialModel.classifyCoachRequest(text);
+      if (coachReq) { this._coach(coachReq, text); return true; }
 
       // "read my code" / "read my program" — read the editor back. Line-specific
       // reads ("read line 2") are NOT consumed; they fall through to the IDE.
@@ -854,6 +926,13 @@
 
       var kind = TutorialModel.classifyDecision(text);
       if (!kind) return false;
+
+      // Tutorial navigation (continue, next, hint, repeat, recap, try again,
+      // exit tutorial, start coding) must not collide with narration: stop any
+      // current speech through the shared engine BEFORE doing the action.
+      if (typeof SpeechManager !== 'undefined' && SpeechManager.cancelAll) {
+        SpeechManager.cancelAll();
+      }
 
       switch (kind) {
         case 'exit':   this.exit(true); return true;

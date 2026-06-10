@@ -218,3 +218,75 @@ class TestValidateAttempt:
     def test_unknown_module(self):
         res = te.validate_attempt("functions", 'print("x")', ran_ok=True)
         assert res["passed"] is False
+
+
+# ---------------------------------------------------------------------------
+# AI tutor coach — deterministic knowledge base (the safe fallback)
+# ---------------------------------------------------------------------------
+class TestCoachClassify:
+    @pytest.mark.parametrize("text,expected", [
+        ("explain simpler", "explain_simpler"),
+        ("say that again simpler", "explain_simpler"),
+        ("I don't understand", "dont_understand"),
+        ("i am confused", "dont_understand"),
+        ("why do we use quotes", "why_quotes"),
+        ("why indentation", "why_indentation"),
+        ("give me another hint", "another_hint"),
+        ("encourage me", "encourage"),
+        ("what am I learning", "what_learning"),
+    ])
+    def test_recognises_coach_phrases(self, text, expected):
+        assert te.classify_coach_request(text) == expected
+
+    @pytest.mark.parametrize("text", [
+        "run code", "run", "insert print hello world", "continue", "hint",
+        "recap", "repeat", "exit tutorial", "read my code", "say that again", "",
+    ])
+    def test_ignores_control_and_coding_commands(self, text):
+        # The coach must never swallow normal tutorial controls or coding commands.
+        assert te.classify_coach_request(text) is None
+
+
+class TestCoachResponse:
+    def test_explain_simpler_is_short_and_about_print(self):
+        r = te.coach_response("print", "explain_simpler")
+        assert "print" in r["text"].lower()
+        assert len(r["text"].split()) <= 30
+
+    def test_dont_understand_reassures_then_explains(self):
+        r = te.coach_response("print", "dont_understand")
+        assert r["text"].lower().startswith("no problem")
+        assert "print" in r["text"].lower()
+
+    def test_why_quotes_explains_text_not_variable(self):
+        r = te.coach_response("print", "why_quotes")
+        low = r["text"].lower()
+        assert "text" in low and "quote" in low
+
+    def test_why_indentation_mentions_block(self):
+        r = te.coach_response("if", "why_indentation")
+        assert "indent" in r["text"].lower()
+
+    def test_what_learning_names_topic(self):
+        assert "for" in te.coach_response("for", "what_learning")["text"].lower()
+
+    def test_another_hint_returns_a_real_hint(self):
+        r = te.coach_response("print", "another_hint", attempts=0)
+        assert r["text"]
+        assert "hint" in r["text"].lower() or "insert" in r["text"].lower()
+
+    def test_encourage_after_repeated_failure_is_supportive_with_hint(self):
+        r = te.coach_response("print", "encourage", attempts=2)
+        low = r["text"].lower()
+        assert "wrong" not in low            # supportive, not blunt "wrong"
+        assert "insert" in low or "try" in low or "step" in low
+
+    def test_unknown_request_invents_nothing(self):
+        r = te.coach_response("print", "delete_everything")
+        assert r["text"] == ""
+        assert r["kind"] == "none"
+
+    def test_responses_stay_short(self):
+        for request in ("explain_simpler", "why_quotes", "why_indentation", "what_learning", "encourage"):
+            r = te.coach_response("while", request, attempts=1)
+            assert len(r["text"].split()) <= 45, request

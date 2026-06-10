@@ -2877,6 +2877,8 @@ async function handleConfirmedAction(action, payload) {
   if (action === 'run')              await runCode();
   else if (action === 'action_sequence') await executeActionSequence(payload || {});
   else if (action === 'mentor_stop') { SpeechManager.cancelAll(); speak('Mentor stopped.'); srAnnounce('Mentor stopped'); }
+  // Speech-only cancel: silence narration without touching the mic or the app.
+  else if (action === 'stop_speaking') { SpeechManager.cancelAll(); srAnnounce('Speech stopped'); }
   else if (action === 'mentor_chat') {
     const _mentorMode = payload && payload.mode ? payload.mode : 'general';
     // Conceptual questions use the non-streaming path so the backend's
@@ -2911,7 +2913,7 @@ async function handleConfirmedAction(action, payload) {
     out(text); speak(text);
   }
   else if (action === 'generate_code') await generateCode(payload && payload.prompt ? payload.prompt : '', payload || {});
-  else if (action === 'exact_symbol_clarification' || action === 'orchestrator_clarification' || action === 'deterministic_message') {
+  else if (action === 'exact_symbol_clarification' || action === 'orchestrator_clarification' || action === 'deterministic_message' || action === 'clarify') {
     const message = (payload && (payload.message || payload.speech)) || 'No guidance available.';
     out(message);
     srAnnounce('Guidance shown');
@@ -5373,6 +5375,12 @@ function normalizeSpokenCodeText(text) {
     indent += '    ';
     raw = raw.replace(/^(?:an?\s+|the\s+)?(?:indent|indented|four\s+spaces|tab)\s+/i, '').trim();
   }
+
+  // Forgive a common mis-heard "print" keyword at the start of an insert
+  // ("prent hello world" -> "print hello world") so a slightly imperfect spoken
+  // command still becomes valid Python. Only the leading word is corrected, and
+  // only for a clear near-miss of "print" — never an arbitrary word.
+  raw = raw.replace(/^(?:prent|prnt|preent|pirnt|printt|brint|prind|prinr)\b/i, 'print');
 
   if (/^[A-Za-z_]\w*\s*=/.test(raw) || /^\s*(?:print|range)\s*\(/i.test(raw) || /:\s*$/.test(raw)) {
     return indent + raw;

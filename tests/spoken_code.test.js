@@ -99,6 +99,14 @@ check('print message vs print variable', () => {
   assert.strictEqual(N.normalizeSpokenCodeText('print hello world'), 'print("hello world")');
   assert.strictEqual(N.normalizeSpokenCodeText('print name'), 'print(name)');
 });
+check('a mis-heard print keyword is safely corrected', () => {
+  // "insert prent hello world" reaches the normalizer as "prent hello world";
+  // a clear near-miss of "print" is forgiven so the beginner's command still
+  // becomes valid Python. A correct "print ..." stays unaffected.
+  assert.strictEqual(N.normalizeSpokenCodeText('prent hello world'), 'print("hello world")');
+  assert.strictEqual(N.normalizeSpokenCodeText('prnt hello world'), 'print("hello world")');
+  assert.strictEqual(N.normalizeSpokenCodeText('print hello world'), 'print("hello world")');
+});
 check('"saying" forces a quoted message even for one word', () => {
   assert.strictEqual(N.normalizeSpokenCodeText('an indented print statement saying ready'), '    print("ready")');
   assert.strictEqual(N.normalizeSpokenCodeText('print saying you can vote'), 'print("you can vote")');

@@ -68,8 +68,14 @@ class TestConceptRouting:
     @pytest.mark.parametrize("phrase", CONCEPT_PHRASES)
     def test_routes_to_concept_mentor(self, client, phrase):
         d = client.post("/voice-command", json={"text": phrase, "code": LOOP}).get_json()
-        assert d["action"] == "mentor_chat", f"{phrase!r} -> {d['action']}"
-        assert d["mode"] == "concept"
+        # Fix 5: a few concrete concept questions (range, colon) now get a grounded
+        # deterministic answer; the rest still route to the concept mentor. Either
+        # way the answer is explanation-only (never a mutating action).
+        if d["action"] == "deterministic_message":
+            assert d.get("concept")
+        else:
+            assert d["action"] == "mentor_chat", f"{phrase!r} -> {d['action']}"
+            assert d["mode"] == "concept"
 
     @pytest.mark.parametrize("phrase", CONCEPT_PHRASES)
     def test_concept_never_triggers_a_mutating_action(self, client, phrase):

@@ -11,6 +11,7 @@ import secrets
 import subprocess
 import sys
 import tempfile
+import textwrap
 import threading
 import time
 import traceback
@@ -22,7 +23,14 @@ from dotenv import load_dotenv
 from flask import Flask, Response, g, has_request_context, jsonify, render_template, request, send_from_directory, stream_with_context
 from rapidfuzz import fuzz
 
-from conversation_orchestrator import frontend_actions, action_next_label, orchestrate_command, strip_wake_phrase
+from conversation_orchestrator import frontend_actions, action_next_label, looks_like_generation_request, orchestrate_command, strip_wake_phrase
+from input_concierge import build_input_plan, concierge_request_message, detect_inputs as detect_concierge_inputs
+import session_memory
+import command_clarifier
+import grounded_ai
+import clarification_flow
+import concept_qa
+import intent_repair
 from intent_parser import parse_intent
 from project_support import (
     PROJECT_MANIFEST,
@@ -1102,6 +1110,86 @@ def call_conversation_orchestrator_ai(system_prompt: str, user_prompt: str) -> s
         return ""
 
 
+# Core concept words a coach rephrase must keep if the note states them.
+_COACH_CONCEPT_VOCAB = (
+    "quotes", "quote", "text", "variable", "indentation", "indent", "block",
+    "print", "message", "loop", "while", "for", "if", "string", "even", "average",
+)
+
+
+def _ai_coach_rephrase(base_text: str) -> str:
+    """Use Key 2 to rephrase a known teaching note into one warmer short line.
+
+    Returns "" (so the deterministic note is used) when Key 2 is missing/busy or
+    the reply looks unsafe. The model may ONLY restate the given note — guardrails
+    reject anything with code, multiple sentences of bloat, or excessive length so
+    the coach can never invent code, output, or validation results."""
+    base_text = str(base_text or "").strip()
+    if not base_text:
+        return ""
+    system = (
+        "You are CodeUp's friendly beginner coding tutor for blind learners. "
+        "Rephrase the teaching note below into ONE short, warm, encouraging sentence. "
+        "Do NOT add new facts, code, numbers, variable values, or results — only "
+        "restate the note more kindly. Plain text only, no code, under 28 words."
+    )
+    user = f"Teaching note: {base_text}\n\nRephrase it as one short, friendly sentence."
+    raw = call_conversation_orchestrator_ai(system, user)
+    coached = str(raw or "").strip().strip('"').strip()
+    if not coached:
+        return ""
+    # The rephrase must preserve the note's core concept terms (e.g. quotes/text/
+    # variable, indentation/block, print/message) and invent no code or numbers,
+    # else we keep the deterministic note.
+    concept_terms = [t for t in _COACH_CONCEPT_VOCAB if grounded_ai.fact_present(t, base_text)]
+    ok, _reason = grounded_ai.validate(
+        coached, deterministic_text=base_text, required_facts=concept_terms,
+        context=base_text, single_sentence=True, max_words=40, max_chars=220,
+    )
+    return coached if ok else ""
+
+
+def _concierge_ai_values(code_inputs, text):
+    """Key 2 fallback for the input concierge: map a messy spoken value phrase to
+    ordered input values. Returns a list of string values aligned to the prompts,
+    or None. Never raises — the deterministic path stays the source of truth."""
+    try:
+        labels = [str(inp.get("label") or inp.get("name") or f"Input {i + 1}") for i, inp in enumerate(code_inputs)]
+        types = [str(inp.get("type") or "str") for inp in code_inputs]
+    except Exception:
+        return None
+    if not labels:
+        return None
+    system = (
+        "You are CodeUp's input concierge. Map the user's spoken values to a Python "
+        "program's input() prompts, in order. Convert spoken numbers to digits "
+        "(sixteen -> 16, ninety two point five -> 92.5). Return ONLY a JSON array of "
+        "strings, exactly one per prompt, in order. No prose and no code."
+    )
+    user = (
+        "Prompts in order:\n"
+        + "\n".join(f"{i + 1}. {label} (type: {typ})" for i, (label, typ) in enumerate(zip(labels, types)))
+        + f"\n\nUser said: {text}\n\nReturn a JSON array of {len(labels)} string values."
+    )
+    raw = call_conversation_orchestrator_ai(system, user)
+    if not raw:
+        return None
+    cleaned = re.sub(r"```(?:json)?\s*|\s*```", "", str(raw)).strip()
+    data = None
+    try:
+        data = json.loads(cleaned)
+    except (ValueError, TypeError):
+        match = re.search(r"\[.*\]", str(raw), re.DOTALL)
+        if match:
+            try:
+                data = json.loads(match.group(0))
+            except (ValueError, TypeError):
+                data = None
+    if not isinstance(data, list):
+        return None
+    return [str(v) for v in data][:50]
+
+
 def extract_code(text: str):
     m = re.search(r"```(?:python)?\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
     if not m:
@@ -1348,6 +1436,57 @@ def tutorial_validate():
         "feedback": result["feedback"],
         "hint": result["hint"],
         "next_module": tutorial_engine.next_module_id(module_id),
+    })
+
+
+@app.route("/tutorial/coach", methods=["POST"])
+def tutorial_coach():
+    """AI-assisted tutorial coaching (friendlier phrasing, hints, encouragement).
+
+    Body: {module, request|text, attempts}. The deterministic engine produces a
+    known-fact answer; Key 2 may only rephrase it more warmly. If Key 2 is
+    missing/busy the deterministic note is returned, so the tutorial never
+    depends on AI. The coach never validates code or invents program state.
+    """
+    body = safejson()
+    module_id = _safe_text(body.get("module"), "", limit=40).strip()
+    raw_text = _safe_text(body.get("text"), "", limit=300)
+    request_type = _safe_text(body.get("request"), "", limit=40).strip()
+    try:
+        attempts = int(body.get("attempts") or 0)
+    except (TypeError, ValueError):
+        attempts = 0
+    attempts = max(0, min(attempts, 20))
+
+    if module_id:
+        try:
+            session_memory.record_tutorial(session_memory.get_memory(get_trace_storage()), module_id)
+        except Exception:
+            pass
+
+    if request_type not in tutorial_engine.COACH_REQUESTS:
+        request_type = tutorial_engine.classify_coach_request(raw_text) or ""
+    if not request_type:
+        # Not a coach phrase — let the frontend fall back to its normal handling.
+        return jsonify({"success": True, "handled": False})
+
+    base = tutorial_engine.coach_response(module_id, request_type, attempts=attempts)
+    spoken = base["text"]
+    source = "deterministic"
+    if spoken:
+        coached = _ai_coach_rephrase(spoken)
+        if coached:
+            spoken = coached
+            source = "ai_coached"
+
+    return jsonify({
+        "success": True,
+        "handled": True,
+        "request": request_type,
+        "module": module_id,
+        "text": spoken,
+        "speech": spoken,
+        "source": source,
     })
 
 # ==========================
@@ -3951,6 +4090,11 @@ def run_code():
         safe_error = _syntax_error_message(e, code)
         _save_mistake_snapshot(get_session_id(), code, safe_error, success=False)
         explanation = _local_error_explanation(code, safe_error, language=safe(body.get("language"), "en"), beginner=True)
+        try:
+            session_memory.record_run(session_memory.get_memory(get_trace_storage()),
+                                      error=safe_error, inputs=inputs, ran_ok=False)
+        except Exception:
+            pass
         return jsonify({
             "success": False,
             "error": safe_error,
@@ -3973,13 +4117,19 @@ def run_code():
     uses_input = bool(input_prompts) or bool(re.search(r'\binput\s*\(', code))
     inputs_hint = None
     if uses_input and not inputs:
-        inputs_hint = (
-            "Your code uses input(), but you did not provide any pre-flight "
-            "inputs. The first input() call will fail with a clear error "
-            "telling you what to do. To fix: open the inputs panel and add "
-            "values, or add a magic comment like '# inputs: Alice, 17' at "
-            "the top of your code, or switch to live input mode."
-        )
+        concierge_inputs = detect_concierge_inputs(code)
+        if concierge_inputs:
+            # Concierge phrasing names the fields and the spoken commands that
+            # supply them, so a beginner is never stuck guessing.
+            inputs_hint = concierge_request_message(concierge_inputs)
+        else:
+            inputs_hint = (
+                "Your code uses input(), but you did not provide any pre-flight "
+                "inputs. The first input() call will fail with a clear error "
+                "telling you what to do. To fix: open the inputs panel and add "
+                "values, or add a magic comment like '# inputs: Alice, 17' at "
+                "the top of your code, or switch to live input mode."
+            )
 
     stdout_buf = io.StringIO()
     stderr_buf = io.StringIO()
@@ -4123,6 +4273,11 @@ def run_code():
         if error.strip():
             _save_mistake_snapshot(get_session_id(), code, error, success=False)
             explanation = explain_error(code, error, language=safe(body.get("language"), "en"))
+            try:
+                session_memory.record_run(session_memory.get_memory(get_trace_storage()),
+                                          error=error, inputs=inputs, ran_ok=False)
+            except Exception:
+                pass
             return jsonify({
                 "success": False,
                 "error": error,
@@ -4132,6 +4287,11 @@ def run_code():
             })
 
         _save_mistake_snapshot(get_session_id(), code, "", success=True, output=output)
+        try:
+            session_memory.record_run(session_memory.get_memory(get_trace_storage()),
+                                      output=output, inputs=inputs, ran_ok=True)
+        except Exception:
+            pass
 
         return jsonify({
             "success": True,
@@ -5272,6 +5432,11 @@ def generate_code():
     if not prompt.strip():
         return jsonify({"success": False, "error": "Prompt cannot be empty"}), 400
 
+    try:
+        session_memory.record_generation(session_memory.get_memory(get_trace_storage()), prompt)
+    except Exception:
+        pass
+
     input_source = safe(body.get("source"), "typed").strip().lower() or "typed"
     if input_source not in {"typed", "voice"}:
         input_source = "typed"
@@ -5505,6 +5670,12 @@ def project_file_open():
             requirements=previous.get("requirements") or infer_requirements(files),
         )
         _write_project_manifest(sandbox, manifest)
+        try:
+            _mem = session_memory.get_memory(get_trace_storage())
+            session_memory.record_file_open(_mem, path)
+            session_memory.record_project_files(_mem, list(files.keys()))
+        except Exception:
+            pass
         return jsonify({
             "success": True,
             "path": path,
@@ -6631,6 +6802,375 @@ def get_voice_telemetry():
         })
 
 
+_ONBOARDING_MESSAGE = (
+    "You can build Python by speaking or typing. Try saying: generate code to "
+    "print the first five even numbers. Then say: run code, explain it, or start "
+    "tutorial. Say more examples for a longer list."
+)
+_FIRST_HELP_RE = re.compile(
+    r"^\s*(?:what\s+can\s+i\s+do(?:\s+here)?|what\s+can\s+you\s+do|help\s+me\s+start|"
+    r"how\s+do\s+i\s+use\s+this|what\s+should\s+i\s+try|what\s+can\s+i\s+say|"
+    r"where\s+do\s+i\s+start|how\s+does\s+this\s+work)\s*$",
+    re.IGNORECASE,
+)
+_MORE_HELP_RE = re.compile(
+    r"^\s*(?:more\s+examples|show\s+all\s+commands|full\s+help|command\s+list|"
+    r"more\s+help|all\s+commands|list\s+commands|longer\s+list)\s*$",
+    re.IGNORECASE,
+)
+_NEW_COMMAND_RE = re.compile(
+    r"^\s*(?:make|generate|print|create|put|write|draw|run|fix|clear|open|read|walk|"
+    r"map|sonify|start|stop|help|what|why|how|insert|delete|rename|use\s+sample|"
+    r"explain|hint|continue|recap|exit|tutorial)\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_new_command(text: str) -> bool:
+    return bool(_NEW_COMMAND_RE.match(text or ""))
+
+
+def _broken_code_request(text):
+    """If the user clearly asks for a broken example, return the broken code to
+    insert. Only fires on explicit *create-an-error* requests — never when the
+    user wants to fix/correct one, and never accidentally."""
+    low = " ".join(str(text or "").lower().split())
+    # The user wants to FIX an error, not make one -> not a broken-code request.
+    if re.search(r"\b(?:fix|correct|repair|debug|solve|resolve)\b", low):
+        return None
+    quote_trigger = (
+        re.search(r"\b(?:without|missing|no)\s+(?:a\s+)?closing\s+quote\b", low)
+        or "with a missing quote" in low or "missing closing quote" in low
+        or "make a quote error" in low or "quotation error" in low
+    )
+    if quote_trigger:
+        msg = re.search(r"print\s+(.+?)\s+(?:without|with|missing|and|that)\b", low)
+        message = msg.group(1).strip() if msg else "hello world"
+        message = re.sub(r"^(?:a|an|the)\s+", "", message)
+        return f'print("{message})'
+    wants_indent_error = (
+        re.search(r"\b(?:make|create|insert|show|give|add|with)\b.*\bindentation\s+error\b", low)
+        or "remove indentation" in low or "without indentation" in low
+    )
+    if wants_indent_error:
+        cond = re.search(r"if\s+(\w+)\s+(?:is\s+)?(greater than|more than|less than|greater|less|equal to|equals?)\s+(\d+)", low)
+        if cond:
+            var, op_word, num = cond.group(1), cond.group(2), int(cond.group(3))
+            op = ">" if ("greater" in op_word or "more" in op_word) else ("<" if "less" in op_word else "==")
+            val = num + 2 if op == ">" else (num - 2 if op == "<" else num)
+            return f'{var} = {val}\nif {var} {op} {num}:\nprint("Ready")'
+        return 'age = 12\nif age > 10:\nprint("Ready")'
+    if "make a syntax error" in low or ("syntax error" in low and "insert" in low):
+        return 'print("hello)'
+    return None
+
+
+def _spoken_insert_response(text, code):
+    """Build valid beginner Python for a spoken print/loop insert and return a
+    conversational_edit, or None so the existing insert pipeline handles it."""
+    content = intent_repair.extract_insert_content(text)
+    if not content:
+        return None
+    python = intent_repair.build_insert_python(content, code)
+    if not python:
+        return None
+    try:
+        compile(textwrap.dedent(python), "<insert>", "exec")
+    except SyntaxError:
+        return None
+    speech = "Inserting the line." if "\n" not in python else "Inserting the loop."
+    return {
+        "success": True, "action": "conversational_edit",
+        "ai_action": {"action": "append_code", "code": python},
+        "heard": text, "speech": speech, "spoken_code": python,
+    }
+
+
+def _spoken_variable_response(text, code, mem, intent):
+    """Build a valid Python variable assignment from natural speech, or ask one
+    specific question (remembered as a pending clarification) when the name or
+    value is missing. Only overrides generic/unknown inserts, never a real
+    different intent such as set_inputs."""
+    if intent not in (None, "", "insert_variable", "append_line"):
+        return None
+    slots = intent_repair.parse_variable_assignment(text, code)
+    if not slots:
+        return None
+    if slots.get("missing"):
+        question = intent_repair.variable_question(slots)
+        pending = {"type": "variable"}
+        if "name" in slots["missing"]:
+            pending["missing"] = "name"
+            pending["value"] = slots.get("value")
+        else:
+            pending["name"] = slots.get("name")
+        session_memory.set_pending(mem, pending)
+        return {"success": True, "action": "clarify", "intent": "clarify",
+                "message": question, "speech": question, "reason": "variable_assignment",
+                "needs_clarification": True, "heard": text}
+    python = slots["python"]
+    try:
+        compile(python, "<insert>", "exec")
+    except SyntaxError:
+        return None
+    return {"success": True, "action": "conversational_edit",
+            "ai_action": {"action": "append_code", "code": python},
+            "heard": text, "speech": "Inserting the variable.", "spoken_code": python}
+
+
+def _route_repaired_intent(text, code, allow_ai=False):
+    """Map a Key 2 / deterministic intent-repair decision onto an existing action,
+    or None to fall through. Only allowlisted actions are ever executed.
+
+    ``allow_ai`` gates the Key 2 fallback: it is False for the high-confidence
+    deterministic pass that runs *before* the fuzzy/security matcher (so Key 2 can
+    never override an existing safe route), and True only for the last-resort pass
+    that runs *after* fuzzy matching has had its say."""
+    ai_fn = call_conversation_orchestrator_ai if allow_ai else None
+    decision = intent_repair.repair(text, code=code, ai_fn=ai_fn)
+    if not intent_repair.validate_decision(decision):
+        return None
+    action = decision.get("action")
+    confidence = float(decision.get("confidence", 0) or 0)
+    base = {"success": True, "heard": text, "repaired": True, "confidence": confidence,
+            "canonical_command": decision.get("canonical_command", "")}
+    if decision.get("handled") and confidence >= 0.6:
+        mapping = {
+            "stop_speaking": {"action": "stop_speaking"},
+            "stop_listening": {"action": "pause_voice"},
+            "start_listening": {"action": "resume_voice"},
+            "stop_everything": {"action": "stop_everything"},
+            "run": {"action": "run"},
+            "explain_code": {"action": "walk_through"},
+            "code_map": {"action": "code_map"},
+            "sonify_block": {"action": "sonify_block"},
+            "start_tutorial": {"action": "start_tutorial"},
+        }
+        if action in mapping:
+            return {**base, **mapping[action]}
+        if action == "generate_code":
+            return {**base, "action": "generate_code", "prompt": decision.get("slots", {}).get("prompt", "")}
+        if action in ("open_project_file", "run_project_file"):
+            return {**base, "action": action, "path": decision.get("slots", {}).get("path", "")}
+        if action == "concept_answer":
+            return {**base, "action": "mentor_chat", "message": text, "mode": "concept"}
+    if action == "clarify" or (decision.get("handled") and confidence < 0.6):
+        message = decision.get("clarification") or (
+            "Do you want me to generate code, edit the current code, or explain something?"
+        )
+        return {**base, "action": "clarify", "intent": "clarify", "message": message,
+                "speech": message, "needs_clarification": True}
+    return None
+
+
+def _ground_concept_answer(answer, required_facts, code, text):
+    """Let Key 2 make a concept answer warmer/shorter, grounded so it cannot drop
+    the fact or invent code/output. Deterministic answer is the fallback."""
+    if not answer:
+        return answer
+    system = (
+        "You are CodeUp's friendly beginner tutor for a blind learner. Rephrase the "
+        "answer below into ONE short, warm sentence. Keep every concrete detail (the "
+        "exact word in quotes, the exact numbers). Do NOT invent code, output, files, "
+        "or variables. Plain text, under 30 words."
+    )
+    user = f"Question: {text}\nAnswer to rephrase: {answer}\nReturn one short sentence."
+    raw = call_conversation_orchestrator_ai(system, user)
+    return grounded_ai.ground(
+        raw, answer, required_facts=required_facts,
+        context=f"{answer} {code} {text}", single_sentence=True, max_words=40, max_chars=240,
+    )
+
+
+def _resolve_pending_clarification(pending, text, mem):
+    """Understand the user's answer to a question CodeUp asked. Returns a response
+    dict (a completed action or one more specific question), or None to fall
+    through to normal routing."""
+    ptype = pending.get("type")
+    if ptype == "pattern":
+        merged = clarification_flow.parse_pattern_answer(text, pending.get("slots", {}))
+        if clarification_flow.pattern_ready(merged):
+            command = clarification_flow.build_pattern_command(merged)
+            exact = build_exact_symbol_generation(command, source="voice")
+            if exact and exact.get("success"):
+                session_memory.clear_pending(mem)
+                return {
+                    "success": True, "action": "generate_code", "prompt": command,
+                    "confidence": 0.95, "source": "deterministic_exact", "exact_symbol": True,
+                    "resolved_from_clarification": True, "heard": text, "normalized_text": command,
+                }
+        session_memory.set_pending(mem, {"type": "pattern", "slots": merged})
+        question = clarification_flow.pattern_question(merged)
+        return {
+            "success": True, "action": "clarify", "intent": "clarify", "message": question,
+            "speech": question, "reason": "ambiguous_pattern", "needs_clarification": True, "heard": text,
+        }
+    if ptype == "file":
+        ans = " ".join(str(text or "").lower().split())
+        verb = pending.get("verb", "delete")
+        action = "rename_project_file" if verb == "rename" else "delete_project_file"
+        if ans in ("no", "cancel", "stop", "never mind", "nevermind"):
+            session_memory.clear_pending(mem)
+            msg = "Okay, I will not change any file."
+            return {"success": True, "action": "deterministic_message", "message": msg, "speech": msg, "heard": text}
+        if pending.get("file") and ans in ("yes", "yeah", "yep", "confirm", "do it", "go ahead"):
+            session_memory.clear_pending(mem)
+            return {"success": True, "action": action, "path": pending["file"], "heard": text}
+        try:
+            fname = normalize_project_path(text)
+        except Exception:
+            fname = ""
+        if fname and re.search(r"\.[a-zA-Z0-9]+$", fname):
+            session_memory.clear_pending(mem)
+            return {"success": True, "action": action, "path": fname, "heard": text}
+        question = f"Which file should I {verb}? Please say the file name, for example main dot py."
+        return {"success": True, "action": "clarify", "intent": "clarify", "message": question,
+                "speech": question, "needs_clarification": True, "heard": text}
+    if ptype == "variable":
+        python = intent_repair.parse_variable_answer(text, pending)
+        if python:
+            try:
+                compile(python, "<insert>", "exec")
+            except SyntaxError:
+                python = None
+        if python:
+            session_memory.clear_pending(mem)
+            return {"success": True, "action": "conversational_edit",
+                    "ai_action": {"action": "append_code", "code": python},
+                    "heard": text, "speech": "Inserting the variable."}
+        if pending.get("missing") == "name" or not pending.get("name"):
+            question = "What should I name the variable? Please say one word, for example score."
+        else:
+            question = f"What value should {pending.get('name')} store?"
+        return {"success": True, "action": "clarify", "intent": "clarify", "message": question,
+                "speech": question, "needs_clarification": True, "heard": text}
+    return None
+
+
+def _record_voice_memory(mem, text, intent, response):
+    """Record short-term working memory from a /voice-command response."""
+    action = str(response.get("action") or "")
+    session_memory.record_utterance(mem, text, intent or "", action)
+    if action == "action_sequence":
+        actions = response.get("actions") or []
+        session_memory.record_actions(mem, [a.get("action", "") for a in actions if isinstance(a, dict)])
+        for a in actions:
+            if not isinstance(a, dict):
+                continue
+            sub = a.get("action")
+            if sub == "generate_code" and a.get("prompt"):
+                session_memory.record_generation(mem, a.get("prompt"))
+            elif sub == "set_inputs" and isinstance(a.get("values"), list):
+                session_memory.record_input_values(mem, [str(v) for v in a["values"]])
+            elif sub == "open_project_file" and a.get("path"):
+                session_memory.record_file_open(mem, a.get("path"))
+            elif sub == "run_project_file" and a.get("path"):
+                session_memory.record_active_file(mem, a.get("path"))
+        return
+    if action == "generate_code" and response.get("prompt"):
+        session_memory.record_generation(mem, response.get("prompt"))
+    elif action == "open_project_file" and response.get("path"):
+        session_memory.record_file_open(mem, response.get("path"))
+    elif action == "run_project_file" and response.get("path"):
+        session_memory.record_active_file(mem, response.get("path"))
+
+
+def _ai_modify_prompt(text, mem, params):
+    """Key 2 referent resolution for a modification follow-up ("do the same with
+    10"). Returns a refined generation prompt grounded in memory, or "" to keep
+    the deterministic prompt. Key 2 may only resolve the referent — it is given
+    bounded memory context and cannot invent facts."""
+    snap = session_memory.snapshot(mem, utterance=text)
+    if not snap.get("last_gen_prompt") and not snap.get("current_file"):
+        return ""
+    system = (
+        "You are CodeUp's command interpreter. The user gave a short modification "
+        "command that refers to earlier work with words like it/that/same. Using ONLY "
+        "the provided context, rewrite it into ONE clear, beginner-friendly Python "
+        "generation prompt. Do NOT invent details not implied by the context. Plain "
+        "text only, one sentence, under 40 words."
+    )
+    user = (
+        f"Last generation request: {snap.get('last_gen_prompt') or '(none)'}\n"
+        f"Current file: {snap.get('current_file') or '(none)'}\n"
+        f"User command: {text}\n\n"
+        "Return one clear generation prompt."
+    )
+    refined = str(call_conversation_orchestrator_ai(system, user) or "").strip().strip('"').strip()
+    if not refined:
+        return ""
+    # The rewrite must keep the new count/instruction and the prior subject (e.g.
+    # "10" and "even"), and invent no new numbers/files, else keep deterministic.
+    last_prompt = snap.get("last_gen_prompt", "")
+    required = grounded_ai.numbers(text) + grounded_ai.salient_terms(text)[:2] + grounded_ai.salient_terms(last_prompt)[:2]
+    required = [f for f in dict.fromkeys(required) if f][:6]
+    deterministic_prompt = params.get("prompt", "") if isinstance(params, dict) else ""
+    # deterministic_text is left empty here: the new request legitimately changes
+    # the old count, so we only require the new facts and forbid invented ones
+    # (the allow-list context still includes the prior prompt's numbers).
+    ok, _reason = grounded_ai.validate(
+        refined, deterministic_text="",
+        required_facts=required,
+        context=f"{text} {last_prompt} {deterministic_prompt} {snap.get('current_file', '')}",
+        single_sentence=True, max_words=45, max_chars=300,
+    )
+    return refined if ok else ""
+
+
+def _map_followup_decision(decision, text, mem):
+    """Map a session_memory follow-up decision to a /voice-command response, or
+    None to fall through to normal handling."""
+    base = {
+        "success": True,
+        "heard": text,
+        "memory": True,
+        "referent": decision.get("referent", ""),
+        "confidence": decision.get("confidence", 0.0),
+    }
+    if not decision.get("handled"):
+        msg = decision.get("clarification") or "Could you say that another way?"
+        return {**base, "action": "deterministic_message", "message": msg, "speech": msg,
+                "next_action": "Waiting for clarification.", "needs_clarification": True}
+
+    action = decision.get("resolved_action")
+    params = decision.get("params", {})
+    if action in ("explain_code",):
+        return {**base, "action": "walk_through"}
+    if action in ("explain_run", "describe_run"):
+        return {**base, "action": "read_output"}
+    if action == "explain_simpler":
+        return {**base, "action": "mentor_chat",
+                "message": "Explain the current program in simpler words.", "mode": "shorter"}
+    if action == "explain_error":
+        return {**base, "action": "explain_simply", "error": params.get("error", "")}
+    if action == "fix_error":
+        return {**base, "action": "fix", "error": params.get("error", "")}
+    if action == "run_again":
+        return {**base, "action": "run"}
+    if action == "run_same_inputs":
+        values = [str(v) for v in (params.get("inputs") or [])]
+        msg = "Running again with your saved values."
+        return {**base, "action": "action_sequence", "spoken_summary": msg, "speech": msg,
+                "next_action": "Setting input values.",
+                "actions": [
+                    {"action": "set_inputs", "values": values, "label": "Reusing saved input values."},
+                    {"action": "run", "label": "Running with the same values."},
+                ]}
+    if action == "modify_code":
+        prompt = _ai_modify_prompt(text, mem, params) or params.get("prompt", "")
+        return {**base, "action": "generate_code", "prompt": prompt, "source": "memory_followup"}
+    if action == "open_file":
+        return {**base, "action": "open_project_file", "path": params.get("path", "")}
+    if action == "run_file":
+        return {**base, "action": "run_project_file", "path": params.get("path", "")}
+    if action == "explain_project":
+        return {**base, "action": "explain_project_structure"}
+    if action == "summarize_session":
+        msg = params.get("summary", "")
+        return {**base, "action": "deterministic_message", "message": msg, "speech": msg}
+    return None
+
+
 @app.route("/voice-command", methods=["POST"])
 def voice():
     body = safejson()
@@ -6650,6 +7190,7 @@ def voice():
     confidence = parsed.get("confidence", 0.0)
 
     storage = get_trace_storage()
+    mem = session_memory.get_memory(storage)
 
     # Handle repeat command
     if intent == "repeat":
@@ -6663,10 +7204,77 @@ def voice():
         return jsonify(last_action[0]), last_action[1]
 
     def _store_and_return(response_dict, status_code=200):
-        """Helper: save action for repeat, then return the response."""
+        """Helper: save action for repeat, record working memory, then return."""
         with _session_traces_lock:
             storage['last_voice_action'] = (response_dict, status_code)
+        try:
+            _record_voice_memory(mem, text, intent, response_dict)
+        except Exception:
+            pass
         return jsonify(response_dict), status_code
+
+    # ---- 1. Pending clarification answer ------------------------------------
+    # CodeUp only asks a question it can understand the answer to. If we are
+    # waiting on one, parse this utterance as the answer (unless it is clearly a
+    # brand-new command, in which case we drop the pending question).
+    pending = session_memory.get_pending(mem)
+    if pending:
+        if _looks_like_new_command(text):
+            session_memory.clear_pending(mem)
+        else:
+            resolved = _resolve_pending_clarification(pending, text, mem)
+            if resolved:
+                return _store_and_return(resolved)
+
+    # ---- 2. Short first-help vs. full command list --------------------------
+    if _MORE_HELP_RE.match(text):
+        return _store_and_return({"success": True, "action": "more_help", "confidence": 0.95})
+    if _FIRST_HELP_RE.match(text):
+        return _store_and_return({
+            "success": True, "action": "deterministic_message",
+            "message": _ONBOARDING_MESSAGE, "speech": _ONBOARDING_MESSAGE,
+            "heard": text, "onboarding": True,
+        })
+
+    # ---- 3. Intentional broken-code examples --------------------------------
+    broken = _broken_code_request(text)
+    if broken:
+        speech = "Inserting a broken example so you can hear the error when you run it."
+        return _store_and_return({
+            "success": True, "action": "conversational_edit",
+            "ai_action": {"action": "append_code", "code": broken},
+            "intentional_error": True, "heard": text, "speech": speech,
+        })
+
+    # ---- 3b. Spoken print/loop inserts -> valid beginner Python -------------
+    # "insert print hello" / "put print hello in the editor" become
+    # print("hello") (text quoted, numbers bare, defined variables left bare),
+    # built deterministically with editor context. Other inserts (variables, if,
+    # while, for-headers) fall through to the existing pipeline.
+    insert_response = _spoken_insert_response(text, current_code)
+    if insert_response is not None:
+        return _store_and_return(insert_response)
+
+    # ---- 3c. Natural variable assignments -> valid Python (or ask) ----------
+    # "set age to 16" -> age = 16; "insert a variable with the value Taki" asks
+    # "What should I name the variable?" and remembers it.
+    variable_response = _spoken_variable_response(text, current_code, mem, intent)
+    if variable_response is not None:
+        return _store_and_return(variable_response)
+
+    # ---- 4. Global beginner concept Q&A (works outside the tutorial) --------
+    concept_kind = concept_qa.classify_concept_question(text)
+    if concept_kind:
+        # "what does range 3 mean" only answers when the code actually has a range;
+        # otherwise let the normal concept-mentor route handle it.
+        if concept_kind != "range" or re.search(r"\brange\s*\(", current_code or ""):
+            answer, facts = concept_qa.answer_concept(concept_kind, current_code)
+            if answer:
+                grounded = _ground_concept_answer(answer, facts, current_code, text)
+                return _store_and_return({
+                    "success": True, "action": "deterministic_message",
+                    "message": grounded, "speech": grounded, "heard": text, "concept": concept_kind,
+                })
 
     pending_clarification = storage.get("pending_orchestrator_clarification")
     orchestrator_text = text
@@ -6683,13 +7291,55 @@ def voice():
     ):
         orchestrator_text = f"{pending_clarification.get('original_text', '')} {text}".strip()
 
+    # ---- confidence-aware clarification for risky/ambiguous commands --------
+    # Ask one short question before a destructive file op with a vague referent,
+    # or a sized symbol-pattern request too vague to parse cleanly. Clear
+    # commands (exact patterns, run code, inserts, tutorial) are never blocked.
+    # Assess on the wake-stripped, noise-cleaned text so a complete exact-symbol
+    # request (e.g. "ast risks" -> asterisks) is recognized and never clarified.
+    _clarifier_text = strip_wake_phrase(text).get("text") or text
+    clarification = command_clarifier.assess(
+        _clarifier_text,
+        intent=intent or "",
+        confidence=confidence,
+        code=current_code,
+        mem=mem,
+        exact_result=build_exact_symbol_generation(_clarifier_text, source=input_source),
+        ai_fn=call_conversation_orchestrator_ai,
+    )
+    if clarification and clarification.get("needs_clarification"):
+        message = clarification["message"]
+        # Remember the structured question so the user's next utterance is
+        # understood as the answer (see the pending-clarification block above).
+        session_memory.set_pending(mem, clarification.get("pending"))
+        return _store_and_return({
+            "success": True,
+            "intent": "clarify",
+            "action": "clarify",
+            "message": message,
+            "speech": message,
+            "reason": clarification.get("reason", ""),
+            "needs_clarification": True,
+            "heard": text,
+            "next_action": "Waiting for clarification.",
+        })
+
     wake_info = strip_wake_phrase(orchestrator_text)
     lower_orchestrator_text = orchestrator_text.lower()
+    has_multi_connector = bool(re.search(r"\b(?:then|and then|after that)\b", lower_orchestrator_text))
+    # Route rough generation asks ("make a marks thing") to the Key 2 brain only
+    # when the deterministic parser could not already classify them — clean
+    # generation intents (e.g. multi-file projects) keep their fast existing path.
+    rough_generation_request = bool(
+        not intent
+        and looks_like_generation_request(wake_info.get("text") or orchestrator_text)
+    )
     should_try_orchestrator = (
         wake_info.get("wake_detected")
-        or re.search(r"\b(?:then|and then|after that)\b", lower_orchestrator_text)
+        or has_multi_connector
         or "cube" in lower_orchestrator_text
         or re.search(r"\bfix\s+it\s+and\s+run\s+it\b", lower_orchestrator_text)
+        or rough_generation_request
         or build_exact_symbol_generation(wake_info.get("text") or orchestrator_text, source=input_source) is not None
     )
     if should_try_orchestrator:
@@ -6698,7 +7348,7 @@ def voice():
             orchestrator_text,
             code=current_code,
             source=input_source,
-            ai_plan_fn=call_conversation_orchestrator_ai if (wake_info.get("wake_detected") or re.search(r"\b(?:then|and then|after that)\b", lower_orchestrator_text)) else None,
+            ai_plan_fn=call_conversation_orchestrator_ai if (wake_info.get("wake_detected") or has_multi_connector or rough_generation_request) else None,
         )
         if plan:
             if plan.get("needs_clarification"):
@@ -6762,6 +7412,62 @@ def voice():
             "source": "deterministic_exact",
             "exact_symbol": True,
         })
+
+    # ---- session memory: contextual follow-ups ------------------------------
+    # Short follow-ups ("explain it again", "why did it fail", "fix that",
+    # "run it again", "do the same with 10", "open that file again") are resolved
+    # against this session's working memory and routed to the existing real
+    # actions. Runs after exact-symbol/orchestrator so those still win, and
+    # before the concierge so "run with the same values" reuses saved inputs.
+    followup_category = session_memory.classify_followup(text)
+    if followup_category:
+        decision = session_memory.resolve_followup(
+            followup_category, text, mem, code=current_code, error=error_context,
+        )
+        mapped = _map_followup_decision(decision, text, mem)
+        if mapped is not None:
+            return _store_and_return(mapped)
+
+    # ---- input() concierge --------------------------------------------------
+    # Natural value-supplying commands ("run with name Taknoor and age 16",
+    # "use sample values", "name is Taknoor and age is sixteen") feed the
+    # existing pre-flight input run path. We only override the generic run-file
+    # intent, never a specific one (e.g. "run with step narration").
+    if intent in (None, "run_project_file"):
+        concierge = build_input_plan(current_code, text, ai_value_fn=_concierge_ai_values)
+        if concierge:
+            status = concierge.get("status")
+            if status in ("ask_for_code", "type_error"):
+                message = concierge["message"]
+                return _store_and_return({
+                    "success": True,
+                    "action": "deterministic_message",
+                    "message": message,
+                    "speech": message,
+                    "heard": text,
+                    "next_action": "Waiting for input values.",
+                    "input_concierge": True,
+                })
+            if status == "ready":
+                message = concierge["message"]
+                return _store_and_return({
+                    "success": True,
+                    "action": "action_sequence",
+                    "heard": text,
+                    "normalized_text": concierge.get("summary", message),
+                    "spoken_summary": message,
+                    "speech": message,
+                    "next_action": "Setting input values.",
+                    "input_concierge": True,
+                    "actions": [
+                        {"action": "set_inputs", "values": concierge["values"], "label": "Setting input values."},
+                        {"action": "run", "label": "Running with your values."},
+                    ],
+                })
+            if status == "no_input":
+                # Values were offered but the code never calls input(): honour
+                # requirement 8 and just run the code normally.
+                return _store_and_return({"success": True, "action": "run", "heard": text, "input_concierge": True})
 
     if (
         intent == "mentor_chat"
@@ -7038,9 +7744,18 @@ def voice():
         language=language,
         cursor_line=cursor_line,
     )
+    if conversational and conversational.get("action") != "unknown":
+        return _store_and_return(conversational)
+
+    # High-confidence DETERMINISTIC intent repair only (speech controls like
+    # "alright stop listening", plus run/explain/map/sonify/tutorial). Key 2 is
+    # NOT consulted here, so it can never override an existing fuzzy/security
+    # voice route — that fallback runs next and gets first refusal.
+    repaired = _route_repaired_intent(text, current_code, allow_ai=False)
+    if repaired is not None:
+        return _store_and_return(repaired)
+
     if conversational:
-        if conversational.get("action") != "unknown":
-            return _store_and_return(conversational)
         return jsonify(conversational)
 
     # Fallback: fuzzy matching on COMMANDS
@@ -7067,6 +7782,14 @@ def voice():
             "heard": text,
             "confidence": bscore / 100.0
         })
+
+    # Key 2 intent repair as the LAST resort — only now that the deterministic
+    # routes and the fuzzy/security matcher have all declined. It may map a
+    # genuinely messy command onto a validated action or ask one clarification,
+    # but by running here it can never hijack a route those layers already own.
+    repaired_ai = _route_repaired_intent(text, current_code, allow_ai=True)
+    if repaired_ai is not None:
+        return _store_and_return(repaired_ai)
 
     # Log unrecognized commands so we can iterate the vocabulary from real data
     _log_unrecognized_command(text, get_session_id())

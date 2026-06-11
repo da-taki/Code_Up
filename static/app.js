@@ -3141,6 +3141,22 @@ async function handleConfirmedAction(action, payload) {
   }
   else if (action === 'export_project') await exportProject();
   else if (action === 'project_report') await requestProjectReport();
+  // ----- Sprint 2: navigate-by-meaning + code landmarks (read-only) -----
+  else if (action === 'navigate_code' || action === 'bookmark_read') {
+    const message = (payload && (payload.message || payload.speech)) || 'Here is the block.';
+    // Move the cursor/highlight to the target line if we have one. Never edits code.
+    if (payload && payload.line && typeof gotoLine === 'function') gotoLine(payload.line);
+    const excerpt = (payload && payload.code_excerpt) ? '\n\n' + payload.code_excerpt : '';
+    out(message + excerpt);
+    srAnnounce(message);
+    speak(message);
+  }
+  else if (action === 'bookmark_created' || action === 'bookmark_deleted' || action === 'bookmark_list' || action === 'bookmark_error') {
+    const message = (payload && (payload.message || payload.speech)) || 'Done.';
+    out(message);
+    srAnnounce(message);
+    speak(message);
+  }
   else if (action === 'read_project_files') readProjectFiles();
   else if (action === 'open_project_file') await openProjectFile(payload && payload.path);
   else if (action === 'create_project_file') await createProjectFile(payload && payload.path);

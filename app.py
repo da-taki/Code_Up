@@ -62,6 +62,12 @@ from openvino_intent_demo import classify_local_intent
 import export_support
 import report_support
 import learning_recap
+# Sprint 2: non-visual code understanding. All deterministic / Flask-free; routed
+# through the existing /voice-command + session model.
+import structure_tools
+import error_replay
+import hint_engine
+import landmarks
 
 load_dotenv(override=True)
 
@@ -7399,6 +7405,185 @@ def _sprint1_command(text, mem):
     return None
 
 
+# ---- Sprint 2: non-visual code understanding (deterministic) ----------------
+# Structure snapshot, navigate-by-meaning, error replay, staged hints, code
+# landmarks. Whole-utterance matching on NEW phrasings only, so existing
+# route-tested commands (mentor "tiny hint", "compare before and after",
+# "replay my mistake", output bookmarks, "where am i in the program") are
+# untouched. parse_intent is not modified.
+_STRUCTURE_RE = re.compile(
+    r"^(?:please\s+)?(?:summari[sz]e (?:the )?structure|give me (?:a )?structure snapshot|"
+    r"structure snapshot|give me an audio overview|audio overview|audio structure snapshot|"
+    r"what is in this (?:program|code)|what'?s in this (?:program|code)|"
+    r"what blocks are in this code|what are the blocks)$", re.IGNORECASE)
+_NAV_GOTO_RE = re.compile(
+    r"^(?:please\s+)?(?:go to|jump to|take me to|find|read) (?:the )?"
+    r"(for loop|while loop|loop|function|condition|if statement|if|print statement|print|"
+    r"error|mistake|bug|class|try block|try)$", re.IGNORECASE)
+_NAV_BLOCK_RE = re.compile(
+    r"^(?:please\s+)?(?:read (?:the )?)?(next|previous|prev|current|this) block$", re.IGNORECASE)
+_WHERE_IS_RE = re.compile(
+    r"^(?:please\s+)?where is (?:the )?([A-Za-z_][\w ]*?) "
+    r"(used|changed|defined|calculated|computed|updated|set|created|modified|assigned)$", re.IGNORECASE)
+_REPLAY_RE = re.compile(
+    r"^(?:please\s+)?(?:show me what went wrong|what went wrong|replay the mistake|"
+    r"compare broken and fixed(?: code)?|what changed after the fix|explain the fix|"
+    r"show the difference|show me the fix)$", re.IGNORECASE)
+_HINT_SMALL_RE = re.compile(r"^(?:please\s+)?(?:give me )?(?:a )?(?:small|little|gentle) hint$", re.IGNORECASE)
+_HINT_BIGGER_RE = re.compile(r"^(?:please\s+)?(?:give me )?(?:a )?(?:bigger|larger|more specific|better) hint$", re.IGNORECASE)
+_HINT_ANOTHER_RE = re.compile(r"^(?:please\s+)?(?:give me )?(?:another|one more|the next) hint$", re.IGNORECASE)
+_HINT_ANSWER_RE = re.compile(r"^(?:please\s+)?(?:show me the answer|tell me the answer|"
+                             r"(?:just )?give me the answer|what'?s the answer|reveal the answer)$", re.IGNORECASE)
+_HINT_GENERIC_RE = re.compile(r"^(?:please\s+)?(?:give me )?(?:a )?hint$|^i need a hint$|^help me solve this$|^help me fix this$", re.IGNORECASE)
+_HINT_NOTYET_RE = re.compile(r"^(?:please\s+)?(?:do not|don'?t) give me the answer(?: yet)?$", re.IGNORECASE)
+_LM_CREATE_RE = re.compile(
+    r"^(?:please\s+)?(?:bookmark|mark) this (loop|for loop|while loop|function|line|section|"
+    r"block|condition|if|class|method)(?:\s+as\s+(.+))?$", re.IGNORECASE)
+_LM_GOTO_RE = re.compile(r"^(?:please\s+)?(?:go to|open|jump to) (?:bookmark|landmark) (.+)$", re.IGNORECASE)
+_LM_READ_RE = re.compile(r"^(?:please\s+)?read (?:bookmark|landmark) (.+)$", re.IGNORECASE)
+_LM_LIST_RE = re.compile(r"^(?:please\s+)?list (?:my )?(?:code )?(?:bookmarks|landmarks)$", re.IGNORECASE)
+_LM_DELETE_RE = re.compile(r"^(?:please\s+)?(?:delete|remove) (?:bookmark|landmark) (.+)$", re.IGNORECASE)
+_LM_CLEAR_RE = re.compile(r"^(?:please\s+)?clear (?:all )?(?:code )?(?:bookmarks|landmarks)$", re.IGNORECASE)
+
+
+def _extract_error_line(error: str) -> Optional[int]:
+    matches = re.findall(r"line (\d+)", str(error or ""))
+    if matches:
+        try:
+            return int(matches[-1])
+        except ValueError:
+            return None
+    return None
+
+
+def _nav_response(nav, text, mem):
+    """Turn a structure_tools navigation result into a /voice-command response."""
+    if nav.get("found"):
+        session_memory.record_navigation(mem, nav)
+        resp = {"success": True, "action": "navigate_code", "heard": text,
+                "line": nav.get("line"), "end_line": nav.get("end_line"),
+                "message": nav.get("message", ""), "speech": nav.get("message", ""),
+                "code_excerpt": nav.get("code", ""), "block_type": nav.get("block_type", "")}
+        return resp
+    msg = nav.get("message", "I could not find that in your code.")
+    return {"success": True, "action": "deterministic_message", "heard": text,
+            "message": msg, "speech": msg}
+
+
+def _resolve_landmark_target(code, cursor_line, mem, construct):
+    nav = session_memory.get_last_navigated(mem)
+    if nav and nav.get("line"):
+        return nav
+    target = construct or "current block"
+    n = structure_tools.navigate(code, target, cursor_line=cursor_line)
+    if n.get("found"):
+        return {"line": n["line"], "end_line": n.get("end_line") or n["line"],
+                "block_type": n.get("block_type", ""), "preview": n.get("preview", "")}
+    return None
+
+
+def _sprint2_command(text, code, mem, cursor_line, error_context, mistake_snapshot):
+    """Deterministic Sprint-2 commands, or None to fall through."""
+    t = " ".join(str(text or "").lower().strip().rstrip(".!?").split())
+    if not t:
+        return None
+    code = code or ""
+
+    # 1) Structure snapshot
+    if _STRUCTURE_RE.match(t):
+        snap = structure_tools.build_structure_snapshot(code)
+        return {"success": True, "action": "deterministic_message", "heard": text,
+                "message": snap["summary"], "speech": snap["summary"], "structure": snap}
+
+    # 2) Error replay (new phrasings; reuses the run snapshots)
+    if _REPLAY_RE.match(t):
+        result = error_replay.from_snapshot(mistake_snapshot)
+        return {"success": True, "action": "deterministic_message", "heard": text,
+                "message": result["explanation"], "speech": result["speech"],
+                "error_replay": True, "changed_lines": result.get("changed_lines", [])}
+
+    # 3) Landmarks — create (construct word disambiguates from output bookmarks)
+    m = _LM_CREATE_RE.match(t)
+    if m:
+        construct, name = m.group(1), (m.group(2) or "").strip()
+        norm_construct = "loop" if "loop" in construct else construct
+        target = _resolve_landmark_target(code, cursor_line, mem, norm_construct if norm_construct in
+                                          ("loop", "function", "condition", "if", "class") else None)
+        if not target:
+            msg = "Which line or block should I bookmark? Try saying 'go to the loop' first."
+            return {"success": True, "action": "bookmark_error", "heard": text, "message": msg, "speech": msg}
+        store = session_memory.get_landmarks(mem)
+        result = landmarks.create_landmark(
+            store, name or norm_construct, line=target.get("line"),
+            end_line=target.get("end_line"), block_type=target.get("block_type") or construct,
+            preview=target.get("preview", ""))
+        return {**result, "heard": text}
+
+    # Landmark list / goto / read / delete / clear. For commands that collide
+    # with output bookmarks ("list bookmarks", "go to bookmark X"), only claim
+    # them when a code landmark actually matches; otherwise fall through.
+    store = session_memory.get_landmarks(mem)
+    if _LM_CLEAR_RE.match(t):
+        return {**landmarks.clear_landmarks(store), "heard": text}
+    m = _LM_DELETE_RE.match(t)
+    if m and landmarks.normalize_name(m.group(1)) in store:
+        return {**landmarks.delete_landmark(store, m.group(1)), "heard": text}
+    m = _LM_GOTO_RE.match(t) or _LM_READ_RE.match(t)
+    if m:
+        name = landmarks.normalize_name(m.group(1))
+        is_landmark_word = "landmark" in t
+        if name in store or is_landmark_word:
+            return {**landmarks.get_landmark(store, m.group(1)), "heard": text}
+    if _LM_LIST_RE.match(t):
+        if store or "landmark" in t:
+            return {**landmarks.list_landmarks(store), "heard": text}
+
+    # 4) Navigation by meaning
+    if _NAV_GOTO_RE.match(t):
+        target = _NAV_GOTO_RE.match(t).group(1)
+        last_err_line = _extract_error_line(error_context) or _extract_error_line(mem.get("last_run_error", ""))
+        nav = structure_tools.navigate(code, target, cursor_line=cursor_line, last_error_line=last_err_line)
+        return _nav_response(nav, text, mem)
+    if _NAV_BLOCK_RE.match(t):
+        rel = _NAV_BLOCK_RE.match(t).group(1)
+        nav = structure_tools.navigate(code, f"{rel} block", cursor_line=cursor_line,
+                                       last_block=session_memory.get_last_navigated(mem))
+        return _nav_response(nav, text, mem)
+    m = _WHERE_IS_RE.match(t)
+    if m:
+        name, verb = m.group(1).strip(), m.group(2).lower()
+        mode = "changed" if verb in ("changed", "calculated", "computed", "updated", "set", "modified", "assigned") \
+            else ("defined" if verb in ("defined", "created") else "used")
+        result = structure_tools.find_symbol(code, name.split()[-1], mode)
+        return _nav_response(result, text, mem)
+
+    # 5) Staged hints
+    level = None
+    if _HINT_SMALL_RE.match(t):
+        level = session_memory.set_hint_level(mem, "small")
+    elif _HINT_BIGGER_RE.match(t):
+        level = session_memory.set_hint_level(mem, "bigger")
+    elif _HINT_ANSWER_RE.match(t):
+        level = session_memory.set_hint_level(mem, "answer")
+    elif _HINT_ANOTHER_RE.match(t):
+        level = session_memory.escalate_hint(mem)
+    elif _HINT_GENERIC_RE.match(t):
+        level = session_memory.get_hint_level(mem)
+    elif _HINT_NOTYET_RE.match(t):
+        level = session_memory.set_hint_level(mem, "small")
+    if level is not None:
+        ctx = {"code": code, "error": error_context or mem.get("last_run_error", ""),
+               "tutorial_module": mem.get("tutorial_module", "")}
+        hint = hint_engine.build_hint(ctx, level)
+        prefix = "I won't give the answer yet. " if _HINT_NOTYET_RE.match(t) else ""
+        msg = prefix + hint["hint"]
+        return {"success": True, "action": "deterministic_message", "heard": text,
+                "message": msg, "speech": msg, "hint_level": hint["level"],
+                "problem_type": hint.get("problem_type", "")}
+
+    return None
+
+
 @app.route("/voice-command", methods=["POST"])
 def voice():
     body = safejson()
@@ -7501,6 +7686,16 @@ def voice():
     sprint1 = _sprint1_command(text, mem)
     if sprint1 is not None:
         return _store_and_return(sprint1)
+
+    # ---- 3e. Sprint 2: structure / navigation / replay / hints / landmarks --
+    # Deterministic, whole-utterance commands routed before concept Q&A and
+    # generation so "what is in this program" summarizes structure (not a concept
+    # answer) and "where is total changed" navigates (not chat).
+    with _mistake_snapshots_lock:
+        _snap = dict(_mistake_snapshots.get(get_session_id(), {}))
+    sprint2 = _sprint2_command(text, current_code, mem, cursor_line, error_context, _snap)
+    if sprint2 is not None:
+        return _store_and_return(sprint2)
 
     # ---- 4. Global beginner concept Q&A (works outside the tutorial) --------
     concept_kind = concept_qa.classify_concept_question(text)

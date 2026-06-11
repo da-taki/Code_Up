@@ -24,6 +24,25 @@ let _restartTimer = null;
 let _voicePaused = false;
 let _voiceEnabledByUser = false;
 
+// --- Speech cancellation token -------------------------------------------
+// Every time speech is cancelled (stop speaking / stop everything / a new action
+// that interrupts narration) we bump this epoch. A long async narration captures
+// the epoch before it awaits, and any speak() it issues afterwards is dropped if
+// the epoch has since changed — so a network callback that resolves *after* the
+// user said "stop" can never start talking again.
+let _speechEpoch = 0;
+function currentSpeechEpoch() { return _speechEpoch; }
+function bumpSpeechEpoch() { _speechEpoch = (_speechEpoch + 1) % 1e9; return _speechEpoch; }
+
+// --- Voice-recognition lifecycle state (single source of truth) ----------
+// _voiceEnabledByUser (above) means recognition is WANTED. The flags below stop
+// double instances and restart storms when the browser ends recognition for its
+// own reasons (idle timeout, transient error).
+let _recognitionStarting = false;     // a start() call is in flight
+let _recognitionRestartCount = 0;     // consecutive rapid auto-restarts
+let _lastRecognitionStartAt = 0;      // when the current session actually started
+const _MAX_RAPID_RESTARTS = 6;        // give up after this many rapid failures (anti-storm)
+
 // Watchdog: track last time recognition was confirmed active. If voice is
 // supposedly listening but we haven't seen activity in a while, the session
 // may have silently died (common during long pauses). The watchdog kicks it
@@ -42,14 +61,11 @@ function _startRecognitionWatchdog() {
       _lastRecognitionActivity = Date.now();  // reset to avoid kick loops
       try {
         if (!_voiceEnabledByUser) return;
-        // Stop and restart to force a clean session. onend will trigger
-        // the auto-restart chain.
+        // Stop to force a clean session; onend triggers the debounced restart.
         recognition.stop();
       } catch (e) {
-        // If stop fails, try start directly
-        try { if (_voiceEnabledByUser) recognition.start(); } catch (e2) {
-          _debugLog('Watchdog kick failed:', e2.message);
-        }
+        // If stop failed the session may already be dead — restart safely.
+        _scheduleRecognitionRestart();
       }
     }
   }, 15000);  // check every 15s
@@ -60,6 +76,70 @@ function _stopRecognitionWatchdog() {
     clearInterval(_watchdogTimer);
     _watchdogTimer = null;
   }
+}
+
+// Start the existing recognition object safely: never while one is already
+// starting or active (prevents the "two recognizers at once" InvalidStateError),
+// and only while voice is still wanted.
+function _safeStartRecognition() {
+  if (!recognition || !_voiceEnabledByUser) return;
+  if (_recognitionStarting || isListening) return;
+  _recognitionStarting = true;
+  try {
+    recognition.start();
+    _lastRecognitionActivity = Date.now();
+  } catch (e) {
+    // Almost always InvalidStateError when called too soon after onend.
+    _recognitionStarting = false;
+    _debugLog('Recognition start failed, backing off:', e && e.message ? e.message : e);
+    _scheduleRecognitionRestart();
+  }
+}
+
+// Debounced, backing-off auto-restart after an UNEXPECTED end. A single timer is
+// used (cleared before re-arming) so restarts never pile up, the delay grows with
+// each rapid failure, and after too many rapid failures we give up rather than
+// spin forever.
+function _scheduleRecognitionRestart() {
+  if (!_voiceEnabledByUser) return;            // user paused/stopped -> do not restart
+  if (typeof document !== 'undefined' && document.hidden) return;  // resume on visibility instead
+  if (_restartTimer) { clearTimeout(_restartTimer); _restartTimer = null; }
+
+  // A session that died almost immediately counts as a rapid failure; a healthy
+  // session (lasted a while) resets the counter.
+  const sessionMs = _lastRecognitionStartAt ? Date.now() - _lastRecognitionStartAt : 0;
+  if (sessionMs > 0 && sessionMs < 1500) _recognitionRestartCount++;
+  else _recognitionRestartCount = 0;
+
+  if (_recognitionRestartCount > _MAX_RAPID_RESTARTS) {
+    _debugLog('Voice: too many rapid restarts — stopping to avoid a storm');
+    _recognitionRestartCount = 0;
+    markVoiceListeningOff();
+    try { SonificationManager.playTone(300, 0.15, 0.1); } catch (e) {}
+    speak('Voice recognition keeps stopping. Press the voice button or Control Shift M to restart.');
+    return;
+  }
+
+  // 400ms, 800ms, 1600ms ... capped at 4s. (Chrome also throws if start() is
+  // called too soon after onend, so a floor of ~400ms is required anyway.)
+  const delay = Math.min(4000, 400 * Math.pow(2, _recognitionRestartCount));
+  _restartTimer = setTimeout(() => {
+    _restartTimer = null;
+    if (!_voiceEnabledByUser) return;
+    if (typeof document !== 'undefined' && document.hidden) return;
+    _voiceStartIsUserInitiated = false;
+    _safeStartRecognition();
+  }, delay);
+}
+
+// When the user paused/stopped, recognition does not auto-restart. If the tab was
+// merely hidden (we skip restarts while hidden), resume once it is visible again.
+if (typeof document !== 'undefined' && document.addEventListener) {
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && _voiceEnabledByUser && !isListening && !_recognitionStarting) {
+      _scheduleRecognitionRestart();
+    }
+  });
 }
 let _voiceStartIsUserInitiated = false;
 let _loadingSnippets = false;
@@ -323,6 +403,9 @@ const SpeechManager = (function () {
     }
 
     function cancelAll() {
+      // Invalidate any in-flight async narration: callbacks that captured an
+      // earlier epoch will see it has changed and refuse to speak.
+      bumpSpeechEpoch();
       queue.length = 0;
       AppState.isSpeaking = false;
       currentUtterance = null;
@@ -933,6 +1016,8 @@ function pasteCode() {
 // ---------- TTS ----------
 function speak(text, opts = {}) {
   if (!text) return;
+  // Stale-utterance guard (epoch bumped by cancelAll on stop). See _speechEpoch.
+  if (opts.epoch != null && opts.epoch !== _speechEpoch) return;
   lastSpokenText = text;
   // Delegate to VoiceEngine when available so speech stays interruptible.
   if (typeof VoiceEngine !== 'undefined' && VoiceEngine.speak) {
@@ -2902,7 +2987,9 @@ async function handleConfirmedAction(action, payload) {
     SonificationManager.clearAll();
     ErrorBeaconManager.stop();
     if (typeof _stepNarrationJob !== 'undefined' && _stepNarrationJob) { _stepNarrationJob.cancelled = true; }
-    out('Stopped.');
+    // Preserve the last program output/error in the output box — only announce
+    // the stop via the status/ARIA region so the visible result is never lost.
+    srAnnounce('Stopped.');
     SonificationManager.playTone(400, 0.08, 0.08);
   }
   else if (action === 'speak')       speakOutput();
@@ -3669,6 +3756,7 @@ async function speakCodeMap() {
 async function requestCodeMap(query) {
   if (!ensurePythonEditorContent('code map')) return;
   showAI('Mapping your code...');
+  const _codeMapEpoch = currentSpeechEpoch();
   try {
     const res = await fetch('/audio-code-map', {
       method: 'POST',
@@ -3678,8 +3766,8 @@ async function requestCodeMap(query) {
     const data = await res.json();
     const reply = data.reply || data.speech || data.error || 'Could not map the code.';
     out(reply);
-    speak(reply);
-    srAnnounce('Code map ready');
+    speak(reply, { epoch: _codeMapEpoch });
+    if (_codeMapEpoch === currentSpeechEpoch()) srAnnounce('Code map ready');
   } catch (e) {
     console.error(e);
     speak('Code map failed.');
@@ -3752,6 +3840,9 @@ async function requestStepNarration() {
   }
   const job = { cancelled: false };
   _stepNarrationJob = job;
+  // If speech is cancelled (stop speaking / stop everything) the epoch changes
+  // and the narration loop below stops re-enqueuing steps.
+  const _narrEpoch = currentSpeechEpoch();
 
   showAI('Running with step narration...');
   try {
@@ -3774,7 +3865,7 @@ async function requestStepNarration() {
       out(fullText);
 
       for (let i = 0; i < steps.length; i++) {
-        if (job.cancelled) return;
+        if (job.cancelled || _narrEpoch !== currentSpeechEpoch()) return;
         const depth = depths[i];
         if (depth >= 0) {
           _playDepthCue(depth);
@@ -4112,16 +4203,27 @@ function startListening() {
     return;
   }
   if (isListening) { speak('Already listening.'); return; }
+  if (_recognitionStarting) { _debugLog('Voice: start already in flight'); return; }
+
+  // Tear down any previous recognizer so we never run two at once.
+  if (recognition) {
+    try {
+      recognition.onend = null;
+      recognition.onerror = null;
+      recognition.onresult = null;
+      recognition.abort();
+    } catch (e) {}
+  }
+  if (_restartTimer) { clearTimeout(_restartTimer); _restartTimer = null; }
 
   _voiceEnabledByUser = true;
   _voicePaused = false;
+  _recognitionRestartCount = 0;
+  _lastRecognitionStartAt = 0;
   recognition = new SR();
   recognition.continuous      = true;
   recognition.interimResults  = true;
   recognition.lang            = getLanguage() === 'hi' ? 'hi-IN' : 'en-US';
-  recognition._restartAttempts = 0;
-  recognition._maxRestarts     = 5;
-  recognition._backoffBase     = 300;
 
   recognition.onstart = () => {
     if (!_voiceEnabledByUser) {
@@ -4132,7 +4234,8 @@ function startListening() {
     }
     isListening = true;
     AppState.isListening = true;
-    recognition._restartAttempts = 0;
+    _recognitionStarting = false;
+    _lastRecognitionStartAt = Date.now();
     _lastRecognitionActivity = Date.now();
     _startRecognitionWatchdog();
 
@@ -4237,6 +4340,7 @@ function startListening() {
 
   recognition.onerror = (event) => {
     _debugLog('Voice recognition error:', event.error);
+    _recognitionStarting = false;
     if (event.error === 'no-speech') { return; }
     if (event.error === 'aborted') {
       if (!_voiceEnabledByUser) {
@@ -4260,59 +4364,23 @@ function startListening() {
 
   recognition.onend = () => {
     _debugLog('Voice: Session ended');
-    if (!isListening || !_voiceEnabledByUser) return;
-    recognition._restartAttempts = (recognition._restartAttempts || 0) + 1;
-    if (recognition._restartAttempts > 10) {
-      recognition._restartAttempts = 0;
-    }
-    if (_restartTimer) { clearTimeout(_restartTimer); _restartTimer = null; }
-    // 400ms cooldown — Chrome throws InvalidStateError if start() is called
-    // too soon after onend. 200ms hits the edge case; 400ms is safe.
-    _restartTimer = setTimeout(() => {
-      _restartTimer = null;
-      _voiceStartIsUserInitiated = false;
-      try {
-        if (!(isListening && _voiceEnabledByUser)) return;
-        recognition.start();
-        // Recognition is alive again — reset the watchdog
-        _lastRecognitionActivity = Date.now();
-      } catch (e) {
-        // Almost always InvalidStateError. Retry with longer waits, and if
-        // both retries fail, reconcile state so the user can recover.
-        _debugLog('Auto-restart deferred:', e.message);
-        setTimeout(() => {
-          try {
-            if (!(isListening && _voiceEnabledByUser)) return;
-            recognition.start();
-            _lastRecognitionActivity = Date.now();
-          }
-          catch (e2) {
-            _debugLog('Second restart failed:', e2.message);
-            // Third and final attempt
-            setTimeout(() => {
-              try {
-                if (!(isListening && _voiceEnabledByUser)) return;
-                recognition.start();
-                _lastRecognitionActivity = Date.now();
-              } catch (e3) {
-                // Recognition is dead. Stop lying to the user about state.
-                _debugLog('Recognition session permanently lost. Reconciling.');
-                markVoiceListeningOff();
-                // Audible cue so the user knows something happened
-                SonificationManager.playTone(300, 0.15, 0.1);
-                speak('Voice recognition stopped unexpectedly. Press the voice button or Control Shift M to restart.');
-              }
-            }, 3000);
-          }
-        }, 1500);
-      }
-    }, 400);
+    isListening = false;
+    AppState.isListening = false;
+    _recognitionStarting = false;
+    // Only auto-restart an UNEXPECTED end. If the user turned voice off
+    // (markVoiceListeningOff clears _voiceEnabledByUser) we stay off. The
+    // scheduler debounces, backs off, skips hidden tabs, and gives up after a
+    // burst of rapid failures so we never get a restart storm or two recognizers.
+    if (!_voiceEnabledByUser) return;
+    _scheduleRecognitionRestart();
   };
 
   try {
     _voiceStartIsUserInitiated = true;
+    _recognitionStarting = true;
     recognition.start();
   } catch (e) {
+    _recognitionStarting = false;
     _debugLog('Failed to start recognition:', e && e.message ? e.message : e);
     const msg = 'Failed to start voice control. Keyboard shortcuts and the typed command box still work.';
     out(msg);
@@ -6112,6 +6180,9 @@ async function walkThroughCode() {
 
   showAI('Walking through your code...');
   speak('Let me walk through your code.');
+  // Capture the speech epoch: if the user says "stop" while we await the
+  // network, the epoch changes and the explanation below is not spoken.
+  const _walkEpoch = currentSpeechEpoch();
   try {
     const res = await fetch('/walkthrough', {
       method: 'POST',
@@ -6121,8 +6192,8 @@ async function walkThroughCode() {
     const data = await res.json();
     const explanation = data.explanation || data.speech || data.error || 'No walkthrough available.';
     out(explanation);
-    speak(explanation);
-    srAnnounce('Walkthrough complete');
+    speak(explanation, { epoch: _walkEpoch });
+    if (_walkEpoch === currentSpeechEpoch()) srAnnounce('Walkthrough complete');
   } catch (e) {
     console.error(e);
     speak('Walkthrough failed.');

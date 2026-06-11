@@ -17,6 +17,7 @@ Design notes:
     can never invent an error, output, or file that memory does not hold.
 """
 
+import re
 import time
 from typing import Any, Dict, List, Optional
 
@@ -232,6 +233,70 @@ _MODIFY = ["do the same", "add comments", "add a comment", "add some comments",
 _SUMMARIZE = ["summarize what i did", "summarise what i did", "summarize my work",
               "summarise my work", "what did i do", "what have i done", "recap my session"]
 
+# Correction / "oh I meant ..." follow-ups: after generating or editing code the
+# learner refines it in natural speech. We strip the correction lead-in and treat
+# the remainder as a modification instruction (resolved against the last
+# generation / current editor code). Kept tight so a plain command after a filler
+# (e.g. "actually run it") is NOT hijacked: a leading "actually"/"no" only counts
+# as a correction when the remainder is itself a modify-style instruction.
+_CORRECTION_LEADIN_RE = re.compile(
+    r"^(?:oh[,\s]+)?i\s+(?:meant|mean)\b[:,]?\s*"
+    r"|^oh[,\s]+(?=make|use|change|print|turn|add|rename|it\b)"
+    r"|^no[,]?\s+(?:i\s+meant\s+)?(?=make|use|change|print|turn|add|rename|it\b)"
+    r"|^actually[,]?\s+"
+    r"|^(?:wait|sorry)[,]?\s+(?:i\s+meant\s+)?"
+    r"|^modify\s+it\s+so(?:\s+that)?\s+"
+    r"|^change\s+it\s+(?:to|so)\s+",
+    re.IGNORECASE,
+)
+_MODIFY_HINT_RE = re.compile(
+    r"\b(make\s+it|use\b|change\b|rename\b|print\b|turn\s+it\s+into|add\s+(?:a\s+)?comment|"
+    r"comments?\b|a\s+function|a\s+loop|a\s+while|odd\b|even\b|instead\b|variable\b|return\b|"
+    r"shorter\b|longer\b|simpler\b|the\s+output)\b",
+    re.IGNORECASE,
+)
+# An instruction with no actionable target ("change that", "make it", a bare
+# pronoun) is ambiguous: the caller asks one clarifying question instead.
+_VAGUE_INSTRUCTION_RE = re.compile(
+    r"^(?:change|make|use|fix|update|modify|do|edit)\s+(?:it|that|this|the\s+code|something)?$"
+    r"|^(?:that|this|it|the\s+other\s+one|that\s+one|the\s+same|something\s+else)$",
+    re.IGNORECASE,
+)
+
+
+def detect_correction(text: str) -> Optional[str]:
+    """If ``text`` is a natural correction of just-generated code, return the
+    modification instruction (the part after the lead-in); otherwise None.
+
+    Examples:
+      "oh I meant make it first ten even numbers" -> "make it first ten even numbers"
+      "actually use a while loop instead"         -> "actually use a while loop instead"
+      "actually run it"                           -> None (plain command, not an edit)
+    """
+    raw = " ".join(str(text or "").split())
+    if not raw:
+        return None
+    low = raw.lower()
+    # Trailing/embedded "instead" is a strong correction signal; keep the whole
+    # utterance as the instruction so "use a while loop instead" stays intact.
+    if re.search(r"\binstead\b", low):
+        return raw
+    match = _CORRECTION_LEADIN_RE.match(raw)
+    if not match:
+        return None
+    remainder = raw[match.end():].strip(" ,.")
+    if not remainder:
+        return None
+    leadin = match.group(0).lower()
+    if leadin.startswith(("actually", "no")) and not _MODIFY_HINT_RE.search(remainder):
+        return None
+    return remainder
+
+
+def instruction_is_vague(instruction: str) -> bool:
+    """True when a modification instruction has no actionable target."""
+    return bool(_VAGUE_INSTRUCTION_RE.match(_norm(instruction)))
+
 
 def classify_followup(text: str) -> Optional[str]:
     """Classify a whole utterance into a follow-up category, or None.
@@ -266,6 +331,10 @@ def classify_followup(text: str) -> Optional[str]:
         return "modify"
     if _match(t, _SUMMARIZE):
         return "summarize_session"
+    # "oh I meant ...", "actually use ... instead": a correction of the code we
+    # just produced. Checked last so specific follow-ups above still win.
+    if detect_correction(text):
+        return "modify"
     return None
 
 
@@ -358,13 +427,18 @@ def resolve_followup(category: str, text: str, mem: Dict[str, Any], *,
                         "run with name Taknoor and age 16.", referent="no_inputs")
 
     if category == "modify":
+        # For a natural correction ("oh I meant ...") use the stripped instruction.
+        instruction = detect_correction(text) or text
+        if instruction_is_vague(instruction):
+            return _clarify("What change would you like? For example, say: make it use ten, "
+                            "use a while loop, or rename the variable to total.")
         referent_prompt = _clip(mem.get("last_gen_prompt", ""), _MAX_PROMPT)
         if not referent_prompt and not code:
             return _clarify("I'm not sure what to change. Generate some code first, "
                             "then tell me how to change it.")
-        prompt = build_modify_prompt(text, referent_prompt, has_code=bool(code))
+        prompt = build_modify_prompt(instruction, referent_prompt, has_code=bool(code))
         return _act("modify_code", "last_code" if code else "last_prompt",
-                    {"prompt": prompt, "instruction": _norm(text), "referent_prompt": referent_prompt},
+                    {"prompt": prompt, "instruction": _norm(instruction), "referent_prompt": referent_prompt},
                     confidence=0.8)
 
     if category == "open_file_again":

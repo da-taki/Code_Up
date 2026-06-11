@@ -52,6 +52,11 @@ from sandboxed_fs import cleanup_sandbox, cleanup_stale_sandboxes, get_sandbox
 from symbolic_specs import build_exact_symbol_generation, constraint_summary, validate_exact_output
 from structure_parser import CodeAnalyzer
 import tutorial_engine
+# Optional, isolated Intel OpenVINO local-intent demo (Intel AI Global Impact
+# Festival). Importing this module is always safe: its OpenVINO import is
+# guarded, so CodeUp runs normally whether or not OpenVINO is installed. This
+# is a diagnostic prototype only and is NOT part of the real command router.
+from openvino_intent_demo import classify_local_intent
 
 load_dotenv(override=True)
 
@@ -9033,6 +9038,35 @@ def mentor_bug_challenge():
         })
 
     return jsonify({"success": True, "challenge": parsed})
+
+
+# ==========================
+# OPTIONAL OPENVINO LOCAL-INTENT DEMO (Intel AI Global Impact Festival)
+# ==========================
+# Isolated, diagnostic prototype. This route classifies a text command into a
+# coarse intent using local rules in openvino_intent_demo.py and reports whether
+# the OpenVINO runtime is present. It is intentionally NOT part of the real
+# voice-command router: it never edits the editor, runs code, mutates session
+# state, or calls the Key 2 (GROQ_API_KEY_2) orchestrator. CodeUp's existing
+# deterministic + Key 2 pipeline is unchanged.
+
+@app.route("/openvino-intent-demo", methods=["POST"])
+def openvino_intent_demo_route():
+    """Classify a command into a coarse intent (OpenVINO demo, diagnostic only).
+
+    Input JSON:  {"text": "insert print hello"}
+    Output JSON: {"available", "source", "intent", "confidence", "note"}
+
+    Read-only: does not touch the editor, run code, change session state, or
+    call any cloud AI key.
+    """
+    body = safejson()
+    text = safe(body.get("text"), "")
+    if not isinstance(text, str):
+        text = str(text)
+    if len(text) > MAX_CODE_SIZE:
+        return jsonify({"success": False, "error": f"Text too large (max {MAX_CODE_SIZE} bytes)"}), 413
+    return jsonify(classify_local_intent(text))
 
 
 # ==========================

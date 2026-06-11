@@ -390,6 +390,15 @@ Monaco Editor (vendored locally, no CDN dependency), JavaScript using the Web Sp
 | `structure_parser.py` | AST-based code structure extraction (functions, classes, loops, async detection, parent class tracking) |
 | `tutorial_engine.py` | Guided-tutorial lesson content + AST-based activity validators + while-loop safety check |
 | `sandboxed_fs.py` | Per-session restricted workspace file system |
+| `openvino_intent_demo.py` | Optional, isolated Intel OpenVINO local-intent demo (diagnostic only; not part of the command router) |
+
+### Optional Intel OpenVINO intent demo
+
+CodeUp includes a small optional OpenVINO intent-classification demo for Intel AI Global Impact Festival. It shows how common voice commands such as “insert print hello” or “write a program for even numbers” could be classified locally before falling back to cloud AI in future deployments.
+
+This demo is isolated from the main command router. If OpenVINO is not installed or no model is configured, CodeUp continues using its existing deterministic and Key 2 intent-understanding pipeline.
+
+It exposes a diagnostic-only `POST /openvino-intent-demo` route (`{"text": "..."}` → intent JSON) backed by `classify_local_intent()` in `openvino_intent_demo.py`. The route never edits the editor, runs code, changes session state, or calls a cloud key. No model files ship with CodeUp. Tests: `tests/test_openvino_intent_demo.py`.
 
 ---
 

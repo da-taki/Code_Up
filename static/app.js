@@ -34,6 +34,11 @@ let _speechEpoch = 0;
 function currentSpeechEpoch() { return _speechEpoch; }
 function bumpSpeechEpoch() { _speechEpoch = (_speechEpoch + 1) % 1e9; return _speechEpoch; }
 
+// Accessibility: spoken speech rate (0.75 slow / 1.0 normal / 1.25 fast). The
+// SpeechManager fallback reads this; VoiceEngine reads its own Config.speechRate
+// which applySpeechRate() keeps in sync. Persisted in localStorage.
+let _speechRate = 1.0;
+
 // --- Voice-recognition lifecycle state (single source of truth) ----------
 // _voiceEnabledByUser (above) means recognition is WANTED. The flags below stop
 // double instances and restart storms when the browser ends recognition for its
@@ -325,7 +330,7 @@ const SpeechManager = (function () {
         _lastSynthKick = now;
       }
 
-      currentUtterance.rate  = item.rate  || 1;
+      currentUtterance.rate  = item.rate  || _speechRate || 1;
       currentUtterance.pitch = item.pitch || 1;
       currentUtterance.lang  = (typeof getLanguage === 'function' && getLanguage() === 'hi') ? 'hi-IN' : 'en-US';
 
@@ -1045,7 +1050,122 @@ function buildVoiceCommandPayload(text, source = 'typed') {
     language: getLanguage(),
     source,
     cursor_line: pos && pos.lineNumber ? pos.lineNumber : null,
+    verbosity: getVerbosity(),
   };
+}
+
+// ---------- ACCESSIBILITY: SPEECH RATE + VERBOSITY ----------
+// Both persist in localStorage for the browser session. Speech rate affects only
+// spoken output (never Python execution); verbosity is sent to the backend so it
+// can tune explanation length where safe.
+function applySpeechRate(rate) {
+  const r = Math.max(0.5, Math.min(2.0, Number(rate) || 1.0));
+  _speechRate = r;
+  try { if (typeof VoiceEngine !== 'undefined' && VoiceEngine.configure) VoiceEngine.configure({ speechRate: r }); } catch (e) {}
+  try { localStorage.setItem('codeupSpeechRate', String(r)); } catch (e) {}
+  return r;
+}
+function getStoredSpeechRate() {
+  try { const v = parseFloat(localStorage.getItem('codeupSpeechRate')); if (v >= 0.5 && v <= 2.0) return v; } catch (e) {}
+  return 1.0;
+}
+function setVerbosity(mode) {
+  const allowed = ['concise', 'normal', 'detailed', 'beginner', 'expert'];
+  const m = allowed.indexOf(mode) >= 0 ? mode : 'normal';
+  window._codeupVerbosity = m;
+  try { localStorage.setItem('codeupVerbosity', m); } catch (e) {}
+  return m;
+}
+function getVerbosity() {
+  if (window._codeupVerbosity) return window._codeupVerbosity;
+  try {
+    const v = localStorage.getItem('codeupVerbosity');
+    if (v) { window._codeupVerbosity = v; return v; }
+  } catch (e) {}
+  return 'normal';
+}
+function restoreAccessibilityPreferences() {
+  applySpeechRate(getStoredSpeechRate());
+  getVerbosity();
+}
+
+// ---------- LEARNER HANDOFF: EXPORT ZIP + PROJECT REPORT ----------
+function offerProjectDownload(url, filename) {
+  const safeName = String(filename || 'codeup_project.zip').replace(/[^a-zA-Z0-9_.\-]/g, '');
+  let area = document.getElementById('exportDownloadArea');
+  if (!area) {
+    area = document.createElement('div');
+    area.id = 'exportDownloadArea';
+    area.setAttribute('role', 'region');
+    area.setAttribute('aria-label', 'Project download');
+    area.style.cssText = 'margin-top:8px;';
+    const outEl = document.getElementById('output');
+    if (outEl && outEl.parentNode) outEl.parentNode.insertBefore(area, outEl.nextSibling);
+    else document.body.appendChild(area);
+  }
+  area.innerHTML = '';
+  const link = document.createElement('a');
+  link.href = url;
+  link.setAttribute('download', safeName);
+  link.textContent = 'Download ' + safeName;
+  link.className = 'cu-download-link';
+  link.style.cssText = 'display:inline-block;padding:6px 10px;color:var(--accent);text-decoration:underline;font-weight:600;';
+  area.appendChild(link);
+  try { link.focus(); } catch (e) {}
+  // Start the download now (this runs inside the user-initiated command flow).
+  try { link.click(); } catch (e) {}
+  return link;
+}
+
+async function exportProject() {
+  showAI('Packaging your project...');
+  const payload = { code: getCode() };
+  try { const project = currentProjectPayload(); if (project) payload.project = project; } catch (e) {}
+  try {
+    const res = await fetch('/export-project', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!data.success) {
+      const msg = data.message || data.error || 'There is nothing to export yet.';
+      out(msg); speak(msg); srAnnounce(msg);
+      return;
+    }
+    out((data.speech || 'Your project is ready to download.') + '\nFile: ' + data.filename +
+        ' (' + (data.file_count || 0) + ' file' + (data.file_count === 1 ? '' : 's') + ').');
+    offerProjectDownload(data.download_url, data.filename);
+    speak(data.speech || 'Your project is ready to download.');
+    srAnnounce('Project export ready to download');
+  } catch (e) {
+    console.error(e);
+    speak('Sorry, the export failed.');
+  } finally {
+    setTimeout(() => hideAI(), 1200);
+  }
+}
+
+async function requestProjectReport() {
+  showAI('Building a project report...');
+  const payload = { code: getCode(), verbosity: getVerbosity(), language: getLanguage() };
+  try { const project = currentProjectPayload(); if (project) payload.project = project; } catch (e) {}
+  const epoch = currentSpeechEpoch();
+  try {
+    const res = await fetch('/project-report', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    const reportText = data.report_md || data.speech || 'No report available.';
+    out(reportText);
+    speak(data.speech || 'Here is your project report.', { epoch });
+    srAnnounce('Project report ready');
+  } catch (e) {
+    console.error(e);
+    speak('Sorry, I could not build the report.');
+  } finally {
+    setTimeout(() => hideAI(), 1200);
+  }
 }
 
 // ---------- AI BUBBLE ----------
@@ -3006,6 +3126,21 @@ async function handleConfirmedAction(action, payload) {
     srAnnounce('Guidance shown');
     speak((payload && payload.speech) || message);
   }
+  // ----- Sprint 1: learner handoff + accessibility controls -----
+  else if (action === 'set_speech_rate') {
+    applySpeechRate(payload && payload.rate ? payload.rate : 1.0);
+    const msg = (payload && payload.speech) || 'Speed changed.';
+    srAnnounce(msg);
+    speak(msg);  // spoken at the new rate
+  }
+  else if (action === 'set_verbosity') {
+    setVerbosity(payload && payload.verbosity ? payload.verbosity : 'normal');
+    const msg = (payload && payload.speech) || 'Detail level changed.';
+    srAnnounce(msg);
+    speak(msg);
+  }
+  else if (action === 'export_project') await exportProject();
+  else if (action === 'project_report') await requestProjectReport();
   else if (action === 'read_project_files') readProjectFiles();
   else if (action === 'open_project_file') await openProjectFile(payload && payload.path);
   else if (action === 'create_project_file') await createProjectFile(payload && payload.path);
@@ -4661,6 +4796,9 @@ async function handleVoiceCommand(rawText) {
 
 // ---------- KEYBOARD SHORTCUTS ----------
 window.addEventListener('DOMContentLoaded', () => {
+  // Restore the learner's saved speech rate + verbosity before any speech.
+  try { restoreAccessibilityPreferences(); } catch (e) {}
+
   const resumeAudio = () => {
     if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
   };

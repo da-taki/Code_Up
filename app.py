@@ -57,6 +57,11 @@ import tutorial_engine
 # guarded, so CodeUp runs normally whether or not OpenVINO is installed. This
 # is a diagnostic prototype only and is NOT part of the real command router.
 from openvino_intent_demo import classify_local_intent
+# Sprint 1: learner handoff + accessibility. All deterministic and Flask-free;
+# routes below thread them through the existing session/sandbox model.
+import export_support
+import report_support
+import learning_recap
 
 load_dotenv(override=True)
 
@@ -4623,6 +4628,8 @@ def walkthrough():
             "Under 8 sentences. Spoken English only. No markdown. No code blocks."
         )
 
+    system += _verbosity_directive(safe(body.get("verbosity"), ""))
+
     explanation = _canonical_loop_walkthrough(code, language)
     if not explanation:
         user = f"Python code:\n```python\n{code}\n```"
@@ -7079,10 +7086,14 @@ def _record_voice_memory(mem, text, intent, response):
     """Record short-term working memory from a /voice-command response."""
     action = str(response.get("action") or "")
     session_memory.record_utterance(mem, text, intent or "", action)
+    # Track learning features/concepts for the "what did I learn today?" recap.
+    session_memory.record_activity(mem, action, concept=str(response.get("concept") or ""))
     if action == "action_sequence":
         actions = response.get("actions") or []
         session_memory.record_actions(mem, [a.get("action", "") for a in actions if isinstance(a, dict)])
         for a in actions:
+            if isinstance(a, dict) and a.get("action"):
+                session_memory.record_activity(mem, a.get("action"))
             if not isinstance(a, dict):
                 continue
             sub = a.get("action")
@@ -7286,6 +7297,108 @@ def _complete_generation_prompt(kind, original, answer):
     return answer
 
 
+def _verbosity_directive(verbosity: str) -> str:
+    """A short system-prompt suffix that nudges AI explanation length/style.
+
+    Empty for the default ('normal'/unknown), so deterministic fallbacks and
+    existing behaviour are completely unchanged when no verbosity is set."""
+    v = str(verbosity or "").strip().lower()
+    if v == "concise":
+        return " Keep the explanation very short: at most three sentences."
+    if v == "expert":
+        return " Be brief and direct; use precise technical terms and skip the basics."
+    if v == "detailed":
+        return " Give a fuller explanation with a little more step-by-step detail, still spoken and clear."
+    if v == "beginner":
+        return " Use very simple words, explain each idea gently, and assume no prior knowledge."
+    return ""
+
+
+# ---- Sprint 1 deterministic voice commands ----------------------------------
+# Export / report / recap / speech-rate / verbosity. Matched on the whole
+# (normalized) utterance so they are unambiguous and never mistaken for code
+# generation, project creation, or a concept question. Routed BEFORE the
+# concept/generation logic in the /voice-command route.
+_SPEECH_RATE_PATTERNS = [
+    ("slow", 0.75, r"^(?:please\s+)?(?:speak\s+slower|slow\s+down|speak\s+more\s+slowly|talk\s+slower|slower\s+speech|slow\s+speech)$"),
+    ("fast", 1.25, r"^(?:please\s+)?(?:speak\s+faster|speed\s+up|talk\s+faster|faster\s+speech|speak\s+more\s+quickly|speak\s+quicker)$"),
+    ("normal", 1.0, r"^(?:please\s+)?(?:normal\s+speed|reset\s+speech\s+speed|reset\s+speech\s+rate|normal\s+speech\s+speed|default\s+speech\s+speed|normal\s+speech\s+rate)$"),
+]
+_VERBOSITY_PATTERNS = [
+    ("concise", r"^(?:please\s+)?(?:be\s+more\s+concise|be\s+concise|less\s+detail|explain\s+briefly|be\s+brief|keep\s+it\s+short|shorter\s+answers|concise\s+mode)$"),
+    ("detailed", r"^(?:please\s+)?(?:explain\s+in\s+detail|explain\s+in\s+more\s+detail|more\s+detail|more\s+details|be\s+more\s+detailed|detailed\s+mode)$"),
+    ("beginner", r"^(?:please\s+)?(?:beginner\s+mode|explain\s+like\s+a\s+beginner|explain\s+like\s+i'?m\s+a\s+beginner)$"),
+    ("expert", r"^(?:please\s+)?(?:expert\s+mode|advanced\s+mode)$"),
+    ("normal", r"^(?:please\s+)?(?:normal\s+mode|normal\s+verbosity|default\s+verbosity|reset\s+verbosity)$"),
+]
+_EXPORT_RE = re.compile(
+    r"^(?:please\s+)?(?:export\s+(?:this\s+|my\s+|the\s+)?project(?:\s+as\s+(?:a\s+)?zip)?|"
+    r"download\s+(?:my|this|the)\s+(?:project|code|program)|"
+    r"make\s+(?:a\s+)?zip\s+of\s+(?:this\s+|my\s+|the\s+)?project|"
+    r"export\s+project\s+as\s+zip|package\s+(?:my|this|the)\s+project|"
+    r"zip\s+(?:this\s+|my\s+|the\s+)?project|export\s+my\s+code|export\s+to\s+(?:a\s+)?zip|"
+    r"save\s+(?:my|this)\s+project\s+as\s+(?:a\s+)?zip)$",
+    re.IGNORECASE,
+)
+_REPORT_RE = re.compile(
+    r"^(?:please\s+)?(?:make\s+(?:a\s+)?project\s+report|summari[sz]e\s+my\s+project(?:\s+for\s+(?:my\s+)?teacher)?|"
+    r"explain\s+what\s+this\s+project\s+contains|make\s+(?:a\s+)?handoff\s+report|teacher\s+report|"
+    r"project\s+report|generate\s+(?:a\s+)?project\s+report|make\s+(?:a\s+)?teacher\s+report|"
+    r"handoff\s+report)$",
+    re.IGNORECASE,
+)
+_RECAP_RE = re.compile(
+    r"^(?:please\s+)?(?:what\s+did\s+i\s+learn\s+today|summari[sz]e\s+(?:today'?s\s+)?session|"
+    r"make\s+(?:a\s+)?learning\s+report|what\s+did\s+i\s+do\s+today|recap\s+my\s+session|"
+    r"what\s+have\s+i\s+learned(?:\s+today)?|today'?s\s+recap|session\s+recap)$",
+    re.IGNORECASE,
+)
+
+
+def _sprint1_command(text, mem):
+    """Deterministic Sprint-1 commands (export/report/recap/rate/verbosity) or None."""
+    t = " ".join(str(text or "").lower().strip().rstrip(".!?").split())
+    if not t:
+        return None
+
+    for level, rate, pattern in _SPEECH_RATE_PATTERNS:
+        if re.match(pattern, t):
+            speech = {"slow": "Speaking slower now.", "fast": "Speaking faster now.",
+                      "normal": "Back to normal speed."}[level]
+            return {"success": True, "action": "set_speech_rate", "rate": rate, "level": level,
+                    "speech": speech, "message": speech, "heard": text}
+
+    for mode, pattern in _VERBOSITY_PATTERNS:
+        if re.match(pattern, t):
+            speech = {
+                "concise": "I'll keep explanations concise.",
+                "detailed": "I'll give more detailed explanations.",
+                "beginner": "Beginner mode on. I'll explain simply.",
+                "expert": "Expert mode on. I'll be brief and technical.",
+                "normal": "Back to normal explanations.",
+            }[mode]
+            return {"success": True, "action": "set_verbosity", "verbosity": mode,
+                    "speech": speech, "message": speech, "heard": text}
+
+    if _EXPORT_RE.match(t):
+        speech = "Preparing your project for download."
+        return {"success": True, "action": "export_project", "speech": speech,
+                "message": speech, "heard": text}
+
+    if _REPORT_RE.match(t):
+        speech = "Building a project report."
+        return {"success": True, "action": "project_report", "speech": speech,
+                "message": speech, "heard": text}
+
+    if _RECAP_RE.match(t):
+        recap = learning_recap.build_recap(mem)
+        return {"success": True, "action": "deterministic_message", "recap": True,
+                "message": recap["recap"], "speech": recap["speech"],
+                "next_step": recap.get("next_step", ""), "heard": text}
+
+    return None
+
+
 @app.route("/voice-command", methods=["POST"])
 def voice():
     body = safejson()
@@ -7380,6 +7493,14 @@ def voice():
     variable_response = _spoken_variable_response(text, current_code, mem, intent)
     if variable_response is not None:
         return _store_and_return(variable_response)
+
+    # ---- 3d. Sprint 1: export / report / recap / speech-rate / verbosity ----
+    # Deterministic, whole-utterance commands. Routed before concept Q&A and
+    # generation so "what did I learn today" recaps (not a concept answer) and
+    # "make a project report" reports (not a new project).
+    sprint1 = _sprint1_command(text, mem)
+    if sprint1 is not None:
+        return _store_and_return(sprint1)
 
     # ---- 4. Global beginner concept Q&A (works outside the tutorial) --------
     concept_kind = concept_qa.classify_concept_question(text)
@@ -9190,6 +9311,125 @@ def openvino_intent_demo_route():
     if len(text) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": f"Text too large (max {MAX_CODE_SIZE} bytes)"}), 413
     return jsonify(classify_local_intent(text))
+
+
+# ==========================
+# SPRINT 1 — LEARNER HANDOFF + ACCESSIBILITY
+# ==========================
+# Export ZIP, project report, session recap. Deterministic; no cloud AI is
+# required and none is called from the export path. Generated ZIPs live only in
+# a short-lived in-memory per-session store — never written to a tracked path.
+
+_EXPORTS: Dict[str, Dict[str, Any]] = {}
+_EXPORTS_LOCK = threading.Lock()
+_EXPORT_TTL_SECONDS = 600
+_MAX_EXPORTS = 50
+
+
+def _store_export(session_id: str, filename: str, data: bytes) -> str:
+    export_id = uuid.uuid4().hex
+    now = time.time()
+    with _EXPORTS_LOCK:
+        for key in [k for k, v in _EXPORTS.items() if now - v["created_at"] > _EXPORT_TTL_SECONDS]:
+            _EXPORTS.pop(key, None)
+        if len(_EXPORTS) >= _MAX_EXPORTS:
+            for key, _ in sorted(_EXPORTS.items(), key=lambda kv: kv[1]["created_at"])[: len(_EXPORTS) - _MAX_EXPORTS + 1]:
+                _EXPORTS.pop(key, None)
+        _EXPORTS[export_id] = {"data": data, "filename": filename, "session_id": session_id, "created_at": now}
+    return export_id
+
+
+def _export_files_from_body(body: Dict[str, Any]):
+    """Resolve the file map to export: the current project, else single main.py."""
+    project = body.get("project")
+    if isinstance(project, dict) and isinstance(project.get("files"), dict) and project["files"]:
+        files = {str(k): (v if isinstance(v, str) else str(v or "")) for k, v in project["files"].items()}
+        return files, True
+    code = _safe_text(body.get("code"), limit=MAX_CODE_SIZE)
+    if code.strip():
+        return {"main.py": code}, False
+    return {}, False
+
+
+@app.route("/export-project", methods=["POST"])
+def export_project_route():
+    """Package the current program/project into a downloadable ZIP (read-only)."""
+    body = safejson()
+    files, is_project = _export_files_from_body(body)
+    if not files:
+        msg = "There is no code or project to export yet. Create or generate some code first."
+        return jsonify({"success": False, "needs_content": True, "error": msg, "speech": msg, "message": msg})
+    result = export_support.prepare_export(files, prefix="codeup_project" if is_project else "codeup_program")
+    if not result.get("success"):
+        msg = "I could not find anything safe to export."
+        return jsonify({"success": False, "error": msg, "speech": msg, "message": msg, "excluded": result.get("excluded", [])})
+    export_id = _store_export(get_session_id(), result["filename"], result["bytes"])
+    speech = "Your project is ready to download."
+    return jsonify({
+        "success": True,
+        "export_id": export_id,
+        "download_url": f"/download-export/{export_id}",
+        "filename": result["filename"],
+        "file_count": result["file_count"],
+        "included": result["included"],
+        "excluded": result["excluded"],
+        "speech": speech,
+        "message": speech,
+    })
+
+
+@app.route("/download-export/<export_id>", methods=["GET"])
+def download_export_route(export_id):
+    """Serve a previously prepared export ZIP (scoped to the creating session)."""
+    safe_id = re.sub(r"[^a-fA-F0-9]", "", str(export_id or ""))[:64]
+    with _EXPORTS_LOCK:
+        record = _EXPORTS.get(safe_id)
+    if not record:
+        return jsonify({"success": False, "error": "Export not found or expired."}), 404
+    if record.get("session_id") and record["session_id"] != get_session_id():
+        return jsonify({"success": False, "error": "Not authorized for this export."}), 403
+    return Response(
+        record["data"],
+        mimetype="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{record["filename"]}"',
+            "Content-Length": str(len(record["data"])),
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+def _report_state_from_body(body: Dict[str, Any]) -> Dict[str, Any]:
+    project = body.get("project")
+    if isinstance(project, dict) and isinstance(project.get("files"), dict) and project["files"]:
+        return {
+            "is_project": True,
+            "name": project.get("name") or (project.get("manifest") or {}).get("name") or "CodeUp project",
+            "files": {str(k): (v if isinstance(v, str) else str(v or "")) for k, v in project["files"].items()},
+            "entry": project.get("entry") or (project.get("manifest") or {}).get("entry") or "main.py",
+            "requirements": project.get("requirements") or (project.get("manifest") or {}).get("requirements") or [],
+        }
+    return {"is_project": False, "code": _safe_text(body.get("code"), limit=MAX_CODE_SIZE)}
+
+
+@app.route("/project-report", methods=["POST"])
+def project_report_route():
+    """Build a fact-grounded teacher-handoff report for the current project."""
+    body = safejson()
+    state = _report_state_from_body(body)
+    verbosity = _safe_text(body.get("verbosity"), "normal", limit=20).lower() or "normal"
+    mem = session_memory.get_memory(get_trace_storage())
+    report = report_support.build_project_report(state, mem, verbosity=verbosity)
+    return jsonify(report)
+
+
+@app.route("/learning-recap", methods=["POST"])
+def learning_recap_route():
+    """Summarise what the learner did this session (deterministic, from memory)."""
+    mem = session_memory.get_memory(get_trace_storage())
+    recap = learning_recap.build_recap(mem)
+    return jsonify({"success": True, "action": "deterministic_message",
+                    "message": recap["recap"], **recap})
 
 
 # ==========================

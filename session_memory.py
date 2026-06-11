@@ -58,8 +58,57 @@ def new_memory() -> Dict[str, Any]:
         "input_values": [],
         "input_prompts": [],
         "code_map_summary": "",
+        "features_used": [],          # human-friendly feature tags used this session
+        "concepts_practiced": [],     # concepts the learner touched (for the recap)
         "pending_clarification": None,
     }
+
+
+# Map a /voice-command action to a human-friendly "feature used" tag for the
+# session recap. Actions not listed (navigation, confirmations, control) are not
+# counted as a learning feature.
+_FEATURE_BY_ACTION = {
+    "run": "ran code",
+    "generate_code": "generated code",
+    "walk_through": "asked for explanations",
+    "mentor_chat": "asked for explanations",
+    "explain_simply": "debugged errors",
+    "fix": "debugged errors",
+    "code_map": "used code mapping",
+    "mentor_code_map": "used code mapping",
+    "show_structure": "used code mapping",
+    "read_outline": "used code mapping",
+    "sonify_block": "used sonification",
+    "sonify_file": "used sonification",
+    "step_narration": "traced execution",
+    "story_mode": "traced execution",
+    "conversational_edit": "edited code by voice",
+    "insert_variable": "edited code by voice",
+    "insert_function": "edited code by voice",
+    "append_line": "edited code by voice",
+    "export_project": "exported the project",
+    "project_report": "made a project report",
+    "learning_recap": "reviewed the session",
+    "open_project_file": "worked in project mode",
+    "run_project_file": "worked in project mode",
+    "read_project_files": "worked in project mode",
+}
+
+
+def record_activity(mem: Dict[str, Any], action: str, *, concept: str = "") -> None:
+    """Record a learning feature used and/or a concept practised (bounded, unique)."""
+    feature = _FEATURE_BY_ACTION.get(str(action or ""))
+    if feature:
+        feats = mem.setdefault("features_used", [])
+        if feature not in feats:
+            feats.append(feature)
+            del feats[20:]
+    concept = _clip(concept, 40)
+    if concept:
+        concepts = mem.setdefault("concepts_practiced", [])
+        if concept not in concepts:
+            concepts.append(concept)
+            del concepts[20:]
 
 
 def get_memory(storage: Dict[str, Any]) -> Dict[str, Any]:

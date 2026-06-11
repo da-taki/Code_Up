@@ -59,7 +59,64 @@ def new_memory() -> Dict[str, Any]:
         "input_prompts": [],
         "code_map_summary": "",
         "pending_clarification": None,
+        # Sprint 2 (non-visual code understanding)
+        "hint_level": "small",        # staged-hint level: small | bigger | answer
+        "landmarks": {},              # named code bookmarks: name -> {line, ...}
+        "last_navigated": None,       # last navigate-by-meaning target block
     }
+
+
+# ---------------------------------------------------------------------------
+# Sprint 2: staged hints, landmarks, navigation memory
+# ---------------------------------------------------------------------------
+_HINT_LEVELS = ("small", "bigger", "answer")
+
+
+def get_hint_level(mem: Dict[str, Any]) -> str:
+    level = mem.get("hint_level", "small")
+    return level if level in _HINT_LEVELS else "small"
+
+
+def set_hint_level(mem: Dict[str, Any], level: str) -> str:
+    mem["hint_level"] = level if level in _HINT_LEVELS else "small"
+    return mem["hint_level"]
+
+
+def escalate_hint(mem: Dict[str, Any]) -> str:
+    """Advance to the next stronger hint level (capped at 'answer')."""
+    idx = _HINT_LEVELS.index(get_hint_level(mem))
+    mem["hint_level"] = _HINT_LEVELS[min(idx + 1, len(_HINT_LEVELS) - 1)]
+    return mem["hint_level"]
+
+
+def reset_hint(mem: Dict[str, Any]) -> str:
+    mem["hint_level"] = "small"
+    return "small"
+
+
+def get_landmarks(mem: Dict[str, Any]) -> Dict[str, Any]:
+    landmarks = mem.get("landmarks")
+    if not isinstance(landmarks, dict):
+        landmarks = {}
+        mem["landmarks"] = landmarks
+    return landmarks
+
+
+def record_navigation(mem: Dict[str, Any], nav: Optional[Dict[str, Any]]) -> None:
+    """Remember the last navigate-by-meaning target (for 'bookmark this block')."""
+    if not nav or not nav.get("line"):
+        return
+    mem["last_navigated"] = {
+        "line": int(nav.get("line") or 0),
+        "end_line": int(nav.get("end_line") or nav.get("line") or 0),
+        "block_type": _clip(nav.get("block_type", ""), 40),
+        "preview": _clip(nav.get("preview") or nav.get("code", ""), 80),
+    }
+
+
+def get_last_navigated(mem: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    nav = mem.get("last_navigated")
+    return nav if isinstance(nav, dict) else None
 
 
 def get_memory(storage: Dict[str, Any]) -> Dict[str, Any]:

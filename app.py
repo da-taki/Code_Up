@@ -7049,6 +7049,29 @@ def _resolve_pending_clarification(pending, text, mem):
             question = f"What value should {pending.get('name')} store?"
         return {"success": True, "action": "clarify", "intent": "clarify", "message": question,
                 "speech": question, "needs_clarification": True, "heard": text}
+    if ptype == "generate":
+        answer = " ".join(str(text or "").split())
+        low = answer.lower()
+        # User pivoted to a real command instead of answering: abandon the
+        # pending question and let normal routing handle it.
+        if re.match(r"^(?:run|stop|clear|open|help|exit|cancel|never\s*mind|nevermind|"
+                    r"pause|resume|quit|tutorial)\b", low):
+            session_memory.clear_pending(mem)
+            return None
+        if _generation_is_vague(answer):
+            kind = pending.get("kind", "generic")
+            _, question = _vague_generation_question(answer, _generation_spec_tokens(answer))
+            if kind == "marks":
+                question = "Should it calculate an average, assign grades, or show who passed?"
+            elif kind == "project":
+                question = "What kind of project should I create?"
+            return {"success": True, "action": "clarify", "intent": "clarify", "message": question,
+                    "speech": question, "needs_clarification": True, "heard": text}
+        session_memory.clear_pending(mem)
+        completed = _complete_generation_prompt(pending.get("kind", "generic"), pending.get("original", ""), answer)
+        return {"success": True, "action": "generate_code", "prompt": completed,
+                "source": "clarified_generation", "resolved_from_clarification": True,
+                "confidence": 0.9, "heard": text}
     return None
 
 
@@ -7163,7 +7186,11 @@ def _map_followup_decision(decision, text, mem):
                 ]}
     if action == "modify_code":
         prompt = _ai_modify_prompt(text, mem, params) or params.get("prompt", "")
-        return {**base, "action": "generate_code", "prompt": prompt, "source": "memory_followup"}
+        # A correction/modification edits the existing program: route to the
+        # generate path (which validates that the result parses before applying)
+        # with a prompt grounded in the prior generation and current editor code.
+        return {**base, "action": "generate_code", "prompt": prompt,
+                "source": "memory_followup", "followup_edit": True}
     if action == "open_file":
         return {**base, "action": "open_project_file", "path": params.get("path", "")}
     if action == "run_file":
@@ -7174,6 +7201,89 @@ def _map_followup_decision(decision, text, mem):
         msg = params.get("summary", "")
         return {**base, "action": "deterministic_message", "message": msg, "speech": msg}
     return None
+
+
+# ---- vague generation clarification (deterministic, demo-safe) --------------
+# A generation request with no concrete "what should it do" content should ask
+# ONE short question rather than guess. This is the fallback used when the Key 2
+# orchestrator is unavailable or declined; a good prompt (numbers, a named task,
+# sample data) always generates immediately and is never clarified.
+_GEN_BOILERPLATE = {
+    "please", "hey", "ok", "okay", "alright", "could", "would", "can", "you",
+    "for", "me", "us", "generate", "create", "make", "write", "build", "code",
+    "program", "programme", "script", "a", "an", "some", "the", "python",
+    "simple", "small", "basic", "little", "new", "to", "that", "which", "of",
+    "app", "application", "thing", "something", "anything", "stuff", "project",
+    "with", "using", "and", "just", "really",
+}
+_GEN_ACTION_WORDS = {
+    "print", "calculate", "average", "averages", "sum", "total", "count", "sort",
+    "grade", "grades", "grading", "pass", "passed", "passing", "fail", "store",
+    "analysis", "analyse", "analyze", "reverse", "fibonacci", "prime", "primes",
+    "even", "odd", "factorial", "table", "tables", "multiplication", "quiz",
+    "game", "pattern", "convert", "compare", "filter", "search", "dictionary",
+    "list", "loop", "function", "numbers", "number", "temperature", "celsius",
+    "fahrenheit", "palindrome", "calculator", "statistics", "mean", "median",
+    "mode", "csv", "plot", "chart", "guess", "password", "timer", "counter",
+}
+_MARKS_WORDS = {"marks", "mark", "grade", "grades", "score", "scores", "result", "results"}
+
+
+def _generation_spec_tokens(spec_text):
+    cleaned = re.sub(r"[^\w\s]", " ", str(spec_text or "").lower())
+    return [w for w in cleaned.split() if w not in _GEN_BOILERPLATE]
+
+
+def _generation_is_vague(spec_text):
+    """True when a generation spec has no concrete task content."""
+    tokens = _generation_spec_tokens(spec_text)
+    if not tokens:
+        return True
+    if all(w in _MARKS_WORDS for w in tokens):
+        # A bare domain hint ("make a marks thing") is not a task.
+        return True
+    has_action = any(w in _GEN_ACTION_WORDS for w in tokens) or bool(re.search(r"\d", str(spec_text or "")))
+    if has_action:
+        return False
+    # Two or more concrete content words also describe a real task
+    # ("prints hello", "reverse a string"); a lone vague noun does not.
+    return len(tokens) < 2
+
+
+def _vague_generation_question(text, tokens):
+    low = (text or "").lower()
+    if any(w in _MARKS_WORDS for w in tokens) or (not tokens and re.search(r"\bmarks?\b", low)):
+        return "marks", "Should it calculate an average, assign grades, or show who passed?"
+    if re.search(r"\bproject\b", low):
+        return "project", "What kind of project should I create?"
+    return "generic", ("What should the program do? For example, print numbers, "
+                       "calculate marks, or make a quiz.")
+
+
+def _vague_generation_clarification(text, intent, prompt, mem):
+    """If this is a generation request too vague to act on, return a clarify
+    response (remembering a pending 'generate' question); else None."""
+    gen_like = intent == "generate_code" or looks_like_generation_request(text)
+    if not gen_like:
+        return None
+    spec = (prompt or "").strip() or text
+    if not _generation_is_vague(spec):
+        return None
+    kind, question = _vague_generation_question(text, _generation_spec_tokens(spec))
+    session_memory.set_pending(mem, {"type": "generate", "kind": kind, "original": text})
+    return {
+        "success": True, "intent": "clarify", "action": "clarify",
+        "message": question, "speech": question, "reason": "vague_generation",
+        "needs_clarification": True, "heard": text,
+        "next_action": "Waiting for clarification.",
+    }
+
+
+def _complete_generation_prompt(kind, original, answer):
+    answer = " ".join(str(answer or "").split())
+    if kind == "marks":
+        return f"Create a beginner-friendly Python program about student marks that {answer}."
+    return answer
 
 
 @app.route("/voice-command", methods=["POST"])
@@ -7224,7 +7334,11 @@ def voice():
     # brand-new command, in which case we drop the pending question).
     pending = session_memory.get_pending(mem)
     if pending:
-        if _looks_like_new_command(text):
+        # A pending "generate" question expects a free-form answer that often
+        # starts with a command word ("print the first five even numbers"), so we
+        # do NOT treat it as a brand-new command; the resolver itself detects a
+        # genuine pivot (e.g. "run") and returns None to fall through.
+        if pending.get("type") != "generate" and _looks_like_new_command(text):
             session_memory.clear_pending(mem)
         else:
             resolved = _resolve_pending_clarification(pending, text, mem)
@@ -7481,6 +7595,15 @@ def voice():
         and re.match(r"^why\s+did\s+(?:this|my\s+code|it)\s+fail\??$", text.lower())
     ):
         return _store_and_return({"success": True, "action": "explain_simply", "confidence": confidence})
+
+    # ---- vague generation clarification (deterministic, demo-safe) ----------
+    # Runs only after the Key 2 orchestrator declined, so a good rough prompt
+    # that Key 2 rewrote still generates. A vague ask ("generate code", "make a
+    # marks thing") gets one short question and a pending follow-up instead of a
+    # guessed/empty generation.
+    vague = _vague_generation_clarification(text, intent, slots.get("prompt", ""), mem)
+    if vague is not None:
+        return _store_and_return(vague)
 
     if intent and confidence >= 0.75:
         if intent == "goto_line":

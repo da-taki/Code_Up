@@ -801,7 +801,7 @@ async function checkSyntaxErrors() {
     });
     const data = await res.json();
     if (data.success && !data.has_errors) {
-      out('✓ No errors detected. Code looks good!');
+      out('No errors detected. Code looks good!');
       // Cancel the "checking..." utterance so the result speaks cleanly.
       // Without this, Chrome's synth sometimes truncates the second utterance
       // mid-word when transitioning from one queued item to the next.
@@ -811,7 +811,7 @@ async function checkSyntaxErrors() {
       speak('Code looks good.');
     } else if (data.success && data.has_errors) {
       const errorList = data.errors.map(e => `Line ${e.line || 'unknown'}: ${e.type} - ${e.message}`).join('\n');
-      out(`⚠ Found ${data.error_count} error(s):\n\n${errorList}`);
+      out(`Found ${data.error_count} error(s):\n\n${errorList}`);
 
       // Do NOT cancel speech here.
       // The speech queue already handles sequencing safely now.
@@ -1884,7 +1884,7 @@ async function runCode(runFile) {
   const usesInput = /\binput\s*\(/.test(codeToCheck);
   if (usesInput && _preflightInputs.length === 0) {
     speak('Heads up: your code uses input, but you have not declared any pre-flight inputs. The first input call will fail with a friendly error. To fix: say "set inputs to" followed by your values, or add a magic comment like "hash inputs colon Alice comma 17" at the top of your code, or say "live input mode" to switch to interactive mode.');
-    out('⚠ Your code uses input() but no pre-flight inputs are declared.\n\nFix one of these ways:\n  • Say: "set inputs to Alice and 17"\n  • Add at top of code: # inputs: Alice, 17\n  • Say: "live input mode"\n\nRunning anyway — first input() will explain.');
+    out('Your code uses input() but no pre-flight inputs are declared.\n\nFix one of these ways:\n  • Say: "set inputs to Alice and 17"\n  • Add at top of code: # inputs: Alice, 17\n  • Say: "live input mode"\n\nRunning anyway — first input() will explain.');
   } else if (usesInput && _preflightInputs.length > 0) {
     speak(`Pre-flight inputs ready: ${_preflightInputs.length} value${_preflightInputs.length === 1 ? '' : 's'}.`);
   }
@@ -3391,7 +3391,7 @@ function enablePreflightInputMode() {
 function updateInputModeUI() {
   const indicator = document.getElementById('inputModeIndicator');
   if (indicator) {
-    indicator.textContent = _liveInputMode ? '⚡ LIVE' : '📋 PRE-FLIGHT';
+    indicator.textContent = _liveInputMode ? 'LIVE' : 'PRE-FLIGHT';
     indicator.title = _liveInputMode
       ? 'Live input mode: your code pauses and asks for inputs in real time.'
       : 'Pre-flight input mode: inputs are declared ahead of time.';
@@ -4177,12 +4177,12 @@ async function handleCommandText(txt) {
         SonificationManager.playTone(900, 0.1, 0.1);
         speak(`Correct! ${q.explanation}`);
         srAnnounce('Correct answer');
-        out(`✓ CORRECT!\n\n${q.explanation}`);
+        out(`CORRECT!\n\n${q.explanation}`);
       } else {
         SonificationManager.playTone(200, 0.15, 0.08);
         speak(`Not quite. The correct answer was ${q.answer}. ${q.explanation}`);
         srAnnounce('Wrong answer');
-        out(`✗ The correct answer was ${q.answer}.\n\n${q.explanation}`);
+        out(`Incorrect. The correct answer was ${q.answer}.\n\n${q.explanation}`);
       }
       return;
     }
@@ -4394,7 +4394,7 @@ function startListening() {
     if (_voicePaused) {
       const btn = document.getElementById('voiceButton');
       if (btn) {
-        btn.textContent = '🎤 Voice (Paused)';
+        btn.textContent = 'Voice (Paused)';
         btn.setAttribute('aria-pressed', 'mixed');
         btn.classList.remove('cu-button-voice--active');
         btn.classList.add('cu-button-voice--paused');
@@ -4405,7 +4405,7 @@ function startListening() {
 
     const btn = document.getElementById('voiceButton');
     if (btn) {
-      btn.textContent = '🎤 Voice (ON)';
+      btn.textContent = 'Voice (ON)';
       btn.setAttribute('aria-pressed', 'true');
       btn.classList.remove('cu-button-voice--paused');
       btn.classList.add('cu-button-voice--active');
@@ -4594,7 +4594,7 @@ function pauseVoiceRecognition() {
   // helper can see at a glance that the mic is open but ignoring input.
   const btn = document.getElementById('voiceButton');
   if (btn) {
-    btn.textContent = '🎤 Voice (Paused)';
+    btn.textContent = 'Voice (Paused)';
     btn.setAttribute('aria-pressed', 'mixed');
     btn.classList.remove('cu-button-voice--active');
     btn.classList.add('cu-button-voice--paused');
@@ -4630,7 +4630,7 @@ function resumeVoiceRecognition() {
 
   const btn = document.getElementById('voiceButton');
   if (btn) {
-    btn.textContent = '🎤 Voice (ON)';
+    btn.textContent = 'Voice (ON)';
     btn.setAttribute('aria-pressed', 'true');
     btn.classList.remove('cu-button-voice--paused');
     btn.classList.add('cu-button-voice--active');
@@ -4728,12 +4728,12 @@ async function handleVoiceCommand(rawText) {
         SonificationManager.playTone(900, 0.1, 0.1);
         speak(`Correct! ${q.explanation}`);
         srAnnounce('Correct answer');
-        out(`✓ CORRECT!\n\n${q.explanation}`);
+        out(`CORRECT!\n\n${q.explanation}`);
       } else {
         SonificationManager.playTone(200, 0.15, 0.08);
         speak(`Not quite. The correct answer was ${q.answer}. ${q.explanation}`);
         srAnnounce('Wrong answer');
-        out(`✗ The correct answer was ${q.answer}.\n\n${q.explanation}`);
+        out(`Incorrect. The correct answer was ${q.answer}.\n\n${q.explanation}`);
       }
       return;
     }
@@ -5031,10 +5031,9 @@ async function updateStructurePanel() {
     let html = '';
 
     if (imports.length > 0) {
-      html += '<div class="structure-group"><div class="structure-group-title">📦 Imports</div>';
+      html += '<div class="structure-group"><div class="structure-group-title">Imports</div>';
       imports.forEach(imp => {
         html += `<div class="structure-item" role="button" tabindex="0" data-line="1">
-          <span class="structure-item-icon">📦</span>
           <span class="structure-item-label">${escapeHtml(imp)}</span>
         </div>`;
       });
@@ -5042,10 +5041,9 @@ async function updateStructurePanel() {
     }
 
     if (classes.length > 0) {
-      html += '<div class="structure-group"><div class="structure-group-title">🏛️ Classes</div>';
+      html += '<div class="structure-group"><div class="structure-group-title">Classes</div>';
       classes.forEach(cls => {
         html += `<div class="structure-item" role="button" tabindex="0" data-line="${cls.line}" aria-label="Go to class ${escapeHtml(cls.name)} at line ${cls.line}">
-          <span class="structure-item-icon">🏛️</span>
           <span class="structure-item-label">${escapeHtml(cls.name)}</span>
           <span class="structure-item-line">L${cls.line}</span>
         </div>`;
@@ -5054,15 +5052,13 @@ async function updateStructurePanel() {
     }
 
     if (functions.length > 0) {
-      html += '<div class="structure-group"><div class="structure-group-title">⚙️ Functions</div>';
+      html += '<div class="structure-group"><div class="structure-group-title">Functions</div>';
       functions.forEach(fn => {
         const params = fn.params.map(p => p.name).join(', ');
         const asyncBadge = fn.is_async ? '<span style="color:#facc15;font-size:0.7rem;margin-right:4px;">async</span>' : '';
         const parentLabel = fn.parent_class ? `<span style="color:#64748b;font-size:0.75rem;">${escapeHtml(fn.parent_class)}.</span>` : '';
-        const icon = fn.is_async ? '⚡' : '⚙️';
         const ariaLabel = `Go to ${fn.is_async ? 'async ' : ''}function ${fn.parent_class ? fn.parent_class + '.' : ''}${fn.name} at line ${fn.line}`;
         html += `<div class="structure-item" role="button" tabindex="0" data-line="${fn.line}" aria-label="${escapeHtml(ariaLabel)}">
-          <span class="structure-item-icon">${icon}</span>
           <span class="structure-item-label">${asyncBadge}${parentLabel}${escapeHtml(fn.name)}(${escapeHtml(params)})</span>
           <span class="structure-item-line">L${fn.line}</span>
         </div>`;
@@ -5071,10 +5067,9 @@ async function updateStructurePanel() {
     }
 
     if (loops.length > 0) {
-      html += '<div class="structure-group"><div class="structure-group-title">🔄 Loops</div>';
+      html += '<div class="structure-group"><div class="structure-group-title">Loops</div>';
       loops.forEach((loop, idx) => {
         html += `<div class="structure-item" role="button" tabindex="0" data-line="${loop.line}" aria-label="Go to loop at line ${loop.line}">
-          <span class="structure-item-icon">🔄</span>
           <span class="structure-item-label">Loop #${idx + 1}</span>
           <span class="structure-item-line">L${loop.line}</span>
         </div>`;
@@ -5384,7 +5379,7 @@ async function getDebugSuggestions() {
 
     let output = 'DEBUG SUGGESTIONS:\n\n';
     let speech = `Found ${data.suggestions.length} suggestion${data.suggestions.length !== 1 ? 's' : ''}. `;
-    data.suggestions.forEach((sugg, idx) => { output += `${sugg.icon} ${sugg.text}\n\n`; speech += `Item ${idx + 1}: ${sugg.text}. `; });
+    data.suggestions.forEach((sugg, idx) => { output += `${sugg.type === 'warning' ? 'Warning' : 'Suggestion'}: ${sugg.text}\n\n`; speech += `Item ${idx + 1}: ${sugg.text}. `; });
     out(output); speak(speech);
     // Glyph decorations require a line number from the backend — skipping until backend provides it
   } catch (e) {
@@ -5394,33 +5389,33 @@ async function getDebugSuggestions() {
 
 // ---------- COMMAND PALETTE ----------
 const COMMAND_PALETTE_COMMANDS = [
-  { id: 'run',              title: 'Run Code',           desc: 'Execute Python code',                icon: '▶',  keys: 'Ctrl+Enter',   action: () => runCode() },
-  { id: 'analyze',          title: 'Analyze Code',        desc: 'AI analysis of code',               icon: '🔍', keys: 'Ctrl+Alt+A',   action: () => analyzeCode() },
-  { id: 'fix',              title: 'Fix Code',            desc: 'Automatically fix errors',          icon: '🔧', keys: 'Ctrl+Alt+F',   action: () => fixCode() },
-  { id: 'advise',           title: 'Get Advice',          desc: 'Suggestions for improvements',      icon: '💡', keys: 'Ctrl+Alt+I',   action: () => adviseCode() },
+  { id: 'run',              title: 'Run Code',           desc: 'Execute Python code',                icon: '',  keys: 'Ctrl+Enter',   action: () => runCode() },
+  { id: 'analyze',          title: 'Analyze Code',        desc: 'AI analysis of code',               icon: '', keys: 'Ctrl+Alt+A',   action: () => analyzeCode() },
+  { id: 'fix',              title: 'Fix Code',            desc: 'Automatically fix errors',          icon: '', keys: 'Ctrl+Alt+F',   action: () => fixCode() },
+  { id: 'advise',           title: 'Get Advice',          desc: 'Suggestions for improvements',      icon: '', keys: 'Ctrl+Alt+I',   action: () => adviseCode() },
   { id: 'python_starter',   title: 'Python Starter',      desc: 'Load a clean Python starter',       icon: 'Py', keys: '',             action: () => resetPythonStarter() },
-  { id: 'goto_line',        title: 'Go to Line',          desc: 'Jump to specific line',             icon: '➡️', keys: 'Ctrl+G',       action: () => showInputDialog('Enter line number:', gotoLine) },
-  { id: 'read_line',        title: 'Read Line',           desc: 'Read current line with context',    icon: '📖', keys: '',             action: () => readCurrentLine() },
+  { id: 'goto_line',        title: 'Go to Line',          desc: 'Jump to specific line',             icon: '', keys: 'Ctrl+G',       action: () => showInputDialog('Enter line number:', gotoLine) },
+  { id: 'read_line',        title: 'Read Line',           desc: 'Read current line with context',    icon: '', keys: '',             action: () => readCurrentLine() },
   { id: 'next_line',        title: 'Next Line',           desc: 'Move to next line',                 icon: '↓',  keys: 'Down',         action: () => nextLine() },
   { id: 'prev_line',        title: 'Previous Line',       desc: 'Move to previous line',             icon: '↑',  keys: 'Up',           action: () => prevLine() },
-  { id: 'show_structure',   title: 'Show Structure',      desc: 'Display code navigation map',       icon: '🗺️', keys: 'Ctrl+Shift+S', action: () => toggleStructurePanel() },
+  { id: 'show_structure',   title: 'Show Structure',      desc: 'Display code navigation map',       icon: '', keys: 'Ctrl+Shift+S', action: () => toggleStructurePanel() },
   { id: 'project_files',    title: 'Project Files',       desc: 'Read active project file list',     icon: 'Files', keys: '',          action: () => readProjectFiles() },
   { id: 'open_project_file',title: 'Open Project File',   desc: 'Open a file by name',               icon: 'Open', keys: '',           action: () => showInputDialog('File name:', openProjectFile) },
   { id: 'create_project_file', title: 'Create Project File', desc: 'Create a file in this project',  icon: 'New', keys: '',            action: () => showInputDialog('New file name:', createProjectFile) },
   { id: 'requirements',     title: 'Requirements',        desc: 'Explain project dependencies',      icon: 'Req', keys: '',            action: () => explainProjectRequirements() },
-  { id: 'sonify_block',     title: 'Sonify Block',        desc: 'Hear current code block',           icon: '🔊', keys: 'Alt+S',        action: () => sonifyCurrentBlock() },
-  { id: 'next_step',        title: 'Next step',           desc: 'Step forward in execution trace',   icon: '⏭',  keys: 'Alt+N',        action: () => speakNextStep() },
-  { id: 'prev_step',        title: 'Previous step',       desc: 'Step back in execution trace',      icon: '⏮',  keys: '',             action: () => handleCommandText('previous step') },
-  { id: 'save_snippet',     title: 'Save Snippet',        desc: 'Save code as snippet',              icon: '💾', keys: 'Ctrl+S',       action: () => saveSnippet() },
-  { id: 'list_variables',   title: 'List Variables',      desc: 'Show all variables in scope',       icon: '📊', keys: 'Ctrl+Alt+V',   action: () => listVariables() },
-  { id: 'check_errors',     title: 'Check Errors',        desc: 'Find syntax errors',                icon: '⚠️', keys: '',             action: () => checkSyntaxErrors() },
-  { id: 'locate_error',     title: 'Locate Error',        desc: 'Jump to first error',               icon: '🎯', keys: 'Ctrl+Alt+E',   action: () => locateError() },
-  { id: 'clear_editor',     title: 'Clear Editor',        desc: 'Delete all code',                   icon: '🗑️', keys: '',             action: () => clearEditor() },
-  { id: 'copy_code',        title: 'Copy Code',           desc: 'Copy to clipboard',                 icon: '📋', keys: 'Ctrl+C',       action: () => copyCode() },
-  { id: 'paste_code',       title: 'Paste Code',          desc: 'Paste from clipboard',              icon: '📌', keys: 'Ctrl+V',       action: () => pasteCode() },
-  { id: 'debug_suggestions',title: 'Debug Suggestions',   desc: 'Get AI debugging hints',            icon: '🔬', keys: '',             action: () => getDebugSuggestions() },
-  { id: 'sonify_issues',    title: 'Sonify Issues',       desc: 'Hear code problems',                icon: '🔊', keys: '',             action: () => sonifyCodeIssues() },
-  { id: 'help',             title: 'Show Help',           desc: 'Display all commands',              icon: '❓', keys: 'F1',           action: () => showHelp() },
+  { id: 'sonify_block',     title: 'Sonify Block',        desc: 'Hear current code block',           icon: '', keys: 'Alt+S',        action: () => sonifyCurrentBlock() },
+  { id: 'next_step',        title: 'Next step',           desc: 'Step forward in execution trace',   icon: '',  keys: 'Alt+N',        action: () => speakNextStep() },
+  { id: 'prev_step',        title: 'Previous step',       desc: 'Step back in execution trace',      icon: '',  keys: '',             action: () => handleCommandText('previous step') },
+  { id: 'save_snippet',     title: 'Save Snippet',        desc: 'Save code as snippet',              icon: '', keys: 'Ctrl+S',       action: () => saveSnippet() },
+  { id: 'list_variables',   title: 'List Variables',      desc: 'Show all variables in scope',       icon: '', keys: 'Ctrl+Alt+V',   action: () => listVariables() },
+  { id: 'check_errors',     title: 'Check Errors',        desc: 'Find syntax errors',                icon: '', keys: '',             action: () => checkSyntaxErrors() },
+  { id: 'locate_error',     title: 'Locate Error',        desc: 'Jump to first error',               icon: '', keys: 'Ctrl+Alt+E',   action: () => locateError() },
+  { id: 'clear_editor',     title: 'Clear Editor',        desc: 'Delete all code',                   icon: '', keys: '',             action: () => clearEditor() },
+  { id: 'copy_code',        title: 'Copy Code',           desc: 'Copy to clipboard',                 icon: '', keys: 'Ctrl+C',       action: () => copyCode() },
+  { id: 'paste_code',       title: 'Paste Code',          desc: 'Paste from clipboard',              icon: '', keys: 'Ctrl+V',       action: () => pasteCode() },
+  { id: 'debug_suggestions',title: 'Debug Suggestions',   desc: 'Get AI debugging hints',            icon: '', keys: '',             action: () => getDebugSuggestions() },
+  { id: 'sonify_issues',    title: 'Sonify Issues',       desc: 'Hear code problems',                icon: '', keys: '',             action: () => sonifyCodeIssues() },
+  { id: 'help',             title: 'Show Help',           desc: 'Display all commands',              icon: '', keys: 'F1',           action: () => showHelp() },
 ];
 
 let commandPaletteSelectedIndex = 0;

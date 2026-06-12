@@ -53,7 +53,7 @@
         Night Mode
       </button>
       <button id="tutorialBtn" class="cu-button cu-button-secondary" aria-label="Start interactive tutorial" style="font-size:0.8rem;padding:6px 12px;">
-        📖 Tutorial
+        Tutorial
       </button>
     </div>
   </header>
@@ -75,7 +75,7 @@
           class="cu-button cu-button-secondary"
           aria-label="Save snippet with this name"
           style="padding:6px 10px;font-size:0.8rem;"
-        >💾</button>
+        >Save</button>
       </div>
       <div id="snippetList" class="cu-snippet-list" aria-labelledby="snippets-heading" style="max-height:180px;"></div>
 
@@ -88,7 +88,7 @@
         <span>INPUTS</span>
         <span id="inputModeIndicator"
               style="font-size:0.65rem;padding:2px 6px;border-radius:4px;background:var(--accent-soft);color:var(--accent);border:1px solid var(--accent);"
-              title="Pre-flight input mode">📋 PRE-FLIGHT</span>
+              title="Pre-flight input mode">PRE-FLIGHT</span>
       </div>
       <div style="display:flex;gap:6px;margin-bottom:8px;">
         <input
@@ -110,7 +110,7 @@
       </div>
       <div style="display:flex;gap:6px;margin-top:8px;">
         <button id="clearInputsBtn" class="cu-button" style="flex:1;font-size:0.75rem;padding:6px 8px;" aria-label="Clear all pre-flight inputs">Clear</button>
-        <button id="toggleInputModeBtn" class="cu-button" style="flex:1;font-size:0.75rem;padding:6px 8px;" aria-label="Toggle between pre-flight and live input mode">Live ⚡</button>
+        <button id="toggleInputModeBtn" class="cu-button" style="flex:1;font-size:0.75rem;padding:6px 8px;" aria-label="Toggle between pre-flight and live input mode">Live</button>
       </div>
     </aside>
 
@@ -121,17 +121,17 @@
       </div>
 
       <div class="cu-command-bar" role="toolbar" aria-label="Editor actions">
-        <button class="cu-button cu-button-primary" id="runBtn" aria-label="Run Python code (Ctrl+Enter)">▶ Run</button>
-        <button class="cu-button" id="analyzeBtn" aria-label="Analyze code with AI">🔍 Analyze</button>
-        <button class="cu-button" id="fixBtn" aria-label="Fix code automatically">🔧 Fix</button>
+        <button class="cu-button cu-button-primary" id="runBtn" aria-label="Run Python code (Ctrl+Enter)">Run</button>
+        <button class="cu-button" id="analyzeBtn" aria-label="Analyze code with AI">Analyze</button>
+        <button class="cu-button" id="fixBtn" aria-label="Fix code automatically">Fix</button>
         <button class="cu-button cu-button-voice" id="voiceButton" aria-label="Toggle voice control" aria-pressed="false">
-          🎤 Voice (Off)
+          Voice (Off)
         </button>
         <span id="voiceStateIndicator" class="voice-state-indicator" aria-live="polite" aria-atomic="true"></span>
-        <button class="cu-button" id="codeMapBtn" aria-label="Audio code map - hear program structure">🗺 Code Map</button>
-        <button class="cu-button" id="stepNarrationBtn" aria-label="Run with step narration">📖 Step Narration</button>
-        <button class="cu-button" id="mistakeReplayBtn" aria-label="Compare before and after mistake">🔄 Mistake Replay</button>
-        <button class="cu-button cu-button-secondary" id="saveBtn" aria-label="Save current code as snippet">💾 Save</button>
+        <button class="cu-button" id="codeMapBtn" aria-label="Audio code map - hear program structure">Code Map</button>
+        <button class="cu-button" id="stepNarrationBtn" aria-label="Run with step narration">Step Narration</button>
+        <button class="cu-button" id="mistakeReplayBtn" aria-label="Compare before and after mistake">Mistake Replay</button>
+        <button class="cu-button cu-button-secondary" id="saveBtn" aria-label="Save current code as snippet">Save</button>
         <select id="languageSelector" class="cu-language-selector" aria-label="Select language for AI responses">
           <option value="en">English</option>
           <option value="hi">हिंदी (Hindi)</option>
@@ -313,12 +313,12 @@
     <div class="cu-tutorial-head">
       <span id="tutorialTopic" class="cu-tutorial-topic">Guided tutorial</span>
       <span id="tutorialProgress" class="cu-tutorial-progress" aria-live="polite" aria-atomic="true"></span>
-      <button id="tutorialExitBtn" class="cu-tutorial-exit" aria-label="Exit tutorial and start coding">✕ Exit</button>
+      <button id="tutorialExitBtn" class="cu-tutorial-exit" aria-label="Exit tutorial and start coding">Exit</button>
     </div>
     <p id="tutorialStatus" class="cu-tutorial-status" role="status" aria-live="polite" aria-atomic="true"></p>
     <p id="tutorialText" class="cu-tutorial-text"></p>
     <div id="tutorialActivityControls" class="cu-tutorial-controls" role="group" aria-label="Activity controls">
-      <button id="tutorialRunBtn" class="cu-button cu-button-primary" aria-label="Run your code (Control Enter)">▶ Run</button>
+      <button id="tutorialRunBtn" class="cu-button cu-button-primary" aria-label="Run your code (Control Enter)">Run</button>
       <button id="tutorialExampleBtn" class="cu-button" aria-label="Fill in an example for me">Example</button>
       <button id="tutorialHintBtn" class="cu-button" aria-label="Give me a hint">Hint</button>
       <button id="tutorialRepeatBtn" class="cu-button" aria-label="Repeat the instructions">Repeat</button>
@@ -630,10 +630,10 @@
       if (toggleInputModeBtn) toggleInputModeBtn.addEventListener('click', function () {
         if (typeof _liveInputMode !== 'undefined' && _liveInputMode) {
           if (typeof enablePreflightInputMode === 'function') enablePreflightInputMode();
-          this.textContent = 'Live ⚡';
+          this.textContent = 'Live';
         } else {
           if (typeof enableLiveInputMode === 'function') enableLiveInputMode();
-          this.textContent = 'Pre-flight 📋';
+          this.textContent = 'Pre-flight';
         }
       });
       document.getElementById('voiceButton').addEventListener('click', function () { if (typeof toggleVoice === 'function') toggleVoice(); });

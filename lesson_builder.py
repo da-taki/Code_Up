@@ -8,7 +8,7 @@ solution, and a trainer note. Pure and Flask-free.
 """
 
 import re
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 
 SUPPORTED = ["print", "variables", "if statements", "for loops", "while loops",
              "functions", "lists", "dictionaries", "beginner debugging"]
@@ -151,24 +151,40 @@ def extract_topic(text: str) -> str:
     return topic
 
 
-def _lesson_message(lesson: Dict[str, Any], verbosity: str) -> str:
-    solution = lesson["solution"].replace("\n", "  ").strip()
-    full = [
-        f"Lesson: {lesson['title']}.",
-        f"Explanation: {lesson['explanation']}",
-        f"Command to try: {lesson['command']}.",
-        f"Practice task: {lesson['practice']}",
-        f"Small hint: {lesson['small_hint']}",
-        f"Bigger hint: {lesson['bigger_hint']}",
-        f"Expected solution: {solution}",
-        f"Trainer note: {lesson['trainer_note']}",
+def _speech_solution(solution: str) -> str:
+    """A single-line, speech-friendly form: 'for i in range(5): print(i)'."""
+    return " ".join(line.strip() for line in solution.splitlines() if line.strip())
+
+
+def _render_lesson(lesson: Dict[str, Any], verbosity: str) -> Tuple[str, str]:
+    """Return (display message, spoken message).
+
+    The expected solution is shown as real, copy-pasteable multi-line code in the
+    display message, but flattened to one readable line in the spoken message so a
+    screen-reader user hears it as a single flowing statement.
+    """
+    display_solution = lesson["solution"].rstrip()
+    # (display line, spoken line) per section. Only the solution differs.
+    sections = [
+        (f"Lesson: {lesson['title']}.", f"Lesson: {lesson['title']}."),
+        (f"Explanation: {lesson['explanation']}", f"Explanation: {lesson['explanation']}"),
+        (f"Command to try: {lesson['command']}.", f"Command to try: {lesson['command']}."),
+        (f"Practice task: {lesson['practice']}", f"Practice task: {lesson['practice']}"),
+        (f"Small hint: {lesson['small_hint']}", f"Small hint: {lesson['small_hint']}"),
+        (f"Bigger hint: {lesson['bigger_hint']}", f"Bigger hint: {lesson['bigger_hint']}"),
+        (f"Expected solution:\n{display_solution}",
+         f"Expected solution: {_speech_solution(lesson['solution'])}"),
+        (f"Trainer note: {lesson['trainer_note']}", f"Trainer note: {lesson['trainer_note']}"),
     ]
     if verbosity == "concise":
-        keep = [full[0], full[1], full[2], full[6]]
-        return "\n".join(keep)
-    if verbosity == "expert":
-        return "\n".join([full[0], full[1], full[2], full[6], full[7]])
-    return "\n".join(full)
+        keep = [0, 1, 2, 6]
+    elif verbosity == "expert":
+        keep = [0, 1, 2, 6, 7]
+    else:
+        keep = list(range(len(sections)))
+    message = "\n".join(sections[i][0] for i in keep)
+    speech = " ".join(sections[i][1] for i in keep)
+    return message, speech
 
 
 def build_accessible_lesson(topic: str, verbosity: str = "normal") -> Dict[str, Any]:
@@ -180,9 +196,9 @@ def build_accessible_lesson(topic: str, verbosity: str = "normal") -> Dict[str, 
                 "speech": _UNSUPPORTED_MESSAGE, "supported": list(SUPPORTED), "topic": ""}
 
     lesson = _LESSONS[key]
-    message = _lesson_message(lesson, verbosity)
+    message, speech = _render_lesson(lesson, verbosity)
     return {
-        "action": "deterministic_message", "message": message, "speech": message,
+        "action": "deterministic_message", "message": message, "speech": speech,
         "topic": key, "concept": lesson["concept"], "explanation": lesson["explanation"],
         "command": lesson["command"], "practice": lesson["practice"],
         "hints": [lesson["small_hint"], lesson["bigger_hint"]],

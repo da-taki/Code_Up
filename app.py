@@ -68,6 +68,12 @@ import structure_tools
 import error_replay
 import hint_engine
 import landmarks
+import debug_teacher
+import concept_tutor
+import ask_code
+import trainer_review
+import lesson_builder
+import screen_reader_bridge
 
 load_dotenv(override=True)
 
@@ -7584,6 +7590,101 @@ def _sprint2_command(text, code, mem, cursor_line, error_context, mistake_snapsh
     return None
 
 
+# ---- NAB value sprint: classroom + non-visual learning features -------------
+# Deterministic teacher/learner tools layered on Sprint 1/2: Blind Debugger,
+# Concept Tutor, Ask My Code, Trainer Review, Lesson Builder, Screen Reader
+# Bridge. Whole-utterance matching on NEW phrasings only; routed AFTER Sprint
+# 1/2 and BEFORE generic concept Q&A so reserved phrases (onboarding, project
+# report, recap, structure, navigation, hints, replay, bookmarks) are never
+# shadowed. parse_intent is not modified; the OpenVINO route stays isolated.
+_DEBUG_TEACHER_RE = re.compile(
+    r"^(?:please\s+)?(?:debug this like a teacher|debug my code|help me debug this|"
+    r"why is my code failing|explain this error like a teacher)$", re.IGNORECASE)
+_CONCEPT_TUTOR_RE = re.compile(
+    r"^(?:please\s+)?(?:teach me this code|turn this code into a lesson|explain this like a lesson|"
+    r"make a lesson from this program|teach this program step by step)$", re.IGNORECASE)
+_TRAINER_REVIEW_RE = re.compile(
+    r"^(?:please\s+)?(?:make trainer notes|make teacher notes|make a trainer review|"
+    r"summari[sz]e this for a trainer|prepare trainer feedback)$", re.IGNORECASE)
+_LESSON_BUILDER_RE = re.compile(
+    r"^(?:please\s+)?(?:make|create|build)\b.*\b(?:lesson|exercise)\b", re.IGNORECASE)
+_SR_BRIDGE_RE = re.compile(
+    r"^(?:please\s+)?(?:prepare this for nvda|prepare this for jaws|"
+    r"prepare this for (?:a )?screen reader|screen reader bridge|"
+    r"explain how this would sound in (?:nvda|jaws|a screen reader)|"
+    r"help me move this to (?:vs ?code|visual studio code)|make a screen reader handoff)$",
+    re.IGNORECASE)
+
+
+def _nab_payload_project_state(mem):
+    """Build a small, grounded project_state from session memory (file names only)."""
+    files = mem.get("project_files") or []
+    files = [str(f) for f in files] if isinstance(files, list) else []
+    entry = mem.get("last_active_file") or (files[0] if files else "")
+    return {"is_project": len(files) > 1, "files": files, "entry": entry}
+
+
+def _nab_value_command(command, payload, memory):
+    """Route NAB classroom / non-visual learning commands to their deterministic
+    module. Returns a /voice-command response dict, or None to fall through.
+
+    Pure orchestration: never edits or runs code. ``payload`` carries the current
+    code, last run facts, verbosity, and a memory-derived project_state.
+    """
+    t = " ".join(str(command or "").lower().strip().rstrip(".!?").split())
+    if not t:
+        return None
+    code = payload.get("code") or ""
+    verbosity = payload.get("verbosity") or "normal"
+    last_run = payload.get("last_run") or {}
+    project_state = payload.get("project_state") or {}
+
+    # 1) Blind Debugger Mode
+    if _DEBUG_TEACHER_RE.match(t):
+        result = debug_teacher.build_blind_debugger_response(code, memory, last_run, verbosity)
+        return {"success": True, "action": "deterministic_message", "heard": command,
+                "message": result["message"], "speech": result["speech"],
+                "problem_type": result.get("problem_type", ""), "line": result.get("line"),
+                "concepts": result.get("concepts", []),
+                "next_commands": result.get("next_commands", []), "blind_debugger": True}
+
+    # 2) Concept-Aware Code Tutor
+    if _CONCEPT_TUTOR_RE.match(t):
+        result = concept_tutor.build_concept_lesson(code, memory, verbosity)
+        return {"success": True, "action": "deterministic_message", "heard": command,
+                "message": result["message"], "speech": result["speech"],
+                "concepts": result.get("concepts", []), "line": result.get("line"),
+                "concept_lesson": True}
+
+    # 3) Trainer Review Mode
+    if _TRAINER_REVIEW_RE.match(t):
+        result = trainer_review.build_trainer_review(code, project_state, memory, verbosity)
+        return {"success": True, "action": "deterministic_message", "heard": command,
+                "message": result["message"], "speech": result["speech"], "trainer_review": True}
+
+    # 4) Accessible Lesson Builder
+    if _LESSON_BUILDER_RE.match(t):
+        topic = lesson_builder.extract_topic(t)
+        result = lesson_builder.build_accessible_lesson(topic, verbosity)
+        return {"success": True, "action": "deterministic_message", "heard": command,
+                "message": result["message"], "speech": result["speech"],
+                "topic": result.get("topic", ""), "lesson_builder": True}
+
+    # 5) Screen Reader Bridge Mode
+    if _SR_BRIDGE_RE.match(t):
+        result = screen_reader_bridge.build_screen_reader_bridge(code, project_state, t, verbosity)
+        return {"success": True, "action": "deterministic_message", "heard": command,
+                "message": result["message"], "speech": result["speech"],
+                "target": result.get("target", ""), "screen_reader_bridge": True}
+
+    # 6) Ask My Code Mode — code-grounded questions (most general; checked last)
+    if ask_code.looks_like_code_question(t):
+        result = ask_code.answer_code_question(command, code, memory, verbosity)
+        return {"success": True, "heard": command, "ask_my_code": True, **result}
+
+    return None
+
+
 @app.route("/voice-command", methods=["POST"])
 def voice():
     body = safejson()
@@ -7597,6 +7698,7 @@ def voice():
     if input_source not in {"typed", "voice"}:
         input_source = "typed"
     cursor_line = _as_optional_int(body.get("cursor_line"))
+    verbosity = _safe_text(body.get("verbosity"), "normal", limit=20).strip().lower() or "normal"
     parsed = parse_intent(text)
     intent = parsed.get("intent")
     slots = parsed.get("slots", {})
@@ -7696,6 +7798,22 @@ def voice():
     sprint2 = _sprint2_command(text, current_code, mem, cursor_line, error_context, _snap)
     if sprint2 is not None:
         return _store_and_return(sprint2)
+
+    # ---- 3f. NAB value sprint: classroom + non-visual learning tools --------
+    # Deterministic teacher/learner tools routed after Sprint 1/2 and before the
+    # generic concept Q&A so reserved phrases keep their existing behaviour.
+    nab = _nab_value_command(text, {
+        "code": current_code,
+        "error": error_context or mem.get("last_run_error", ""),
+        "last_run": {"output": mem.get("last_run_output", ""),
+                     "error": error_context or mem.get("last_run_error", ""),
+                     "ok": mem.get("last_run_ok")},
+        "verbosity": verbosity,
+        "project_state": _nab_payload_project_state(mem),
+        "cursor_line": cursor_line,
+    }, mem)
+    if nab is not None:
+        return _store_and_return(nab)
 
     # ---- 4. Global beginner concept Q&A (works outside the tutorial) --------
     concept_kind = concept_qa.classify_concept_question(text)

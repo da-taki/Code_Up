@@ -70,7 +70,7 @@
       // Also show it in the output panel
       const out = document.getElementById('output');
       if (out) {
-        out.textContent = '⚠ ' + msg + '\n\n' + (out.textContent || '');
+        out.textContent = msg + '\n\n' + (out.textContent || '');
       }
     }
   };

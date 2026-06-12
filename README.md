@@ -186,7 +186,7 @@ A spoken word value becomes a quoted string (`Taknoor` → `"Taknoor"`); a numbe
 
 ### How to start
 
-- **Keyboard / mouse:** press the **📖 Tutorial** button in the header (Tab reaches it after the start screen).
+- **Keyboard / mouse:** press the **Tutorial** button in the header (Tab reaches it after the start screen).
 - **Voice or typed command:** say or type `start tutorial` (or just `tutorial`). Jump to one topic with `practise for loops`, `practise variables`, etc.
 
 ### Commands during the tutorial

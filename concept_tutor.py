@@ -147,9 +147,13 @@ def _last_output_sentence(mem: Optional[Dict[str, Any]]) -> str:
     out = (mem.get("last_run_output") or "").strip()
     err = (mem.get("last_run_error") or "").strip()
     if out and ok is not False:
-        return f"The last output was {_flatten_output(out)}."
+        flat = _flatten_output(out)
+        end = "" if flat[-1:] in ".!?:" else "."
+        return f"The last output was {flat}{end}"
     if err and ok is False:
-        return f"Last time it ran it hit an error: {err.splitlines()[0][:100]}."
+        first = err.splitlines()[0][:100]
+        end = "" if first[-1:] in ".!?:" else "."
+        return f"Last time it ran it hit an error: {first}{end}"
     return ""
 
 

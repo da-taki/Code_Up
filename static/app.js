@@ -5695,17 +5695,21 @@ function spokenConditionPhrase(cond) {
 // is summarized with an offer to hear it all via "read full output". Empty
 // output is stated plainly instead of a dangling "Program output:". Pure
 // (string in, string out); the visible output box always keeps the exact text.
+function _outputPeriod(s) { return /[.!?:]$/.test(String(s || '')) ? '' : '.'; }
 function formatRunOutputSpeech(output) {
   const lines = String(output == null ? '' : output)
     .split('\n').map(s => s.trim()).filter(s => s.length > 0);
   if (lines.length === 0) return 'Your program ran successfully but produced no output.';
   const joined = lines.join(', ');
   if (lines.length <= 12 && joined.length <= 240) {
-    return 'Program output: ' + joined + '.';
+    return 'Program output: ' + joined + _outputPeriod(joined);
   }
+  const lineWord = lines.length === 1 ? 'line' : 'lines';
+  const label = lines.length === 1 ? 'It starts with' : 'First lines';
   const firstFew = lines.slice(0, 3).join(', ');
-  return 'Program produced ' + lines.length + ' lines of output. First lines: ' +
-    firstFew + '. Say read full output to hear everything.';
+  const preview = firstFew.length > 160 ? firstFew.slice(0, 160).replace(/\s+\S*$/, '') + '...' : firstFew;
+  return 'Program produced ' + lines.length + ' ' + lineWord + ' of output. ' +
+    label + ': ' + preview + '. Say read full output to hear everything.';
 }
 
 // Read the FULL output back, exactly and in order (no summarizing), for the
@@ -5714,7 +5718,8 @@ function formatFullOutputSpeech(output) {
   const lines = String(output == null ? '' : output)
     .split('\n').map(s => s.trim()).filter(s => s.length > 0);
   if (lines.length === 0) return 'No output available.';
-  return 'Program output: ' + lines.join(', ') + '.';
+  const joined = lines.join(', ');
+  return 'Program output: ' + joined + _outputPeriod(joined);
 }
 // ==== SPOKEN-CODE-NORMALIZERS-END ====
 

@@ -193,6 +193,15 @@ check('long output is summarized but stays accessible via read full output', () 
   assert.ok(/First lines: 0, 1, 2/.test(spoken), spoken);
   assert.ok(/read full output/.test(spoken), spoken);
 });
+check('a single very long line is summarized with correct singular grammar', () => {
+  const spoken = N.formatRunOutputSpeech('x'.repeat(300));
+  assert.ok(/Program produced 1 line of output/.test(spoken), spoken);  // "1 line", not "1 lines"
+  assert.ok(/It starts with:/.test(spoken), spoken);
+  // Preview is truncated (~160 chars + framing), never the full 300-char dump.
+  assert.ok(!spoken.includes('x'.repeat(200)), 'preview must be truncated, not dump the whole line');
+  assert.ok(spoken.length < 270, 'preview too long: ' + spoken.length);
+  assert.ok(/read full output/.test(spoken), spoken);
+});
 check('read full output reads everything, no summarizing', () => {
   const many = Array.from({ length: 40 }, (_, i) => String(i)).join('\n');
   const full = N.formatFullOutputSpeech(many);

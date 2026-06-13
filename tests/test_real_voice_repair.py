@@ -34,8 +34,12 @@ def test_first_help_returns_short_onboarding(client):
     d = _vc(client, "what can I do here")
     assert d["action"] == "deterministic_message"
     assert d.get("onboarding") is True
-    assert "generate code to print the first five even numbers" in d["message"]
-    assert "more examples" in d["message"].lower()
+    # General, demo-safe capabilities — not a bizarre over-specific example.
+    msg = d["message"].lower()
+    assert "generate code" in msg
+    assert "run code" in msg and "explain it" in msg
+    assert "star pattern" not in msg and "5 by 5" not in msg
+    assert "more examples" in msg
     assert len(d["message"]) < 320  # short, not the long command dump
 
 

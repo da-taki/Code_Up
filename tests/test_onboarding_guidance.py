@@ -121,3 +121,29 @@ def test_help_action_does_not_modify_editor_contents():
 def test_existing_demo_commands_still_route(client, text, expected_action):
     data = _action(client, text)
     assert data["action"] == expected_action
+
+
+def test_onboarding_message_is_general_not_pattern_specific():
+    # The first-level onboarding reply must describe broad capabilities, not
+    # bizarre over-specific examples like "5 by 5 star pattern where row 3 has 6
+    # stars". This guards against onboarding regressing into arbitrary demos.
+    msg = app_module._ONBOARDING_MESSAGE.lower()
+    for cap in ("generate code", "run code", "explain it", "debug", "tutorial"):
+        assert cap in msg, cap
+    for weird in ("star pattern", "5 by 5", "5x5", "row 3", "row 6", "6 stars"):
+        assert weird not in msg, weird
+
+
+def test_spoken_beginner_guide_leads_with_capabilities_not_star_patterns():
+    # The spoken beginner command guide (what a blind learner hears on "help")
+    # must lead with general capabilities and must not feature arbitrary star
+    # patterns, which confuse beginners and are not demo-safe. The visible guide
+    # may still list exact-symbol examples; the *spoken* version must not.
+    src = _read("static/app.js")
+    start = src.index("const BEGINNER_COMMAND_GUIDE_SPEECH")
+    end = src.index(";", start)
+    speech = src[start:end].lower()
+    for cap in ("generate code", "run", "explain", "debug", "tutorial"):
+        assert cap in speech, cap
+    for weird in ("star pattern", "5 by 5", "row 3 has 6 stars"):
+        assert weird not in speech, weird

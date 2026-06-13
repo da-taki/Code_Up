@@ -259,6 +259,10 @@ class IntentParser:
         r"^read\s+(?:me\s+)?my\s+(?:whole\s+|entire\s+|full\s+|complete\s+)?(?:code|program|script)(?:\s+back)?(?:\s+to\s+me)?(?:\s+(?:out\s+loud|aloud))?$",
         r"^read\s+(?:all\s+(?:of\s+)?)?my\s+(?:code|program|script)$",
         r"^read\s+back\s+(?:my\s+|the\s+)?(?:code|program|script)$",
+        # "read line by line" / "read my code line by line": a minimal alias onto
+        # the same deterministic line-by-line read-back (Concept Tutor suggests it).
+        r"^read\s+(?:me\s+)?(?:my\s+|the\s+)?(?:code|program|script)\s+line\s+by\s+line$",
+        r"^read\s+line\s+by\s+line$",
     ]
     NARRATE_FILE_PATTERNS = [
         r"^narrate(?:\s+(?:the\s+)?(?:file|code|whole\s+file))?$",
@@ -570,6 +574,11 @@ class IntentParser:
 
     READ_OUTPUT_PATTERNS = [
         r"^(?:speak|read|say)\s+(?:the\s+)?output$",
+        # "read full output" / "read last output" / "read all output" / variants:
+        # a blind learner asks to hear the program output again, in full.
+        r"^(?:speak|read|say)\s+(?:the\s+)?(?:full|whole|entire|last|complete|all(?:\s+of)?(?:\s+the)?)\s+output$",
+        r"^(?:speak|read|say)\s+(?:the\s+)?output\s+(?:again|in\s+full|out\s+loud|aloud)$",
+        r"^read\s+(?:me\s+)?(?:the\s+)?output\s+again$",
     ]
 
     REPEAT_PATTERNS = [

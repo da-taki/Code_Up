@@ -81,6 +81,58 @@ class TestBuilder:
         assert len(normal) >= len(concise)
 
 
+class TestTeacherFirst:
+    """Problem 4 — debug like a teacher BEFORE offering staged hints."""
+
+    def test_indentation_gives_explanation_and_likely_fix(self):
+        r = debug_teacher.build_blind_debugger_response(
+            LOOP_BAD_INDENT, {}, {"error": "IndentationError: expected an indented block on line 2"})
+        low = r["message"].lower()
+        assert "indentation error" in low
+        assert "likely fix" in low and "indent" in low
+        assert "four spaces" in low  # concrete fix
+        # The why-it-works explanation is present.
+        assert "loop" in low
+
+    def test_nameerror_explains_and_gives_likely_fix(self):
+        r = debug_teacher.build_blind_debugger_response(
+            NAME_ERR_CODE, {"last_run_error": "NameError: name 'total' is not defined"}, None)
+        low = r["message"].lower()
+        assert "name error" in low and "total" in r["message"]
+        assert "likely fix" in low and "total = 0" in r["message"]
+
+    def test_syntaxerror_explains_and_gives_likely_fix(self):
+        r = debug_teacher.build_blind_debugger_response(
+            MISSING_COLON, {}, {"error": "SyntaxError: expected ':'"})
+        low = r["message"].lower()
+        assert "syntax error" in low
+        assert "likely fix" in low and "colon" in low
+
+    def test_hint_commands_come_after_the_explanation(self):
+        # The optional "bigger hint" offer must appear AFTER the likely fix, never
+        # before the learner has been taught the problem.
+        r = debug_teacher.build_blind_debugger_response(
+            LOOP_BAD_INDENT, {}, {"error": "IndentationError: expected an indented block on line 2"})
+        low = r["message"].lower()
+        assert "bigger hint" in low
+        assert low.index("likely fix") < low.index("bigger hint")
+        assert low.index("indentation error") < low.index("bigger hint")
+
+    def test_normal_response_is_not_just_a_hint_wrap(self):
+        # Regression: the old debugger led with "Small hint: ..." — the teacher
+        # response must instead carry a real fix + reasoning.
+        r = debug_teacher.build_blind_debugger_response(
+            LOOP_BAD_INDENT, {}, {"error": "IndentationError on line 2"})
+        assert "small hint:" not in r["message"].lower()
+        assert "likely fix" in r["message"].lower()
+
+    def test_success_explains_behavior_and_suggests_a_test(self):
+        r = debug_teacher.build_blind_debugger_response(LOOP_OK, {}, {"ok": True})
+        low = r["message"].lower()
+        assert "runs successfully" in low
+        assert "predict" in low or "test" in low or "habit" in low
+
+
 class TestRoute:
 
     def test_debug_like_a_teacher_routes(self, client):

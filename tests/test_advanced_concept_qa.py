@@ -1,0 +1,216 @@
+"""
+Advanced / general concept Q&A (pre-NAB).
+
+"what is recursion", "explain inheritance", "what is big O", "what is a tuple",
+etc. must produce a safe, beginner-friendly spoken explanation — never run,
+edit, generate, navigate, or fall into a weird clarification. Deterministic, so
+the answers work even when AI is unavailable. These also must not steal
+code-specific (Ask My Code) or explicit generation commands.
+"""
+import pytest
+
+import app as app_module
+import concept_qa
+
+LOOP = "for i in range(3):\n    print(i)\n"
+
+_MUTATING = {
+    "run", "fix", "generate_code", "conversational_edit", "clear_editor",
+    "insert_line", "replace_line", "delete_line", "append_line", "indent_line",
+    "dedent_line", "insert_function", "insert_variable", "save_snippet_named",
+}
+
+
+@pytest.fixture
+def client(monkeypatch):
+    # AI forced OFF so the deterministic concept answers are exercised.
+    monkeypatch.setenv("CODEUP_AI_ENABLED", "0")
+    monkeypatch.setenv("GEMINI_ENABLED", "0")
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.delenv("GROQ_API_KEY_2", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    app_module.app.config["TESTING"] = True
+    with app_module.app.test_client() as c:
+        yield c
+
+
+def _vc(client, text, code=LOOP):
+    return client.post("/voice-command", json={"text": text, "code": code}).get_json()
+
+
+# =====================================================================
+# Advanced concept answers — deterministic, grounded in the right concept
+# =====================================================================
+
+class TestAdvancedConceptAnswers:
+
+    # (command, expected concept kind, a keyword that must appear in the answer)
+    CASES = [
+        ("what is recursion", "recursion", "calls itself"),
+        ("explain recursion", "recursion", "base case"),
+        ("what is inheritance", "inheritance", "class"),
+        ("explain inheritance", "inheritance", "parent class"),
+        ("what is a tuple", "tuple", "parentheses"),
+        ("what is a set", "set", "unique"),
+        ("what is a decorator", "decorator", "wraps"),
+        ("what is big O", "big_o", "grows"),
+        ("what is time complexity", "big_o", "input"),
+        ("what is object oriented programming", "oop", "object"),
+        ("what is a class", "class", "blueprint"),
+        ("what is a method", "method", "class"),
+        ("what is a module", "module", "import"),
+        ("what is an import", "import", "module"),
+        ("what is exception handling", "exception", "except"),
+        ("what is try except", "exception", "except"),
+        ("what is a parameter", "parameter", "argument"),
+        ("what is a return value", "return", "return"),
+    ]
+
+    @pytest.mark.parametrize("text,kind,keyword", CASES)
+    def test_concept_answered_and_grounded(self, client, text, kind, keyword):
+        d = _vc(client, text)
+        assert d["action"] == "deterministic_message", (text, d["action"])
+        assert d.get("concept") == kind, (text, d.get("concept"))
+        assert keyword.lower() in d["message"].lower(), (text, d["message"])
+
+    @pytest.mark.parametrize("text,kind,keyword", CASES)
+    def test_concept_never_runs_or_mutates(self, client, text, kind, keyword):
+        assert _vc(client, text)["action"] not in _MUTATING
+
+    @pytest.mark.parametrize("text,kind,keyword", CASES)
+    def test_concept_has_meaningful_speech(self, client, text, kind, keyword):
+        d = _vc(client, text)
+        spoken = (d.get("speech") or d.get("message") or "").strip()
+        assert len(spoken) >= 60, (text, spoken)
+        # spoken-friendly: no markdown fences or emojis-as-bullets.
+        assert "```" not in spoken and "|" not in spoken
+
+
+# =====================================================================
+# Beginner concepts still work
+# =====================================================================
+
+class TestBeginnerConceptsStillWork:
+
+    @pytest.mark.parametrize("text", [
+        "what is a variable", "what is a loop", "what is a function",
+        "what does range three mean", "what is a list", "what is a dictionary",
+    ])
+    def test_still_answers_without_mutating(self, client, text):
+        d = _vc(client, text)
+        assert d["action"] in ("deterministic_message", "mentor_chat"), (text, d["action"])
+        assert d["action"] not in _MUTATING
+
+
+# =====================================================================
+# Routing safety — concept (and identity) questions never run
+# =====================================================================
+
+class TestNeverRuns:
+
+    @pytest.mark.parametrize("text", [
+        "what is recursion", "what is inheritance", "what is a tuple",
+        "what is big O", "what is a decorator", "what is object oriented programming",
+        "who are you", "what time is it",
+    ])
+    def test_never_returns_run(self, client, text):
+        assert _vc(client, text)["action"] != "run"
+
+    def test_unknown_concept_gives_helpful_fallback(self, client):
+        # A clear concept-question form with an unknown topic offers a helpful
+        # pointer, not a weird "did you mean locate error" clarification.
+        d = _vc(client, "what is a flux capacitor", code="")
+        assert d["action"] == "deterministic_message"
+        assert "explain" in d["message"].lower()
+        assert "recursion" in d["message"].lower() or "loop" in d["message"].lower()
+
+
+# =====================================================================
+# Do not steal Ask My Code (code-specific questions)
+# =====================================================================
+
+class TestDoesNotStealAskMyCode:
+
+    def test_print_count_is_code_specific(self, client):
+        d = _vc(client, "why does this print three times")
+        assert d.get("concept") is None
+        assert d["action"] in ("navigate_code", "deterministic_message")
+
+    def test_loop_control_is_code_specific(self, client):
+        d = _vc(client, "what line controls the loop")
+        assert d.get("concept") is None
+        assert d["action"] in ("navigate_code", "deterministic_message")
+
+    def test_symbol_location_is_navigation(self, client):
+        d = _vc(client, "where is total changed", code="total = 0\ntotal = total + 1\n")
+        assert d.get("concept") is None
+        assert d["action"] in ("navigate_code", "deterministic_message")
+
+    def test_function_behavior_is_code_specific(self, client):
+        code = "def add(a, b):\n    return a + b\n\nprint(add(2, 3))\n"
+        d = _vc(client, "what does this function do", code=code)
+        assert d.get("concept") is None
+        assert d["action"] in ("navigate_code", "deterministic_message")
+
+
+# =====================================================================
+# Do not steal generation / lesson commands
+# =====================================================================
+
+class TestDoesNotStealGeneration:
+
+    @pytest.mark.parametrize("text", [
+        "write a program that explains recursion",
+        "generate code to demonstrate recursion",
+    ])
+    def test_explicit_generation_still_generates(self, client, text):
+        d = _vc(client, text, code="")
+        assert d["action"] == "generate_code"
+
+    def test_lesson_request_is_not_concept_qa(self, client):
+        d = _vc(client, "make a beginner lesson on recursion", code="")
+        # Routes to the lesson builder (or a safe lesson response), not the
+        # generic concept Q&A path.
+        assert d.get("concept") is None
+        assert d["action"] == "deterministic_message"
+
+
+# =====================================================================
+# Unit: the classifier maps the listed concepts + aliases
+# =====================================================================
+
+class TestClassifierUnit:
+
+    @pytest.mark.parametrize("text,kind", [
+        ("what is recursion", "recursion"),
+        ("what is a recursive function", "recursion"),
+        ("what is big-o notation", "big_o"),
+        ("what is space complexity", "big_o"),
+        ("what are tuples", "tuple"),
+        ("what are sets", "set"),
+        ("what are decorators", "decorator"),
+        ("what is oop", "oop"),
+        ("what is a subclass", "inheritance"),
+        ("what is an argument", "parameter"),
+        ("what is a return statement", "return"),
+        ("explain try and except", "exception"),
+    ])
+    def test_aliases_resolve(self, text, kind):
+        assert concept_qa.classify_concept_question(text) == kind
+
+    @pytest.mark.parametrize("text", [
+        "what is a loop", "what is a list", "what is a function", "what is a string",
+    ])
+    def test_mentor_handled_concepts_defer(self, text):
+        # These return None so the richer concept-mentor path keeps them.
+        assert concept_qa.classify_concept_question(text) is None
+
+    @pytest.mark.parametrize("text", [
+        "explain this code", "what does this function do", "write a program",
+        "run the code", "what is total",
+    ])
+    def test_does_not_classify_code_or_command_text(self, text):
+        # Code-referential or command text must not be treated as a general
+        # concept (None, or deferred — never a concrete advanced concept).
+        result = concept_qa.classify_concept_question(text)
+        assert result in (None, concept_qa.UNKNOWN_CONCEPT) or result not in concept_qa._CONCEPTS

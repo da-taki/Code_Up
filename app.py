@@ -7114,7 +7114,13 @@ def _record_voice_memory(mem, text, intent, response):
     action = str(response.get("action") or "")
     session_memory.record_utterance(mem, text, intent or "", action)
     # Track learning features/concepts for the "what did I learn today?" recap.
-    session_memory.record_activity(mem, action, concept=str(response.get("concept") or ""))
+    # Internal sentinels (identity / non-code / unknown-concept markers, all
+    # prefixed with "__") are NOT real concepts, so they must never leak into the
+    # recap or trainer notes as something the learner "practised".
+    concept = str(response.get("concept") or "")
+    if concept.startswith("__"):
+        concept = ""
+    session_memory.record_activity(mem, action, concept=concept)
     if action == "action_sequence":
         actions = response.get("actions") or []
         session_memory.record_actions(mem, [a.get("action", "") for a in actions if isinstance(a, dict)])

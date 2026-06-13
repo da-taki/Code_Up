@@ -214,3 +214,127 @@ class TestClassifierUnit:
         # concept (None, or deferred — never a concrete advanced concept).
         result = concept_qa.classify_concept_question(text)
         assert result in (None, concept_qa.UNKNOWN_CONCEPT) or result not in concept_qa._CONCEPTS
+
+
+# =====================================================================
+# Non-code / identity small talk -> safe, scoped responses (no fuzzy)
+# =====================================================================
+
+class TestNonCodeSafeResponses:
+
+    IDENTITY = ["who are you", "what is your name", "what are you", "are you a robot",
+                "introduce yourself"]
+    SCOPED = ["what time is it", "what day is it", "what is the date", "are you working",
+              "how are you", "is this working"]
+
+    @pytest.mark.parametrize("text", IDENTITY)
+    def test_identity_is_deterministic_and_scoped(self, client, text):
+        d = _vc(text=text, client=client)
+        assert d["action"] == "deterministic_message"
+        assert "codeup" in d["message"].lower()
+        assert len((d.get("speech") or d.get("message") or "")) >= 40
+
+    @pytest.mark.parametrize("text", SCOPED)
+    def test_scoped_fallback_is_deterministic(self, client, text):
+        d = _vc(text=text, client=client)
+        assert d["action"] == "deterministic_message"
+        assert "python" in d["message"].lower()
+
+    @pytest.mark.parametrize("text", IDENTITY + SCOPED)
+    def test_non_code_never_runs_or_mutates(self, client, text):
+        assert _vc(text=text, client=client)["action"] not in _MUTATING
+
+    @pytest.mark.parametrize("text", IDENTITY + SCOPED)
+    def test_non_code_never_fuzzy_confirms(self, client, text):
+        d = _vc(text=text, client=client)
+        assert d["action"] != "confirm"
+        assert "options" not in d
+
+
+# =====================================================================
+# Unsupported concepts via any form -> safe fallback (not fuzzy)
+# =====================================================================
+
+class TestUnsupportedConcepts:
+
+    @pytest.mark.parametrize("text", [
+        "what is flarbology", "explain flarbology", "teach me flarbology",
+        "tell me about flarbology",
+    ])
+    def test_unknown_concept_gives_unsupported_fallback(self, client, text):
+        d = _vc(text=text, client=client)
+        assert d["action"] == "deterministic_message"
+        msg = d["message"].lower()
+        assert "i can explain" in msg
+        assert "recursion" in msg
+        spoken = (d.get("speech") or d.get("message") or "")
+        assert len(spoken) >= 60
+
+    @pytest.mark.parametrize("text", [
+        "what is flarbology", "explain flarbology", "teach me flarbology",
+        "who are you", "what time is it",
+    ])
+    def test_no_fuzzy_junk_in_message(self, client, text):
+        msg = _vc(text=text, client=client)["message"].lower()
+        for junk in ("did you mean", "locate error", "read line enhanced"):
+            assert junk not in msg, (text, junk)
+
+
+# =====================================================================
+# Known concept command forms ("explain X", "teach me X", ...)
+# =====================================================================
+
+class TestKnownConceptCommandForms:
+
+    @pytest.mark.parametrize("text,kind", [
+        ("explain recursion", "recursion"),
+        ("teach me inheritance", "inheritance"),
+        ("tell me about big O", "big_o"),
+        ("how does try except work", "exception"),
+        ("why use a tuple", "tuple"),
+    ])
+    def test_command_form_answers_known_concept(self, client, text, kind):
+        d = _vc(text=text, client=client)
+        assert d["action"] == "deterministic_message"
+        assert d.get("concept") == kind
+
+
+# =====================================================================
+# Existing commands must not be stolen by the new fallbacks
+# =====================================================================
+
+class TestDoesNotStealCommands:
+
+    def test_explain_structure_is_outline(self, client):
+        assert _vc(text="explain structure", client=client)["action"] == "read_outline"
+
+    def test_explain_it_again_is_not_concept(self, client):
+        d = _vc(text="explain it again", client=client)
+        assert d.get("concept") is None
+        assert d["action"] != "run"
+
+    def test_explain_this_program_is_walkthrough(self, client):
+        assert _vc(text="explain this program", client=client)["action"] == "walk_through"
+
+    def test_teach_me_this_code_is_concept_tutor(self, client):
+        d = _vc(text="teach me this code", client=client)
+        assert d.get("concept_lesson") is True
+        assert d.get("concept") is None
+
+    def test_print_count_is_ask_my_code(self, client):
+        assert _vc(text="why does this print three times", client=client)["action"] == "navigate_code"
+
+    def test_loop_control_is_navigation(self, client):
+        assert _vc(text="what line controls the loop", client=client)["action"] == "navigate_code"
+
+    @pytest.mark.parametrize("text", [
+        "generate code to explain recursion",
+        "write a program that explains recursion",
+    ])
+    def test_generation_still_generates(self, client, text):
+        assert _vc(text=text, client=client, code="")["action"] == "generate_code"
+
+    def test_lesson_request_is_not_concept_qa(self, client):
+        d = _vc(text="make a beginner lesson on recursion", client=client, code="")
+        assert d.get("concept") is None
+        assert d["action"] == "deterministic_message"

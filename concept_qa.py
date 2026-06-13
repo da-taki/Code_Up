@@ -35,8 +35,11 @@ _TRIGGERS = [
 # rephrased by Key 2 when available (the deterministic text is the fallback).
 GROUNDED_KINDS = {"quotes", "indentation", "colon", "range", "print", "variable"}
 
-# Sentinel for a clear concept-question form whose topic we do not recognise.
-UNKNOWN_CONCEPT = "__unknown_concept__"
+# Sentinels for safe deterministic responses that must never run/edit code or
+# fall into fuzzy command confirmation.
+UNKNOWN_CONCEPT = "__unknown_concept__"   # concept-form question, topic unknown
+IDENTITY_QUERY = "__identity__"           # "who are you", "what is your name"
+NON_CODE_QUERY = "__non_code__"           # "what time is it", "are you working"
 
 # Deterministic, beginner-friendly, spoken-safe explanations for the broader
 # (often advanced) concepts that the narrow _TRIGGERS list did not cover. No
@@ -103,9 +106,74 @@ _CONCEPTS = {
 }
 
 _UNKNOWN_CONCEPT_MESSAGE = (
-    "I can explain beginner Python concepts like variables, loops, functions, lists, "
-    "dictionaries, classes, recursion, inheritance, and time complexity. Try asking, what is a "
-    "loop, or what is recursion.")
+    "I do not have a prepared explanation for that concept yet. I can explain beginner Python and "
+    "programming topics like variables, loops, functions, lists, dictionaries, classes, recursion, "
+    "inheritance, exceptions, and time complexity.")
+
+_IDENTITY_MESSAGE = (
+    "I am CodeUp, a voice-first Python learning environment. I can help you create, run, debug, "
+    "understand, and export Python code.")
+
+_NON_CODE_MESSAGE = (
+    "I am focused on helping with Python learning in this environment. You can ask me to create "
+    "code, run code, explain code, debug errors, summarize structure, make trainer notes, or "
+    "export your project.")
+
+# Identity questions ("who are you", "what is your name").
+_IDENTITY_RE = re.compile(
+    r"^(?:hey|ok|okay|so)?[,\s]*(?:"
+    r"who\s+are\s+you|who\s+is\s+this|what\s+are\s+you|what\s+is\s+codeup|"
+    r"what(?:'s| is)\s+your\s+name|whats\s+your\s+name|"
+    r"are\s+you\s+(?:a\s+|an\s+)?(?:robot|human|real|ai|bot|person|chatgpt|gpt)|"
+    r"introduce\s+yourself|tell\s+me\s+about\s+yourself"
+    r")\s*\??$", re.IGNORECASE)
+# Non-code small talk / status questions ("what time is it", "are you working").
+_NON_CODE_RE = re.compile(
+    r"^(?:hey|ok|okay|so)?[,\s]*(?:"
+    r"what\s+time\s+is\s+it|what(?:'s| is)\s+the\s+time|"
+    r"what\s+day\s+is\s+it|what(?:'s| is)\s+(?:the\s+|today'?s\s+)?date|what(?:'s| is)\s+today|"
+    r"what(?:'s| is)\s+the\s+weather|how(?:'s| is)\s+the\s+weather|"
+    r"how\s+are\s+you(?:\s+doing)?|how\s+is\s+it\s+going|"
+    r"are\s+you\s+(?:working|there|awake|ok|okay|online|ready|alive|listening)|"
+    r"is\s+(?:this|it)\s+working|do\s+you\s+work"
+    r")\s*\??$", re.IGNORECASE)
+
+# Command targets that "explain X" / "teach me X" point at — never treat these as
+# an unknown concept; defer to the real structure/follow-up/code routing.
+_WEAK_DEFER_WORDS = {
+    "it", "again", "structure", "outline", "code", "program", "file", "line",
+    "output", "error", "everything", "this", "that", "these", "those", "here",
+}
+
+
+def classify_non_code_query(text: str) -> Optional[str]:
+    """Identity / non-code small-talk questions get a safe, scoped response
+    instead of a fuzzy command confirmation. Returns a sentinel or None."""
+    t = " ".join(str(text or "").lower().strip().split())
+    if not t:
+        return None
+    if _IDENTITY_RE.match(t):
+        return IDENTITY_QUERY
+    if _NON_CODE_RE.match(t):
+        return NON_CODE_QUERY
+    return None
+
+
+def non_code_answer(kind: str) -> str:
+    if kind == IDENTITY_QUERY:
+        return _IDENTITY_MESSAGE
+    if kind == NON_CODE_QUERY:
+        return _NON_CODE_MESSAGE
+    return _UNKNOWN_CONCEPT_MESSAGE
+
+
+def _weak_command_target(topic: str) -> bool:
+    """True when an 'explain X' / 'teach me X' topic is really a command target
+    (structure, it, again, this code, ...) rather than an unknown concept."""
+    t = (topic or "").lower()
+    if _CODE_REF_RE.search(t):
+        return True
+    return bool(set(re.findall(r"[a-z]+", t)) & _WEAK_DEFER_WORDS)
 
 # Aliases for the concepts above (the ones we answer here).
 _CONCEPT_ALIASES = {
@@ -220,13 +288,18 @@ def classify_concept_question(text: str) -> Optional[str]:
     topic = _extract_topic(_DEFINITIONAL_FORM_RE, t)
     if topic is not None:
         return _lookup_concept(topic)
-    # 2b) Command-overloaded forms ("explain X", "teach me X"): only when X is a
-    # KNOWN concept, so "explain structure" / "explain it again" still route to
-    # their real commands instead of a generic explanation.
+    # 2b) Command-overloaded forms ("explain X", "teach me X"). A known concept
+    # is answered; a command target ("explain structure", "explain it again") is
+    # deferred to its real route; a genuine unknown concept ("explain flarbology")
+    # gets the safe unsupported-concept fallback rather than fuzzy confirmation.
     topic = _extract_topic(_WEAK_FORM_RE, t)
     if topic is not None:
         kind = _lookup_concept(topic)
-        return kind if kind not in (None, UNKNOWN_CONCEPT) else None
+        if kind not in (None, UNKNOWN_CONCEPT):
+            return kind
+        if kind is None:
+            return None
+        return None if _weak_command_target(topic) else UNKNOWN_CONCEPT
     return None
 
 

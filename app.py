@@ -7839,7 +7839,14 @@ def voice():
     if nab is not None:
         return _store_and_return(nab)
 
-    # ---- 4. Global beginner concept Q&A (works outside the tutorial) --------
+    # ---- 4. Global concept Q&A (works outside the tutorial) -----------------
+    # Catches "what is X" / "explain X" for general Python/CS concepts (variables,
+    # loops, recursion, inheritance, big O, tuples, decorators, ...) BEFORE the
+    # orchestrator, input concierge, conversational-edit, or fuzzy matcher can
+    # mistake them — so a concept question is never run, edited, or sent to a
+    # weird clarification. Code-specific questions ("what does this function do")
+    # were already handled by Ask My Code above; generation ("write a program
+    # that ...") does not match these question forms and still generates.
     concept_kind = concept_qa.classify_concept_question(text)
     if concept_kind:
         # "what does range 3 mean" only answers when the code actually has a range;
@@ -7847,10 +7854,16 @@ def voice():
         if concept_kind != "range" or re.search(r"\brange\s*\(", current_code or ""):
             answer, facts = concept_qa.answer_concept(concept_kind, current_code)
             if answer:
-                grounded = _ground_concept_answer(answer, facts, current_code, text)
+                # Only the short, code-grounded beginner answers are rephrased by
+                # Key 2; general/advanced concept answers are returned verbatim so
+                # the multi-sentence explanation is never truncated.
+                if concept_kind in concept_qa.GROUNDED_KINDS:
+                    message = _ground_concept_answer(answer, facts, current_code, text)
+                else:
+                    message = answer
                 return _store_and_return({
                     "success": True, "action": "deterministic_message",
-                    "message": grounded, "speech": grounded, "heard": text, "concept": concept_kind,
+                    "message": message, "speech": message, "heard": text, "concept": concept_kind,
                 })
 
     pending_clarification = storage.get("pending_orchestrator_clarification")

@@ -450,7 +450,14 @@ def build_input_plan(
         }
 
     if not code_inputs:
-        return {"status": "no_input"}
+        # Honour the "just run" shortcut (req 8) ONLY when the user explicitly
+        # offered values ("run with name Taki and age 16") or asked for samples.
+        # A bare "X is Y" / "what is Z" sentence must never be treated as a run
+        # command on a program with no input() — otherwise asking "what is
+        # recursion" would execute the editor code. Fall through to Q&A instead.
+        if parsed.get("explicit") or parsed.get("sample"):
+            return {"status": "no_input"}
+        return None
 
     # Non-explicit "name is X" forms must match at least one real field, so we
     # never hijack unrelated sentences that happen to contain "is"/"are".

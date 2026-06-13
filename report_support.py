@@ -194,6 +194,7 @@ def describe_program_behavior(code: str) -> List[str]:
     assigns = [n for n in ast.iter_child_nodes(tree)
                if isinstance(n, (ast.Assign, ast.AnnAssign)) and _assign_target_name(n)]
     has_if = any(isinstance(n, ast.If) for n in ast.walk(tree))
+    has_try = any(isinstance(n, (ast.Try, ast.Raise)) for n in ast.walk(tree))
     has_print = any(_call_is(n, "print") for n in ast.walk(tree))
 
     if first_for is not None:
@@ -237,6 +238,9 @@ def describe_program_behavior(code: str) -> List[str]:
 
     if has_if and first_for is None and first_while is None:
         sents.append("It uses an if statement to decide which lines run.")
+
+    if has_try:
+        sents.append("It uses try and except to handle errors without crashing.")
 
     if not sents and has_print:
         sents.append("It prints output to the screen.")

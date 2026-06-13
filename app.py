@@ -6338,9 +6338,13 @@ def _local_conversational_voice_action(
                 "indent_line",
                 line_number=line_number,
                 spoken_confirmation=(
-                    "Maine print statement ko loop ke andar kar diya."
+                    "Maine print line ko loop ke andar kar diya. Python indentation se decide karta "
+                    "hai ki loop kaunsi lines repeat karega, isliye ab har value ke liye chalegi. "
+                    "Ab run bolkar test karein."
                     if is_hinglish else
-                    "I indented the line after the loop."
+                    "I indented the print line so it now runs inside the loop. Python uses indentation "
+                    "to decide which lines the loop repeats, so it will now run for each value. "
+                    "Say run to test it."
                 ),
                 confidence=0.9,
                 source="local",
@@ -6355,9 +6359,12 @@ def _local_conversational_voice_action(
                 "dedent_line",
                 line_number=line_number,
                 spoken_confirmation=(
-                    "Maine print statement ke pehle wali indentation hata di."
+                    "Maine print line se pehle wali indentation hata di, ab woh loop ke andar nahi hai. "
+                    "Code run karne par indentation error aayega jise aap debug kar sakte hain. "
+                    "Run bolkar suniye."
                     if is_hinglish else
-                    "I removed the indentation before the print statement."
+                    "I removed the indentation before the print line, so it is no longer inside the loop. "
+                    "Now running the code will raise an indentation error you can debug. Say run to hear it."
                 ),
                 confidence=0.92,
                 source="local",
@@ -6827,9 +6834,10 @@ def get_voice_telemetry():
 
 
 _ONBOARDING_MESSAGE = (
-    "You can build Python by speaking or typing. Try saying: generate code to "
-    "print the first five even numbers. Then say: run code, explain it, or start "
-    "tutorial. Say more examples for a longer list."
+    "You can build Python by speaking or typing. Try commands like generate code "
+    "to print even numbers, insert print hello, or put a loop in the editor. Then "
+    "run code, say explain it for an explanation, debug errors, or start tutorial "
+    "for a guided walkthrough. Say more examples for a longer list."
 )
 _FIRST_HELP_RE = re.compile(
     r"^\s*(?:what\s+can\s+i\s+do(?:\s+here)?|what\s+can\s+you\s+do|help\s+me\s+start|"

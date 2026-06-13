@@ -32,7 +32,9 @@ vm.runInContext(
   '\nthis.normalizeSpokenCondition = normalizeSpokenCondition;' +
   '\nthis.normalizeSpokenCodeText = normalizeSpokenCodeText;' +
   '\nthis.normalizeSpokenPrintArgument = normalizeSpokenPrintArgument;' +
-  '\nthis.spokenConditionPhrase = spokenConditionPhrase;',
+  '\nthis.spokenConditionPhrase = spokenConditionPhrase;' +
+  '\nthis.formatRunOutputSpeech = formatRunOutputSpeech;' +
+  '\nthis.formatFullOutputSpeech = formatFullOutputSpeech;',
   sandbox
 );
 const N = sandbox;
@@ -171,6 +173,41 @@ check('project file aliases refuse ambiguous matches', () => {
 
 check('project file aliases keep safe fallback for missing files', () => {
   assert.strictEqual(A.resolveProjectFileAlias('missing file', ['main.py']).path, 'missing_file');
+});
+
+// --- Run output speech: every run must be speakable, in one clean utterance ----
+check('single-line output is spoken with the value', () => {
+  assert.strictEqual(N.formatRunOutputSpeech('Taki\n'), 'Program output: Taki.');
+});
+check('multi-line output is read as a comma list, not raw newlines', () => {
+  assert.strictEqual(N.formatRunOutputSpeech('0\n1\n2\n'), 'Program output: 0, 1, 2.');
+});
+check('empty output is stated plainly, never a dangling label', () => {
+  assert.strictEqual(N.formatRunOutputSpeech(''), 'Your program ran successfully but produced no output.');
+  assert.strictEqual(N.formatRunOutputSpeech('   \n  \n'), 'Your program ran successfully but produced no output.');
+});
+check('long output is summarized but stays accessible via read full output', () => {
+  const many = Array.from({ length: 40 }, (_, i) => String(i)).join('\n');
+  const spoken = N.formatRunOutputSpeech(many);
+  assert.ok(/Program produced 40 lines of output/.test(spoken), spoken);
+  assert.ok(/First lines: 0, 1, 2/.test(spoken), spoken);
+  assert.ok(/read full output/.test(spoken), spoken);
+});
+check('a single very long line is summarized with correct singular grammar', () => {
+  const spoken = N.formatRunOutputSpeech('x'.repeat(300));
+  assert.ok(/Program produced 1 line of output/.test(spoken), spoken);  // "1 line", not "1 lines"
+  assert.ok(/It starts with:/.test(spoken), spoken);
+  // Preview is truncated (~160 chars + framing), never the full 300-char dump.
+  assert.ok(!spoken.includes('x'.repeat(200)), 'preview must be truncated, not dump the whole line');
+  assert.ok(spoken.length < 270, 'preview too long: ' + spoken.length);
+  assert.ok(/read full output/.test(spoken), spoken);
+});
+check('read full output reads everything, no summarizing', () => {
+  const many = Array.from({ length: 40 }, (_, i) => String(i)).join('\n');
+  const full = N.formatFullOutputSpeech(many);
+  assert.ok(full.startsWith('Program output: 0, 1, 2,'), full);
+  assert.ok(full.indexOf('39') !== -1, 'full readback must include the last line');
+  assert.strictEqual(N.formatFullOutputSpeech(''), 'No output available.');
 });
 
 console.log('spoken_code.test.js: ' + groups + ' groups passed');

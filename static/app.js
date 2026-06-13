@@ -845,7 +845,7 @@ function stopErrorBeacon() {
 function locateError() { checkSyntaxErrors(); }
 
 // ---------- HELP ----------
-const BEGINNER_COMMAND_GUIDE_SPEECH = 'You can type or speak commands. Voice works well for run, map my code, walk me through this program, open main, run main, and start tutorial. For exact symbols, patterns, quotes, or long prompts, typing is more reliable. Try: print five stars. Make a 5 by 5 star pattern where row 3 has 6 stars. Clear editor. Put a loop from zero to two that prints each number in the editor. Run.';
+const BEGINNER_COMMAND_GUIDE_SPEECH = 'You can build Python by speaking or typing. You can generate code, run it, explain it, debug errors like a teacher, summarize your code structure, make trainer notes, build a beginner lesson, or export your project. Voice works well for run, map my code, walk me through this program, open main, run main, and start tutorial. For exact symbols, patterns, or long prompts, typing is more reliable. Say more examples for a longer list.';
 const BEGINNER_COMMAND_GUIDE_VISIBLE = `You can type or speak natural commands.
 
 Voice works well for:
@@ -1033,8 +1033,13 @@ function speak(text, opts = {}) {
 }
 function speakOutput() {
   if (!ensureNotExecuting(() => speakOutput(), 'speak output')) return;
-  const t = document.getElementById('output').textContent || 'No output available.';
-  speak(t, { forceFull: true });
+  // Prefer the exact last run output (so "read full output" reads everything,
+  // even when the post-run summary was shortened); fall back to the box text.
+  const panel = document.getElementById('output');
+  const raw = (typeof window !== 'undefined' && window.lastRunOutput)
+    ? window.lastRunOutput
+    : (panel ? panel.textContent : '');
+  speak(formatFullOutputSpeech(raw), { forceFull: true });
 }
 function repeatLastSpeech() {
   speak(lastSpokenText || 'There is nothing to repeat yet.', { forceFull: true });
@@ -1942,8 +1947,9 @@ async function runCode(runFile) {
       _previousOutput = _lastOutput;
       _lastOutput = data.output || '';
 
-      speak('Program output:');
-      speak(data.output);
+      // Speak the output as ONE well-formed utterance (comma-joined lines, empty
+      // and long output handled). The visible box above keeps the exact text.
+      speak(formatRunOutputSpeech(data.output));
 
       if (diff && !diff.identical && diff.total_changes > 0) {
         speak(diff.summary);
@@ -5680,6 +5686,40 @@ function spokenConditionPhrase(cond) {
     .replace(/>/g, ' is greater than ')
     .replace(/</g, ' is less than ')
     .replace(/\s+/g, ' ').trim();
+}
+
+// Build ONE clean spoken string for a program's run output. A blind learner
+// cannot read the visible output box, so the output must be spoken — reliably
+// and in one well-formed utterance (two separate speak() calls can collide or
+// be cut off). Multi-line output is read as a comma-separated list; long output
+// is summarized with an offer to hear it all via "read full output". Empty
+// output is stated plainly instead of a dangling "Program output:". Pure
+// (string in, string out); the visible output box always keeps the exact text.
+function _outputPeriod(s) { return /[.!?:]$/.test(String(s || '')) ? '' : '.'; }
+function formatRunOutputSpeech(output) {
+  const lines = String(output == null ? '' : output)
+    .split('\n').map(s => s.trim()).filter(s => s.length > 0);
+  if (lines.length === 0) return 'Your program ran successfully but produced no output.';
+  const joined = lines.join(', ');
+  if (lines.length <= 12 && joined.length <= 240) {
+    return 'Program output: ' + joined + _outputPeriod(joined);
+  }
+  const lineWord = lines.length === 1 ? 'line' : 'lines';
+  const label = lines.length === 1 ? 'It starts with' : 'First lines';
+  const firstFew = lines.slice(0, 3).join(', ');
+  const preview = firstFew.length > 160 ? firstFew.slice(0, 160).replace(/\s+\S*$/, '') + '...' : firstFew;
+  return 'Program produced ' + lines.length + ' ' + lineWord + ' of output. ' +
+    label + ': ' + preview + '. Say read full output to hear everything.';
+}
+
+// Read the FULL output back, exactly and in order (no summarizing), for the
+// explicit "read output" / "read full output" commands.
+function formatFullOutputSpeech(output) {
+  const lines = String(output == null ? '' : output)
+    .split('\n').map(s => s.trim()).filter(s => s.length > 0);
+  if (lines.length === 0) return 'No output available.';
+  const joined = lines.join(', ');
+  return 'Program output: ' + joined + _outputPeriod(joined);
 }
 // ==== SPOKEN-CODE-NORMALIZERS-END ====
 

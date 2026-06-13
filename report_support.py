@@ -77,6 +77,214 @@ def _ordered(found) -> List[str]:
     return [c for c in _CONCEPT_ORDER if c in found]
 
 
+# ---------------------------------------------------------------------------
+# Deterministic "what the program does" explanation (AST-based, beginner-facing)
+# ---------------------------------------------------------------------------
+_NUM_WORDS = {0: "zero", 1: "one", 2: "two", 3: "three", 4: "four", 5: "five",
+              6: "six", 7: "seven", 8: "eight", 9: "nine", 10: "ten"}
+
+
+def _num_word(n: int) -> str:
+    return _NUM_WORDS.get(n, str(n))
+
+
+def _oxford(items: List[str]) -> str:
+    items = [str(i) for i in items]
+    if not items:
+        return ""
+    if len(items) == 1:
+        return items[0]
+    if len(items) == 2:
+        return f"{items[0]} and {items[1]}"
+    return ", ".join(items[:-1]) + ", and " + items[-1]
+
+
+def _flatten_output(out: str, limit: int = 200) -> str:
+    """Join the non-empty lines of program output into a clean spoken phrase."""
+    lines = [ln.strip() for ln in str(out or "").splitlines() if ln.strip()]
+    joined = ", ".join(lines)
+    return (joined[:limit] + "...") if len(joined) > limit else joined
+
+
+def _sentence_end(text: str) -> str:
+    """A terminal period, unless the text already ends with sentence punctuation."""
+    return "" if str(text or "")[-1:] in ".!?:" else "."
+
+
+def _call_is(node: ast.AST, name: str) -> bool:
+    return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            and node.func.id == name)
+
+
+def _assign_target_name(node: ast.AST) -> str:
+    target = None
+    if isinstance(node, ast.Assign) and node.targets:
+        target = node.targets[0]
+    elif isinstance(node, ast.AnnAssign):
+        target = node.target
+    return target.id if isinstance(target, ast.Name) else ""
+
+
+def _for_range_info(node: ast.For):
+    """If the loop iterates a literal range(...), return (start, stop, display)."""
+    it = node.iter
+    if not _call_is(it, "range"):
+        return None
+    args = it.args
+
+    def lit(a):
+        return a.value if isinstance(a, ast.Constant) and isinstance(a.value, int) else None
+
+    if len(args) == 1 and lit(args[0]) is not None:
+        n = lit(args[0])
+        return (0, n, f"range({n})")
+    if len(args) >= 2 and lit(args[0]) is not None and lit(args[1]) is not None:
+        a, b = lit(args[0]), lit(args[1])
+        return (a, b, f"range({a}, {b})")
+    return None
+
+
+def _range_values_phrase(start: int, stop: int) -> str:
+    vals = list(range(start, stop))
+    if not vals:
+        return "no values"
+    if len(vals) <= 6:
+        return _oxford([str(v) for v in vals])
+    return f"{vals[0]}, {vals[1]}, and so on up to {vals[-1]}"
+
+
+def _block_has_print(node: ast.AST) -> bool:
+    return any(_call_is(c, "print") for c in ast.walk(node))
+
+
+def _name_in_print(tree: ast.AST, name: str) -> bool:
+    """True if ``name`` actually appears inside a print(...) call (so we never
+    claim a variable is printed when it is not)."""
+    if not name:
+        return False
+    for node in ast.walk(tree):
+        if _call_is(node, "print"):
+            for arg in ast.walk(node):
+                if isinstance(arg, ast.Name) and arg.id == name:
+                    return True
+    return False
+
+
+def describe_program_behavior(code: str) -> List[str]:
+    """Beginner-facing sentences describing what ``code`` actually does.
+
+    Grounded entirely in the AST: loop bounds, the action a loop repeats,
+    functions, variables, conditionals and printing. Returns [] for empty code
+    and one honest sentence for code that does not parse.
+    """
+    code = code or ""
+    if not code.strip():
+        return []
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return ["The program currently has a syntax error, so it will not run until that line is fixed."]
+
+    sents: List[str] = []
+    first_for = next((n for n in ast.walk(tree) if isinstance(n, ast.For)), None)
+    first_while = next((n for n in ast.walk(tree) if isinstance(n, ast.While)), None)
+    functions = [n for n in ast.iter_child_nodes(tree)
+                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    classes = [n for n in ast.iter_child_nodes(tree) if isinstance(n, ast.ClassDef)]
+    assigns = [n for n in ast.iter_child_nodes(tree)
+               if isinstance(n, (ast.Assign, ast.AnnAssign)) and _assign_target_name(n)]
+    has_if = any(isinstance(n, ast.If) for n in ast.walk(tree))
+    has_print = any(_call_is(n, "print") for n in ast.walk(tree))
+
+    if first_for is not None:
+        info = _for_range_info(first_for)
+        inner_print = _block_has_print(first_for)
+        action = "a print statement" if inner_print else "an action"
+        if info is not None:
+            start, stop, disp = info
+            count = max(0, stop - start)
+            sents.append(f"It uses a for loop to repeat {action} {_num_word(count)} times.")
+            sents.append(f"The loop is controlled by {disp}, so the values are {_range_values_phrase(start, stop)}.")
+        else:
+            sents.append(f"It uses a for loop to repeat {action}.")
+        if inner_print:
+            sents.append("The indented print line is the action the loop repeats.")
+    elif first_while is not None:
+        sents.append("It uses a while loop that repeats an action while its condition stays true.")
+
+    if functions:
+        names = _oxford([f.name for f in functions[:3]])
+        if len(functions) == 1:
+            sents.append(f"It defines a function called {names} that groups steps you can reuse.")
+        else:
+            sents.append(f"It defines functions called {names}.")
+
+    if classes:
+        cnames = _oxford([c.name for c in classes[:3]])
+        if len(classes) == 1:
+            sents.append(f"It defines a class called {cnames}, which bundles related data and methods.")
+        else:
+            sents.append(f"It defines classes called {cnames}.")
+
+    if assigns and first_for is None and not functions and not classes:
+        name = _assign_target_name(assigns[0])
+        if name and _name_in_print(tree, name):
+            sents.append(f"It stores a value in the variable {name} and then prints it.")
+        elif has_print:
+            sents.append(f"It stores a value in the variable {name}, then prints a result.")
+        else:
+            sents.append(f"It stores a value in the variable {name} and uses it later.")
+
+    if has_if and first_for is None and first_while is None:
+        sents.append("It uses an if statement to decide which lines run.")
+
+    if not sents and has_print:
+        sents.append("It prints output to the screen.")
+    if not sents:
+        sents.append("It runs a few simple top-level statements.")
+    return sents
+
+
+def _multifile_behavior(files: Dict[str, str], entry: str) -> List[str]:
+    """How the files of a project fit together (entry point + local imports)."""
+    if not files:
+        return []
+    entry = entry if entry in files else next(iter(sorted(files)), "")
+    sents: List[str] = []
+    if entry:
+        sents.append(f"The entry point is {entry}; start reading there.")
+    entry_code = files.get(entry, "")
+    entry_stem = entry[:-3] if entry.endswith(".py") else entry
+    local = []
+    for path in sorted(files):
+        if not path.endswith(".py"):
+            continue
+        stem = path.rsplit("/", 1)[-1][:-3]
+        if stem and stem != entry_stem and re.search(rf"\b(?:import|from)\s+{re.escape(stem)}\b", entry_code):
+            local.append(stem)
+    if local:
+        sents.append(f"{entry} imports {_oxford(local)} to use their functions, so the files work together as one program.")
+    return sents
+
+
+def _last_output_speech(mem: Optional[Dict[str, Any]]) -> str:
+    """A short spoken phrase about the most recent run result, or ''."""
+    mem = mem or {}
+    ok = mem.get("last_run_ok")
+    err = (mem.get("last_run_error") or "").strip()
+    out = (mem.get("last_run_output") or "").strip()
+    if ok is True and out:
+        flat = _flatten_output(out)
+        return f"The last successful output was {flat}{_sentence_end(flat)}"
+    if ok is False and err:
+        first = err.splitlines()[0][:120]
+        return f"The last run hit an error: {first}{_sentence_end(first)}"
+    if out:
+        flat = _flatten_output(out)
+        return f"The last output was {flat}{_sentence_end(flat)}"
+    return ""
+
+
 def _looks_like_python(path: str) -> bool:
     return path.endswith(".py")
 
@@ -182,11 +390,17 @@ def build_project_report(project_state: Dict[str, Any],
 
     run_instruction = _run_instruction(is_project, entry, files)
     last_run = _last_run_line(mem)
+    last_output_phrase = _last_output_speech(mem)
+
+    if is_project:
+        behavior = _multifile_behavior(files, entry)
+    else:
+        behavior = describe_program_behavior(next(iter(files.values()), ""))
 
     report_md = _render_markdown(title, is_project, file_summaries, all_concepts,
-                                 requirements, run_instruction, last_run)
+                                 requirements, run_instruction, last_run, behavior)
     speech = _render_speech(title, is_project, file_summaries, all_concepts,
-                            run_instruction, verbosity)
+                            run_instruction, verbosity, behavior, last_output_phrase)
 
     return {
         "success": True,
@@ -195,6 +409,7 @@ def build_project_report(project_state: Dict[str, Any],
         "is_project": is_project,
         "files": file_summaries,
         "concepts": all_concepts,
+        "behavior": behavior,
         "requirements": requirements,
         "run_instruction": run_instruction,
         "last_run": last_run,
@@ -204,13 +419,15 @@ def build_project_report(project_state: Dict[str, Any],
 
 
 def _render_markdown(title, is_project, file_summaries, concepts, requirements,
-                     run_instruction, last_run) -> str:
+                     run_instruction, last_run, behavior=None) -> str:
     lines = [f"# {title}", ""]
     if not file_summaries:
         lines.append("There is no code or project to report on yet.")
         return "\n".join(lines)
     kind = "Multi-file project" if is_project else "Single-file program"
     lines += [f"_{kind}, generated by CodeUp from the learner's current project._", ""]
+    if behavior:
+        lines += ["## What this program does", "", " ".join(behavior), ""]
     lines += ["## Files", ""]
     for record in file_summaries:
         concept_note = f" — concepts: {', '.join(record['concepts'])}" if record["concepts"] else ""
@@ -226,16 +443,19 @@ def _render_markdown(title, is_project, file_summaries, concepts, requirements,
 
 
 def _render_speech(title, is_project, file_summaries, concepts, run_instruction,
-                   verbosity: str = "normal") -> str:
+                   verbosity: str = "normal", behavior=None, last_output: str = "") -> str:
     if not file_summaries:
         return "There is no code or project to report on yet. Create or generate some code first."
+    behavior = behavior or []
     if is_project:
         names = ", ".join(r["path"] for r in file_summaries[:6])
-        head = f"{title}. It has {len(file_summaries)} files: {names}."
+        head = f"Project report. This is a multi-file Python project with {len(file_summaries)} files: {names}."
     else:
-        head = f"{title}."
+        head = "Project report. This is a single-file Python program."
     # Concise/expert: keep it to the essentials (what it is + how to run).
     if str(verbosity or "").lower() in ("concise", "expert"):
         return f"{head} {run_instruction}"
-    concept_part = (" It uses " + ", ".join(concepts) + ".") if concepts else ""
-    return f"{head}{concept_part} {run_instruction}"
+    behavior_part = (" " + " ".join(behavior)) if behavior else (
+        (" It uses " + ", ".join(concepts) + ".") if concepts else "")
+    last_part = (" " + last_output) if last_output else ""
+    return f"{head}{behavior_part} {run_instruction}{last_part}"

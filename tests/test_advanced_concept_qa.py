@@ -338,3 +338,24 @@ class TestDoesNotStealCommands:
         d = _vc(text="make a beginner lesson on recursion", client=client, code="")
         assert d.get("concept") is None
         assert d["action"] == "deterministic_message"
+
+
+# =====================================================================
+# Internal sentinels must never leak into the recap / trainer notes
+# =====================================================================
+
+class TestSentinelsDoNotLeak:
+
+    def test_identity_and_unknown_not_recorded_as_concepts(self, client):
+        # Identity / non-code / unknown-concept responses carry an internal
+        # "__...__" marker in `concept`; it must not surface as something the
+        # learner "practised" in trainer notes or the session recap.
+        for t in ["who are you", "what time is it", "what is flarbology",
+                  "explain flarbology", "what is recursion"]:
+            _vc(text=t, client=client)
+        trainer = _vc(text="make trainer notes", client=client)["message"]
+        recap = _vc(text="what did I learn today", client=client)["message"]
+        assert "__" not in trainer, trainer
+        assert "__" not in recap, recap
+        # A genuine concept the learner asked about is still recorded.
+        assert "recursion" in (trainer + recap).lower()

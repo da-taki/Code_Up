@@ -106,6 +106,11 @@ def _flatten_output(out: str, limit: int = 200) -> str:
     return (joined[:limit] + "...") if len(joined) > limit else joined
 
 
+def _sentence_end(text: str) -> str:
+    """A terminal period, unless the text already ends with sentence punctuation."""
+    return "" if str(text or "")[-1:] in ".!?:" else "."
+
+
 def _call_is(node: ast.AST, name: str) -> bool:
     return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
             and node.func.id == name)
@@ -152,6 +157,19 @@ def _block_has_print(node: ast.AST) -> bool:
     return any(_call_is(c, "print") for c in ast.walk(node))
 
 
+def _name_in_print(tree: ast.AST, name: str) -> bool:
+    """True if ``name`` actually appears inside a print(...) call (so we never
+    claim a variable is printed when it is not)."""
+    if not name:
+        return False
+    for node in ast.walk(tree):
+        if _call_is(node, "print"):
+            for arg in ast.walk(node):
+                if isinstance(arg, ast.Name) and arg.id == name:
+                    return True
+    return False
+
+
 def describe_program_behavior(code: str) -> List[str]:
     """Beginner-facing sentences describing what ``code`` actually does.
 
@@ -172,6 +190,7 @@ def describe_program_behavior(code: str) -> List[str]:
     first_while = next((n for n in ast.walk(tree) if isinstance(n, ast.While)), None)
     functions = [n for n in ast.iter_child_nodes(tree)
                  if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    classes = [n for n in ast.iter_child_nodes(tree) if isinstance(n, ast.ClassDef)]
     assigns = [n for n in ast.iter_child_nodes(tree)
                if isinstance(n, (ast.Assign, ast.AnnAssign)) and _assign_target_name(n)]
     has_if = any(isinstance(n, ast.If) for n in ast.walk(tree))
@@ -200,10 +219,19 @@ def describe_program_behavior(code: str) -> List[str]:
         else:
             sents.append(f"It defines functions called {names}.")
 
-    if assigns and first_for is None and not functions:
+    if classes:
+        cnames = _oxford([c.name for c in classes[:3]])
+        if len(classes) == 1:
+            sents.append(f"It defines a class called {cnames}, which bundles related data and methods.")
+        else:
+            sents.append(f"It defines classes called {cnames}.")
+
+    if assigns and first_for is None and not functions and not classes:
         name = _assign_target_name(assigns[0])
-        if has_print:
+        if name and _name_in_print(tree, name):
             sents.append(f"It stores a value in the variable {name} and then prints it.")
+        elif has_print:
+            sents.append(f"It stores a value in the variable {name}, then prints a result.")
         else:
             sents.append(f"It stores a value in the variable {name} and uses it later.")
 
@@ -246,11 +274,14 @@ def _last_output_speech(mem: Optional[Dict[str, Any]]) -> str:
     err = (mem.get("last_run_error") or "").strip()
     out = (mem.get("last_run_output") or "").strip()
     if ok is True and out:
-        return f"The last successful output was {_flatten_output(out)}."
+        flat = _flatten_output(out)
+        return f"The last successful output was {flat}{_sentence_end(flat)}"
     if ok is False and err:
-        return f"The last run hit an error: {err.splitlines()[0][:120]}."
+        first = err.splitlines()[0][:120]
+        return f"The last run hit an error: {first}{_sentence_end(first)}"
     if out:
-        return f"The last output was {_flatten_output(out)}."
+        flat = _flatten_output(out)
+        return f"The last output was {flat}{_sentence_end(flat)}"
     return ""
 
 

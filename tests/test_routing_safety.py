@@ -121,3 +121,26 @@ class TestGenerationRouting:
     ])
     def test_named_function_inserts_are_preserved(self, client, text):
         assert _action(client, text, code="") == "insert_function"
+
+
+# ---------------------------------------------------------------------------
+# 4. Non-code / identity and unsupported-concept questions are demo-safe:
+#    deterministic, never run, never a fuzzy "did you mean ..." confirmation.
+# ---------------------------------------------------------------------------
+
+class TestNonCodeAndUnsupportedAreSafe:
+
+    @pytest.mark.parametrize("text", [
+        "who are you", "what is your name", "what are you", "what time is it",
+        "what day is it", "are you working", "how are you",
+        "what is flarbology", "explain flarbology", "teach me flarbology",
+    ])
+    def test_safe_deterministic_not_run_not_fuzzy(self, client, text):
+        d = client.post("/voice-command", json={"text": text, "code": LOOP}).get_json()
+        assert d["action"] == "deterministic_message", (text, d["action"])
+        assert d["action"] != "run"
+        assert "options" not in d  # not a fuzzy confirm
+        msg = (d.get("message") or "").lower()
+        assert msg  # meaningful, spoken text
+        for junk in ("did you mean", "locate error", "read line enhanced"):
+            assert junk not in msg, (text, junk)

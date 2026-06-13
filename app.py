@@ -7839,7 +7839,21 @@ def voice():
     if nab is not None:
         return _store_and_return(nab)
 
-    # ---- 4. Global concept Q&A (works outside the tutorial) -----------------
+    # ---- 4. Identity / non-code small talk -> safe, scoped response ----------
+    # "who are you", "what is your name", "what time is it", "are you working":
+    # answer plainly and scoped to CodeUp/Python, BEFORE concept Q&A or the fuzzy
+    # matcher, so these never run code, edit code, or hit a "did you mean ..."
+    # confirmation. Checked before concept Q&A so identity forms ("what are you")
+    # are not treated as an unknown concept.
+    non_code_kind = concept_qa.classify_non_code_query(text)
+    if non_code_kind:
+        msg = concept_qa.non_code_answer(non_code_kind)
+        return _store_and_return({
+            "success": True, "action": "deterministic_message",
+            "message": msg, "speech": msg, "heard": text, "concept": non_code_kind,
+        })
+
+    # ---- 4b. Global concept Q&A (works outside the tutorial) ----------------
     # Catches "what is X" / "explain X" for general Python/CS concepts (variables,
     # loops, recursion, inheritance, big O, tuples, decorators, ...) BEFORE the
     # orchestrator, input concierge, conversational-edit, or fuzzy matcher can

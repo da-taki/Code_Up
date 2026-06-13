@@ -135,3 +135,73 @@ class TestReport:
     def test_voice_command_routes_to_report(self, client):
         d = client.post("/voice-command", json={"text": "make a project report"}).get_json()
         assert d["action"] == "project_report"
+
+
+# =====================================================================
+# Code-aware behavioural explanation (Problem 2 — deeper report)
+# =====================================================================
+
+class TestBehaviorExplanation:
+
+    LOOP = "for i in range(3):\n    print(i)\n"
+
+    def test_single_file_loop_report_explains_loop_behavior(self, client):
+        d = client.post("/project-report", json={"code": self.LOOP}).get_json()
+        speech = d["speech"].lower()
+        # Explains what the loop does, not only how to run it.
+        assert "for loop" in speech
+        assert "range(3)" in speech
+        assert "0, 1, and 2" in speech
+        assert "repeat" in speech
+        # The written report carries the same behavioural section.
+        assert "What this program does" in d["report_md"]
+        assert d["behavior"]
+
+    def test_variable_print_report_explains_assignment_and_use(self, client):
+        d = client.post("/project-report", json={"code": 'name = "Asha"\nprint(name)\n'}).get_json()
+        speech = d["speech"].lower()
+        assert "variable name" in speech
+        assert "print" in speech
+
+    def test_function_report_explains_function_role(self, client):
+        d = client.post("/project-report", json={"code": "def greet(n):\n    print(n)\n\ngreet(2)\n"}).get_json()
+        assert "greet" in d["speech"]
+        assert "function" in d["speech"].lower()
+
+    def test_report_speech_mentions_last_output_when_present(self):
+        import session_memory
+        mem = session_memory.new_memory()
+        session_memory.record_run(mem, output="0\n1\n2\n", ran_ok=True)
+        rep = report_support.build_project_report({"is_project": False, "code": self.LOOP}, mem)
+        assert "last successful output was 0, 1, 2" in rep["speech"].lower()
+
+    def test_report_speech_mentions_last_error_when_present(self):
+        import session_memory
+        mem = session_memory.new_memory()
+        session_memory.record_run(mem, error="NameError: name 'x' is not defined", ran_ok=False)
+        rep = report_support.build_project_report({"is_project": False, "code": "print(x)\n"}, mem)
+        assert "error" in rep["speech"].lower()
+
+    def test_multifile_report_explains_file_roles_and_how_they_connect(self, client):
+        project = {"name": "Marks", "files": {
+            "main.py": "from loader import load\nprint(load())\n",
+            "loader.py": "def load():\n    return 42\n",
+        }, "entry": "main.py"}
+        d = client.post("/project-report", json={"project": project}).get_json()
+        md = d["report_md"]
+        # Each file's role is described.
+        assert "loader.py" in md and "main.py" in md
+        # How they work together: the entry point imports the helper module.
+        speech_and_md = (d["speech"] + " " + md).lower()
+        assert "entry point" in speech_and_md
+        assert "loader" in d["speech"].lower()  # local import surfaced in the behaviour
+
+    def test_behavior_does_not_invent_for_plain_statements(self):
+        # No loop/function present -> must not claim one.
+        sents = " ".join(report_support.describe_program_behavior("x = 1\ny = 2\nprint(x + y)\n")).lower()
+        assert "for loop" not in sents
+        assert "function" not in sents
+
+    def test_syntax_error_code_reported_honestly(self):
+        sents = report_support.describe_program_behavior("for i in range(3)\n    print(i)\n")
+        assert any("syntax error" in s.lower() for s in sents)

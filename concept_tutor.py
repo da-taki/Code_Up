@@ -134,6 +134,32 @@ def _practice(facts: Dict[str, Any]) -> str:
     return "Practice idea: change one value and predict the new output before running."
 
 
+def _flatten_output(out: str, limit: int = 160) -> str:
+    lines = [ln.strip() for ln in str(out or "").splitlines() if ln.strip()]
+    joined = ", ".join(lines)
+    return (joined[:limit] + "...") if len(joined) > limit else joined
+
+
+def _last_output_sentence(mem: Optional[Dict[str, Any]]) -> str:
+    """Make the program's most recent result accessible before any practice idea."""
+    mem = mem or {}
+    ok = mem.get("last_run_ok")
+    out = (mem.get("last_run_output") or "").strip()
+    err = (mem.get("last_run_error") or "").strip()
+    if out and ok is not False:
+        return f"The last output was {_flatten_output(out)}."
+    if err and ok is False:
+        return f"Last time it ran it hit an error: {err.splitlines()[0][:100]}."
+    return ""
+
+
+def _readback_suggestion(code: str) -> str:
+    """Suggest line-by-line readback when there is more than one line to hear."""
+    if len([ln for ln in (code or "").splitlines() if ln.strip()]) > 1:
+        return 'You can say "read my code" to hear it line by line.'
+    return ""
+
+
 def _primary_line(facts: Dict[str, Any]) -> Optional[int]:
     if facts["loops"]:
         return facts["loops"][0][1]
@@ -170,17 +196,21 @@ def build_concept_lesson(code: str, session_memory: Optional[Dict[str, Any]] = N
     concepts = list(snap.get("concepts") or [])
     intro = _intro(concepts)
     where = _where_sentences(facts)
+    last_output = _last_output_sentence(session_memory)
+    readback = _readback_suggestion(code)
     prediction = _prediction(facts)
     practice = _practice(facts)
 
+    # Always teach the code first (what it is -> important lines -> last output),
+    # then offer a way to explore it, and only then a prediction + practice idea.
     if verbosity == "concise":
-        parts = [intro] + where[:1] + [prediction]
+        parts = [intro] + where[:1] + [last_output, prediction]
     elif verbosity in ("beginner", "detailed"):
-        parts = [intro] + where + [prediction, practice]
+        parts = [intro] + where + [last_output, readback, prediction, practice]
     elif verbosity == "expert":
         parts = [intro] + where[:1] + [prediction]
     else:  # normal
-        parts = [intro] + where[:2] + [prediction, practice]
+        parts = [intro] + where[:2] + [last_output, readback, prediction, practice]
 
     msg = " ".join(p for p in parts if p)
     return {"action": "deterministic_message", "message": msg, "speech": msg,

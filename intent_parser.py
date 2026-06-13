@@ -343,7 +343,7 @@ class IntentParser:
     # ambient speech ("code for that exam") cannot be misrouted to the LLM.
     GENERATE_CODE_PATTERNS = [
         r"^(?:please\s+)?(?:generate|write|create|make|build)\s+(?:a\s+|some\s+)?(?:python\s+)?code\s+(?:that|which|to|for)\s+(\S+(?:\s+\S+)*)",
-        r"^(?:please\s+)?(?:generate|write|create|make|build)\s+(?:a\s+|some\s+)?(?:python\s+)?(?:program|script|function)\s+(?:that|which|to|for)\s+(\S+(?:\s+\S+)*)",
+        r"^(?:please\s+)?(?:generate|write|create|make|build)\s+(?:a\s+|an\s+|some\s+)?(?:python\s+)?(?:\w+\s+){0,2}(?:program|script|function|class|method)\s+(?:that|which|to|for)\s+(\S+(?:\s+\S+)*)",
         r"^(?:please\s+)?(?:generate|write|create|make|build)\s+(?:a\s+|some\s+)?(?:python\s+)?code\s+for\s+(\S+(?:\s+\S+)*)",
         r"^i\s+want\s+(?:python\s+)?code\s+(?:for|to|that)\s+(\S+(?:\s+\S+)*)",
         r"^(?:please\s+)?(?:generate|write|create|make|build)\s+(?:a\s+|an\s+|some\s+)?(.+\b(?:game|project|app|application|program|script|tool|tests?|pandas|numpy|multiple\s+files|multi-file|split\s+into|csv)\b.*)$",

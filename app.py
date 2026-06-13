@@ -6850,6 +6850,13 @@ _MORE_HELP_RE = re.compile(
     r"more\s+help|all\s+commands|list\s+commands|longer\s+list)\s*$",
     re.IGNORECASE,
 )
+# Relative line navigation: "next line", "previous line", "go to the next line",
+# "read the previous line", "move down a line", etc. Group 1 is next|previous.
+_LINE_NAV_RE = re.compile(
+    r"^\s*(?:go\s+to\s+|move\s+to\s+|read\s+|take\s+me\s+to\s+|go\s+)?"
+    r"(?:the\s+)?(next|previous|prior|down\s+a|up\s+a)\s+line\s*$",
+    re.IGNORECASE,
+)
 _NEW_COMMAND_RE = re.compile(
     r"^\s*(?:make|generate|print|create|put|write|draw|run|fix|clear|open|read|walk|"
     r"map|sonify|start|stop|help|what|why|how|insert|delete|rename|use\s+sample|"
@@ -7762,6 +7769,15 @@ def voice():
             "message": _ONBOARDING_MESSAGE, "speech": _ONBOARDING_MESSAGE,
             "heard": text, "onboarding": True,
         })
+
+    # ---- 2b. Relative line navigation ("next line" / "previous line") -------
+    # Core for non-visual reading. The frontend (nextLine/prevLine) moves and
+    # reads the line; routed here, before the conversational-edit handler, so the
+    # word "line" is not mistaken for an edit and swallowed.
+    _line_nav = _LINE_NAV_RE.match(text)
+    if _line_nav:
+        action = "next_line" if _line_nav.group(1).lower() in ("next", "down a") else "prev_line"
+        return _store_and_return({"success": True, "action": action, "confidence": 0.95, "heard": text})
 
     # ---- 3. Intentional broken-code examples --------------------------------
     broken = _broken_code_request(text)

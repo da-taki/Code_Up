@@ -5696,10 +5696,14 @@ function spokenConditionPhrase(cond) {
 // output is stated plainly instead of a dangling "Program output:". Pure
 // (string in, string out); the visible output box always keeps the exact text.
 function _outputPeriod(s) { return /[.!?:]$/.test(String(s || '')) ? '' : '.'; }
+// The backend substitutes this exact text for a program that printed nothing
+// (app.py /run). The visible panel keeps it; speech states success plainly.
+const _NO_OUTPUT_PLACEHOLDER = 'Program finished with no output.';
 function formatRunOutputSpeech(output) {
-  const lines = String(output == null ? '' : output)
-    .split('\n').map(s => s.trim()).filter(s => s.length > 0);
-  if (lines.length === 0) return 'Your program ran successfully but produced no output.';
+  const raw = String(output == null ? '' : output);
+  if (raw.trim() === _NO_OUTPUT_PLACEHOLDER) return 'Program ran successfully with no printed output.';
+  const lines = raw.split('\n').map(s => s.trim()).filter(s => s.length > 0);
+  if (lines.length === 0) return 'Program ran successfully with no printed output.';
   const joined = lines.join(', ');
   if (lines.length <= 12 && joined.length <= 240) {
     return 'Program output: ' + joined + _outputPeriod(joined);
@@ -5715,8 +5719,9 @@ function formatRunOutputSpeech(output) {
 // Read the FULL output back, exactly and in order (no summarizing), for the
 // explicit "read output" / "read full output" commands.
 function formatFullOutputSpeech(output) {
-  const lines = String(output == null ? '' : output)
-    .split('\n').map(s => s.trim()).filter(s => s.length > 0);
+  const raw = String(output == null ? '' : output);
+  if (raw.trim() === _NO_OUTPUT_PLACEHOLDER) return 'The program finished with no printed output.';
+  const lines = raw.split('\n').map(s => s.trim()).filter(s => s.length > 0);
   if (lines.length === 0) return 'No output available.';
   const joined = lines.join(', ');
   return 'Program output: ' + joined + _outputPeriod(joined);

@@ -359,3 +359,21 @@ class TestSentinelsDoNotLeak:
         assert "__" not in recap, recap
         # A genuine concept the learner asked about is still recorded.
         assert "recursion" in (trainer + recap).lower()
+
+    def test_snake_case_concept_kinds_are_spoken_friendly(self, client):
+        # Internal kinds like "big_o" / "oop" must be recorded as readable labels,
+        # never read aloud verbatim in trainer notes or the recap.
+        for t in ["what is big O", "what is object oriented programming"]:
+            _vc(text=t, client=client)
+        trainer = _vc(text="make trainer notes", client=client)["message"]
+        recap = _vc(text="what did I learn today", client=client)["message"]
+        blob = (trainer + " " + recap).lower()
+        assert "big_o" not in blob              # the raw snake_case key never leaks
+        assert "time complexity" in blob        # the readable label is used instead
+
+    def test_concept_label_maps_kinds(self):
+        assert concept_qa.concept_label("big_o") == "time complexity"
+        assert concept_qa.concept_label("oop") == "object-oriented programming"
+        assert concept_qa.concept_label("recursion") == "recursion"
+        assert concept_qa.concept_label("__identity__") == ""
+        assert concept_qa.concept_label("") == ""

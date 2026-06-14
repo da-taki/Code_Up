@@ -167,6 +167,21 @@ def non_code_answer(kind: str) -> str:
     return _UNKNOWN_CONCEPT_MESSAGE
 
 
+# Spoken-friendly labels for concept KINDS when they are recorded in the recap /
+# trainer notes ("you touched on ..."). Internal snake_case keys like "big_o"
+# must never be read aloud verbatim.
+_CONCEPT_DISPLAY = {"big_o": "time complexity", "oop": "object-oriented programming"}
+
+
+def concept_label(kind: str) -> str:
+    """A spoken-friendly label for a recorded concept kind. Returns '' for the
+    internal sentinels (identity / non-code / unknown) so they are not recorded."""
+    kind = str(kind or "").strip()
+    if not kind or kind.startswith("__"):
+        return ""
+    return _CONCEPT_DISPLAY.get(kind, kind.replace("_", " "))
+
+
 def _weak_command_target(topic: str) -> bool:
     """True when an 'explain X' / 'teach me X' topic is really a command target
     (structure, it, again, this code, ...) rather than an unknown concept."""

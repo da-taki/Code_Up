@@ -204,6 +204,69 @@ _LOOP_GUARD_RE = re.compile(
     r"\b(lesson|exercise|quiz|report|trainer|handoff|story|tutorial|class|function|times)\b",
     re.IGNORECASE,
 )
+_BARE_COUNTING_LOOP_RE = re.compile(
+    r"^(?:a\s+|an\s+|the\s+)?(?:for\s+)?loop\b(?P<tail>.*)$",
+    re.IGNORECASE,
+)
+_LOOP_COMMAND_RE = re.compile(
+    r"^(?:please\s+|hey\s+|ok\s+|okay\s+|alright\s+|can\s+you\s+|could\s+you\s+|would\s+you\s+)*"
+    r"(?:(?:insert|add|put|write|type|make|generate|create|build|give\s+me)\b.*\b(?:for\s+)?loop\b|"
+    r"(?:of\s+)?(?:a\s+|an\s+|the\s+)?(?:for\s+)?loop\b)",
+    re.IGNORECASE,
+)
+_LOOP_OUTPUT_HINT_RE = re.compile(
+    r"\b(first\s+(?:3|three)|(?:3|three)\s+(?:whole\s+)?numbers?|whole\s+numbers?|"
+    r"numbers?|zero\s+to\s+two|0\s+to\s+2|print|prints|prince|trends|friends)\b",
+    re.IGNORECASE,
+)
+_NOISY_LOOP_REPAIRS = (
+    (re.compile(r"\btrends\s+the\s+first\b", re.IGNORECASE), "prints the first"),
+    (re.compile(r"\bthe\s+trends\b", re.IGNORECASE), "that prints"),
+    (re.compile(r"\bprince\s+3\b", re.IGNORECASE), "prints 3"),
+    (re.compile(r"\bfriends\s+zero\s+to\s+two\b", re.IGNORECASE), "prints zero to two"),
+    (re.compile(r"\bof\s+for\s+loop\b", re.IGNORECASE), "a for loop"),
+    (re.compile(r"\bwhole\s+number\b", re.IGNORECASE), "whole numbers"),
+    (re.compile(r"\btrends\b", re.IGNORECASE), "prints"),
+    (re.compile(r"\bprince\b", re.IGNORECASE), "prints"),
+    (re.compile(r"\bfriends\b", re.IGNORECASE), "prints"),
+    (re.compile(r"\bthe\s+prints\b", re.IGNORECASE), "that prints"),
+)
+_HINGLISH_LOOP_ROUTE_RE = re.compile(
+    r"\b(?:karo|banao|hata|andar|bahar|pehle|tak|se|har|kya|hota|hai|ko|ke|"
+    r"mein|taaki|aaye|dikhe)\b",
+    re.IGNORECASE,
+)
+
+
+def repair_noisy_loop_transcript(text: str) -> str:
+    """Repair ASR-damaged loop insert wording without touching non-loop text."""
+    repaired = " ".join(str(text or "").split())
+    if not re.search(r"\b(?:for\s+loop|loop)\b", repaired, re.IGNORECASE):
+        return repaired
+    for pattern, replacement in _NOISY_LOOP_REPAIRS:
+        repaired = pattern.sub(replacement, repaired)
+    repaired = re.sub(r"\s+", " ", repaired).strip()
+    return repaired
+
+
+def looks_like_unclear_loop_command(text: str) -> bool:
+    """True when a loop edit command should clarify instead of raw-inserting."""
+    raw = " ".join(str(text or "").split())
+    if not raw or _LOOP_GUARD_RE.search(raw):
+        return False
+    if re.search(r"\bwhile\s+loop\b", raw, re.IGNORECASE):
+        return False
+    if _HINGLISH_LOOP_ROUTE_RE.search(raw):
+        return False
+    repaired = repair_noisy_loop_transcript(raw)
+    return bool(
+        _LOOP_COMMAND_RE.search(raw)
+        or _LOOP_COMMAND_RE.search(repaired)
+        or (
+            re.search(r"\b(?:for\s+loop|loop)\b", repaired, re.IGNORECASE)
+            and _LOOP_OUTPUT_HINT_RE.search(raw)
+        )
+    )
 
 
 def _loop_bounds(tail: str):
@@ -252,10 +315,22 @@ def build_counting_loop_insert(text: str):
     raw = " ".join(str(text or "").split())
     if not raw or _LOOP_GUARD_RE.search(raw):
         return None
-    m = _COUNTING_LOOP_RE.match(raw)
-    if not m:
-        return None
-    start, count, explicit = _loop_bounds(m.group("tail") or "")
+    repaired = repair_noisy_loop_transcript(raw)
+    m = _COUNTING_LOOP_RE.match(repaired)
+    no_verb_fragment = False
+    if m:
+        tail = m.group("tail") or ""
+    else:
+        m = _BARE_COUNTING_LOOP_RE.match(repaired)
+        if not m:
+            return None
+        tail = m.group("tail") or ""
+        no_verb_fragment = True
+        # "for loop" by itself may be a topic, not a command. Repair no-verb
+        # fragments only when the learner also supplied number/output hints.
+        if not _LOOP_OUTPUT_HINT_RE.search(raw) and not _LOOP_OUTPUT_HINT_RE.search(repaired):
+            return None
+    start, count, explicit = _loop_bounds(tail)
     if start is None:
         return None
     if start == 0:
@@ -265,7 +340,8 @@ def build_counting_loop_insert(text: str):
         python = f"for i in range({start}, {start + count}):\n    print(i)"
         values = list(range(start, start + count))
     values_phrase = _oxford_join([str(v) for v in values])
-    loop_words = "for loop" if explicit else "simple for loop"
+    was_repaired = repaired.lower() != raw.lower()
+    loop_words = "simple for loop" if (not explicit or was_repaired or no_verb_fragment) else "for loop"
     confirmation = f"Inserted a {loop_words} that prints {values_phrase}."
     return python, confirmation
 

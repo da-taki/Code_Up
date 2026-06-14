@@ -7122,12 +7122,11 @@ def _record_voice_memory(mem, text, intent, response):
     action = str(response.get("action") or "")
     session_memory.record_utterance(mem, text, intent or "", action)
     # Track learning features/concepts for the "what did I learn today?" recap.
-    # Internal sentinels (identity / non-code / unknown-concept markers, all
-    # prefixed with "__") are NOT real concepts, so they must never leak into the
-    # recap or trainer notes as something the learner "practised".
-    concept = str(response.get("concept") or "")
-    if concept.startswith("__"):
-        concept = ""
+    # concept_label() drops internal sentinels (identity / non-code / unknown,
+    # prefixed with "__") and maps snake_case kinds to a spoken-friendly label
+    # (e.g. "big_o" -> "time complexity"), so nothing ugly leaks into the recap
+    # or trainer notes as something the learner "practised".
+    concept = concept_qa.concept_label(response.get("concept") or "")
     session_memory.record_activity(mem, action, concept=concept)
     if action == "action_sequence":
         actions = response.get("actions") or []

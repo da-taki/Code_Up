@@ -113,11 +113,10 @@ class TestTutorTeachesBeforePractice:
 
 class TestRoute:
 
-    def test_teach_me_this_code_routes(self, client):
+    def test_teach_me_this_code_routes_to_demo_analyze(self, client):
         d = client.post("/voice-command", json={"text": "teach me this code", "code": LOOP_OK}).get_json()
-        assert d["action"] == "deterministic_message"
-        assert d.get("concept_lesson") is True
-        assert "prediction question" in d["message"].lower()
+        assert d["action"] == "analyze"
+        assert d.get("concept_lesson") is not True
 
     def test_make_a_lesson_from_this_program_routes(self, client):
         d = client.post("/voice-command", json={

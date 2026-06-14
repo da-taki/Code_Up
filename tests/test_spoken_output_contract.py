@@ -76,7 +76,6 @@ class TestDirectContentActions:
         ("what can I do here", {}, "python"),
         ("what is recursion", {}, "recursion"),
         ("who are you", {}, "codeup"),
-        ("teach me this code", {"code": LOOP}, "loop"),
         ("debug this like a teacher", {"code": BAD, "error": INDENT_ERR}, "indent"),
         ("fix the indentation issue", {"code": BAD}, "indent"),
         ("summarize structure", {"code": LOOP}, "loop"),
@@ -196,6 +195,11 @@ class TestRunAndReadbackSpeechWiring:
     def test_read_my_code_is_wired_to_speak(self, app_js):
         assert "action === 'read_code'" in app_js
         assert "readMyCodeAloud()" in app_js
+
+    def test_analyze_alias_is_wired_to_speak(self, client, app_js):
+        assert _vc(client, "teach me this scored", code=LOOP)["action"] == "analyze"
+        assert "action === 'analyze'" in app_js
+        assert "analyzeCode()" in app_js
 
     def test_deterministic_message_dispatch_speaks(self, app_js):
         idx = app_js.index("action === 'deterministic_message'")

@@ -50,15 +50,16 @@ def test_what_can_i_do_here_speaks_useful_help(client):
     assert "say more" in speech or "more examples" in speech
 
 
-def test_teach_me_this_code_explains_actual_loop(client):
-    speech = _spoken(_vc(client, "teach me this code", code=LOOP)).lower()
-    assert speech.startswith("this program uses a for loop")
-    for expected in ("for loop", "range(3)", "0, 1, and 2", "print(i)", "expected output"):
-        assert expected in speech
-    # The loop variable is the REAL one (i), never a hallucinated name like "Alu".
-    assert "i changes each time through the loop" in speech
-    # Speech never opens on the practice idea.
-    assert "practice idea" not in speech.split(".")[0]
+def test_teach_me_this_code_routes_to_analyze_for_demo(client):
+    data = _vc(client, "teach me this code", code=LOOP)
+    assert data["action"] == "analyze"
+    assert data.get("concept_lesson") is not True
+
+
+def test_teach_me_this_scored_routes_to_analyze_for_demo(client):
+    data = _vc(client, "teach me this scored", code=LOOP)
+    assert data["action"] == "analyze"
+    assert data.get("concept_lesson") is not True
 
 
 @pytest.mark.parametrize("text", ["fix this code", "remove error"])

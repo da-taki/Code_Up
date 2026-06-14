@@ -139,10 +139,9 @@ class TestRoute:
         d = client.post("/voice-command", json={
             "text": "debug this like a teacher", "code": LOOP_BAD_INDENT,
             "error": "IndentationError: expected an indented block on line 2"}).get_json()
-        assert d["action"] == "deterministic_message"
-        assert d.get("blind_debugger") is True
-        assert "indentation" in d["message"].lower()
-        assert "give me a bigger hint" in d["next_commands"]
+        assert d["action"] == "conversational_edit"
+        assert d["ai_action"]["action"] == "indent_line"
+        assert "print line needed to be indented" in d["ai_action"]["spoken_confirmation"].lower()
 
     def test_debug_does_not_edit_or_run(self, client):
         d = client.post("/voice-command", json={

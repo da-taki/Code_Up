@@ -43,7 +43,6 @@ def _vc(client, text, code="", error=""):
 SUBSTANTIAL = [
     ("what can I do here", "", "", 80),
     ("summarize structure", LOOP, "", 60),
-    ("teach me this code", LOOP, "", 120),
     ("debug this like a teacher", BAD, "IndentationError: expected an indented block on line 2", 120),
     ("make trainer notes", LOOP, "", 80),
     ("make a beginner lesson on loops", "", "", 120),
@@ -60,6 +59,8 @@ SHORT_OK = [
 # the editor / output box aloud). The backend intentionally returns no payload;
 # the contract is that the dispatcher wires them to a speaking function.
 FRONTEND_SPEECH = [
+    ("teach me this code", "analyze", "analyzeCode()"),
+    ("teach me this scored", "analyze", "analyzeCode()"),
     ("read output", "read_output", "speakOutput()"),
     ("read my code", "read_code", "readMyCodeAloud()"),
 ]
@@ -70,10 +71,12 @@ def test_teaching_actions_speak_the_substance(client, text, code, error, min_len
     d = _vc(client, text, code, error)
     speech = (d.get("speech") or "").strip()
     message = (d.get("message") or "").strip()
+    action_speech = ((d.get("ai_action") or {}).get("spoken_confirmation") or "").strip()
     # A spoken payload must exist (speech, or a message the frontend speaks).
-    assert speech or message, (text, d.get("action"))
+    assert speech or message or action_speech, (text, d.get("action"))
     # And it must carry the core explanation, not a one-line stub.
-    assert len(speech or message) >= min_len, (text, len(speech or message))
+    spoken = speech or message or action_speech
+    assert len(spoken) >= min_len, (text, len(spoken))
     # When a `speech` field is present it must itself be meaningful.
     if speech:
         assert len(speech) >= 40, (text, speech)

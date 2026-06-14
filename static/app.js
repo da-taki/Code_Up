@@ -868,15 +868,20 @@ function stopErrorBeacon() {
 function locateError() { checkSyntaxErrors(); }
 
 // ---------- HELP ----------
-const BEGINNER_COMMAND_GUIDE_SPEECH = 'You can build Python by speaking or typing. You can generate code, run it, explain it, debug errors like a teacher, summarize your code structure, make trainer notes, build a beginner lesson, or export your project. Voice works well for run, map my code, walk me through this program, open main, run main, and start tutorial. For exact symbols, patterns, or long prompts, typing is more reliable. Say more examples for a longer list.';
+const BEGINNER_COMMAND_GUIDE_SPEECH = 'You can build Python by speaking or typing. Main demo commands are generate code, run code, read output, analyze, explain this code to explain it, fix this code to debug, replay mistake, summarize structure, make project report, stop everything, and start tutorial. Voice works well for analyze, run, read output, fix this code, replay mistake, summarize structure, make project report, stop everything, and start tutorial. For exact symbols, patterns, or long prompts, typing is more reliable. Say more examples for a longer list.';
 const BEGINNER_COMMAND_GUIDE_VISIBLE = `You can type or speak natural commands.
 
 Voice works well for:
-run
-map my code
-walk me through this program
-open main
-run main
+generate code
+run code
+read output
+analyze
+explain this code
+fix this code
+replay mistake
+summarize structure
+make project report
+stop everything
 start tutorial
 
 For exact symbols, patterns, quotes, or long prompts, typing is more reliable.
@@ -891,14 +896,18 @@ Beginner flow:
 clear editor
 put a loop from zero to two that prints each number in the editor
 run
-walk me through this program
-What does range three mean?
-map my code
-sonify block
+read output
+analyze
+explain this code
 
 Error recovery:
 remove the indentation before the print statement so I can see the error
-fix the indentation issue
+fix this code
+replay mistake
+
+Project review:
+summarize structure
+make project report
 
 Guided tutorial:
 start tutorial

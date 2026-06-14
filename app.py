@@ -74,6 +74,8 @@ import ask_code
 import trainer_review
 import lesson_builder
 import screen_reader_bridge
+from command_normalization import normalize_command_transcript
+from speech_output import sanitize_speech_text
 
 load_dotenv(override=True)
 
@@ -3097,13 +3099,23 @@ def watch_variable_route():
 # MISTAKE REPLAY / BEFORE-VS-AFTER
 # ==========================
 
-def _save_mistake_snapshot(session_id: str, code: str, error: str, success: bool, output: str = ""):
+def _save_mistake_snapshot(
+    session_id: str,
+    code: str,
+    error: str,
+    success: bool,
+    output: str = "",
+    explanation: str = "",
+):
     """Record code snapshots for mistake replay. Called from /run."""
     with _mistake_snapshots_lock:
         snap = _mistake_snapshots.get(session_id, {})
+        snap["session_id"] = session_id
         if not success and error:
             snap["error_code"] = code
             snap["error_msg"] = error
+            if explanation:
+                snap["error_explanation"] = explanation
             snap["error_timestamp"] = time.time()
         elif success:
             if snap.get("error_code"):
@@ -4110,8 +4122,8 @@ def run_code():
         compile(code, project_run["entry"] if project_run else "<user>", "exec")
     except SyntaxError as e:
         safe_error = _syntax_error_message(e, code)
-        _save_mistake_snapshot(get_session_id(), code, safe_error, success=False)
         explanation = _local_error_explanation(code, safe_error, language=safe(body.get("language"), "en"), beginner=True)
+        _save_mistake_snapshot(get_session_id(), code, safe_error, success=False, explanation=explanation)
         try:
             session_memory.record_run(session_memory.get_memory(get_trace_storage()),
                                       error=safe_error, inputs=inputs, ran_ok=False)
@@ -4293,8 +4305,8 @@ def run_code():
             diff_info = _compute_output_diff(prev_output, output)
 
         if error.strip():
-            _save_mistake_snapshot(get_session_id(), code, error, success=False)
             explanation = explain_error(code, error, language=safe(body.get("language"), "en"))
+            _save_mistake_snapshot(get_session_id(), code, error, success=False, explanation=explanation)
             try:
                 session_memory.record_run(session_memory.get_memory(get_trace_storage()),
                                           error=error, inputs=inputs, ran_ok=False)
@@ -5383,6 +5395,18 @@ def fix():
         return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
     if not code.strip():
         return jsonify({"success": False, "error": "Code cannot be empty"}), 400
+
+    line_number = _unindented_block_body_line(code)
+    if line_number:
+        fixed = _indent_line_in_code(code, line_number)
+        error = f"IndentationError: expected an indented block on line {line_number}"
+        explanation = (
+            f"I indented line {line_number} by four spaces so it belongs inside the block above it. "
+            "Python uses indentation to decide which lines a loop or block repeats. "
+            "The fixed code should now run; say replay mistake to hear the before and after."
+        )
+        _record_fixed_snapshot(code, fixed, error, explanation)
+        return jsonify({"success": True, "code": fixed, "explanation": explanation, "speech": explanation})
 
     if language == "hi":
         system = (
@@ -6842,14 +6866,155 @@ _ONBOARDING_MESSAGE = (
 _FIRST_HELP_RE = re.compile(
     r"^\s*(?:what\s+can\s+i\s+do(?:\s+here)?|what\s+can\s+you\s+do|help\s+me\s+start|"
     r"how\s+do\s+i\s+use\s+this|what\s+should\s+i\s+try|what\s+can\s+i\s+say|"
-    r"where\s+do\s+i\s+start|how\s+does\s+this\s+work)\s*$",
+    r"where\s+do\s+i\s+start|how\s+does\s+this\s+work)\s*[.?!]?\s*$",
     re.IGNORECASE,
 )
 _MORE_HELP_RE = re.compile(
     r"^\s*(?:more\s+examples|show\s+all\s+commands|full\s+help|command\s+list|"
-    r"more\s+help|all\s+commands|list\s+commands|longer\s+list)\s*$",
+    r"more\s+help|all\s+commands|list\s+commands|longer\s+list|say\s+more)\s*[.?!]?\s*$",
     re.IGNORECASE,
 )
+
+
+def _sanitize_voice_response(response: dict) -> dict:
+    """Keep display Markdown intact while making all speech fields TTS-safe."""
+    if not isinstance(response, dict):
+        return response
+    for key in ("speech", "spoken_summary"):
+        if response.get(key):
+            response[key] = sanitize_speech_text(response[key])
+    ai_action = response.get("ai_action")
+    if isinstance(ai_action, dict) and ai_action.get("spoken_confirmation"):
+        ai_action["spoken_confirmation"] = sanitize_speech_text(ai_action["spoken_confirmation"])
+    actions = response.get("actions")
+    if isinstance(actions, list):
+        for action in actions:
+            if isinstance(action, dict) and action.get("spoken_confirmation"):
+                action["spoken_confirmation"] = sanitize_speech_text(action["spoken_confirmation"])
+    return response
+
+
+def _project_state_from_voice_body(body: Dict[str, Any], current_code: str = "") -> Dict[str, Any]:
+    project = body.get("project")
+    if isinstance(project, dict) and isinstance(project.get("files"), dict) and project["files"]:
+        return _report_state_from_body(body)
+    reqs = body.get("requirements")
+    requirements = []
+    if isinstance(reqs, list):
+        requirements = [str(r).strip() for r in reqs if str(r).strip()]
+    elif isinstance(reqs, str):
+        requirements = [ln.strip() for ln in reqs.splitlines() if ln.strip()]
+    return {"is_project": False, "code": current_code or "", "requirements": requirements}
+
+
+def _requirements_from_voice_body(body: Dict[str, Any], current_code: str = "") -> List[str]:
+    reqs = body.get("requirements")
+    if isinstance(reqs, list):
+        return [str(r).strip() for r in reqs if str(r).strip()]
+    if isinstance(reqs, str):
+        return [ln.strip() for ln in reqs.splitlines() if ln.strip()]
+    project = body.get("project")
+    if isinstance(project, dict):
+        project_reqs = project.get("requirements") or (project.get("manifest") or {}).get("requirements")
+        if isinstance(project_reqs, list):
+            return [str(r).strip() for r in project_reqs if str(r).strip()]
+        files = project.get("files")
+        if isinstance(files, dict):
+            for path, content in files.items():
+                if str(path).lower().endswith("requirements.txt"):
+                    return [ln.strip() for ln in str(content or "").splitlines() if ln.strip() and not ln.strip().startswith("#")]
+    lines = [ln.strip() for ln in str(current_code or "").splitlines() if ln.strip()]
+    if lines and all(re.match(r"^[A-Za-z0-9_.-]+(?:[<>=!~]=?.*)?$", ln) for ln in lines):
+        return lines
+    return []
+
+
+def _requirements_explanation(reqs: List[str]) -> dict:
+    if reqs:
+        names = ", ".join(reqs[:8])
+        more = f", and {len(reqs) - 8} more" if len(reqs) > 8 else ""
+        msg = (
+            f"requirements.txt lists the Python packages this project needs: {names}{more}. "
+            "A beginner can think of it as the install list for the project. "
+            "Install them with pip install -r requirements.txt before running the project."
+        )
+    else:
+        msg = (
+            "A requirements.txt file lists the Python packages a project needs, one package per line. "
+            "For example, flask means the project needs Flask installed. "
+            "This project does not show a requirements.txt file yet, so there are no extra dependencies to explain."
+        )
+    return {"success": True, "action": "deterministic_message", "message": msg,
+            "speech": msg, "requirements": reqs, "heard": "explain requirements"}
+
+
+def _unindented_block_body_line(code: str) -> Optional[int]:
+    lines = str(code or "").splitlines()
+    for idx, line in enumerate(lines[:-1], start=1):
+        stripped = line.strip()
+        if not stripped or not stripped.endswith(":"):
+            continue
+        if not re.match(r"^(?:for|while|if|elif|else|def|class|with|try|except|finally)\b", stripped):
+            continue
+        header_indent = len(line) - len(line.lstrip(" "))
+        for next_idx in range(idx, len(lines)):
+            body = lines[next_idx]
+            if not body.strip():
+                continue
+            body_indent = len(body) - len(body.lstrip(" "))
+            if body_indent <= header_indent:
+                return next_idx + 1
+            break
+    return None
+
+
+def _indent_line_in_code(code: str, line_number: int, spaces: int = 4) -> str:
+    lines = str(code or "").splitlines()
+    if not (1 <= line_number <= len(lines)):
+        return code
+    lines[line_number - 1] = (" " * spaces) + lines[line_number - 1].lstrip(" ")
+    suffix = "\n" if str(code or "").endswith("\n") else ""
+    return "\n".join(lines) + suffix
+
+
+def _record_fixed_snapshot(broken: str, fixed: str, error: str, explanation: str) -> None:
+    session_id = get_session_id()
+    with _mistake_snapshots_lock:
+        _mistake_snapshots[session_id] = {
+            "session_id": session_id,
+            "error_code": broken,
+            "error_msg": error,
+            "error_explanation": explanation,
+            "error_timestamp": time.time(),
+            "success_code": fixed,
+            "success_output": "",
+            "success_timestamp": time.time(),
+        }
+
+
+def _deterministic_indentation_repair_command(text: str, code: str) -> Optional[dict]:
+    t = " ".join(str(text or "").lower().strip().rstrip(".!?").split())
+    if t not in {"fix this code", "fix code", "fix this", "fix it", "remove error", "remove the error"}:
+        return None
+    line_number = _unindented_block_body_line(code)
+    if not line_number:
+        return None
+    fixed = _indent_line_in_code(code, line_number)
+    error = f"IndentationError: expected an indented block on line {line_number}"
+    explanation = (
+        f"I indented line {line_number} by four spaces so it belongs inside the block above it. "
+        "Python uses indentation to decide which lines a loop or block repeats. "
+        "Say run to test the fixed code, or say replay mistake to hear what changed."
+    )
+    _record_fixed_snapshot(code, fixed, error, explanation)
+    return _make_conversational_edit_response(
+        "indent_line",
+        line_number=line_number,
+        spoken_confirmation=explanation,
+        confidence=0.96,
+        source="local",
+    )
+
 # Relative line navigation: "next line", "previous line", "go to the next line",
 # "read the previous line", "move down a line", etc. Group 1 is next|previous.
 _LINE_NAV_RE = re.compile(
@@ -7395,7 +7560,7 @@ _RECAP_RE = re.compile(
 )
 
 
-def _sprint1_command(text, mem):
+def _sprint1_command(text, mem, *, project_state=None, verbosity: str = "normal"):
     """Deterministic Sprint-1 commands (export/report/recap/rate/verbosity) or None."""
     t = " ".join(str(text or "").lower().strip().rstrip(".!?").split())
     if not t:
@@ -7421,14 +7586,21 @@ def _sprint1_command(text, mem):
                     "speech": speech, "message": speech, "heard": text}
 
     if _EXPORT_RE.match(t):
-        speech = "Preparing your project for download."
+        state = project_state or {}
+        files = state.get("files") if isinstance(state.get("files"), dict) else None
+        if files:
+            names = ", ".join(list(files.keys())[:4])
+            speech = f"I will export this project with {len(files)} files, including {names}. The download will include safe project files and skip secrets."
+        else:
+            speech = "I will export your current program as a safe ZIP with the code and project handoff files where available."
         return {"success": True, "action": "export_project", "speech": speech,
                 "message": speech, "heard": text}
 
     if _REPORT_RE.match(t):
-        speech = "Building a project report."
+        report = report_support.build_project_report(project_state or {}, mem, verbosity=verbosity)
+        speech = report.get("speech") or "I will build a project report from the current code, concepts, session history, and next steps."
         return {"success": True, "action": "project_report", "speech": speech,
-                "message": speech, "heard": text}
+                "message": speech, "heard": text, "report_preview": report.get("report_md", "")}
 
     if _RECAP_RE.match(t):
         recap = learning_recap.build_recap(mem)
@@ -7530,7 +7702,7 @@ def _sprint2_command(text, code, mem, cursor_line, error_context, mistake_snapsh
                 "message": snap["summary"], "speech": snap["summary"], "structure": snap}
 
     # 2) Error replay (new phrasings; reuses the run snapshots)
-    if _REPLAY_RE.match(t):
+    if _REPLAY_RE.match(t) or t == "replay mistake":
         result = error_replay.from_snapshot(mistake_snapshot)
         return {"success": True, "action": "deterministic_message", "heard": text,
                 "message": result["explanation"], "speech": result["speech"],
@@ -7716,9 +7888,11 @@ def _nab_value_command(command, payload, memory):
 @app.route("/voice-command", methods=["POST"])
 def voice():
     body = safejson()
-    text = _safe_text(body.get("text"), limit=MAX_VOICE_TEXT_SIZE + 1).strip()
-    if len(text) > MAX_VOICE_TEXT_SIZE:
+    raw_text = _safe_text(body.get("text"), limit=MAX_VOICE_TEXT_SIZE + 1).strip()
+    if len(raw_text) > MAX_VOICE_TEXT_SIZE:
         return jsonify({"success": False, "action": "unknown", "error": "Voice command is too long"}), 413
+    command_norm = normalize_command_transcript(raw_text)
+    text = str(command_norm.get("normalized_text") or "").strip()
     current_code = _safe_text(body.get("code"), limit=MAX_CONVERSATIONAL_CONTEXT_SIZE + 1)
     error_context = _safe_text(body.get("error"), limit=MAX_MENTOR_CONTEXT_SIZE + 1)
     language = _safe_text(body.get("language"), "en", limit=20) or "en"
@@ -7748,10 +7922,14 @@ def voice():
 
     def _store_and_return(response_dict, status_code=200):
         """Helper: save action for repeat, record working memory, then return."""
+        if command_norm.get("changed"):
+            response_dict.setdefault("raw_transcript", raw_text)
+            response_dict.setdefault("normalized_text", text)
+        response_dict = _sanitize_voice_response(response_dict)
         with _session_traces_lock:
             storage['last_voice_action'] = (response_dict, status_code)
         try:
-            _record_voice_memory(mem, text, intent, response_dict)
+            _record_voice_memory(mem, raw_text, intent, response_dict)
         except Exception:
             pass
         return jsonify(response_dict), status_code
@@ -7818,11 +7996,16 @@ def voice():
     if variable_response is not None:
         return _store_and_return(variable_response)
 
+    repair_response = _deterministic_indentation_repair_command(text, current_code)
+    if repair_response is not None:
+        return _store_and_return(repair_response)
+
     # ---- 3d. Sprint 1: export / report / recap / speech-rate / verbosity ----
     # Deterministic, whole-utterance commands. Routed before concept Q&A and
     # generation so "what did I learn today" recaps (not a concept answer) and
     # "make a project report" reports (not a new project).
-    sprint1 = _sprint1_command(text, mem)
+    voice_project_state = _project_state_from_voice_body(body, current_code)
+    sprint1 = _sprint1_command(text, mem, project_state=voice_project_state, verbosity=verbosity)
     if sprint1 is not None:
         return _store_and_return(sprint1)
 
@@ -7851,6 +8034,10 @@ def voice():
     }, mem)
     if nab is not None:
         return _store_and_return(nab)
+
+    if re.match(r"^\s*(?:explain|what\s+are|show|read)\s+(?:the\s+)?requirements\s*$", text, re.IGNORECASE):
+        reqs = _requirements_from_voice_body(body, current_code)
+        return _store_and_return(_requirements_explanation(reqs))
 
     # ---- 4. Identity / non-code small talk -> safe, scoped response ----------
     # "who are you", "what is your name", "what time is it", "are you working":
@@ -9736,12 +9923,24 @@ def export_project_route():
     if not files:
         msg = "There is no code or project to export yet. Create or generate some code first."
         return jsonify({"success": False, "needs_content": True, "error": msg, "speech": msg, "message": msg})
+    try:
+        state = _report_state_from_body(body)
+        report = report_support.build_project_report(state, session_memory.get_memory(get_trace_storage()))
+        if report.get("report_md"):
+            files.setdefault("codeup_project_report.md", report["report_md"])
+    except Exception:
+        pass
     result = export_support.prepare_export(files, prefix="codeup_project" if is_project else "codeup_program")
     if not result.get("success"):
         msg = "I could not find anything safe to export."
         return jsonify({"success": False, "error": msg, "speech": msg, "message": msg, "excluded": result.get("excluded", [])})
     export_id = _store_export(get_session_id(), result["filename"], result["bytes"])
-    speech = "Your project is ready to download."
+    names = ", ".join(result["included"][:5])
+    speech = (
+        f"Export ready: {result['filename']} contains {result['file_count']} file"
+        f"{'' if result['file_count'] == 1 else 's'}"
+        f"{': ' + names if names else ''}. The download link is ready."
+    )
     return jsonify({
         "success": True,
         "export_id": export_id,

@@ -185,6 +185,21 @@ const VoiceEngine = (function () {
   let _isSpeaking = false;
   let _narrationAborted = false;
 
+  function sanitizeSpeechText(text) {
+    return String(text || '')
+      .replace(/```[a-zA-Z0-9_-]*\s*/g, ' ')
+      .replace(/```/g, ' ')
+      .replace(/`/g, '')
+      .replace(/(\*\*|__)(.*?)\1/g, '$2')
+      .replace(/(^|\s)([*_])([^*_]+)\2(?=\s|$)/g, '$1$3')
+      .replace(/^\s*[-*+]\s+/gm, '')
+      .replace(/^\s*\d+\.\s+/gm, '')
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+      .replace(/[>#]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
   function speak(text, opts = {}) {
     if (!text || !Config.voiceEnabled) return Promise.resolve();
     if (!('speechSynthesis' in window)) return Promise.resolve();
@@ -196,7 +211,7 @@ const VoiceEngine = (function () {
     }
     _narrationAborted = false;
 
-    const chunks = _semanticSpeechChunks(text);
+    const chunks = _semanticSpeechChunks(sanitizeSpeechText(text));
     if (!chunks.length) return Promise.resolve();
 
     return new Promise(resolve => {

@@ -47,9 +47,18 @@ def _facts(code: str) -> Dict[str, Any]:
         return facts
     for node in ast.walk(tree):
         if isinstance(node, (ast.For, ast.AsyncFor)):
-            facts["loops"].append(("for", node.lineno))
+            target = node.target.id if isinstance(node.target, ast.Name) else "the loop variable"
+            range_stop = None
+            if (isinstance(node.iter, ast.Call) and isinstance(node.iter.func, ast.Name)
+                    and node.iter.func.id == "range" and node.iter.args
+                    and isinstance(node.iter.args[0], ast.Constant)
+                    and isinstance(node.iter.args[0].value, int)):
+                range_stop = node.iter.args[0].value
+            facts["loops"].append({"kind": "for", "line": node.lineno,
+                                   "target": target, "range_stop": range_stop})
         elif isinstance(node, ast.While):
-            facts["loops"].append(("while", node.lineno))
+            facts["loops"].append({"kind": "while", "line": node.lineno,
+                                   "target": "", "range_stop": None})
         elif isinstance(node, ast.If):
             facts["conditions"].append(node.lineno)
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -65,7 +74,7 @@ def _facts(code: str) -> Dict[str, Any]:
             elif fn == "range" and node.args and isinstance(node.args[0], ast.Constant) \
                     and isinstance(node.args[0].value, int):
                 facts["ranges"].append(node.args[0].value)
-    facts["loops"].sort(key=lambda x: x[1])
+    facts["loops"].sort(key=lambda x: x["line"])
     facts["prints"].sort()
     facts["conditions"].sort()
     return facts
@@ -97,11 +106,22 @@ def _intro(concepts: List[str]) -> str:
 def _where_sentences(facts: Dict[str, Any]) -> List[str]:
     out: List[str] = []
     if facts["loops"]:
-        kind, line = facts["loops"][0]
+        loop = facts["loops"][0]
+        kind, line = loop["kind"], loop["line"]
         out.append(f"It uses a {kind} loop on line {line} to repeat an action.")
         later_print = next((p for p in facts["prints"] if p > line), None)
         if later_print:
             out.append(f"The indented print statement on line {later_print} is the action that repeats.")
+        target = loop.get("target") or "the loop variable"
+        stop = loop.get("range_stop")
+        if kind == "for" and stop is not None:
+            values = list(range(stop))
+            values_phrase = ", ".join(str(v) for v in values)
+            out.append(f"range({stop}) gives {values_phrase}.")
+            out.append(f"{target} changes each time through the loop.")
+            if later_print:
+                out.append(f"print({target}) displays the current value.")
+                out.append(f"Expected output is {values_phrase} on separate lines.")
     if facts["functions"]:
         name, line = facts["functions"][0]
         out.append(f"The function {name} on line {line} groups steps you can reuse.")
@@ -115,6 +135,10 @@ def _where_sentences(facts: Dict[str, Any]) -> List[str]:
 
 def _prediction(facts: Dict[str, Any]) -> str:
     if facts["loops"] and facts["prints"]:
+        loop = facts["loops"][0]
+        if loop.get("range_stop") is not None:
+            values = ", ".join(str(v) for v in range(loop["range_stop"]))
+            return f"Prediction question: before you run it, can you say why the output will be {values}?"
         return "Prediction question: what numbers will print before you run it?"
     if facts["prints"]:
         return "Prediction question: what will this program print before you run it?"
@@ -166,7 +190,7 @@ def _readback_suggestion(code: str) -> str:
 
 def _primary_line(facts: Dict[str, Any]) -> Optional[int]:
     if facts["loops"]:
-        return facts["loops"][0][1]
+        return facts["loops"][0]["line"]
     if facts["functions"]:
         return facts["functions"][0][1]
     if facts["assigns"]:
@@ -214,7 +238,7 @@ def build_concept_lesson(code: str, session_memory: Optional[Dict[str, Any]] = N
     elif verbosity == "expert":
         parts = [intro] + where[:1] + [prediction]
     else:  # normal
-        parts = [intro] + where[:2] + [last_output, readback, prediction, practice]
+        parts = [intro] + where[:6] + [last_output, readback, prediction, practice]
 
     msg = " ".join(p for p in parts if p)
     return {"action": "deterministic_message", "message": msg, "speech": msg,

@@ -26,6 +26,16 @@ def _target_label(target: str) -> str:
     return "your screen reader"
 
 
+def _reader_phrase(label: str) -> str:
+    """How to name the reader in the opening line. Never implies CodeUp itself
+    configures NVDA/JAWS — it only makes the code easier to read with them."""
+    if label == "NVDA":
+        return "NVDA or another screen reader"
+    if label == "JAWS":
+        return "JAWS or another screen reader"
+    return "a screen reader like NVDA or JAWS"
+
+
 def _call_name(node: ast.Call) -> str:
     func = node.func
     if isinstance(func, ast.Name):
@@ -135,8 +145,15 @@ def build_screen_reader_bridge(code: str, project_state: Optional[Dict[str, Any]
         vscode = ("Moving to VS Code: open the file, turn on NVDA or JAWS, and use line-by-line "
                   "reading; the structure you learned here maps directly onto what you will hear there.")
 
+    # Opening makes the purpose unambiguous: these are handoff NOTES that make the
+    # code easier to read with a screen reader. CodeUp never configures NVDA/JAWS.
+    opening = "Screen reader handoff notes ready."
+    intent_sentence = (f"This explains the current code in a way that is easier to read with "
+                       f"{_reader_phrase(label)}.")
     parts: List[str] = [
-        f"Screen reader bridge for {label}. Project: {project_name}.",
+        opening,
+        intent_sentence,
+        f"Project: {project_name}.",
         files_sentence,
         f"Current code summary: {structure}",
         errors_sentence,
@@ -158,7 +175,7 @@ def build_screen_reader_bridge(code: str, project_state: Optional[Dict[str, Any]
                      f"files are {helpers}.{reqs}")
 
     if verbosity == "concise":
-        parts = [parts[0], listen, indentation]
+        parts = [opening, intent_sentence, listen, indentation]
         if vscode:
             parts.append(vscode)
     else:

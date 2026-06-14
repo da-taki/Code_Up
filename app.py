@@ -6871,7 +6871,15 @@ _FIRST_HELP_RE = re.compile(
 )
 _MORE_HELP_RE = re.compile(
     r"^\s*(?:more\s+examples|show\s+all\s+commands|full\s+help|command\s+list|"
-    r"more\s+help|all\s+commands|list\s+commands|longer\s+list|say\s+more)\s*[.?!]?\s*$",
+    r"more\s+help|all\s+commands|list\s+commands|longer\s+list)\s*[.?!]?\s*$",
+    re.IGNORECASE,
+)
+# "Say more" continues the last long spoken response (e.g. the project report's
+# next steps). It is distinct from "more examples"/"full help" above so the
+# frontend can resume a stored continuation rather than dump the command list.
+_SAY_MORE_RE = re.compile(
+    r"^\s*(?:say\s+more(?:\s+to\s+(?:continue|hear(?:\s+(?:the\s+)?next\s+steps?)?))?|"
+    r"tell\s+me\s+more|read\s+more|continue\s+reading|go\s+on)\s*[.?!]?\s*$",
     re.IGNORECASE,
 )
 
@@ -7072,6 +7080,24 @@ def _broken_code_request(text):
 def _spoken_insert_response(text, code):
     """Build valid beginner Python for a spoken print/loop insert and return a
     conversational_edit, or None so the existing insert pipeline handles it."""
+    # Simple counting loops first ("insert a for loop", "make a loop that prints
+    # three numbers", "generate a loop that prints 0 to 2", ...). These must
+    # produce a real beginner loop (for i in range(3): print(i)), never the weak
+    # range(0)/pass stub or a brittle exact-command-only match.
+    counting_loop = intent_repair.build_counting_loop_insert(text)
+    if counting_loop is not None:
+        loop_python, loop_confirmation = counting_loop
+        try:
+            compile(loop_python, "<insert>", "exec")
+        except SyntaxError:
+            return None
+        return {
+            "success": True, "action": "conversational_edit",
+            "ai_action": {"action": "append_code", "code": loop_python,
+                          "spoken_confirmation": loop_confirmation},
+            "heard": text, "speech": loop_confirmation, "spoken_code": loop_python,
+        }
+
     content = intent_repair.extract_insert_content(text)
     if not content:
         return None
@@ -7809,10 +7835,11 @@ _TRAINER_REVIEW_RE = re.compile(
 _LESSON_BUILDER_RE = re.compile(
     r"^(?:please\s+)?(?:make|create|build)\b.*\b(?:lesson|exercise)\b", re.IGNORECASE)
 _SR_BRIDGE_RE = re.compile(
-    r"^(?:please\s+)?(?:prepare this for nvda|prepare this for jaws|"
+    r"^(?:please\s+)?(?:make (?:a )?screen reader handoff(?:\s+notes)?|"
+    r"screen reader handoff notes|prepare this for nvda|prepare this for jaws|"
     r"prepare this for (?:a )?screen reader|screen reader bridge|"
     r"explain how this would sound in (?:nvda|jaws|a screen reader)|"
-    r"help me move this to (?:vs ?code|visual studio code)|make a screen reader handoff)$",
+    r"help me move this to (?:vs ?code|visual studio code))$",
     re.IGNORECASE)
 
 
@@ -7954,6 +7981,8 @@ def voice():
     # ---- 2. Short first-help vs. full command list --------------------------
     if _MORE_HELP_RE.match(text):
         return _store_and_return({"success": True, "action": "more_help", "confidence": 0.95})
+    if _SAY_MORE_RE.match(text):
+        return _store_and_return({"success": True, "action": "say_more", "confidence": 0.9, "heard": text})
     if _FIRST_HELP_RE.match(text):
         return _store_and_return({
             "success": True, "action": "deterministic_message",

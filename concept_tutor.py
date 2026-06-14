@@ -80,6 +80,18 @@ def _facts(code: str) -> Dict[str, Any]:
     return facts
 
 
+def _oxford(items: List[str]) -> str:
+    """Join values with an Oxford 'and': [0,1,2] -> '0, 1, and 2'."""
+    items = [str(i) for i in items]
+    if not items:
+        return ""
+    if len(items) == 1:
+        return items[0]
+    if len(items) == 2:
+        return f"{items[0]} and {items[1]}"
+    return ", ".join(items[:-1]) + ", and " + items[-1]
+
+
 def _concepts_phrase(concepts: List[str]) -> str:
     words = [_CONCEPT_WORD.get(c, c) for c in concepts]
     # de-dupe preserving order
@@ -97,7 +109,16 @@ def _concepts_phrase(concepts: List[str]) -> str:
     return ", ".join(ordered[:-1]) + ", and " + ordered[-1]
 
 
-def _intro(concepts: List[str]) -> str:
+def _intro(concepts: List[str], facts: Dict[str, Any]) -> str:
+    """Open with what the program actually uses, grounded in the AST facts, so a
+    loop program starts the lesson with 'This program uses a for loop.'"""
+    loops = facts.get("loops") or []
+    if loops:
+        return f"This program uses a {loops[0]['kind']} loop."
+    if facts.get("functions"):
+        return "This program defines a function."
+    if facts.get("assigns"):
+        return "This program uses variables."
     if not concepts:
         return "This program runs a few simple statements."
     return f"This program is a lesson about {_concepts_phrase(concepts)}."
@@ -108,7 +129,7 @@ def _where_sentences(facts: Dict[str, Any]) -> List[str]:
     if facts["loops"]:
         loop = facts["loops"][0]
         kind, line = loop["kind"], loop["line"]
-        out.append(f"It uses a {kind} loop on line {line} to repeat an action.")
+        out.append(f"The {kind} loop on line {line} repeats an action.")
         later_print = next((p for p in facts["prints"] if p > line), None)
         if later_print:
             out.append(f"The indented print statement on line {later_print} is the action that repeats.")
@@ -116,7 +137,7 @@ def _where_sentences(facts: Dict[str, Any]) -> List[str]:
         stop = loop.get("range_stop")
         if kind == "for" and stop is not None:
             values = list(range(stop))
-            values_phrase = ", ".join(str(v) for v in values)
+            values_phrase = _oxford([str(v) for v in values])
             out.append(f"range({stop}) gives {values_phrase}.")
             out.append(f"{target} changes each time through the loop.")
             if later_print:
@@ -137,7 +158,7 @@ def _prediction(facts: Dict[str, Any]) -> str:
     if facts["loops"] and facts["prints"]:
         loop = facts["loops"][0]
         if loop.get("range_stop") is not None:
-            values = ", ".join(str(v) for v in range(loop["range_stop"]))
+            values = _oxford([str(v) for v in range(loop["range_stop"])])
             return f"Prediction question: before you run it, can you say why the output will be {values}?"
         return "Prediction question: what numbers will print before you run it?"
     if facts["prints"]:
@@ -222,7 +243,7 @@ def build_concept_lesson(code: str, session_memory: Optional[Dict[str, Any]] = N
 
     facts = _facts(code)
     concepts = list(snap.get("concepts") or [])
-    intro = _intro(concepts)
+    intro = _intro(concepts, facts)
     where = _where_sentences(facts)
     last_output = _last_output_sentence(session_memory)
     readback = _readback_suggestion(code)

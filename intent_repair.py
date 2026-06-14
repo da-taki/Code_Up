@@ -172,6 +172,104 @@ def build_insert_python(spoken: str, code: str = "") -> Optional[str]:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Simple counting-loop inserts ("insert a for loop", "make a loop that prints
+# the first 3 whole numbers", "generate a loop that prints 0 to 2", ...)
+# ---------------------------------------------------------------------------
+def _oxford_join(items) -> str:
+    items = [str(i) for i in items]
+    if not items:
+        return ""
+    if len(items) == 1:
+        return items[0]
+    if len(items) == 2:
+        return f"{items[0]} and {items[1]}"
+    return ", ".join(items[:-1]) + ", and " + items[-1]
+
+
+# Insert/generate verb + (article/adjective) + a "(for) loop" object. The loop
+# must be the object — phrasings like "make a beginner lesson on loops" name a
+# lesson, not a loop, and are rejected by _LOOP_GUARD_RE below.
+_COUNTING_LOOP_RE = re.compile(
+    r"^(?:please\s+|hey\s+|ok\s+|okay\s+|alright\s+|can\s+you\s+|could\s+you\s+|would\s+you\s+)*"
+    r"(?:insert|add|put|write|type|make|generate|create|build|give\s+me)\s+"
+    r"(?:a\s+|an\s+|the\s+|me\s+a\s+|me\s+an\s+)?"
+    r"(?:simple\s+|basic\s+|beginner\s+|short\s+|little\s+|quick\s+|small\s+)?"
+    r"(?:for\s+|counting\s+)?loop\b(?P<tail>.*)$",
+    re.IGNORECASE,
+)
+# Words that mean this is NOT a plain counting-loop insert (a lesson/report about
+# loops, or the existing "prints X N times" value-loop) — defer to other routes.
+_LOOP_GUARD_RE = re.compile(
+    r"\b(lesson|exercise|quiz|report|trainer|handoff|story|tutorial|class|function|times)\b",
+    re.IGNORECASE,
+)
+
+
+def _loop_bounds(tail: str):
+    """Read (start, count, explicit) from the part after 'loop'.
+
+    Returns (start, count, explicit) where the loop prints ``count`` integers
+    starting at ``start``; ``explicit`` is True when the learner stated a count
+    or range (vs. a bare "insert a for loop"). Returns (None, None, None) when
+    the tail asks for something other than printed numbers (e.g. a string),
+    so the existing insert pipeline keeps handling it.
+    """
+    low = " ".join(str(tail or "").lower().split())
+    # Drop a trailing "in/into the editor" so a bare loop stays bare.
+    low = re.sub(r"\b(?:in|into|to)\s+(?:the\s+)?editor\b\.?$", "", low).strip()
+    if not low:
+        return 0, 3, False  # bare loop -> a useful default counting loop
+    # "0 to 2" / "zero to two" / "0 through 2" -> inclusive range start..stop.
+    m = re.search(r"\b([a-z0-9-]+)\s+(?:to|through|up\s+to)\s+([a-z0-9-]+)\b", low)
+    if m:
+        a, b = _to_number(m.group(1)), _to_number(m.group(2))
+        if a is not None and b is not None and b >= a:
+            return a, (b - a + 1), True
+    # "first 3 whole numbers" / "three numbers" / "5 natural numbers".
+    m = re.search(r"\b(?:first\s+)?([a-z0-9-]+)\s+(?:whole\s+|natural\s+|counting\s+)?numbers?\b", low)
+    if m:
+        n = _to_number(m.group(1))
+        if n is not None and n > 0:
+            return 0, n, True
+    # Generic "print numbers" / "counting" with no explicit count -> default 3.
+    if re.search(r"\bnumbers?\b|\bcount(?:ing)?\b", low):
+        return 0, 3, True
+    # Tail present but not number-related (e.g. "that prints hello") -> defer.
+    return None, None, None
+
+
+def build_counting_loop_insert(text: str):
+    """Recognise a request for a simple counting loop that prints numbers and
+    return ``(python, confirmation)``, or None to let other handlers take it.
+
+    Handles bare "insert a for loop", "put a for loop in the editor",
+    "add a for loop", "make a loop that prints three numbers",
+    "generate a loop that prints 0 to 2", and
+    "insert loop printing first three whole numbers" — all of which should
+    produce a real beginner loop, never a range(0) / pass stub.
+    """
+    raw = " ".join(str(text or "").split())
+    if not raw or _LOOP_GUARD_RE.search(raw):
+        return None
+    m = _COUNTING_LOOP_RE.match(raw)
+    if not m:
+        return None
+    start, count, explicit = _loop_bounds(m.group("tail") or "")
+    if start is None:
+        return None
+    if start == 0:
+        python = f"for i in range({count}):\n    print(i)"
+        values = list(range(count))
+    else:
+        python = f"for i in range({start}, {start + count}):\n    print(i)"
+        values = list(range(start, start + count))
+    values_phrase = _oxford_join([str(v) for v in values])
+    loop_words = "for loop" if explicit else "simple for loop"
+    confirmation = f"Inserted a {loop_words} that prints {values_phrase}."
+    return python, confirmation
+
+
 _PY_KEYWORDS = {
     "False", "None", "True", "and", "as", "assert", "async", "await", "break",
     "class", "continue", "def", "del", "elif", "else", "except", "finally", "for",

@@ -176,14 +176,20 @@ def _render_lesson(lesson: Dict[str, Any], verbosity: str) -> Tuple[str, str]:
          f"Expected solution: {_speech_solution(lesson['solution'])}"),
         (f"Trainer note: {lesson['trainer_note']}", f"Trainer note: {lesson['trainer_note']}"),
     ]
+    # The trainer note (section 7) is teacher-facing: it stays in the written,
+    # display-only message but is NEVER spoken to the learner. A learner asking
+    # for a lesson should hear the lesson, not coaching notes about themselves —
+    # "make trainer notes" is the separate command for the spoken trainer review.
+    TRAINER_NOTE = 7
     if verbosity == "concise":
-        keep = [0, 1, 2, 6]
+        display_keep = [0, 1, 2, 6]
     elif verbosity == "expert":
-        keep = [0, 1, 2, 6, 7]
+        display_keep = [0, 1, 2, 6, 7]
     else:
-        keep = list(range(len(sections)))
-    message = "\n".join(sections[i][0] for i in keep)
-    speech = " ".join(sections[i][1] for i in keep)
+        display_keep = list(range(len(sections)))
+    speech_keep = [i for i in display_keep if i != TRAINER_NOTE]
+    message = "\n".join(sections[i][0] for i in display_keep)
+    speech = " ".join(sections[i][1] for i in speech_keep)
     return message, speech
 
 

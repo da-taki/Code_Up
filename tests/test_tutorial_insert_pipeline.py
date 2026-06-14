@@ -118,7 +118,12 @@ class TestExistingInsertsPreserved:
         assert d["function_name"] == "greet"
 
     def test_insert_for_loop_keyword(self, client):
-        assert _act(client, "insert a for loop")["action"] == "insert_loop"
+        # "insert a for loop" now builds a real beginner loop (not the old weak
+        # range(0)/pass stub) via the conversational-edit router.
+        d = _act(client, "insert a for loop")
+        assert d["action"] == "conversational_edit"
+        assert d["ai_action"]["code"] == "for i in range(3):\n    print(i)"
+        assert d["ai_action"]["spoken_confirmation"].startswith("Inserted a")
 
     def test_run_still_routes_to_run(self, client):
         assert _act(client, "run", code="print(1)")["action"] == "run"

@@ -184,6 +184,13 @@ const VoiceEngine = (function () {
   let _currentUtterance = null;
   let _isSpeaking = false;
   let _narrationAborted = false;
+  // Generation counter guarding the deferred speechSynthesis.cancel() calls that
+  // cancelSpeech() schedules for the Chrome "stuck speaking" quirk. Each cancel
+  // captures the generation it was scheduled in; a later speak() bumps the
+  // generation so those stale cancels become no-ops instead of silencing the
+  // FIRST chunk of the new response. Without this, cancelAll()+speak() (the
+  // normal command path) only ever leaves the tail of the response audible.
+  let _cancelGeneration = 0;
 
   function sanitizeSpeechText(text) {
     return String(text || '')
@@ -210,6 +217,9 @@ const VoiceEngine = (function () {
       return Promise.resolve();
     }
     _narrationAborted = false;
+    // New narration is starting: invalidate any deferred cancels still pending
+    // from a previous cancelSpeech() so they cannot silence this first chunk.
+    _cancelGeneration++;
 
     const chunks = _semanticSpeechChunks(sanitizeSpeechText(text));
     if (!chunks.length) return Promise.resolve();
@@ -329,15 +339,20 @@ const VoiceEngine = (function () {
 
   function cancelSpeech() {
     _narrationAborted = true;
+    const myGeneration = ++_cancelGeneration;
     // Resolve all pending queue items to prevent promise leaks
     const pending = _narrationQueue.splice(0);
     pending.forEach(item => { if (item.resolve) try { item.resolve(); } catch (e) {} });
     _currentUtterance = null;
     _isSpeaking = false;
     try { window.speechSynthesis.cancel(); } catch (e) {}
-    // Multi-cancel for Chrome quirk
+    // Multi-cancel for Chrome quirk — but ONLY while this cancel is still the
+    // most recent intent. If speak() starts new narration before these fire it
+    // bumps _cancelGeneration, so these become no-ops and never cut off the new
+    // response's first chunk (the "only speaks the end" accessibility bug).
     [50, 150, 300].forEach(delay => {
       setTimeout(() => {
+        if (_cancelGeneration !== myGeneration) return;
         try { if (window.speechSynthesis.speaking) window.speechSynthesis.cancel(); } catch (e) {}
       }, delay);
     });

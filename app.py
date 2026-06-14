@@ -6858,10 +6858,10 @@ def get_voice_telemetry():
 
 
 _ONBOARDING_MESSAGE = (
-    "You can build Python by speaking or typing. Try commands like generate code "
-    "to print even numbers, insert print hello, or put a loop in the editor. Then "
-    "run code, say explain it for an explanation, debug errors, or start tutorial "
-    "for a guided walkthrough. Say more examples for a longer list."
+    "You can build Python by speaking or typing. Try generate code, run code, "
+    "read output, analyze, explain this code to explain it, fix this code to "
+    "debug, replay mistake, summarize structure, make project report, stop "
+    "everything, or start tutorial. Say more examples for a longer list."
 )
 _FIRST_HELP_RE = re.compile(
     r"^\s*(?:what\s+can\s+i\s+do(?:\s+here)?|what\s+can\s+you\s+do|help\s+me\s+start|"
@@ -7000,20 +7000,43 @@ def _record_fixed_snapshot(broken: str, fixed: str, error: str, explanation: str
         }
 
 
-def _deterministic_indentation_repair_command(text: str, code: str) -> Optional[dict]:
+_DEMO_ERROR_FIX_COMMANDS = {
+    "fix this code", "fix code", "fix this", "fix it", "remove error", "remove the error",
+    "debug this like a teacher", "debug like a teacher", "debug this", "explain the error",
+    "help me fix the error",
+}
+
+
+def _deterministic_indentation_repair_command(text: str, code: str, error_context: str = "") -> Optional[dict]:
     t = " ".join(str(text or "").lower().strip().rstrip(".!?").split())
-    if t not in {"fix this code", "fix code", "fix this", "fix it", "remove error", "remove the error"}:
+    if t not in _DEMO_ERROR_FIX_COMMANDS:
         return None
     line_number = _unindented_block_body_line(code)
     if not line_number:
+        if str(error_context or "").strip():
+            return {"success": True, "action": "fix", "heard": text, "confidence": 0.94}
         return None
     fixed = _indent_line_in_code(code, line_number)
     error = f"IndentationError: expected an indented block on line {line_number}"
-    explanation = (
-        f"I indented line {line_number} by four spaces so it belongs inside the block above it. "
-        "Python uses indentation to decide which lines a loop or block repeats. "
-        "Say run to test the fixed code, or say replay mistake to hear what changed."
-    )
+    lines = str(code or "").splitlines()
+    body_text = lines[line_number - 1].strip() if 1 <= line_number <= len(lines) else ""
+    header_text = ""
+    for prev in range(line_number - 2, -1, -1):
+        if lines[prev].strip():
+            header_text = lines[prev].strip()
+            break
+    if body_text.startswith("print") and re.match(r"^(?:for|while)\b", header_text):
+        explanation = (
+            f"The print line needed to be indented inside the loop. I indented line {line_number} "
+            "by four spaces so Python knows the loop should repeat it. Say run to test the fixed "
+            "code, or say replay mistake to hear what changed."
+        )
+    else:
+        explanation = (
+            f"I indented line {line_number} by four spaces so it belongs inside the block above it. "
+            "Python uses indentation to decide which lines a loop or block repeats. "
+            "Say run to test the fixed code, or say replay mistake to hear what changed."
+        )
     _record_fixed_snapshot(code, fixed, error, explanation)
     return _make_conversational_edit_response(
         "indent_line",
@@ -7843,6 +7866,16 @@ _DEBUG_TEACHER_RE = re.compile(
 _CONCEPT_TUTOR_RE = re.compile(
     r"^(?:please\s+)?(?:teach me this code|turn this code into a lesson|explain this like a lesson|"
     r"make a lesson from this program|teach this program step by step)$", re.IGNORECASE)
+_DEMO_ANALYZE_RE = re.compile(
+    r"^(?:please\s+)?(?:"
+    r"analy[sz]e(?:\s+(?:this|(?:this|my|the)\s+code|code))?|"
+    r"explain\s+(?:this|my)\s+code|"
+    r"teach\s+me\s+this\s+(?:code|scored|court|cod)|"
+    r"teach\s+me\s+scored|"
+    r"teach\s+this\s+code"
+    r")$",
+    re.IGNORECASE,
+)
 _TRAINER_REVIEW_RE = re.compile(
     r"^(?:please\s+)?(?:make trainer notes|make teacher notes|make a trainer review|"
     r"summari[sz]e this for a trainer|prepare trainer feedback)$", re.IGNORECASE)
@@ -7924,6 +7957,13 @@ def _nab_value_command(command, payload, memory):
         return {"success": True, "heard": command, "ask_my_code": True, **result}
 
     return None
+
+
+def _demo_analyze_alias_command(command: str) -> Optional[dict]:
+    t = " ".join(str(command or "").lower().strip().rstrip(".!?").split())
+    if not _DEMO_ANALYZE_RE.match(t):
+        return None
+    return {"success": True, "action": "analyze", "heard": command, "confidence": 0.96}
 
 
 @app.route("/voice-command", methods=["POST"])
@@ -8039,7 +8079,7 @@ def voice():
     if variable_response is not None:
         return _store_and_return(variable_response)
 
-    repair_response = _deterministic_indentation_repair_command(text, current_code)
+    repair_response = _deterministic_indentation_repair_command(text, current_code, error_context)
     if repair_response is not None:
         return _store_and_return(repair_response)
 
@@ -8061,6 +8101,10 @@ def voice():
     sprint2 = _sprint2_command(text, current_code, mem, cursor_line, error_context, _snap)
     if sprint2 is not None:
         return _store_and_return(sprint2)
+
+    analyze_alias = _demo_analyze_alias_command(text)
+    if analyze_alias is not None:
+        return _store_and_return(analyze_alias)
 
     # ---- 3f. NAB value sprint: classroom + non-visual learning tools --------
     # Deterministic teacher/learner tools routed after Sprint 1/2 and before the

@@ -316,9 +316,10 @@ class TestDoesNotStealCommands:
     def test_explain_this_program_is_walkthrough(self, client):
         assert _vc(text="explain this program", client=client)["action"] == "walk_through"
 
-    def test_teach_me_this_code_is_concept_tutor(self, client):
+    def test_teach_me_this_code_is_demo_analyze_alias(self, client):
         d = _vc(text="teach me this code", client=client)
-        assert d.get("concept_lesson") is True
+        assert d["action"] == "analyze"
+        assert d.get("concept_lesson") is not True
         assert d.get("concept") is None
 
     def test_print_count_is_ask_my_code(self, client):

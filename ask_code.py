@@ -24,9 +24,15 @@ _NUM = {v: k for k, v in _WORD.items()}
 _ROUTE_PATTERNS = [
     re.compile(r"^ask (?:about )?my code\b"),
     re.compile(r"^answer questions about my code$"),
-    re.compile(r"\bwhat line controls the loop\b"),
+    re.compile(r"\bwhat line controls? the loop\b"),
     re.compile(r"\bwhat controls the loop\b"),
-    re.compile(r"\bwhich line controls the loop\b"),
+    re.compile(r"\bwhich line controls? the loop\b"),
+    re.compile(r"\b(?:what|which) line starts? the loop\b"),
+    re.compile(r"\bwhere is the loop$"),
+    re.compile(r"\bwhere does the loop start$"),
+    re.compile(r"\b(?:explain how|how do).*\bloop\b.*\bcondition\b.*\baverage(?: calculation)?\b.*\bwork together\b"),
+    re.compile(r"\bexplain this program conceptually\b"),
+    re.compile(r"\bexplain how this program works conceptually\b"),
     re.compile(r"\bwhy (?:does|do|is|are).*\bprint\w*\b.*\b(times|twice|thrice|multiple)\b"),
     re.compile(r"\bif i change range\b"),
     re.compile(r"\bchange range\s+\w+\s+to\s+range\b"),
@@ -99,7 +105,7 @@ def _loop_info(code: str) -> List[Dict[str, Any]]:
     tree = _safe_tree(code)
     out: List[Dict[str, Any]] = []
     if tree is None:
-        return out
+        return _source_loop_info(code)
     for node in ast.walk(tree):
         if isinstance(node, (ast.For, ast.AsyncFor, ast.While)):
             rc = None
@@ -112,6 +118,21 @@ def _loop_info(code: str) -> List[Dict[str, Any]]:
                         "kind": "while" if isinstance(node, ast.While) else "for",
                         "range_count": rc})
     out.sort(key=lambda d: d["line"])
+    return out
+
+
+def _source_loop_info(code: str) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for idx, line in enumerate(str(code or "").splitlines(), start=1):
+        text = line.strip()
+        m = re.match(r"^(for|while)\b.*:\s*$", text)
+        if not m:
+            continue
+        rc = None
+        count = re.search(r"\brange\s*\(\s*(\d+)\s*\)", text)
+        if count:
+            rc = int(count.group(1))
+        out.append({"line": idx, "text": text, "kind": m.group(1), "range_count": rc})
     return out
 
 
@@ -198,9 +219,61 @@ def _answer_loop_control(code: str) -> Optional[Dict[str, Any]]:
         return _msg("There is no loop in the current code yet, so nothing controls a loop.")
     lp = loops[0]
     text = lp["text"] or f"the loop on line {lp['line']}"
-    msg = (f"The loop is controlled by line {lp['line']}: {text}. That line decides how many "
-           f"times the indented line runs.")
+    msg = (f"Line {lp['line']} controls or starts the loop. It is: {text}. "
+           "That line decides how many times the indented line runs.")
     return _nav(lp["line"], msg, code)
+
+
+def _is_loop_control_question(q: str) -> bool:
+    return bool(
+        re.search(r"\b(?:what|which) line controls? the loop\b", q)
+        or re.search(r"\b(?:what|which) line starts? the loop\b", q)
+        or re.search(r"\bwhat controls the loop\b", q)
+        or re.search(r"\bwhere is the loop$", q)
+        or re.search(r"\bwhere does the loop start$", q)
+    )
+
+
+def _is_conceptual_program_question(q: str) -> bool:
+    return bool(
+        re.search(r"\b(?:explain how|how do).*\bloop\b.*\bcondition\b.*\baverage(?: calculation)?\b.*\bwork together\b", q)
+        or re.search(r"\bexplain this program conceptually\b", q)
+        or re.search(r"\bexplain how this program works conceptually\b", q)
+    )
+
+
+def _first_average_line(code: str) -> Optional[int]:
+    for idx, line in enumerate(str(code or "").splitlines(), start=1):
+        low = line.lower()
+        if re.search(r"\b(?:average|avg)\b", low):
+            return idx
+        if "/" in low and re.search(r"\b(?:total|sum)\b", low) and re.search(r"\b(?:len|count)\b", low):
+            return idx
+    return None
+
+
+def _answer_conceptual_program(q: str, code: str) -> Optional[Dict[str, Any]]:
+    if not _is_conceptual_program_question(q):
+        return None
+    loops = _loop_info(code)
+    ifs = _if_lines(code)
+    average_line = _first_average_line(code)
+    loop_text = (
+        f"The loop processes each student, starting on line {loops[0]['line']}."
+        if loops else "The loop processes each student one at a time."
+    )
+    condition_text = (
+        f"The condition checks pass/practice on line {ifs[0]} by deciding which branch runs for a mark."
+        if ifs else "The condition checks pass/practice by deciding which branch runs."
+    )
+    average_text = (
+        f"The average summarizes the class on line {average_line} by turning the total marks into one class-level number."
+        if average_line else "The average summarizes the class by turning all marks into one class-level number."
+    )
+    msg = f"{loop_text} {condition_text} {average_text}"
+    if loops:
+        return _nav(loops[0]["line"], msg, code)
+    return _msg(msg)
 
 
 def _answer_function(q: str, code: str) -> Optional[Dict[str, Any]]:
@@ -270,11 +343,11 @@ def answer_code_question(question: str, code: str, session_memory: Optional[Dict
 
     # Dispatch most-specific first.
     for handler in (
+        lambda: _answer_conceptual_program(q, code),
         lambda: _answer_range_change(q, code) if "range" in q else None,
         lambda: _answer_print_count(q, code) if re.search(r"\bprint\w*\b", q)
         and re.search(r"\b(time|times|twice|thrice|multiple)\b", q) else None,
-        lambda: _answer_loop_control(code) if re.search(r"\b(what|which) (line )?(controls|runs) the loop\b", q)
-        or "what line controls the loop" in q or "what controls the loop" in q else None,
+        lambda: _answer_loop_control(code) if _is_loop_control_question(q) else None,
         lambda: _answer_function(q, code) if re.search(r"\bwhat does (?:this|the) function\b", q)
         or re.search(r"\bwhat does the function \w+ do\b", q) or "what does this function do" in q else None,
         lambda: _answer_condition(code) if re.search(r"\bcondition (matter|do|control)", q)

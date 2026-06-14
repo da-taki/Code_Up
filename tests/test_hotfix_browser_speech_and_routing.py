@@ -70,6 +70,16 @@ class TestCountingLoopGeneration:
         "put a for loop in the editor",
         "add a for loop",
     ]
+    NOISY_ASR = [
+        "of for loop the Trends the first 3 whole numbers",
+        "a for loop the prints the first three whole numbers",
+        "insert a loop that prince 3 whole numbers",
+        "make loop friends zero to two",
+        "put for loop numbers 0 to 2",
+        "for loop first 3 whole numbers",
+        "loop the first three numbers",
+        "insert for loop trends first 3 numbers",
+    ]
 
     @pytest.mark.parametrize("text", EXPLICIT + BARE)
     def test_inserts_a_real_beginner_loop_not_a_stub(self, client, text):
@@ -87,6 +97,29 @@ class TestCountingLoopGeneration:
     @pytest.mark.parametrize("text", BARE)
     def test_bare_loop_speaks_simple_for_loop(self, client, text):
         assert _spoken(_vc(client, text)).startswith("Inserted a simple for loop that prints 0, 1, and 2.")
+
+    @pytest.mark.parametrize("text", NOISY_ASR)
+    def test_noisy_asr_loop_commands_repair_before_raw_insert(self, client, text):
+        d = _vc(client, text)
+        assert d["action"] == "conversational_edit", (text, d)
+        assert d["ai_action"]["action"] == "append_code", (text, d)
+        assert d["ai_action"]["code"] == "for i in range(3):\n    print(i)"
+        assert text not in d["ai_action"]["code"]
+        spoken = _spoken(d)
+        assert "loop" in spoken.lower()
+        assert "prints 0, 1, and 2" in spoken
+
+    def test_reported_asr_transcript_speaks_simple_loop_confirmation(self, client):
+        d = _vc(client, "of for loop the Trends the first 3 whole numbers")
+        assert _spoken(d).startswith("Inserted a simple for loop that prints 0, 1, and 2.")
+
+    def test_unclear_loop_command_clarifies_instead_of_raw_insert(self, client):
+        d = _vc(client, "insert a loop that blargs the thing")
+        assert d["action"] == "clarify"
+        assert d["reason"] == "unclear_loop_command"
+        assert "loop command" in _spoken(d).lower()
+        assert d.get("text") != "insert a loop that blargs the thing"
+        assert "ai_action" not in d
 
     def test_loop_phrasings_do_not_shadow_lessons_or_reports(self, client):
         # "make a beginner lesson on loops" must stay a lesson, not become a loop.

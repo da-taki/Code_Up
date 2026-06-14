@@ -7077,6 +7077,16 @@ def _broken_code_request(text):
     return None
 
 
+def _unclear_loop_command_response(text):
+    message = (
+        'I heard a loop command but not clearly. Say "insert a simple loop" '
+        "to insert a loop that prints 0, 1, and 2."
+    )
+    return {"success": True, "action": "clarify", "intent": "clarify",
+            "message": message, "speech": message, "reason": "unclear_loop_command",
+            "needs_clarification": True, "heard": text}
+
+
 def _spoken_insert_response(text, code):
     """Build valid beginner Python for a spoken print/loop insert and return a
     conversational_edit, or None so the existing insert pipeline handles it."""
@@ -7100,9 +7110,13 @@ def _spoken_insert_response(text, code):
 
     content = intent_repair.extract_insert_content(text)
     if not content:
+        if intent_repair.looks_like_unclear_loop_command(text):
+            return _unclear_loop_command_response(text)
         return None
     python = intent_repair.build_insert_python(content, code)
     if not python:
+        if intent_repair.looks_like_unclear_loop_command(text):
+            return _unclear_loop_command_response(text)
         return None
     try:
         compile(textwrap.dedent(python), "<insert>", "exec")

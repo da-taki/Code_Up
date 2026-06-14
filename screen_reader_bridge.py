@@ -103,6 +103,11 @@ def build_screen_reader_bridge(code: str, project_state: Optional[Dict[str, Any]
     verbosity = (verbosity or "normal").strip().lower()
     label = _target_label(target)
     project_files = _project_files(project_state)
+    project_name = "CodeUp project"
+    known_errors = ""
+    if isinstance(project_state, dict):
+        project_name = str(project_state.get("name") or project_state.get("title") or project_name)
+        known_errors = str(project_state.get("known_errors") or project_state.get("error") or "").strip()
 
     if not code.strip() and len(project_files) <= 1:
         msg = "There is no code or project to prepare yet. Try creating or opening a program first."
@@ -114,16 +119,32 @@ def build_screen_reader_bridge(code: str, project_state: Optional[Dict[str, Any]
 
     listen = (f"In {label}, listen carefully for indentation, or use line-by-line reading so you "
               f"hear where each block begins and ends.")
-    keyboard = ("Keyboard steps: move line by line with the arrow keys; after a line that ends in a "
-                "colon, the next line should be indented.")
+    keyboard = ("Keyboard steps: Control Enter runs the code, Escape stops speech, Alt H opens help, "
+                "and arrow keys move line by line; after a line that ends in a colon, the next line should be indented.")
     confusion = ("Common confusion: if you hear an indentation error, go back to the line after the "
                  "colon and check that it is indented.")
+    files_sentence = ""
+    if project_files:
+        files_sentence = "Files: " + ", ".join(project_files[:8]) + "."
+    else:
+        files_sentence = "Files: current editor code, usually saved as main.py."
+    errors_sentence = f"Known errors: {known_errors}." if known_errors else "Known errors: none currently recorded."
+    reading_order = "Suggested reading order: start with the project name, then the file list, then line 1, then follow indentation block by block."
     vscode = ""
     if label == "VS Code":
         vscode = ("Moving to VS Code: open the file, turn on NVDA or JAWS, and use line-by-line "
                   "reading; the structure you learned here maps directly onto what you will hear there.")
 
-    parts: List[str] = [f"Screen reader bridge for {label}: {structure}", listen, indentation, keyboard]
+    parts: List[str] = [
+        f"Screen reader bridge for {label}. Project: {project_name}.",
+        files_sentence,
+        f"Current code summary: {structure}",
+        errors_sentence,
+        listen,
+        indentation,
+        keyboard,
+        reading_order,
+    ]
 
     if len(project_files) > 1:
         entry = ""

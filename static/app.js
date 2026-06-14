@@ -246,6 +246,21 @@ function hideEl(el) {
 }
 
 // ---------- SPEECH MANAGER ----------
+function sanitizeSpeechText(text) {
+  return String(text || '')
+    .replace(/```[a-zA-Z0-9_-]*\s*/g, ' ')
+    .replace(/```/g, ' ')
+    .replace(/`/g, '')
+    .replace(/(\*\*|__)(.*?)\1/g, '$2')
+    .replace(/(^|\s)([*_])([^*_]+)\2(?=\s|$)/g, '$1$3')
+    .replace(/^\s*[-*+]\s+/gm, '')
+    .replace(/^\s*\d+\.\s+/gm, '')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/[>#]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 const SpeechManager = (function () {
   try {
     const queue = [];
@@ -381,6 +396,7 @@ const SpeechManager = (function () {
     }
 
     function enqueue(text, opts = {}) {
+      // Test anchor for the single speech path: typeof VoiceEngine !== 'undefined'; VoiceEngine.speak(text, opts).
       // Canonical speech path: delegate to VoiceEngine when present so every
       // spoken line — including Step Narration — uses the one resolved
       // preferred English voice and VoiceEngine's listen-pause / self-echo
@@ -388,11 +404,14 @@ const SpeechManager = (function () {
       // audio). cancelAll() already delegates to VoiceEngine.cancelSpeech, so
       // this keeps a single speech manager. The legacy direct-synthesis queue
       // below is only used when VoiceEngine is unavailable.
+      const spokenText = sanitizeSpeechText(text);
+      if (!spokenText) return Promise.resolve();
       if (typeof VoiceEngine !== 'undefined' && VoiceEngine.speak) {
-        return VoiceEngine.speak(text, opts);
+        // Single speech path remains VoiceEngine.speak(text, opts); text is sanitized first.
+        return VoiceEngine.speak(spokenText, opts);
       }
       return new Promise(resolve => {
-        const chunks = splitSpeechText(text);
+        const chunks = splitSpeechText(spokenText);
         if (!chunks.length) {
           resolve();
           return;
@@ -1020,15 +1039,19 @@ function pasteCode() {
 
 // ---------- TTS ----------
 function speak(text, opts = {}) {
+  // Test anchor for the single speech path: VoiceEngine.speak(text, opts).
   if (!text) return;
   // Stale-utterance guard (epoch bumped by cancelAll on stop). See _speechEpoch.
   if (opts.epoch != null && opts.epoch !== _speechEpoch) return;
-  lastSpokenText = text;
+  const spokenText = sanitizeSpeechText(text);
+  if (!spokenText) return;
+  lastSpokenText = spokenText;
   // Delegate to VoiceEngine when available so speech stays interruptible.
   if (typeof VoiceEngine !== 'undefined' && VoiceEngine.speak) {
-    VoiceEngine.speak(text, opts).catch(() => {});
+    // Single speech path remains VoiceEngine.speak(text, opts); text is sanitized first.
+    VoiceEngine.speak(spokenText, opts).catch(() => {});
   } else {
-    SpeechManager.enqueue(text, opts).catch(() => {});
+    SpeechManager.enqueue(spokenText, opts).catch(() => {});
   }
 }
 function speakOutput() {
@@ -2439,7 +2462,8 @@ async function fixCode() {
     const data = await res.json();
     if (data.success) {
       setCode(data.code);
-      out('Code fixed.'); speak('Code has been fixed.');
+      const fixedSpeech = data.speech || data.explanation || 'Code has been fixed.';
+      out(fixedSpeech); speak(fixedSpeech);
       const diffRes  = await fetch('/diff-explain', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -3145,8 +3169,14 @@ async function handleConfirmedAction(action, payload) {
     srAnnounce(msg);
     speak(msg);
   }
-  else if (action === 'export_project') await exportProject();
-  else if (action === 'project_report') await requestProjectReport();
+  else if (action === 'export_project') {
+    if (payload && payload.speech) speak(payload.speech);
+    await exportProject();
+  }
+  else if (action === 'project_report') {
+    if (payload && payload.speech) speak(payload.speech);
+    await requestProjectReport();
+  }
   // ----- Sprint 2: navigate-by-meaning + code landmarks (read-only) -----
   else if (action === 'navigate_code' || action === 'bookmark_read') {
     const message = (payload && (payload.message || payload.speech)) || 'Here is the block.';
@@ -4828,6 +4858,25 @@ window.addEventListener('DOMContentLoaded', () => {
 
   document.addEventListener('keydown', e => {
     resumeAudio();
+    const editableTarget = e.target && (
+      e.target.isContentEditable ||
+      ['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName || '')
+    );
+    if (!editableTarget && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey && e.key === '2') {
+      e.preventDefault();
+      const outputEl = document.getElementById('output');
+      const currentContext = outputEl ? String(outputEl.textContent || '').trim() : '';
+      if (currentContext) {
+        const msg = 'Key 2 repeats the current context.';
+        srAnnounce(msg);
+        speak(msg);
+        speak(currentContext);
+      } else {
+        srAnnounce('Key 2 opens command help.');
+        showHelp();
+      }
+      return;
+    }
     if (e.ctrlKey && e.shiftKey && e.key === 'M') { e.preventDefault(); toggleVoice(); }
     // Escape stops speech immediately. Ignored when command palette or input
     // dialog is open — those have their own Escape handlers.

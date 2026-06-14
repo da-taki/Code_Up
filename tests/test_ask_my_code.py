@@ -45,7 +45,7 @@ class TestAnswers:
         r = ask_code.answer_code_question("what line controls the loop", CODE)
         assert r["action"] == "navigate_code"
         assert r["line"] == 2
-        assert "line 2" in r["message"]
+        assert "Line 2 controls or starts the loop." in r["message"]
 
     def test_why_print_three_times(self):
         r = ask_code.answer_code_question("why does this print three times", CODE)

@@ -183,8 +183,14 @@ check('multi-line output is read as a comma list, not raw newlines', () => {
   assert.strictEqual(N.formatRunOutputSpeech('0\n1\n2\n'), 'Program output: 0, 1, 2.');
 });
 check('empty output is stated plainly, never a dangling label', () => {
-  assert.strictEqual(N.formatRunOutputSpeech(''), 'Your program ran successfully but produced no output.');
-  assert.strictEqual(N.formatRunOutputSpeech('   \n  \n'), 'Your program ran successfully but produced no output.');
+  assert.strictEqual(N.formatRunOutputSpeech(''), 'Program ran successfully with no printed output.');
+  assert.strictEqual(N.formatRunOutputSpeech('   \n  \n'), 'Program ran successfully with no printed output.');
+  // The backend's no-output placeholder is spoken as a clean success message,
+  // not "Program output: Program finished with no output."
+  assert.strictEqual(N.formatRunOutputSpeech('Program finished with no output.'),
+    'Program ran successfully with no printed output.');
+  assert.strictEqual(N.formatFullOutputSpeech('Program finished with no output.'),
+    'The program finished with no printed output.');
 });
 check('long output is summarized but stays accessible via read full output', () => {
   const many = Array.from({ length: 40 }, (_, i) => String(i)).join('\n');
@@ -192,6 +198,10 @@ check('long output is summarized but stays accessible via read full output', () 
   assert.ok(/Program produced 40 lines of output/.test(spoken), spoken);
   assert.ok(/First lines: 0, 1, 2/.test(spoken), spoken);
   assert.ok(/read full output/.test(spoken), spoken);
+});
+check('unicode output is spoken without crashing', () => {
+  assert.strictEqual(N.formatRunOutputSpeech('hello नमस्ते'),
+    'Program output: hello नमस्ते.');
 });
 check('a single very long line is summarized with correct singular grammar', () => {
   const spoken = N.formatRunOutputSpeech('x'.repeat(300));

@@ -6917,11 +6917,18 @@ def _spoken_insert_response(text, code):
         compile(textwrap.dedent(python), "<insert>", "exec")
     except SyntaxError:
         return None
-    speech = "Inserting the line." if "\n" not in python else "Inserting the loop."
+    # The frontend speaks ai_action.spoken_confirmation, so the learner hears what
+    # was inserted (not just "I applied that edit.").
+    flat = " ".join(python.replace("\n", " ").split())
+    if "\n" in python:
+        confirmation = "I added a loop to the editor. Say run to see what it prints."
+    else:
+        nxt = " Say run to see the output." if "print(" in python else ""
+        confirmation = f"I added {flat} to the editor.{nxt}"
     return {
         "success": True, "action": "conversational_edit",
-        "ai_action": {"action": "append_code", "code": python},
-        "heard": text, "speech": speech, "spoken_code": python,
+        "ai_action": {"action": "append_code", "code": python, "spoken_confirmation": confirmation},
+        "heard": text, "speech": confirmation, "spoken_code": python,
     }
 
 
@@ -6952,9 +6959,10 @@ def _spoken_variable_response(text, code, mem, intent):
         compile(python, "<insert>", "exec")
     except SyntaxError:
         return None
+    confirmation = f"I added {' '.join(python.split())} to the editor."
     return {"success": True, "action": "conversational_edit",
-            "ai_action": {"action": "append_code", "code": python},
-            "heard": text, "speech": "Inserting the variable.", "spoken_code": python}
+            "ai_action": {"action": "append_code", "code": python, "spoken_confirmation": confirmation},
+            "heard": text, "speech": confirmation, "spoken_code": python}
 
 
 def _route_repaired_intent(text, code, allow_ai=False):

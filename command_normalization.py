@@ -11,6 +11,15 @@ from typing import Dict
 
 
 _REPLACEMENTS = (
+    # Misheard stop commands. ASR often drops the leading "s" of "stop" or hears
+    # "listing"/"listen" for "listening". These are safety-critical (they silence
+    # runaway speech / mic), so we repair them before intent parsing. The \btop
+    # boundary never matches the "top" inside "stop", so "stop listening" is left
+    # untouched.
+    (re.compile(r"\btop\s+everything\b", re.IGNORECASE), "stop everything"),
+    (re.compile(r"\btop\s+listening\b", re.IGNORECASE), "stop listening"),
+    (re.compile(r"\bstop\s+listing\b", re.IGNORECASE), "stop listening"),
+    (re.compile(r"\bstop\s+listen\b", re.IGNORECASE), "stop listening"),
     (re.compile(r"\bleast\s+bookmarks?\b", re.IGNORECASE), "list bookmarks"),
     (re.compile(r"\bmakeup\s+project\s+report\b", re.IGNORECASE), "make a project report"),
     (re.compile(r"\brequriements\b", re.IGNORECASE), "requirements"),

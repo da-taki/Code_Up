@@ -7,6 +7,10 @@ let audioCtx = null;
 let snippetsCache = [];
 let pendingConfirm = null;
 let lastSpokenText = null;
+// Continuation text spoken when the learner says "say more" after a long
+// response (e.g. the project report's next steps). Set by the response that is
+// summarised, consumed once, then cleared. See sayMore() / setSayMoreContinuation().
+let _sayMoreContinuation = '';
 
 // Per-tab unique ID so quiz/bug-challenge state cannot bleed across tabs.
 // All transient interactive state is scoped under window._tabState[_tabId].
@@ -903,7 +907,11 @@ Multi-file project:
 create a quiz game split into multiple files
 read project files
 open main
-run main`;
+run main
+
+Screen reader handoff:
+make screen reader handoff notes
+(also: prepare this for NVDA)`;
 
 async function showHelp() {
   if (!ensureNotExecuting(() => showHelp(), 'show help')) return;
@@ -982,6 +990,11 @@ UTILITIES:
 - "say that again" — repeat last speech
 - "pause voice" — keep mic open but ignore commands
 - "resume voice" — start listening again
+
+SCREEN READER HANDOFF:
+- "make screen reader handoff notes" — explains the current code so it is easier
+  to read with NVDA, JAWS, or another screen reader (also: "prepare this for NVDA")
+- "make a project report" — a teacher-style summary of the project
 
 KEYBOARD:
 - Escape: Stop speech
@@ -1066,6 +1079,27 @@ function speakOutput() {
 }
 function repeatLastSpeech() {
   speak(lastSpokenText || 'There is nothing to repeat yet.', { forceFull: true });
+}
+
+// Store the spoken continuation for the next "say more". Sanitized so no raw
+// Markdown reaches TTS. Pass a falsy value to clear it.
+function setSayMoreContinuation(text) {
+  _sayMoreContinuation = text ? sanitizeSpeechText(text) : '';
+}
+
+// "Say more" — continue the last long response from where it left off. If there
+// is nothing queued to continue, fall back to the full command list so the
+// learner still gets help.
+function sayMore() {
+  if (_sayMoreContinuation) {
+    const more = _sayMoreContinuation;
+    _sayMoreContinuation = '';
+    out(more);
+    speak(more);
+    srAnnounce('Continuing.');
+  } else {
+    showFullHelp();
+  }
 }
 
 function buildVoiceCommandPayload(text, source = 'typed') {
@@ -1186,7 +1220,10 @@ async function requestProjectReport() {
     const data = await res.json();
     const reportText = data.report_md || data.speech || 'No report available.';
     out(reportText);
+    // Speak the learner-safe summary from the beginning; stash the next-steps
+    // continuation for "say more". The full markdown stays in the output box.
     speak(data.speech || 'Here is your project report.', { epoch });
+    setSayMoreContinuation(data.speech_more || '');
     srAnnounce('Project report ready');
   } catch (e) {
     console.error(e);
@@ -2666,7 +2703,11 @@ function clearEditor() {
   _autosaveLastCode = '';
   setCode('');
   out('Editor cleared.');
-  speak('Editor cleared. Previous code erased.');
+  // Spoken confirmation + screen-reader status. setCode('') cancels prior
+  // narration; the VoiceEngine cancel-generation guard lets this line still be
+  // heard from the start (it is not killed by the deferred cancels).
+  speak('Editor cleared.');
+  srAnnounce('Editor cleared.');
 }
 
 function deleteLine(line) {
@@ -3133,13 +3174,16 @@ async function handleConfirmedAction(action, payload) {
   else if (action === 'analyze_deep') await analyzeDeep();
   else if (action === 'fix')         await fixCode();
   else if (action === 'stop_everything') {
+    // "Stop everything" silences speech AND stops the microphone (issue: a bare
+    // "stop everything" used to leave the mic listening).
+    if (typeof _stepNarrationJob !== 'undefined' && _stepNarrationJob) { _stepNarrationJob.cancelled = true; }
+    stopListeningNow();
     SpeechManager.cancelAll();
     SonificationManager.clearAll();
     ErrorBeaconManager.stop();
-    if (typeof _stepNarrationJob !== 'undefined' && _stepNarrationJob) { _stepNarrationJob.cancelled = true; }
     // Preserve the last program output/error in the output box — only announce
     // the stop via the status/ARIA region so the visible result is never lost.
-    srAnnounce('Stopped.');
+    srAnnounce('Stopped listening and speech.');
     SonificationManager.playTone(400, 0.08, 0.08);
   }
   else if (action === 'speak')       speakOutput();
@@ -3174,9 +3218,11 @@ async function handleConfirmedAction(action, payload) {
     await exportProject();
   }
   else if (action === 'project_report') {
-    if (payload && payload.speech) speak(payload.speech);
+    // requestProjectReport() owns the speech (concise summary + "say more"
+    // continuation); speaking payload.speech here too would double-speak it.
     await requestProjectReport();
   }
+  else if (action === 'say_more') sayMore();
   // ----- Sprint 2: navigate-by-meaning + code landmarks (read-only) -----
   else if (action === 'navigate_code' || action === 'bookmark_read') {
     const message = (payload && (payload.message || payload.speech)) || 'Here is the block.';
@@ -4333,6 +4379,20 @@ function markVoiceListeningOff() {
   setVoiceButtonOff();
 }
 
+// Stop microphone recognition immediately (both the VoiceEngine recognizer and
+// the legacy one) WITHOUT speaking and WITHOUT touching the editor or output.
+// Shared by the Key 2 recovery key and the "stop everything" command.
+function stopListeningNow() {
+  try {
+    if (typeof VoiceEngine !== 'undefined' && VoiceEngine.VoiceInput &&
+        (VoiceEngine.VoiceInput.isActive() || VoiceEngine.VoiceInput.isPaused())) {
+      VoiceEngine.VoiceInput.stop();
+    }
+  } catch (e) {}
+  try { if (recognition) recognition.stop(); } catch (e) {}
+  markVoiceListeningOff();
+}
+
 function toggleVoice() {
   // Use VoiceEngine if available
   if (typeof VoiceEngine !== 'undefined' && VoiceEngine.VoiceInput) {
@@ -4605,10 +4665,10 @@ function pauseVoiceRecognition() {
   const offLang = getLanguage();
   const offMsg = offLang === 'hi'
     ? 'Voice off kar diya. Jab ready ho, Voice on kar sakte ho.'
-    : 'Voice off. I will not listen until you turn Voice on again.';
+    : 'Listening stopped. I will not listen until you turn Voice on again.';
   out(offMsg);
   speak(offMsg);
-  srAnnounce('Voice off');
+  srAnnounce('Listening stopped');
   _debugLog('Voice: Manually off');
   return;
   if (!isListening) { speak('Voice control is not active.'); return; }
@@ -4864,17 +4924,18 @@ window.addEventListener('DOMContentLoaded', () => {
     );
     if (!editableTarget && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey && e.key === '2') {
       e.preventDefault();
-      const outputEl = document.getElementById('output');
-      const currentContext = outputEl ? String(outputEl.textContent || '').trim() : '';
-      if (currentContext) {
-        const msg = 'Key 2 repeats the current context.';
-        srAnnounce(msg);
-        speak(msg);
-        speak(currentContext);
-      } else {
-        srAnnounce('Key 2 opens command help.');
-        showHelp();
-      }
+      // Key 2 is the recovery / panic key. It stops active listening and speech,
+      // clears any queued speech, and leaves the editor content untouched. This
+      // is the reliable escape hatch when ASR mishears a stop command such as
+      // "top listening" — the user can always press 2.
+      if (typeof _stepNarrationJob !== 'undefined' && _stepNarrationJob) _stepNarrationJob.cancelled = true;
+      stopListeningNow();
+      SpeechManager.cancelAll();   // stops current speech AND clears the queue
+      SonificationManager.clearAll();
+      ErrorBeaconManager.stop();
+      const msg = 'Stopped listening and speech. Editor unchanged.';
+      srAnnounce(msg);             // silent screen-reader status (always)
+      speak(msg);                  // short spoken confirmation (survives the cancel)
       return;
     }
     if (e.ctrlKey && e.shiftKey && e.key === 'M') { e.preventDefault(); toggleVoice(); }

@@ -52,8 +52,13 @@ def test_what_can_i_do_here_speaks_useful_help(client):
 
 def test_teach_me_this_code_explains_actual_loop(client):
     speech = _spoken(_vc(client, "teach me this code", code=LOOP)).lower()
-    for expected in ("for loop", "range(3)", "0, 1, 2", "i changes", "print(i)", "expected output"):
+    assert speech.startswith("this program uses a for loop")
+    for expected in ("for loop", "range(3)", "0, 1, and 2", "print(i)", "expected output"):
         assert expected in speech
+    # The loop variable is the REAL one (i), never a hallucinated name like "Alu".
+    assert "i changes each time through the loop" in speech
+    # Speech never opens on the practice idea.
+    assert "practice idea" not in speech.split(".")[0]
 
 
 @pytest.mark.parametrize("text", ["fix this code", "remove error"])
@@ -82,10 +87,18 @@ def test_prepare_for_nvda_is_accessibility_summary_not_generation(client):
     data = _vc(client, "prepare this for NVDA", code=LOOP)
     assert data["action"] == "deterministic_message"
     speech = _spoken(data).lower()
-    assert "screen reader bridge for nvda" in speech
+    assert speech.startswith("screen reader handoff notes ready")
+    assert "easier to read with nvda or another screen reader" in speech
     assert "files:" in speech
     assert "keyboard steps" in speech
     assert data["action"] != "generate_code"
+
+
+def test_make_screen_reader_handoff_notes_is_alias(client):
+    data = _vc(client, "make screen reader handoff notes", code=LOOP)
+    assert data["action"] == "deterministic_message"
+    assert data.get("screen_reader_bridge") is True
+    assert _spoken(data).lower().startswith("screen reader handoff notes ready")
 
 
 @pytest.mark.parametrize("text", ["make a project report", "makeup project report"])
@@ -123,5 +136,7 @@ def test_frontend_has_tts_sanitizer_and_key_2_binding():
     assert "function sanitizeSpeechText" in src
     assert "VoiceEngine.speak(spokenText" in src
     assert "e.key === '2'" in src
-    assert "Key 2 repeats the current context" in src
+    # Key 2 is now the recovery / panic key (stop listening + speech, keep editor).
+    assert "Stopped listening and speech. Editor unchanged." in src
+    assert "Key 2 repeats the current context" not in src
 

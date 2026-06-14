@@ -410,9 +410,9 @@ def build_project_report(project_state: Dict[str, Any],
     report_md = _render_markdown(title, is_project, file_summaries, all_concepts,
                                  requirements, run_instruction, last_run, behavior,
                                  session_features, errors_fixed, next_step)
-    speech = _render_speech(title, is_project, file_summaries, all_concepts,
-                            run_instruction, verbosity, behavior, last_output_phrase,
-                            session_features, errors_fixed, next_step)
+    speech, speech_more = _render_speech(title, is_project, file_summaries, all_concepts,
+                                         run_instruction, verbosity, behavior, last_output_phrase,
+                                         session_features, errors_fixed, next_step)
 
     return {
         "success": True,
@@ -430,6 +430,7 @@ def build_project_report(project_state: Dict[str, Any],
         "next_step": next_step,
         "report_md": report_md,
         "speech": speech,
+        "speech_more": speech_more,
     }
 
 
@@ -464,26 +465,41 @@ def _render_markdown(title, is_project, file_summaries, concepts, requirements,
 
 def _render_speech(title, is_project, file_summaries, concepts, run_instruction,
                    verbosity: str = "normal", behavior=None, last_output: str = "",
-                   session_features=None, errors_fixed: str = "", next_step: str = "") -> str:
+                   session_features=None, errors_fixed: str = "", next_step: str = ""):
+    """Return ``(speech, speech_more)``.
+
+    ``speech`` is a learner-safe summary that ALWAYS starts at the beginning
+    ("Project report ready...") — never on session history or next steps — and
+    invites "say more". ``speech_more`` is the continuation (errors fixed,
+    session history, next step) spoken only when the learner asks for it. The
+    written markdown report still carries every fact.
+    """
     if not file_summaries:
-        return "There is no code or project to report on yet. Create or generate some code first."
+        return ("There is no code or project to report on yet. Create or generate some code first.", "")
     behavior = behavior or []
     if is_project:
         names = ", ".join(r["path"] for r in file_summaries[:6])
-        head = f"Project report. This is a multi-file Python project with {len(file_summaries)} files: {names}."
+        head = f"Project report ready. This is a multi-file Python project with {len(file_summaries)} files: {names}."
     else:
-        head = "Project report. This is a single-file Python program."
+        head = "Project report ready. This is a single-file Python program."
     # Concise/expert: keep it to the essentials (what it is + how to run).
     if str(verbosity or "").lower() in ("concise", "expert"):
-        return f"{head} {run_instruction}"
+        return (f"{head} {run_instruction}", "")
     behavior_part = (" " + " ".join(behavior)) if behavior else (
         (" It uses " + ", ".join(concepts) + ".") if concepts else "")
-    last_part = (" " + last_output) if last_output else ""
     concept_part = (" Concepts used: " + ", ".join(concepts) + ".") if concepts else ""
-    history_part = (" Session history includes " + ", ".join(session_features[:4]) + ".") if session_features else ""
-    error_part = (" " + errors_fixed) if errors_fixed else ""
-    next_part = (" Next step: " + next_step) if next_step else ""
-    return f"{head}{behavior_part}{concept_part} {run_instruction}{last_part}{error_part}{history_part}{next_part}"
+    last_part = (" " + last_output) if last_output else ""
+    summary = f"{head}{behavior_part}{concept_part} {run_instruction}{last_part} Say more to hear next steps."
+    # The continuation, revealed only by "say more": fixed errors, what the
+    # learner did this session, and the suggested next step.
+    more_bits: List[str] = []
+    if errors_fixed:
+        more_bits.append(errors_fixed)
+    if session_features:
+        more_bits.append("Session history includes " + ", ".join(session_features[:4]) + ".")
+    if next_step:
+        more_bits.append("Next step: " + next_step)
+    return (summary, " ".join(more_bits).strip())
 
 
 def _errors_fixed_line(mem: Dict[str, Any]) -> str:

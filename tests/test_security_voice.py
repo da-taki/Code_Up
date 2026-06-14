@@ -1066,7 +1066,8 @@ def test_missing_body_handled(client):
     ("set breakpoint at line 5",    "set_breakpoint",lambda d: d.get("line_number") == 5),
     ("watch variable x",            "watch_variable",lambda d: d.get("variable") == "x"),
     ("insert function called greet","insert_function",lambda d: d.get("function_name") == "greet"),
-    ("insert a for loop",           "insert_loop",  lambda d: True),
+    ("insert a for loop",           "conversational_edit",
+     lambda d: d.get("ai_action", {}).get("code") == "for i in range(3):\n    print(i)"),
     # Spoken print inserts are now built into valid Python (quoted text) and applied
     # via conversational_edit, instead of the old raw append_line passthrough.
     ("insert print hello world",    "conversational_edit",

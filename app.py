@@ -75,6 +75,7 @@ import ask_code
 import trainer_review
 import lesson_builder
 import screen_reader_bridge
+import natural_command_mapper
 from command_normalization import normalize_command_transcript
 from speech_output import sanitize_speech_text
 
@@ -7362,6 +7363,12 @@ def _unclear_loop_command_response(text):
 def _spoken_insert_response(text, code):
     """Build valid beginner Python for a spoken print/loop insert and return a
     conversational_edit, or None so the existing insert pipeline handles it."""
+    if str(code or "").strip() and intent_repair.looks_like_print_sequence_request(text):
+        msg = "Do you want me to replace the current code, or add a new loop that prints 0, 1, and 2?"
+        return {"success": True, "action": "clarify", "intent": "clarify",
+                "message": msg, "speech": msg, "reason": "print_sequence_existing_code",
+                "needs_clarification": True, "heard": text}
+
     # Simple counting loops first ("insert a for loop", "make a loop that prints
     # three numbers", "generate a loop that prints 0 to 2", ...). These must
     # produce a real beginner loop (for i in range(3): print(i)), never the weak
@@ -8315,6 +8322,189 @@ def _sparse_command_response(text, code, mem, body, *, cursor_line=None,
     return None
 
 
+def _call_ai_natural_command_mapper(text: str, code: str) -> Dict[str, Any]:
+    """Ask the strict AI mapper for intent JSON only."""
+    return natural_command_mapper.map_command(
+        text,
+        ai_fn=call_conversation_orchestrator_ai,
+        has_code=bool(str(code or "").strip()),
+    )
+
+
+def _ai_mapper_clarification(text: str, *, confidence: float = 0.0,
+                             mapped_intent: str = "unknown_clarify",
+                             reason: str = "") -> dict:
+    message = natural_command_mapper.MAPPER_FALLBACK_CLARIFICATION
+    safe_reason = groq_key_manager.redact_known_keys(reason)[:80]
+    return {
+        "success": True,
+        "action": "clarify",
+        "intent": "clarify",
+        "message": message,
+        "speech": message,
+        "needs_clarification": True,
+        "heard": text,
+        "confidence": confidence,
+        "mapped_intent": mapped_intent,
+        "ai_mapper": True,
+        "reason": safe_reason,
+    }
+
+
+def _ai_mapper_medium_clarification(text: str, mapping: Dict[str, Any]) -> dict:
+    intent = str(mapping.get("intent") or "unknown_clarify")
+    examples = {
+        "insert_beginner_loop": "insert a loop",
+        "run_code": "run",
+        "analyze_code": "explain this code",
+        "explain_current_code": "explain this code",
+        "fix_code": "fix this code",
+        "debug_like_teacher": "debug this like a teacher",
+        "start_tutorial": "start tutorial",
+        "help_short": "what can I do here",
+        "help_more": "more examples",
+        "stop_everything": "stop everything",
+    }
+    example = examples.get(intent, "insert a loop, run, explain this code, or start tutorial")
+    message = f"I think you may mean: {example}. Please say that command clearly."
+    return {
+        "success": True,
+        "action": "clarify",
+        "intent": "clarify",
+        "message": message,
+        "speech": message,
+        "needs_clarification": True,
+        "heard": text,
+        "confidence": float(mapping.get("confidence", 0.0) or 0.0),
+        "mapped_intent": intent,
+        "ai_mapper": True,
+        "reason": "medium_confidence",
+    }
+
+
+def _route_ai_natural_command_mapper(
+    text: str,
+    current_code: str,
+    mem: Dict[str, Any],
+    body: Dict[str, Any],
+    *,
+    cursor_line: Optional[int] = None,
+    error_context: str = "",
+    verbosity: str = "normal",
+) -> dict:
+    """Final strict mapper: AI returns intent JSON; CodeUp executes allowlisted handlers."""
+
+    result = _call_ai_natural_command_mapper(text, current_code)
+    if result.get("status") != "mapped":
+        return _ai_mapper_clarification(text, reason=str(result.get("reason") or result.get("status") or "mapper_failed"))
+
+    mapping = result.get("mapping") or {}
+    intent_name = str(mapping.get("intent") or "unknown_clarify")
+    confidence_value = float(mapping.get("confidence", 0.0) or 0.0)
+    band = result.get("band") or natural_command_mapper.confidence_band(confidence_value)
+
+    if intent_name == "unknown_clarify" or band == "low":
+        return _ai_mapper_clarification(
+            text,
+            confidence=confidence_value,
+            mapped_intent=intent_name,
+            reason="low_confidence" if band == "low" else "unknown_clarify",
+        )
+    if band == "medium":
+        return _ai_mapper_medium_clarification(text, mapping)
+
+    base = {
+        "success": True,
+        "heard": text,
+        "confidence": confidence_value,
+        "mapped_intent": intent_name,
+        "ai_mapper": True,
+        "source": "natural_command_mapper",
+    }
+    has_code = bool(str(current_code or "").strip())
+    has_error = bool(str(error_context or mem.get("last_run_error", "") or "").strip())
+
+    if intent_name == "insert_beginner_loop":
+        response = _make_conversational_edit_response(
+            "append_code",
+            code="for i in range(3):\n    print(i)",
+            position="end_of_file",
+            spoken_confirmation="Inserted a simple for loop that prints 0, 1, and 2.",
+            confidence=confidence_value,
+            source="natural_command_mapper",
+        )
+        if response:
+            response.update(base)
+            return response
+        return _ai_mapper_clarification(text, confidence=confidence_value, mapped_intent=intent_name, reason="loop_build_failed")
+
+    if intent_name == "run_code":
+        return {**base, "action": "run"}
+    if intent_name == "read_output":
+        return {**base, "action": "read_output"}
+    if intent_name == "analyze_code":
+        if has_code:
+            return {**base, "action": "analyze"}
+        return _ai_mapper_clarification(text, confidence=confidence_value, mapped_intent=intent_name, reason="no_code_to_analyze")
+    if intent_name == "explain_current_code":
+        if has_code:
+            return {**base, "action": "walk_through"}
+        return _ai_mapper_clarification(text, confidence=confidence_value, mapped_intent=intent_name, reason="no_code_to_explain")
+    if intent_name == "fix_code":
+        if has_code or has_error:
+            return {**base, "action": "fix"}
+        msg = "There is no code to fix yet. Insert or generate code first, then say fix this code."
+        return {**base, "action": "clarify", "intent": "clarify", "message": msg,
+                "speech": msg, "needs_clarification": True, "reason": "no_code_to_fix"}
+    if intent_name == "debug_like_teacher":
+        if has_code or has_error:
+            debug_response = _nab_value_command("debug this like a teacher", {
+                "code": current_code,
+                "error": error_context or mem.get("last_run_error", ""),
+                "last_run": {"output": mem.get("last_run_output", ""),
+                             "error": error_context or mem.get("last_run_error", ""),
+                             "ok": mem.get("last_run_ok")},
+                "verbosity": verbosity,
+                "project_state": _nab_payload_project_state(mem),
+                "cursor_line": cursor_line,
+            }, mem)
+            if debug_response:
+                debug_response.update(base)
+                return debug_response
+        return _ai_mapper_clarification(text, confidence=confidence_value, mapped_intent=intent_name, reason="no_code_to_debug")
+    if intent_name == "start_tutorial":
+        return {**base, "action": "start_tutorial"}
+    if intent_name == "help_short":
+        return {**base, "action": "deterministic_message",
+                "message": _ONBOARDING_MESSAGE, "speech": _ONBOARDING_MESSAGE,
+                "onboarding": True}
+    if intent_name == "help_more":
+        return {**base, "action": "more_help"}
+    if intent_name == "replay_mistake":
+        return {**base, "action": "replay_mistake"}
+    if intent_name == "summarize_structure":
+        sprint2 = _sprint2_command("summarize structure", current_code, mem, cursor_line, error_context, {})
+        if sprint2:
+            sprint2.update(base)
+            return sprint2
+        return _ai_mapper_clarification(text, confidence=confidence_value, mapped_intent=intent_name, reason="structure_failed")
+    if intent_name == "export_project":
+        sprint1 = _sprint1_command(
+            "export this project",
+            mem,
+            project_state=_project_state_from_voice_body(body, current_code),
+            verbosity=verbosity,
+        )
+        if sprint1:
+            sprint1.update(base)
+            return sprint1
+        return _ai_mapper_clarification(text, confidence=confidence_value, mapped_intent=intent_name, reason="export_failed")
+    if intent_name == "stop_everything":
+        return {**base, "action": "stop_everything"}
+
+    return _ai_mapper_clarification(text, confidence=confidence_value, mapped_intent=intent_name, reason="intent_requires_clarification")
+
+
 @app.route("/voice-command", methods=["POST"])
 def voice():
     body = safejson()
@@ -8363,6 +8553,23 @@ def voice():
         except Exception:
             pass
         return jsonify(response_dict), status_code
+
+    early_text = " ".join(text.lower().strip().rstrip(".!?").split())
+    if early_text == "stop":
+        return _store_and_return({"success": True, "action": "stop_everything", "heard": text, "confidence": 0.96})
+    if re.match(r"^(?:start|begin)\s+learning(?:\s+(?:python|coding|programming|to\s+code))?$", early_text):
+        return _store_and_return({
+            "success": True, "action": "start_tutorial",
+            "confidence": 0.92, "heard": text, "onboarding": True,
+        })
+    if early_text == "more":
+        last_action = storage.get("last_voice_action")
+        last_response = last_action[0] if isinstance(last_action, tuple) and last_action else {}
+        if isinstance(last_response, dict) and (
+            last_response.get("onboarding")
+            or last_response.get("action") in {"help", "more_help", "say_more"}
+        ):
+            return _store_and_return({"success": True, "action": "more_help", "confidence": 0.86, "heard": text})
 
     # ---- 1. Pending clarification answer ------------------------------------
     # CodeUp only asks a question it can understand the answer to. If we are
@@ -9033,6 +9240,8 @@ def voice():
         return _store_and_return(repaired)
 
     if conversational:
+        if re.search(r"\b(?:for\s+loop|loop)\b", text, re.IGNORECASE):
+            return _store_and_return(_unclear_loop_command_response(text))
         return jsonify(conversational)
 
     # Fallback: fuzzy matching on COMMANDS
@@ -9060,17 +9269,20 @@ def voice():
             "confidence": bscore / 100.0
         })
 
-    # Key 2 intent repair as the LAST resort — only now that the deterministic
-    # routes and the fuzzy/security matcher have all declined. It may map a
-    # genuinely messy command onto a validated action or ask one clarification,
-    # but by running here it can never hijack a route those layers already own.
-    repaired_ai = _route_repaired_intent(text, current_code, allow_ai=True)
-    if repaired_ai is not None:
-        return _store_and_return(repaired_ai)
-
-    # Log unrecognized commands so we can iterate the vocabulary from real data
-    _log_unrecognized_command(text, get_session_id())
-    return jsonify({"success": True, "action": "unknown", "heard": text, "confidence": 0.0})
+    # Strict AI natural-command mapper as the LAST resort. The AI returns intent
+    # JSON only; CodeUp validates it and routes to existing safe handlers.
+    mapped_ai = _route_ai_natural_command_mapper(
+        text,
+        current_code,
+        mem,
+        body,
+        cursor_line=cursor_line,
+        error_context=error_context,
+        verbosity=verbosity,
+    )
+    if mapped_ai.get("action") == "clarify":
+        _log_unrecognized_command(text, get_session_id())
+    return _store_and_return(mapped_ai)
 
 # ==========================
 # CODE STRUCTURE BREADCRUMBS

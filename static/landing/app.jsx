@@ -1,4 +1,4 @@
-/* global React, ReactDOM, Nav, Hero, Sonify, Voice, IDE, Features, Stats, CTA, Foot, useReveal, TweaksPanel, useTweaks, TweakSection, TweakRadio, TweakToggle */
+/* global React, ReactDOM, Nav, Hero, Sonify, Voice, IDE, Features, Stats, StartHere, CTA, Foot, useReveal, TweaksPanel, useTweaks, TweakSection, TweakRadio, TweakToggle */
 const { useEffect } = React;
 
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
@@ -30,6 +30,7 @@ function App() {
       <IDE />
       <Features />
       <Stats />
+      <StartHere />
       <CTA />
       <Foot />
 

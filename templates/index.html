@@ -288,9 +288,12 @@
        style="position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:25000;display:flex;align-items:center;justify-content:center;">
     <div style="background:var(--bg-panel);border:1px solid var(--border-strong);border-radius:12px;padding:32px;max-width:480px;width:90%;box-shadow:0 10px 40px rgba(0,0,0,0.15);color:var(--text-main);text-align:center;">
       <h2 id="startGateTitle" style="font-size:1.6rem;margin-bottom:8px;color:var(--text-main);font-family:var(--font-main);">CodeUp</h2>
-      <p style="font-size:0.85rem;color:var(--text-dim);margin-bottom:18px;font-style:italic;">A Python IDE built for blind learners</p>
-      <p id="startGateMsg" style="color:var(--text-main);line-height:1.7;margin-bottom:24px;">
-        Choose your language to begin. Then say or type "start tutorial" to begin the guided tutorial, or "what can I do here" to hear example commands.
+      <p style="font-size:0.85rem;color:var(--text-dim);margin-bottom:18px;font-style:italic;">Learn the basics of Python by voice — built for blind and low-vision beginners</p>
+      <p id="startGateMsg" style="color:var(--text-main);line-height:1.7;margin-bottom:16px;">
+        CodeUp is a voice-first place to learn Python basics. It works <em>alongside</em> your screen reader and headphones — it does not replace NVDA, JAWS, Braille, or VS&nbsp;Code. Choose your language to begin. Then say or type "start tutorial" for a guided lesson, or "what can I do here" to hear example commands.
+      </p>
+      <p id="startGateTips" style="color:var(--text-dim);font-size:0.9rem;line-height:1.6;margin-bottom:24px;">
+        Tip: put on headphones or turn on your speaker, and allow the microphone if you want to talk. If voice does not work, just type the command in the box and press Enter.
       </p>
       <div id="startGateButtons" style="display:flex;gap:12px;flex-wrap:wrap;">
         <button id="startEnglish" class="cu-button cu-button-primary" style="flex:1;min-width:140px;font-size:1rem;padding:12px 16px;" autofocus>
@@ -397,19 +400,18 @@
             // Combine into a single utterance so Chrome doesn't drop the
             // first line when queueing multiple speak() calls back-to-back.
             speak('Welcome to CodeUp, a Python IDE built for blind learners. Say "start tutorial" to begin the guided tutorial, or say "what can I do here" to hear example commands.');
-            // Stagger the rest so each has time to actually play
+            // Stagger the rest so each has time to actually play. These queue in
+            // order through the same VoiceEngine path, so the learner hears the
+            // whole onboarding without overlap.
             setTimeout(function () {
-              speak('You can also type those commands in the command box.');
+              speak('CodeUp helps you learn the basics of Python. It works together with your screen reader and headphones; it does not replace them.');
             }, 100);
             setTimeout(function () {
-              speak('Two: try a demo. Say "run demo" to load an example program.');
+              speak('If you would like to talk, allow the microphone, then press Control Shift M to turn on voice control. If the microphone does not work, you can always type a command into the box and press Enter.');
             }, 200);
             setTimeout(function () {
-              speak('Three: turn on voice control with Control Shift M. Then say "help" to hear what you can do.');
+              speak('To start learning now, say, or type: start tutorial. To hear what you can do, say: what can I do here. If you ever get stuck, just say: help. Let us begin.');
             }, 300);
-            setTimeout(function () {
-              speak('If you ever get stuck, just say "help". Let us begin.');
-            }, 400);
           }
         }, 800);
       }

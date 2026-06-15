@@ -15,8 +15,8 @@ function Features() {
             <h2>Built <span className="accent">end to end.</span></h2>
           </div>
           <p className="desc">
-            Sandbox, sonifier, intent parser, audio debugger, AI mentor, bilingual
-            UI, six-step tutorial. None of it is bolted on — every layer was
+            Sandbox, sonifier, intent parser, audio debugger, AI mentor,
+            six-step tutorial. None of it is bolted on — every layer was
             written with non-visual interaction as the assumption.
           </p>
         </div>
@@ -32,7 +32,7 @@ function Features() {
           <div className="reveal delay-1 feat span6">
             <div className="feat-num">F.02 / voice</div>
             <h3>Grammar parser, not exact-match.</h3>
-            <p>"go to line twenty five," "लाइन बीस पर जाओ," "set breakpoint at line 10" — all parsed to structured intents with slots. Hindi number words 0–50 are recognised in line-navigation commands.</p>
+            <p>"go to line twenty five," "set breakpoint at line 10," "explain simply" — all parsed to structured intents with slots. Number words are recognised in line-navigation commands, and every command can be typed instead of spoken.</p>
             <div className="feat-art"><div className="pulse-art"><div className="ring"></div><div className="ring"></div><div className="ring"></div><div className="core"></div></div></div>
           </div>
 
@@ -53,19 +53,19 @@ function Features() {
           </div>
 
           <div className="reveal delay-1 feat span4">
-            <div className="feat-num">F.04 / bilingual</div>
-            <h3>EN ⇄ हिंदी, baked in.</h3>
-            <p>Speech recognition switches between en-US and hi-IN automatically. Around 15 core Hindi commands cover the run/navigate/explain loop.</p>
+            <div className="feat-num">F.04 / input</div>
+            <h3>Type it, or say it.</h3>
+            <p>Every command works two ways — speak it, or type it in the command box and press Enter. Works best in Google Chrome; if a privacy-heavy browser blocks the microphone, typing always works.</p>
             <div className="feat-art">
               <div className="bil-art">
                 <div className="en">
-                  <span>english</span>
+                  <span>say</span>
                   <b>"run"</b>
                 </div>
                 <div className="arrow">⇄</div>
-                <div className="hi">
-                  <span>हिंदी</span>
-                  <b>"चलाओ"</b>
+                <div className="en">
+                  <span>type</span>
+                  <b>run</b>
                 </div>
               </div>
             </div>
@@ -133,7 +133,7 @@ function Stats() {
         </div>
         <div className="reveal delay-1 stat">
           <div className="num">15<span className="accent">+</span></div>
-          <div className="lbl">Hindi commands</div>
+          <div className="lbl">Voice commands</div>
         </div>
         <div className="reveal delay-2 stat">
           <div className="num">5<span className="accent">k</span></div>
@@ -158,7 +158,7 @@ function Stats() {
 // in NVDA/JAWS and never depends on the animation.
 function StartHere() {
   const steps = [
-    'Open CodeUp — click "Open the IDE", then pick your language.',
+    'Open CodeUp — click "Open the IDE" and press Start in English.',
     'Allow microphone permission if you want to talk to CodeUp.',
     'No microphone? Use the command box — type a command and press Enter.',
     'Try: "what can I do here" — to hear what you can do.',
@@ -196,8 +196,8 @@ function StartHere() {
             <h3 style={{ marginBottom: 12 }}>Before you begin</h3>
             <ul style={{ lineHeight: 1.8, paddingLeft: 22 }}>
               <li>Put on headphones, or turn on your speaker, so you can hear CodeUp.</li>
-              <li>Use a recent Chrome or Edge browser, and allow it to play sound and speech.</li>
-              <li>Allow the microphone if you want voice. You can always type instead.</li>
+              <li>CodeUp works best on Google Chrome. Some browsers, especially Brave or privacy-heavy browsers, may block the microphone or speech. If voice does not work, open this page in Chrome.</li>
+              <li>Allow the microphone if you want voice. You can always type commands in the command box instead.</li>
               <li>Say "help" any time, or "stop everything" to stop the talking.</li>
             </ul>
           </div>

@@ -161,8 +161,8 @@ function EditorHero() {
       );
       setRunning(false);
       setStatus("preview · " + (r.split("\n").length) + " lines · /ide for real run");
-      const speakLang = lang === "EN" ? "en-US" : "hi-IN";
-      speak("This is a preview. For real Python execution, open the full IDE.", speakLang);
+      // English-only for now (Hindi mode temporarily hidden).
+      speak("This is a preview. For real Python execution, open the full IDE.", "en-US");
     }, 350);
   }
 
@@ -260,9 +260,9 @@ function EditorHero() {
             Sonify <span className="eh-key">⌥S</span>
           </button>
           <div className="eh-divider" aria-hidden="true"></div>
-          <div className="eh-lang" role="group" aria-label="Speech language">
-            <button className={"eh-pill" + (lang === "EN" ? " is-on" : "")} onClick={() => setLang("EN")} aria-pressed={lang === "EN"}>EN</button>
-            <button className={"eh-pill" + (lang === "HI" ? " is-on" : "")} onClick={() => setLang("HI")} aria-pressed={lang === "HI"} lang="hi">हिं</button>
+          <div className="eh-lang" role="group" aria-label="Speech language: English">
+            {/* English-only for now — Hindi mode is temporarily hidden. */}
+            <button className="eh-pill is-on" aria-pressed="true" disabled>EN</button>
           </div>
           <div className="eh-divider" aria-hidden="true"></div>
           <button className="eh-btn eh-btn-ghost" onClick={() => speak("Help. Press Control Enter to run. Press Alt S to sonify.")} aria-label="Help · Alt+H">
@@ -321,10 +321,10 @@ function EditorHero() {
           <div className="eh-marquee-track" aria-hidden="true">
             {["run", "sonify block", "tell the story", "what changed here", "go to line twenty five",
               "set breakpoint at line 10", "explain simply", "remember this as quick sort",
-              "चलाओ", "लाइन बीस पर जाओ", "कोड समझाओ", "मदद",
+              "start tutorial", "read output", "explain this code", "help",
               "run", "sonify block", "tell the story", "what changed here", "go to line twenty five",
               "set breakpoint at line 10", "explain simply", "remember this as quick sort",
-              "चलाओ", "लाइन बीस पर जाओ", "कोड समझाओ", "मदद"
+              "start tutorial", "read output", "explain this code", "help"
             ].map((t, i) => (
               <span key={i}>"{t}"<i>●</i></span>
             ))}

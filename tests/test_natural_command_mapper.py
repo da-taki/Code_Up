@@ -89,6 +89,57 @@ def test_mapper_rejects_invalid_json_intents_payloads_and_confidence(raw):
     assert result["status"] == "invalid"
 
 
+@pytest.mark.parametrize("intent,slots", [
+    ("insert_print_statement", {"text": "hello"}),
+    ("insert_variable_example", {"kind": "marks"}),
+    ("insert_input_example", {"kind": "name"}),
+    ("insert_if_statement", {"kind": "age"}),
+    ("insert_for_loop", {"start": 1, "stop": 5}),
+    ("insert_for_loop", {"kind": "even", "stop": 10}),
+    ("insert_while_loop", {"start": 1, "stop": 5}),
+    ("insert_list_example", {"kind": "fruits", "loop": True}),
+    ("insert_function_example", {"name": "greet"}),
+    ("add_comments", {}),
+    ("simplify_current_code", {}),
+    ("convert_loop_type", {"to": "while"}),
+])
+def test_mapper_accepts_new_template_intents_with_safe_slots(intent, slots):
+    result = natural_command_mapper.map_command(
+        f"map {intent}",
+        ai_fn=lambda _system, _user: json.dumps({
+            "intent": intent,
+            "confidence": 0.92,
+            "slots": slots,
+            "reason": "template",
+        }),
+        has_code=True,
+    )
+
+    assert result["status"] == "mapped"
+    assert result["mapping"]["intent"] == intent
+
+
+@pytest.mark.parametrize("slots", [
+    {"code": "print(1)"},
+    {"start": 0, "stop": 500},
+    {"step": 0},
+    {"text": "hello\nprint(1)"},
+    {"unknown": "value"},
+])
+def test_mapper_rejects_unsafe_template_slots(slots):
+    result = natural_command_mapper.map_command(
+        "bad template slots",
+        ai_fn=lambda _system, _user: json.dumps({
+            "intent": "insert_for_loop",
+            "confidence": 0.95,
+            "slots": slots,
+            "reason": "bad",
+        }),
+    )
+
+    assert result["status"] == "invalid"
+
+
 def test_mapper_redacts_api_keys_from_failures(monkeypatch):
     secret = "gsk_live_test_secret_123"
     monkeypatch.setenv("GROQ_API_KEY", secret)
@@ -140,6 +191,38 @@ def test_high_confidence_mapper_loop_executes_safe_existing_handler(client, monk
     assert data["ai_action"]["code"] == LOOP_CODE
     assert transcript not in data["ai_action"]["code"]
     assert data["ai_action"]["source"] == "natural_command_mapper"
+
+
+def test_high_confidence_mapper_for_loop_uses_template_slots(client, monkeypatch):
+    monkeypatch.setattr(
+        app_module,
+        "_call_ai_natural_command_mapper",
+        lambda _text, _code: _mapped("insert_for_loop", 0.93, {"start": 1, "stop": 5}),
+    )
+
+    data = _vc(client, "program please now", code="")
+
+    assert data["action"] == "conversational_edit"
+    assert data["ai_action"]["action"] == "append_code"
+    assert data["ai_action"]["code"] == "for i in range(1, 6):\n    print(i)"
+    assert data["ai_action"]["source"] == "natural_command_mapper"
+    assert data["mapped_intent"] == "insert_for_loop"
+
+
+def test_high_confidence_mapper_transform_uses_current_code(client, monkeypatch):
+    monkeypatch.setattr(
+        app_module,
+        "_call_ai_natural_command_mapper",
+        lambda _text, _code: _mapped("convert_loop_type", 0.93, {"to": "while"}),
+    )
+
+    data = _vc(client, "program please now", code=LOOP_CODE)
+
+    assert data["action"] == "conversational_edit"
+    assert data["ai_action"]["action"] == "replace_code"
+    assert data["ai_action"]["requires_confirmation"] is False
+    assert data["ai_action"]["code"] == "count = 0\n\nwhile count < 3:\n    print(count)\n    count = count + 1"
+    assert data["mapped_intent"] == "convert_loop_type"
 
 
 @pytest.mark.parametrize("confidence,reason", [(0.70, "medium_confidence"), (0.40, "low_confidence")])

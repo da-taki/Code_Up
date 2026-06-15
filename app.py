@@ -76,6 +76,7 @@ import trainer_review
 import lesson_builder
 import screen_reader_bridge
 import natural_command_mapper
+import beginner_templates
 from command_normalization import normalize_command_transcript
 from speech_output import sanitize_speech_text
 
@@ -6384,6 +6385,7 @@ def _make_conversational_edit_response(
     confidence: float = 0.9,
     requires_confirmation: bool = False,
     source: str = "groq",
+    allow_unconfirmed_replace: bool = False,
 ) -> Optional[dict]:
     if edit_action not in CONVERSATIONAL_EDIT_ACTIONS:
         return None
@@ -6393,7 +6395,7 @@ def _make_conversational_edit_response(
     )
     if safe_code is None:
         return None
-    if edit_action == "replace_code":
+    if edit_action == "replace_code" and not allow_unconfirmed_replace:
         requires_confirmation = True
     try:
         confidence_value = float(confidence)
@@ -7449,6 +7451,79 @@ def _spoken_variable_response(text, code, mem, intent):
             "heard": text, "speech": confirmation, "spoken_code": python}
 
 
+def _template_result_voice_response(result, text, *, source="beginner_templates"):
+    """Convert a deterministic beginner template into a normal voice response."""
+    if result is None:
+        return None
+    if result.needs_clarification or result.edit_action == "clarify":
+        message = result.speech or natural_command_mapper.MAPPER_FALLBACK_CLARIFICATION
+        return {
+            "success": True,
+            "action": "clarify",
+            "intent": "clarify",
+            "message": message,
+            "speech": message,
+            "needs_clarification": True,
+            "heard": text,
+            "template_intent": result.intent,
+            "reason": result.reason or "template_clarification",
+            "confidence": result.confidence,
+            "source": source,
+        }
+    position = "end_of_file" if result.edit_action == "append_code" else ""
+    response = _make_conversational_edit_response(
+        result.edit_action,
+        code=result.code,
+        position=position,
+        spoken_confirmation=result.speech,
+        confidence=result.confidence,
+        requires_confirmation=False,
+        source=source,
+        allow_unconfirmed_replace=source in {"beginner_templates", "natural_command_mapper"},
+    )
+    if response is None:
+        message = "I understood the template request, but could not build safe beginner Python for it."
+        return {
+            "success": True,
+            "action": "clarify",
+            "intent": "clarify",
+            "message": message,
+            "speech": message,
+            "needs_clarification": True,
+            "heard": text,
+            "template_intent": result.intent,
+            "reason": "template_build_failed",
+            "confidence": result.confidence,
+            "source": source,
+        }
+    response.update({
+        "heard": text,
+        "speech": result.speech,
+        "spoken_code": result.code,
+        "template_intent": result.intent,
+        "source": source,
+    })
+    return response
+
+
+_BEGINNER_TEMPLATE_TRANSFORM_INTENTS = {
+    "add_comments",
+    "simplify_current_code",
+    "convert_loop_type",
+}
+
+
+def _beginner_template_command_response(text, code, *, mode="all"):
+    result = beginner_templates.match_template_command(text, current_code=code)
+    if result is not None:
+        is_transform = result.intent in _BEGINNER_TEMPLATE_TRANSFORM_INTENTS
+        if mode == "inserts" and is_transform:
+            return None
+        if mode == "transforms" and not is_transform:
+            return None
+    return _template_result_voice_response(result, text, source="beginner_templates")
+
+
 def _route_repaired_intent(text, code, allow_ai=False):
     """Map a Key 2 / deterministic intent-repair decision onto an existing action,
     or None to fall through. Only allowlisted actions are ever executed.
@@ -8354,6 +8429,17 @@ def _ai_mapper_clarification(text: str, *, confidence: float = 0.0,
 def _ai_mapper_medium_clarification(text: str, mapping: Dict[str, Any]) -> dict:
     intent = str(mapping.get("intent") or "unknown_clarify")
     examples = {
+        "insert_print_statement": "insert a print statement",
+        "insert_variable_example": "insert a variable example",
+        "insert_input_example": "insert an input example",
+        "insert_if_statement": "insert an if example",
+        "insert_for_loop": "insert a for loop from 1 to 5",
+        "insert_while_loop": "insert a safe while loop",
+        "insert_list_example": "insert a list example",
+        "insert_function_example": "insert a function example",
+        "add_comments": "add comments",
+        "simplify_current_code": "simplify this code",
+        "convert_loop_type": "change it to a while loop",
         "insert_beginner_loop": "insert a loop",
         "run_code": "run",
         "analyze_code": "explain this code",
@@ -8424,19 +8510,21 @@ def _route_ai_natural_command_mapper(
     has_code = bool(str(current_code or "").strip())
     has_error = bool(str(error_context or mem.get("last_run_error", "") or "").strip())
 
-    if intent_name == "insert_beginner_loop":
-        response = _make_conversational_edit_response(
-            "append_code",
-            code="for i in range(3):\n    print(i)",
-            position="end_of_file",
-            spoken_confirmation="Inserted a simple for loop that prints 0, 1, and 2.",
-            confidence=confidence_value,
+    template_result = beginner_templates.build_from_mapping(
+        intent_name,
+        mapping.get("slots") or {},
+        current_code=current_code,
+    )
+    if template_result is not None:
+        response = _template_result_voice_response(
+            template_result,
+            text,
             source="natural_command_mapper",
         )
         if response:
             response.update(base)
             return response
-        return _ai_mapper_clarification(text, confidence=confidence_value, mapped_intent=intent_name, reason="loop_build_failed")
+        return _ai_mapper_clarification(text, confidence=confidence_value, mapped_intent=intent_name, reason="template_build_failed")
 
     if intent_name == "run_code":
         return {**base, "action": "run"}
@@ -8647,7 +8735,14 @@ def voice():
             "intentional_error": True, "heard": text, "speech": speech,
         })
 
-    # ---- 3b. Spoken print/loop inserts -> valid beginner Python -------------
+    # ---- 3b. Safe beginner template commands -------------------------------
+    # Rich deterministic examples ("loop from 1 to 5", "safe while loop",
+    # "variable example", "add comments") use the central template library.
+    template_response = _beginner_template_command_response(text, current_code, mode="inserts")
+    if template_response is not None:
+        return _store_and_return(template_response)
+
+    # ---- 3c. Spoken print/loop inserts -> valid beginner Python -------------
     # "insert print hello" / "put print hello in the editor" become
     # print("hello") (text quoted, numbers bare, defined variables left bare),
     # built deterministically with editor context. Other inserts (variables, if,
@@ -8656,7 +8751,7 @@ def voice():
     if insert_response is not None:
         return _store_and_return(insert_response)
 
-    # ---- 3c. Natural variable assignments -> valid Python (or ask) ----------
+    # ---- 3d. Natural variable assignments -> valid Python (or ask) ----------
     # "set age to 16" -> age = 16; "insert a variable with the value Taki" asks
     # "What should I name the variable?" and remembers it.
     variable_response = _spoken_variable_response(text, current_code, mem, intent)
@@ -8667,7 +8762,7 @@ def voice():
     if repair_response is not None:
         return _store_and_return(repair_response)
 
-    # ---- 3d. Sprint 1: export / report / recap / speech-rate / verbosity ----
+    # ---- 3e. Sprint 1: export / report / recap / speech-rate / verbosity ----
     # Deterministic, whole-utterance commands. Routed before concept Q&A and
     # generation so "what did I learn today" recaps (not a concept answer) and
     # "make a project report" reports (not a new project).
@@ -8676,7 +8771,7 @@ def voice():
     if sprint1 is not None:
         return _store_and_return(sprint1)
 
-    # ---- 3e. Sprint 2: structure / navigation / replay / hints / landmarks --
+    # ---- 3f. Sprint 2: structure / navigation / replay / hints / landmarks --
     # Deterministic, whole-utterance commands routed before concept Q&A and
     # generation so "what is in this program" summarizes structure (not a concept
     # answer) and "where is total changed" navigates (not chat).
@@ -8690,7 +8785,7 @@ def voice():
     if analyze_alias is not None:
         return _store_and_return(analyze_alias)
 
-    # ---- 3f. NAB value sprint: classroom + non-visual learning tools --------
+    # ---- 3g. NAB value sprint: classroom + non-visual learning tools --------
     # Deterministic teacher/learner tools routed after Sprint 1/2 and before the
     # generic concept Q&A so reserved phrases keep their existing behaviour.
     nab = _nab_value_command(text, {
@@ -8894,6 +8989,15 @@ def voice():
     # against this session's working memory and routed to the existing real
     # actions. Runs after exact-symbol/orchestrator so those still win, and
     # before the concierge so "run with the same values" reuses saved inputs.
+    if not mem.get("last_gen_prompt"):
+        template_transform_response = _beginner_template_command_response(
+            text,
+            current_code,
+            mode="transforms",
+        )
+        if template_transform_response is not None:
+            return _store_and_return(template_transform_response)
+
     followup_category = session_memory.classify_followup(text)
     if followup_category:
         decision = session_memory.resolve_followup(
@@ -8902,6 +9006,14 @@ def voice():
         mapped = _map_followup_decision(decision, text, mem)
         if mapped is not None:
             return _store_and_return(mapped)
+
+    template_transform_response = _beginner_template_command_response(
+        text,
+        current_code,
+        mode="transforms",
+    )
+    if template_transform_response is not None:
+        return _store_and_return(template_transform_response)
 
     # ---- input() concierge --------------------------------------------------
     # Natural value-supplying commands ("run with name Taknoor and age 16",

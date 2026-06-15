@@ -28,6 +28,7 @@ from input_concierge import build_input_plan, concierge_request_message, detect_
 import session_memory
 import command_clarifier
 import grounded_ai
+import groq_key_manager
 import clarification_flow
 import concept_qa
 import intent_repair
@@ -871,16 +872,44 @@ def _current_api_key():
                 return record.get('key', '')
     return getattr(_api_context, 'gemini_key', GEMINI_API_KEY)
 
+def _usable_cloud_key(key: str) -> str:
+    key = str(key or "").strip()
+    lowered = key.lower()
+    if not key or key == "Insert_API_Key_Here" or lowered.startswith("your_"):
+        return ""
+    return key
+
+
+def _configured_extra_cloud_keys():
+    """Session/legacy keys that should be tried before environment failover."""
+    keys = []
+    for key in (_current_api_key(), os.environ.get("GEMINI_API_KEY", "")):
+        usable = _usable_cloud_key(key)
+        if usable and usable not in keys:
+            keys.append(usable)
+    return keys
+
+
+def _allow_environment_groq_keys() -> bool:
+    testing = _is_testing_mode()
+    flask_app = globals().get("app")
+    if flask_app is not None:
+        testing = testing or bool(flask_app.config.get("TESTING"))
+    return not testing or _truthy_env("CODEUP_ALLOW_TEST_AI")
+
+
+def _groq_failover_env():
+    return os.environ if _allow_environment_groq_keys() else {}
+
+
 def _configured_cloud_api_key():
     """Return a usable cloud AI key from session config or environment."""
-    for key in (
-        _current_api_key(),
-        os.environ.get("GROQ_API_KEY", ""),
-        os.environ.get("GEMINI_API_KEY", ""),
-    ):
-        key = str(key or "").strip()
-        if key and key != "Insert_API_Key_Here":
-            return key
+    extra = _configured_extra_cloud_keys()
+    if extra:
+        return extra[0]
+    records = groq_key_manager.load_groq_api_keys(_groq_failover_env())
+    if records:
+        return records[0].key
     return ""
 
 def _env_flag_disabled(name: str) -> bool:
@@ -896,6 +925,12 @@ def _cloud_ai_disabled_for_request(key: str) -> bool:
     if _env_flag_disabled("CODEUP_AI_ENABLED") or _env_flag_disabled("AI_ENABLED"):
         return True
     if _env_flag_disabled("GROQ_ENABLED"):
+        return True
+    if (
+        _env_flag_disabled("GEMINI_ENABLED")
+        and not _configured_extra_cloud_keys()
+        and not _usable_cloud_key(os.environ.get("GROQ_API_KEY", ""))
+    ):
         return True
     if _env_flag_disabled("GEMINI_ENABLED") and not key:
         return True
@@ -921,6 +956,62 @@ def _is_ai_service_message(text: str) -> bool:
         or "not configured" in lower
         or "authentication failed" in lower
     )
+
+
+_SAFE_GENERATED_IMPORTS = {
+    "math", "random", "string", "datetime", "statistics", "collections",
+    "itertools", "typing",
+}
+_EDU_GENERATED_IMPORTS = {"numpy", "pandas"}
+_UNSAFE_GENERATED_IMPORTS = {
+    "os", "sys", "subprocess", "socket", "requests", "urllib", "http",
+    "ftplib", "shutil", "pathlib", "glob", "pickle", "importlib",
+}
+_UNSAFE_GENERATED_CALLS = {
+    "open", "eval", "exec", "__import__", "compile", "globals", "locals", "input",
+}
+
+
+def _generated_code_safety_error(code: str, prompt: str = "") -> str:
+    """Return a user-safe error if generated code uses blocked operations."""
+    try:
+        tree = ast.parse(code or "")
+    except SyntaxError:
+        return ""
+    prompt_lower = str(prompt or "").lower()
+    edu_libs_enabled = _truthy_env("CODEUP_EDU_LIBS_ENABLED")
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            aliases = node.names if isinstance(node, ast.Import) else []
+            if isinstance(node, ast.ImportFrom) and node.module:
+                aliases = [ast.alias(name=node.module, asname=None)]
+            for alias in aliases:
+                root = (alias.name or "").split(".")[0]
+                if root in _UNSAFE_GENERATED_IMPORTS:
+                    return "Generated code used a blocked import. Please ask for a safer beginner version."
+                if root in _EDU_GENERATED_IMPORTS and not (edu_libs_enabled or root in prompt_lower):
+                    return f"Generated code used {root} without the learner asking for it."
+                if root and root not in _SAFE_GENERATED_IMPORTS and root not in _EDU_GENERATED_IMPORTS:
+                    return "Generated code used an unsupported import. Please ask for a standard-library version."
+        if isinstance(node, ast.Call):
+            func = node.func
+            name = ""
+            if isinstance(func, ast.Name):
+                name = func.id
+            elif isinstance(func, ast.Attribute):
+                name = func.attr
+            if name in _UNSAFE_GENERATED_CALLS:
+                return "Generated code used a blocked operation. Please ask for a safer beginner version."
+    return ""
+
+
+def _generation_explanation(prompt: str, code: str) -> str:
+    lines = [line for line in str(code or "").splitlines() if line.strip()]
+    if not lines:
+        return "Generated a beginner Python program."
+    task = _safe_text(prompt, limit=120).strip() or "your request"
+    return f"Generated a beginner Python program for: {task}. It is runnable in CodeUp and uses {len(lines)} non-empty lines."
+
 
 def _call_ollama(system_prompt, user_prompt, temperature=0.2, max_tokens=None):
     """Call local Ollama instance. Returns response string or None on failure."""
@@ -962,6 +1053,7 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en", max_
     """
     max_tokens = _normalize_ai_max_tokens(max_tokens)
     key = _configured_cloud_api_key()
+    extra_keys = _configured_extra_cloud_keys()
 
     def _try_ollama_fallback():
         """Try the local Ollama fallback. Returns response or None."""
@@ -994,23 +1086,35 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en", max_
             if language == "hi":
                 sp = f"आप एक सहायक हैं जो हिंदी में सहायता प्रदान करते हैं। {system_prompt}"
 
-            from groq import Groq
-            client = Groq(api_key=key)
-            response = client.chat.completions.create(
-                model=GEMINI_MODEL,
-                messages=[
-                    {"role": "system", "content": sp},
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=temperature,
-                max_tokens=max_tokens,
+            def _request_with_key(api_key, key_index):
+                from groq import Groq
+                client = Groq(api_key=api_key)
+                response = client.chat.completions.create(
+                    model=GEMINI_MODEL,
+                    messages=[
+                        {"role": "system", "content": sp},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+                for choice in getattr(response, "choices", []) or []:
+                    message = getattr(choice, "message", None)
+                    content = str(getattr(message, "content", "") or "").strip()
+                    if content:
+                        return content
+                return "AI service returned an empty response. Please try again."
+
+            return groq_key_manager.get_groq_key_manager().call_with_failover(
+                _request_with_key,
+                env=_groq_failover_env(),
+                extra_keys=extra_keys,
             )
-            for choice in getattr(response, "choices", []) or []:
-                message = getattr(choice, "message", None)
-                content = str(getattr(message, "content", "") or "").strip()
-                if content:
-                    return content
-            return "AI service returned an empty response. Please try again."
+        except groq_key_manager.GroqFailoverError as e:
+            local = _try_ollama_fallback()
+            if local:
+                return f"[offline mode] {local}"
+            return e.user_message
         except Exception as e:
             err_str = str(e).lower()
             # Try Ollama before returning a user-facing error
@@ -1101,31 +1205,45 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en", max_
 
 
 def call_conversation_orchestrator_ai(system_prompt: str, user_prompt: str) -> str:
-    """Use GROQ_API_KEY_2 only for structured command interpretation."""
+    """Use central Groq failover for structured command interpretation."""
     if _env_flag_disabled("CODEUP_AI_ENABLED") or _env_flag_disabled("AI_ENABLED") or _env_flag_disabled("GROQ_ENABLED"):
         return ""
-    key = str(os.environ.get("GROQ_API_KEY_2", "") or "").strip()
-    if not key or key == "your_second_groq_api_key":
+    extra_keys = _configured_extra_cloud_keys()
+    if (
+        _env_flag_disabled("GEMINI_ENABLED")
+        and not extra_keys
+        and not _usable_cloud_key(os.environ.get("GROQ_API_KEY", ""))
+    ):
+        return ""
+    manager = groq_key_manager.get_groq_key_manager()
+    if not manager.has_keys(env=_groq_failover_env(), extra_keys=extra_keys):
         return ""
 
     def _do_call():
-        from groq import Groq
-        client = Groq(api_key=key)
-        response = client.chat.completions.create(
-            model=os.environ.get("GROQ_ORCHESTRATOR_MODEL", GEMINI_MODEL),
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.1,
-            max_tokens=900,
+        def _request_with_key(api_key, key_index):
+            from groq import Groq
+            client = Groq(api_key=api_key)
+            response = client.chat.completions.create(
+                model=os.environ.get("GROQ_ORCHESTRATOR_MODEL", GEMINI_MODEL),
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.1,
+                max_tokens=900,
+            )
+            for choice in getattr(response, "choices", []) or []:
+                message = getattr(choice, "message", None)
+                content = str(getattr(message, "content", "") or "").strip()
+                if content:
+                    return content
+            return ""
+
+        return manager.call_with_failover(
+            _request_with_key,
+            env=_groq_failover_env(),
+            extra_keys=extra_keys,
         )
-        for choice in getattr(response, "choices", []) or []:
-            message = getattr(choice, "message", None)
-            content = str(getattr(message, "content", "") or "").strip()
-            if content:
-                return content
-        return ""
 
     try:
         future = _get_gemini_executor().submit(_do_call)
@@ -1563,6 +1681,10 @@ def api_config():
 def sanitize_traceback(traceback_str: str) -> str:
     """Remove sensitive paths and credentials from diagnostic text."""
     text = str(traceback_str or "")
+    try:
+        text = groq_key_manager.redact_known_keys(text, extra_keys=_configured_extra_cloud_keys())
+    except Exception:
+        pass
     text = re.sub(r'gsk_[A-Za-z0-9_-]{16,}', '<redacted-api-key>', text)
     text = re.sub(r'(?i)(api[_-]?key["\']?\s*[:=]\s*)["\']?[^"\'\s,;]+', r'\1<redacted>', text)
     text = re.sub(r'[A-Za-z]:[/\\][^"\'\n\r]*', '<path>', text)
@@ -3757,17 +3879,26 @@ def mentor_chat_stream():
             if language == "hi":
                 sp = f"आप एक सहायक हैं जो हिंदी में सहायता प्रदान करते हैं। {system}"
 
-            from groq import Groq
-            client = Groq(api_key=key)
-            stream = client.chat.completions.create(
-                model=GEMINI_MODEL,
-                messages=[
-                    {"role": "system", "content": sp},
-                    {"role": "user", "content": user},
-                ],
-                temperature=0.25,
-                max_tokens=_normalize_ai_max_tokens(None),
-                stream=True,
+            extra_keys = _configured_extra_cloud_keys()
+
+            def _stream_with_key(api_key, key_index):
+                from groq import Groq
+                client = Groq(api_key=api_key)
+                return client.chat.completions.create(
+                    model=GEMINI_MODEL,
+                    messages=[
+                        {"role": "system", "content": sp},
+                        {"role": "user", "content": user},
+                    ],
+                    temperature=0.25,
+                    max_tokens=_normalize_ai_max_tokens(None),
+                    stream=True,
+                )
+
+            stream = groq_key_manager.get_groq_key_manager().call_with_failover(
+                _stream_with_key,
+                env=_groq_failover_env(),
+                extra_keys=extra_keys,
             )
 
             for chunk in stream:
@@ -5490,11 +5621,22 @@ def generate_code():
         input_source = "typed"
     exact_result = build_exact_symbol_generation(prompt, source=input_source)
     if exact_result:
+        if exact_result.get("success") and exact_result.get("code"):
+            try:
+                session_memory.record_generation(session_memory.get_memory(get_trace_storage()), prompt, exact_result.get("code"))
+            except Exception:
+                pass
         return jsonify(exact_result)
 
     local_direct = _local_code_generation_fallback(prompt)
     if local_direct and re.search(r"\b(?:zero|0)\s+to\s+(?:two|2)\b", prompt, re.IGNORECASE):
-        return jsonify({"success": True, "code": local_direct, "source": "local_fallback"})
+        explanation = _generation_explanation(prompt, local_direct)
+        try:
+            session_memory.record_generation(session_memory.get_memory(get_trace_storage()), prompt, local_direct)
+        except Exception:
+            pass
+        return jsonify({"success": True, "code": local_direct, "source": "local_fallback",
+                        "explanation": explanation, "speech": explanation})
 
     if requested_mode == "project" or looks_like_multifile_prompt(prompt):
         template_id = choose_template_for_prompt(prompt)
@@ -5504,16 +5646,24 @@ def generate_code():
             manifest = _write_project_files(sandbox, project["files"], project["manifest"])
             project["manifest"] = manifest
             project["speech"] = project_summary(manifest)
+            try:
+                mem = session_memory.get_memory(get_trace_storage())
+                session_memory.record_generation(mem, prompt, project["files"].get(manifest["active_file"], ""))
+                session_memory.record_project_manifest(mem, manifest)
+            except Exception:
+                pass
             return jsonify({"success": True, "project": True, "source": "template", **project})
 
         system = (
             "You generate accessible multi-file Python projects for CodeUp, a blind-first IDE.\n"
             "Return only JSON with keys: name, entry, active_file, requirements, speech, files.\n"
             "files must be an object mapping relative paths to complete file contents.\n"
-            "Use safe imports only: math, random, statistics, datetime, json, csv, pathlib, typing, collections, itertools, numpy, pandas, matplotlib.\n"
-            "Do not use os, sys, subprocess, sockets, shell commands, eval, exec, or network calls.\n"
-            "For file access, use paths relative to the project root. Include requirements.txt when third-party packages are used.\n"
-            "Include beginner-friendly comments and print output that can be spoken aloud.\n"
+            "Use main.py as the entry point unless the user explicitly asks otherwise.\n"
+            "Keep files small, complete, runnable, and beginner-friendly. Use clear names and short helpful comments only where they teach something.\n"
+            "Prefer the standard library. Safe imports are math, random, statistics, datetime, json, csv, typing, collections, and itertools.\n"
+            "Use numpy or pandas only when the user asks for them or the task is clearly an educational table/data example; include requirements only when actually needed.\n"
+            "Use local imports between generated files only. Do not use os, sys, subprocess, sockets, shell commands, eval, exec, arbitrary file access, or network calls.\n"
+            "Include print output and a concise speech summary that can be spoken aloud.\n"
             "Avoid visual-only phrases like 'look at the left pane'; describe files by name and keyboard or command actions."
         )
         user = f"Create this as a CodeUp multi-file project:\n{prompt}"
@@ -5550,6 +5700,13 @@ def generate_code():
             }
         sandbox = get_sandbox(get_session_id())
         manifest = _write_project_files(sandbox, parsed_project["files"], parsed_project["manifest"])
+        speech = parsed_project.get("speech") or project_summary(manifest)
+        try:
+            mem = session_memory.get_memory(get_trace_storage())
+            session_memory.record_generation(mem, prompt, parsed_project["files"].get(manifest["active_file"], ""))
+            session_memory.record_project_manifest(mem, manifest)
+        except Exception:
+            pass
         return jsonify({
             "success": True,
             "project": True,
@@ -5559,7 +5716,8 @@ def generate_code():
             "active_file": manifest["active_file"],
             "requirements": manifest.get("requirements", []),
             "manifest": manifest,
-            "speech": parsed_project.get("speech") or project_summary(manifest),
+            "speech": speech,
+            "explanation": speech,
         })
 
     if language == "hi":
@@ -5579,17 +5737,19 @@ def generate_code():
     else:
         system = (
             "You are a Python code generator for CodeUp, a beginner-friendly, blind-first IDE.\n"
-            "The user will describe a task in natural language. Generate Python code that solves it.\n\n"
+            "The user will describe a task in natural language. Generate complete, runnable Python code that solves it.\n\n"
             "CRITICAL CONSTRAINTS:\n"
             "1. NEVER use input() — it is BLOCKED in the CodeUp sandbox.\n"
             "   Instead, hardcode sample values directly into variables.\n"
             "   Example: instead of `length = float(input('length?'))` write `length = 10  # sample value, change this to test`\n"
             "   Choose realistic sample values that make the program produce visible output.\n"
-            "2. Only these modules are available: math, random, string, datetime. Do NOT import anything else.\n"
+            "2. Prefer no imports. If needed, only use math, random, string, datetime, statistics, collections, itertools, or typing.\n"
+            "Use numpy or pandas only if the user explicitly asks for them. Keep those examples tiny and teachable.\n"
             "3. NEVER use open(), eval(), exec(), or __import__() — all blocked.\n"
-            "4. Add a brief comment above each non-trivial line explaining what it does, written for a beginner. A blind student will hear these via screen reader.\n"
-            "5. Always include print() statements at the end so the user can see the result when they run it.\n"
-            "6. For interactive-feeling tasks (menus, calculators, games), use hardcoded sample inputs and explain in a comment how to change them.\n\n"
+            "4. NEVER use open(), eval(), exec(), compile(), __import__(), os, sys, subprocess, sockets, shell commands, or network/file operations.\n"
+            "5. Use clear variable names and short helpful comments only where useful. Avoid huge over-engineered programs.\n"
+            "6. Always include print() statements so the user can see the result when they run it.\n"
+            "7. For interactive-feeling tasks (menus, calculators, games), use hardcoded sample inputs and explain in a comment how to change them.\n\n"
             "Return ONLY Python code. No markdown fences. No prose outside code comments."
         )
 
@@ -5607,7 +5767,13 @@ def generate_code():
     if not code:
         fallback = _local_code_generation_fallback(prompt)
         if fallback and _should_use_local_generation_fallback(raw):
-            return jsonify({"success": True, "code": fallback, "source": "local_fallback"})
+            explanation = _generation_explanation(prompt, fallback)
+            try:
+                session_memory.record_generation(session_memory.get_memory(get_trace_storage()), prompt, fallback)
+            except Exception:
+                pass
+            return jsonify({"success": True, "code": fallback, "source": "local_fallback",
+                            "explanation": explanation, "speech": explanation})
         error = raw.strip() if raw else "AI returned empty response. Try rephrasing."
         return jsonify({"success": False, "error": error, "code": ""})
 
@@ -5621,6 +5787,18 @@ def generate_code():
                 "error": "Generated code did not match the exact symbol constraints. Please type a precise command like: generate code to make a 5 by 5 star pattern where row 3 has 6 stars.",
                 "code": "",
             })
+        safety_error = _generated_code_safety_error(code, prompt)
+        if safety_error:
+            fallback = _local_code_generation_fallback(prompt)
+            if fallback and not _generated_code_safety_error(fallback, prompt):
+                explanation = _generation_explanation(prompt, fallback)
+                try:
+                    session_memory.record_generation(session_memory.get_memory(get_trace_storage()), prompt, fallback)
+                except Exception:
+                    pass
+                return jsonify({"success": True, "code": fallback, "source": "local_fallback",
+                                "explanation": explanation, "speech": explanation})
+            return jsonify({"success": False, "error": safety_error, "code": ""})
     except SyntaxError:
         # One retry with a stricter system message
         retry_system = system + "\n\nIMPORTANT: Return ONLY syntactically valid Python. No prose. No markdown."
@@ -5634,15 +5812,38 @@ def generate_code():
                     "error": "Generated code did not match the exact symbol constraints. Please type a precise command like: generate code to make a 5 by 5 star pattern where row 3 has 6 stars.",
                     "code": "",
                 })
+            safety_error = _generated_code_safety_error(retry_code, prompt)
+            if safety_error:
+                fallback = _local_code_generation_fallback(prompt)
+                if fallback and not _generated_code_safety_error(fallback, prompt):
+                    explanation = _generation_explanation(prompt, fallback)
+                    try:
+                        session_memory.record_generation(session_memory.get_memory(get_trace_storage()), prompt, fallback)
+                    except Exception:
+                        pass
+                    return jsonify({"success": True, "code": fallback, "source": "local_fallback",
+                                    "explanation": explanation, "speech": explanation})
+                return jsonify({"success": False, "error": safety_error, "code": ""})
             code = retry_code
         except SyntaxError:
             fallback = _local_code_generation_fallback(prompt)
             if fallback and _should_use_local_generation_fallback(raw_retry):
-                return jsonify({"success": True, "code": fallback, "source": "local_fallback"})
+                explanation = _generation_explanation(prompt, fallback)
+                try:
+                    session_memory.record_generation(session_memory.get_memory(get_trace_storage()), prompt, fallback)
+                except Exception:
+                    pass
+                return jsonify({"success": True, "code": fallback, "source": "local_fallback",
+                                "explanation": explanation, "speech": explanation})
             if _is_ai_service_message(raw_retry):
                 return jsonify({"success": False, "error": raw_retry.strip(), "code": ""})
             return jsonify({"success": False, "error": "AI returned invalid Python code. Please try rephrasing your request.", "code": ""})
-    return jsonify({"success": True, "code": code})
+    explanation = _generation_explanation(prompt, code)
+    try:
+        session_memory.record_generation(session_memory.get_memory(get_trace_storage()), prompt, code)
+    except Exception:
+        pass
+    return jsonify({"success": True, "code": code, "explanation": explanation, "speech": explanation})
 
 
 # ==========================
@@ -7376,6 +7577,8 @@ def _record_voice_memory(mem, text, intent, response):
         return
     if action == "generate_code" and response.get("prompt"):
         session_memory.record_generation(mem, response.get("prompt"))
+    elif action == "clear_editor":
+        session_memory.clear_edit_memory(mem)
     elif action == "open_project_file" and response.get("path"):
         session_memory.record_file_open(mem, response.get("path"))
     elif action == "run_project_file" and response.get("path"):
@@ -7966,6 +8169,104 @@ def _demo_analyze_alias_command(command: str) -> Optional[dict]:
     return {"success": True, "action": "analyze", "heard": command, "confidence": 0.96}
 
 
+_SPARSE_CLARIFICATION = (
+    "I heard a programming command but not clearly. Say 'insert a simple loop', "
+    "'run', 'fix', or 'explain this code'."
+)
+
+
+def _sparse_command_response(text, code, mem, body, *, cursor_line=None,
+                             error_context="", verbosity="normal"):
+    """Repair sparse classroom prompts before one-word suggestion routing."""
+    t = " ".join(str(text or "").lower().strip().rstrip(".!?").split())
+    if not t:
+        return None
+    has_code = bool(str(code or "").strip())
+
+    if t == "loop":
+        if not has_code:
+            code_text = "for i in range(3):\n    print(i)"
+            speech = "Inserted a simple for loop that prints 0, 1, and 2."
+            return _make_conversational_edit_response(
+                "append_code",
+                code=code_text,
+                position="end_of_file",
+                spoken_confirmation=speech,
+                confidence=0.88,
+                source="local",
+            )
+        msg = "Say 'insert a simple loop' to add one, or ask 'what does this loop do' to explain the current loop."
+        return {"success": True, "action": "clarify", "intent": "clarify",
+                "message": msg, "speech": msg, "needs_clarification": True, "heard": text}
+
+    if t == "print":
+        if has_code and re.search(r"\bprint\s*\(", code):
+            msg = "The print statement shows output when the program runs. Say 'explain this code' to hear how it fits in the program."
+            return {"success": True, "action": "deterministic_message",
+                    "message": msg, "speech": msg, "heard": text}
+        speech = "Inserted a print statement that says Hello, CodeUp."
+        return _make_conversational_edit_response(
+            "append_code",
+            code='print("Hello, CodeUp")',
+            position="end_of_file",
+            spoken_confirmation=speech,
+            confidence=0.86,
+            source="local",
+        )
+
+    if t == "debug":
+        if has_code or error_context:
+            return _nab_value_command("debug this like a teacher", {
+                "code": code,
+                "error": error_context or mem.get("last_run_error", ""),
+                "last_run": {"output": mem.get("last_run_output", ""),
+                             "error": error_context or mem.get("last_run_error", ""),
+                             "ok": mem.get("last_run_ok")},
+                "verbosity": verbosity,
+                "project_state": _nab_payload_project_state(mem),
+                "cursor_line": cursor_line,
+            }, mem)
+        msg = "There is no code to debug yet. Generate or insert code first, then say 'debug this like a teacher'."
+        return {"success": True, "action": "clarify", "intent": "clarify",
+                "message": msg, "speech": msg, "needs_clarification": True, "heard": text}
+
+    if t == "explain":
+        if has_code:
+            return {"success": True, "action": "walk_through", "heard": text, "confidence": 0.86}
+        msg = "There is no code to explain yet. Generate or insert code first."
+        return {"success": True, "action": "clarify", "intent": "clarify",
+                "message": msg, "speech": msg, "needs_clarification": True, "heard": text}
+
+    if t in {"report", "project report"}:
+        return _sprint1_command("make a project report", mem,
+                                project_state=_project_state_from_voice_body(body, code),
+                                verbosity=verbosity)
+    if t == "export":
+        return _sprint1_command("export this project", mem,
+                                project_state=_project_state_from_voice_body(body, code),
+                                verbosity=verbosity)
+    if t in {"notes", "trainer notes", "teacher notes"}:
+        return _nab_value_command("make trainer notes", {
+            "code": code,
+            "error": error_context or mem.get("last_run_error", ""),
+            "last_run": {"output": mem.get("last_run_output", ""),
+                         "error": error_context or mem.get("last_run_error", ""),
+                         "ok": mem.get("last_run_ok")},
+            "verbosity": verbosity,
+            "project_state": _nab_payload_project_state(mem),
+            "cursor_line": cursor_line,
+        }, mem)
+    if t == "requirements":
+        return _requirements_explanation(_requirements_from_voice_body(body, code))
+
+    if t in {"add this", "replace this", "do this", "do this also"}:
+        msg = "What should I change? For example, say 'add scoring', 'add comments', or 'change it to a while loop'."
+        return {"success": True, "action": "clarify", "intent": "clarify",
+                "message": msg, "speech": msg, "needs_clarification": True, "heard": text}
+
+    return None
+
+
 @app.route("/voice-command", methods=["POST"])
 def voice():
     body = safejson()
@@ -8043,6 +8344,18 @@ def voice():
             "message": _ONBOARDING_MESSAGE, "speech": _ONBOARDING_MESSAGE,
             "heard": text, "onboarding": True,
         })
+
+    sparse_response = _sparse_command_response(
+        text,
+        current_code,
+        mem,
+        body,
+        cursor_line=cursor_line,
+        error_context=error_context,
+        verbosity=verbosity,
+    )
+    if sparse_response is not None:
+        return _store_and_return(sparse_response)
 
     # ---- 2b. Relative line navigation ("next line" / "previous line") -------
     # Core for non-visual reading. The frontend (nextLine/prevLine) moves and

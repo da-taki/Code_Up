@@ -28,6 +28,7 @@ _MAX_TEXT = 400
 _MAX_OUTPUT = 800
 _MAX_ERROR = 600
 _MAX_PROMPT = 600
+_MAX_CODE = 5000
 _MAX_FILES = 50
 _MAX_VALUES = 50
 
@@ -41,11 +42,17 @@ def new_memory() -> Dict[str, Any]:
     """The shape of per-session working memory (all bounded)."""
     return {
         "last_utterance": "",
+        "latest_user_request": "",
         "last_intent": "",
         "last_action": "",
         "last_actions": [],          # last action-sequence (list of action names)
         "last_gen_prompt": "",       # last generation request (prompt text)
         "last_gen_summary": "",      # short summary of last generated code (not the body)
+        "last_generated_code": "",   # bounded latest generated single-file code
+        "last_project_manifest": {},  # bounded latest generated/open project facts
+        "last_edit_request": "",
+        "last_fix_explanation": "",
+        "student_satisfied": None,
         "last_run_output": "",
         "last_run_error": "",
         "last_run_ok": None,
@@ -194,9 +201,18 @@ def record_actions(mem: Dict[str, Any], action_names: List[str]) -> None:
 
 def record_generation(mem: Dict[str, Any], prompt: str, code: Optional[str] = None) -> None:
     if prompt:
-        mem["last_gen_prompt"] = _clip(prompt, _MAX_PROMPT)
+        prompt_text = _clip(prompt, _MAX_PROMPT)
+        lower_prompt = prompt_text.lower()
+        if lower_prompt.startswith("earlier you generated code for:") or lower_prompt.startswith("using the current program"):
+            mem["last_edit_request"] = prompt_text
+            mem["student_satisfied"] = False
+        else:
+            mem["last_gen_prompt"] = prompt_text
+            mem["latest_user_request"] = prompt_text
     if code:
-        lines = str(code).strip().splitlines()
+        bounded_code = _clip(code, _MAX_CODE)
+        mem["last_generated_code"] = bounded_code
+        lines = bounded_code.strip().splitlines()
         first = lines[0].strip() if lines else ""
         mem["last_gen_summary"] = _clip(f"{len(lines)} lines, starts with: {first}", 200)
 
@@ -235,6 +251,40 @@ def record_active_file(mem: Dict[str, Any], path: str) -> None:
 def record_project_files(mem: Dict[str, Any], files: List[str]) -> None:
     if files:
         mem["project_files"] = [_clip(f, 200) for f in files][:_MAX_FILES]
+
+
+def record_project_manifest(mem: Dict[str, Any], manifest: Dict[str, Any]) -> None:
+    if not isinstance(manifest, dict):
+        return
+    files = manifest.get("files") if isinstance(manifest.get("files"), list) else []
+    if files:
+        record_project_files(mem, [str(f) for f in files])
+    active = _clip(manifest.get("active_file") or manifest.get("entry") or "", 200)
+    if active:
+        mem["last_active_file"] = active
+    mem["last_project_manifest"] = {
+        "name": _clip(manifest.get("name"), 120),
+        "entry": _clip(manifest.get("entry"), 200),
+        "active_file": active,
+        "requirements": [_clip(v, 80) for v in (manifest.get("requirements") or [])[:20]]
+        if isinstance(manifest.get("requirements"), list) else [],
+        "file_count": len(files),
+    }
+
+
+def record_edit_request(mem: Dict[str, Any], instruction: str) -> None:
+    mem["last_edit_request"] = _clip(instruction, _MAX_PROMPT)
+    mem["student_satisfied"] = False
+
+
+def clear_edit_memory(mem: Dict[str, Any]) -> None:
+    for key in (
+        "last_gen_prompt", "last_gen_summary", "last_generated_code",
+        "last_project_manifest", "last_edit_request", "last_fix_explanation",
+        "project_files", "last_active_file", "last_opened_file",
+    ):
+        mem[key] = [] if key == "project_files" else ({} if key == "last_project_manifest" else "")
+    mem["student_satisfied"] = None
 
 
 def record_tutorial(mem: Dict[str, Any], module: str) -> None:
@@ -283,6 +333,8 @@ def snapshot(mem: Dict[str, Any], *, utterance: str = "", file_name: str = "") -
         "last_error": _clip(mem.get("last_run_error", ""), 200),
         "last_output": _clip(mem.get("last_run_output", ""), 200),
         "last_gen_prompt": _clip(mem.get("last_gen_prompt", ""), 200),
+        "last_gen_summary": _clip(mem.get("last_gen_summary", ""), 200),
+        "last_edit_request": _clip(mem.get("last_edit_request", ""), 200),
         "current_file": file_name or mem.get("last_active_file", ""),
         "tutorial_module": mem.get("tutorial_module", ""),
         "project_files": (mem.get("project_files") or [])[:20],
@@ -332,9 +384,14 @@ _EXPLAIN_SIMPLER = ["explain simpler", "say that simpler", "explain it simpler",
                     "explain that simpler", "say it simpler", "in simpler terms",
                     "simpler explanation"]
 _MODIFY = ["do the same", "add comments", "add a comment", "add some comments",
-           "make it shorter", "make it longer", "make it simpler", "make it cleaner",
-           "make it use", "make it print", "make it return", "make it loop", "make it count",
-           "make it a", "make it an", "change the name to", "change it to", "rename it to",
+           "add scoring", "add score", "add scores", "add input", "add levels",
+           "add average", "add this", "add that", "add it", "replace this",
+           "replace that", "replace it", "do this also", "do this", "do it also",
+           "do that also", "make it easier", "make it shorter", "make it longer",
+           "make it simpler", "make it cleaner", "make it speak", "make it with",
+           "make it use", "make it print", "make it return", "make it loop",
+           "make it count", "make it a", "make it an", "remove the hard part",
+           "change the name to", "change it to", "change it into", "rename it to",
            "change the variable", "do that with", "do it with"]
 _SUMMARIZE = ["summarize what i did", "summarise what i did", "summarize my work",
               "summarise my work", "what did i do", "what have i done", "recap my session"]
@@ -350,6 +407,7 @@ _CORRECTION_LEADIN_RE = re.compile(
     r"|^oh[,\s]+(?=make|use|change|print|turn|add|rename|it\b)"
     r"|^no[,]?\s+(?:i\s+meant\s+)?(?=make|use|change|print|turn|add|rename|it\b)"
     r"|^actually[,]?\s+"
+    r"|^arey[,]?\s+(?=add|make|change|replace|do|remove|use|turn|edit)\b"
     r"|^(?:wait|sorry)[,]?\s+(?:i\s+meant\s+)?"
     r"|^modify\s+it\s+so(?:\s+that)?\s+"
     r"|^change\s+it\s+(?:to|so)\s+",
@@ -357,14 +415,16 @@ _CORRECTION_LEADIN_RE = re.compile(
 )
 _MODIFY_HINT_RE = re.compile(
     r"\b(make\s+it|use\b|change\b|rename\b|print\b|turn\s+it\s+into|add\s+(?:a\s+)?comment|"
-    r"comments?\b|a\s+function|a\s+loop|a\s+while|odd\b|even\b|instead\b|variable\b|return\b|"
-    r"shorter\b|longer\b|simpler\b|the\s+output)\b",
+    r"comments?\b|scoring\b|scores?\b|input\b|levels?\b|average\b|pandas\b|a\s+function|"
+    r"a\s+loop|a\s+while|while\s+loop|odd\b|even\b|instead\b|variable\b|return\b|"
+    r"shorter\b|longer\b|simpler\b|easier\b|the\s+output)\b",
     re.IGNORECASE,
 )
 # An instruction with no actionable target ("change that", "make it", a bare
 # pronoun) is ambiguous: the caller asks one clarifying question instead.
 _VAGUE_INSTRUCTION_RE = re.compile(
-    r"^(?:change|make|use|fix|update|modify|do|edit)\s+(?:it|that|this|the\s+code|something)?$"
+    r"^(?:change|make|use|fix|update|modify|do|edit|replace)\s+(?:it|that|this|the\s+code|something)?(?:\s+also)?$"
+    r"|^add\s+(?:it|that|this|something)(?:\s+also)?$"
     r"|^(?:that|this|it|the\s+other\s+one|that\s+one|the\s+same|something\s+else)$",
     re.IGNORECASE,
 )
@@ -468,6 +528,8 @@ def build_modify_prompt(text: str, referent_prompt: str, has_code: bool) -> str:
         parts.append("Using the current program in the editor,")
     parts.append(f"now {instruction}.")
     parts.append("Keep it beginner-friendly, well-commented, and runnable without input().")
+    if re.search(r"\b(?:pandas|numpy|data\s*frame)\b", instruction, re.IGNORECASE):
+        parts.append("Use pandas or numpy only if the learner explicitly asked and the example stays small and teachable.")
     return " ".join(parts).strip()
 
 
@@ -542,6 +604,7 @@ def resolve_followup(category: str, text: str, mem: Dict[str, Any], *,
         if not referent_prompt and not code:
             return _clarify("I'm not sure what to change. Generate some code first, "
                             "then tell me how to change it.")
+        record_edit_request(mem, instruction)
         prompt = build_modify_prompt(instruction, referent_prompt, has_code=bool(code))
         return _act("modify_code", "last_code" if code else "last_prompt",
                     {"prompt": prompt, "instruction": _norm(instruction), "referent_prompt": referent_prompt},

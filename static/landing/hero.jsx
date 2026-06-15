@@ -108,7 +108,7 @@ function Hero() {
           <span>license <b>MIT</b></span>
         </div>
         <div className="meta">
-          <span>EN · हिं</span>
+          <span>English</span>
           <span><b>200+</b> tests</span>
         </div>
       </div>
@@ -156,10 +156,10 @@ function Ticker() {
   // lives in the Voice section below with semantic markup.
   const cmds = [
     'run', 'go to line twenty five', 'sonify block', 'tell the story',
-    'चलाओ', 'what changed here', 'set breakpoint at line 10',
-    'मदद', 'find variable x', 'explain simply', 'remember this as quick sort',
-    'कोड समझाओ', 'next step', 'bookmark this', 'quiz me on loops',
-    'live input mode', 'लाइन बीस पर जाओ', 'check for errors'
+    'explain this code', 'what changed here', 'set breakpoint at line 10',
+    'help', 'find variable x', 'explain simply', 'remember this as quick sort',
+    'read output', 'next step', 'bookmark this', 'quiz me on loops',
+    'live input mode', 'start tutorial', 'check for errors'
   ];
   const items = [...cmds, ...cmds];
   return (

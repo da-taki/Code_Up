@@ -7060,9 +7060,9 @@ def get_voice_telemetry():
 
 _ONBOARDING_MESSAGE = (
     "Learn Python here by speaking or typing. First, say: start tutorial, for a "
-    "guided lesson. You can also say: generate code, run code, explain it, or "
-    "fix this code to debug. No microphone? Just type the command and press "
-    "Enter. Say more examples for the full list."
+    "guided lesson. You can also say: insert a loop, run code, explain it, "
+    "generate code, or fix this code to debug. No microphone? Just type the "
+    "command and press Enter. Say more, or more examples, for the full list."
 )
 # A clear, single first action for a brand-new learner ("what should I do
 # first"). Distinct from the onboarding command list above: it names ONE next

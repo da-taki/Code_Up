@@ -7059,15 +7059,63 @@ def get_voice_telemetry():
 
 
 _ONBOARDING_MESSAGE = (
-    "You can build Python by speaking or typing. Try generate code, run code, "
-    "read output, analyze, explain this code to explain it, fix this code to "
-    "debug, replay mistake, summarize structure, make project report, stop "
-    "everything, or start tutorial. Say more examples for a longer list."
+    "Learn Python here by speaking or typing. First, say: start tutorial, for a "
+    "guided lesson. You can also say: generate code, run code, explain it, or "
+    "fix this code to debug. No microphone? Just type the command and press "
+    "Enter. Say more examples for the full list."
+)
+# A clear, single first action for a brand-new learner ("what should I do
+# first"). Distinct from the onboarding command list above: it names ONE next
+# step (start the tutorial) and the typed fallback, rather than listing options.
+_FIRST_STEP_MESSAGE = (
+    "The best first step is to say: start tutorial. I will then guide you, one "
+    "small step at a time, to write and run your very first Python program. If "
+    "speaking does not work, type start tutorial into the command box and press "
+    "Enter. You can also say: what can I do here, to hear more options."
 )
 _FIRST_HELP_RE = re.compile(
     r"^\s*(?:what\s+can\s+i\s+do(?:\s+here)?|what\s+can\s+you\s+do|help\s+me\s+start|"
     r"how\s+do\s+i\s+use\s+this|what\s+should\s+i\s+try|what\s+can\s+i\s+say|"
     r"where\s+do\s+i\s+start|how\s+does\s+this\s+work)\s*[.?!]?\s*$",
+    re.IGNORECASE,
+)
+# "what should I do first" / "where do I begin" -> one clear first action.
+# Kept separate from _FIRST_HELP_RE so the answer is a single next step, not the
+# command menu.
+_FIRST_STEP_RE = re.compile(
+    r"^\s*(?:what\s+should\s+i\s+do\s+first|what\s+do\s+i\s+do\s+first|"
+    r"what(?:'s| is)\s+the\s+first\s+(?:step|thing)(?:\s+(?:to\s+do|i\s+should\s+do))?|"
+    r"where\s+(?:do|should)\s+i\s+begin|how\s+(?:do|should)\s+i\s+(?:begin|start|get\s+started|get\s+going)|"
+    r"what\s+should\s+i\s+do\s+to\s+(?:start|begin)|how\s+do\s+i\s+get\s+going)\s*[.?!]?\s*$",
+    re.IGNORECASE,
+)
+# Beginner onboarding phrases that should open the guided tutorial directly
+# rather than falling through to concept Q&A, a clarification, or "unknown".
+# Deliberately NARROW so demo phrases are not shadowed:
+#   * "teach me this code"/"teach me this scored" stay -> analyze
+#   * "teach me inheritance"/"teach me flarbology" stay -> concept Q&A
+#   * "make a beginner lesson on loops" stays -> lesson builder (starts with "make")
+# Only an explicit Python/coding learning request lands here.
+_TUTORIAL_ONBOARD_RE = re.compile(
+    r"^\s*(?:"
+    # start/open/begin/launch [the/a] <python|beginner|coding|...> tutorial/lesson/course
+    r"(?:(?:hey|ok|okay|please|let'?s|lets|can\s+you|could\s+you|will\s+you|"
+    r"i\s+(?:want|would\s+like|wanna)\s+to|i'?d\s+like\s+to)\s+){0,3}"
+    r"(?:start|open|begin|launch|take\s+me\s+to)\s+(?:the\s+|a\s+)?"
+    r"(?:python|beginner|beginner'?s|beginners|coding|programming|intro(?:ductory)?|first|basic)\s+"
+    r"(?:python\s+|coding\s+|programming\s+)?(?:tutorial|lesson|lessons|course)"
+    r"|"
+    # bare "<python|beginner|coding> tutorial/lesson"
+    r"(?:python|beginner|beginner'?s|beginners|coding|programming|intro)\s+(?:tutorial|lesson|lessons|course)"
+    r"|"
+    # "teach me python / coding / to code / programming / python basics / the basics"
+    r"teach\s+me\s+(?:how\s+to\s+|to\s+)?"
+    r"(?:python(?:\s+basics)?|code|coding|programming|program|the\s+basics(?:\s+of\s+python)?)"
+    r"|"
+    # "(i want to / help me / let's) learn python / learn to code / learn coding"
+    r"(?:(?:i\s+(?:want|would\s+like|wanna)\s+to\s+|help\s+me\s+|let'?s\s+|lets\s+)?learn)\s+"
+    r"(?:python|to\s+code|coding|programming|the\s+basics(?:\s+of\s+python)?)"
+    r")(?:\s+please|\s+now)?\s*[.?!]*\s*$",
     re.IGNORECASE,
 )
 _MORE_HELP_RE = re.compile(
@@ -8342,6 +8390,22 @@ def voice():
         return _store_and_return({
             "success": True, "action": "deterministic_message",
             "message": _ONBOARDING_MESSAGE, "speech": _ONBOARDING_MESSAGE,
+            "heard": text, "onboarding": True,
+        })
+    # Beginner learning requests ("teach me Python", "start the Python tutorial",
+    # "beginner lesson") open the guided tutorial, which speaks its own first
+    # step. Checked here so they never fall through to concept Q&A, a "confirm"
+    # clarification, or "unknown". Plain "start tutorial" keeps its parse_intent
+    # route below (this pattern requires a learning qualifier).
+    if _TUTORIAL_ONBOARD_RE.match(text):
+        return _store_and_return({
+            "success": True, "action": "start_tutorial",
+            "confidence": 0.92, "heard": text, "onboarding": True,
+        })
+    if _FIRST_STEP_RE.match(text):
+        return _store_and_return({
+            "success": True, "action": "deterministic_message",
+            "message": _FIRST_STEP_MESSAGE, "speech": _FIRST_STEP_MESSAGE,
             "heard": text, "onboarding": True,
         })
 

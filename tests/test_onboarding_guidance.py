@@ -30,12 +30,11 @@ def _action(client, text, code="print('keep me')\n"):
 
 def test_startup_guidance_uses_spoken_commands_not_tab_only():
     src = _read("templates/index.html")
-    # The page-load welcome is now one short spoken line that names a spoken/typed
-    # first action and recommends Chrome. The longer command list stays behind
-    # "what can I do here" / "help" / "say more" (see test_chrome_english_onboarding).
-    assert "Welcome to CodeUp. It works best on Chrome." in src
-    assert "Try saying: start tutorial" in src
-    # The start gate still tells learners the two starting commands, in writing.
+    # /ide now opens directly into the IDE: no blocking start gate and no
+    # automatic welcome speech (see test_chrome_english_onboarding). The two
+    # starting commands are still surfaced as non-blocking on-page text (banner +
+    # hint by the command box), never as a tab-only instruction.
+    assert 'id="startGate"' not in src
     assert "start tutorial" in src
     assert "what can I do here" in src
     # Never a tab-only instruction (bad for voice-first beginners).

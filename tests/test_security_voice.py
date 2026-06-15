@@ -986,12 +986,15 @@ def test_command_input_enter_and_live_input_contracts_are_wired():
     assert "source," in app_js
 
 
-def test_start_gate_is_removed_from_keyboard_order_after_language_choice():
+def test_start_gate_is_removed_so_ide_opens_directly():
+    # The blocking start gate was removed entirely: /ide opens straight into the
+    # usable IDE, so there is no hidden modal left in the keyboard/focus order at
+    # all (a strictly stronger guarantee than hiding it after a language choice).
     with open(os.path.join("templates", "index.html"), encoding="utf-8") as handle:
         html = handle.read()
-    assert "gate.setAttribute('hidden', '')" in html
-    assert "gate.setAttribute('aria-hidden', 'true')" in html
-    assert "btn.disabled = true; btn.tabIndex = -1" in html
+    assert 'id="startGate"' not in html
+    assert 'id="startEnglish"' not in html
+    assert "Start in English" not in html
 
 
 def test_microphone_denied_path_uses_visible_fallback_without_console_error():

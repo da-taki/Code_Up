@@ -20,6 +20,27 @@
   <div id="srAnnouncer" role="status" aria-live="assertive" aria-atomic="true"
        style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;"></div>
 
+  <!-- Non-blocking onboarding banner. Replaces the old blocking start gate, so
+       the IDE is usable immediately. Dismissible; collapsed details hold the
+       fuller scope/help copy for screen-reader users without nagging. -->
+  <div id="cuStartBanner" role="region" aria-label="Getting started"
+       style="background:var(--accent-soft, rgba(0,0,0,0.04));border-bottom:1px solid var(--border-soft);color:var(--text-main);padding:10px 16px;font-size:0.9rem;line-height:1.5;display:flex;gap:12px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;">
+    <div style="flex:1;min-width:260px;">
+      <p style="margin:0 0 4px;">
+        <strong>New here?</strong> Type or say <strong>"what can I do here"</strong> or <strong>"start tutorial."</strong>
+        CodeUp works best on Google Chrome. Some browsers, especially Brave or privacy-heavy browsers, may block microphone or speech features. If voice does not work, use Chrome or type a command in the command box.
+      </p>
+      <details style="margin-top:2px;">
+        <summary style="cursor:pointer;color:var(--text-dim);">More about CodeUp</summary>
+        <p style="margin:6px 0 0;color:var(--text-dim);">
+          CodeUp is a voice-first place to learn Python basics, in English. It works <em>alongside</em> your screen reader and headphones — it does not replace NVDA, JAWS, Braille, or VS&nbsp;Code. Put on headphones or turn on your speaker, and allow the microphone if you want to talk. If voice does not work, just type the command in the box and press Enter.
+        </p>
+      </details>
+    </div>
+    <button id="cuStartBannerDismiss" class="cu-button cu-button-secondary"
+            style="font-size:0.8rem;padding:4px 10px;white-space:nowrap;" aria-label="Dismiss getting-started banner">Dismiss</button>
+  </div>
+
   <header class="cu-header">
     <div class="cu-header-top">
       <h1 class="cu-title">CODEUP</h1>
@@ -188,6 +209,7 @@
       />
       <button class="cu-button cu-button-secondary" id="sendCommandBtn" aria-label="Send command">Send</button>
       <p id="commandPrecisionTip" class="cu-command-tip">Tip: Type or speak commands. For exact symbols, patterns, quotes, or long prompts, typing is more reliable.</p>
+      <p id="cuFirstUseHint" class="cu-command-tip" style="color:var(--text-dim);">New here? Type or say "what can I do here" or "start tutorial." Voice works best on Chrome; if it does not work, just type commands here and press Enter.</p>
       <div
         id="commandUnderstanding"
         class="cu-command-understanding"
@@ -282,36 +304,11 @@
     </div>
   </div>
 
-  <!-- Combined gate: language pick + audio unlock in one step.
-       First-time users see two buttons; returning users see one Begin button. -->
-  <div id="startGate" role="dialog" aria-modal="true" aria-labelledby="startGateTitle"
-       style="position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:25000;display:flex;align-items:center;justify-content:center;">
-    <div style="background:var(--bg-panel);border:1px solid var(--border-strong);border-radius:12px;padding:32px;max-width:480px;width:90%;box-shadow:0 10px 40px rgba(0,0,0,0.15);color:var(--text-main);text-align:center;">
-      <h2 id="startGateTitle" style="font-size:1.6rem;margin-bottom:8px;color:var(--text-main);font-family:var(--font-main);">CodeUp</h2>
-      <p style="font-size:0.85rem;color:var(--text-dim);margin-bottom:18px;font-style:italic;">Learn the basics of Python by voice — built for blind and low-vision beginners</p>
-      <p id="startGateMsg" style="color:var(--text-main);line-height:1.7;margin-bottom:16px;">
-        CodeUp is a voice-first place to learn Python basics, in English. It works <em>alongside</em> your screen reader and headphones — it does not replace NVDA, JAWS, Braille, or VS&nbsp;Code. Say or type "start tutorial" for a guided lesson, or "what can I do here" to hear example commands.
-      </p>
-      <p id="startGateChrome" style="color:var(--text-main);line-height:1.6;margin-bottom:16px;font-size:0.92rem;">
-        CodeUp works best on Google Chrome. Some browsers, especially Brave or privacy-heavy browsers, may block the microphone or speech. If voice does not work, open this page in Chrome — you can still type commands in the command box.
-      </p>
-      <p id="startGateTips" style="color:var(--text-dim);font-size:0.9rem;line-height:1.6;margin-bottom:24px;">
-        Tip: put on headphones or turn on your speaker, and allow the microphone if you want to talk. If voice does not work, just type the command in the box and press Enter.
-      </p>
-      <!-- English-only start. Hindi is temporarily hidden for this external-testing
-           release (browser Hindi TTS quality is inconsistent). -->
-      <div id="startGateButtons" style="display:flex;gap:12px;flex-wrap:wrap;">
-        <button id="startEnglish" class="cu-button cu-button-primary" style="flex:1;min-width:200px;font-size:1rem;padding:12px 16px;" autofocus>
-          Start in English (Enter)
-        </button>
-      </div>
-      <div id="startGateReturning" style="display:none;">
-        <button id="startReturning" class="cu-button cu-button-primary" style="min-width:200px;font-size:1rem;padding:12px 24px;">
-          Begin (Enter)
-        </button>
-      </div>
-    </div>
-  </div>
+  <!-- The blocking start gate was removed: /ide now opens directly into the
+       usable IDE. The onboarding + Chrome-first guidance moved to the
+       non-blocking #cuStartBanner (top of <body>) and #cuFirstUseHint (next to
+       the command box). English mode and audio priming are initialised on load
+       / first gesture instead of on a "Start" click — see the script below. -->
   <aside id="tutorialOverlay" hidden
        role="complementary" aria-labelledby="tutorialTopic"
        class="cu-tutorial-panel">
@@ -361,7 +358,13 @@
 
 
     
-      // ── Combined start gate: pick language AND unlock audio in one step ──
+      // ── Audio priming without a modal ───────────────────────────────────
+      // speechSynthesis needs a user gesture before it will play. The old start
+      // gate supplied that gesture on its "Start" click. With the gate gone we
+      // prime once on the first real interaction (pointer or key) anywhere on
+      // the page. This is invisible and never blocks the IDE; a typed or clicked
+      // command is itself a gesture, so speech for the very first command works
+      // regardless.
       function primeAudio() {
         try {
           if ('speechSynthesis' in window) {
@@ -371,119 +374,57 @@
           }
         } catch (e) {}
       }
-
-      // English-only for this external-testing release. Hindi mode is hidden in
-      // the UI because browser Hindi text-to-speech quality is inconsistent, so
-      // this always runs the English path. The `lang` argument is kept so the
-      // Hindi branch can be restored later without touching callers.
-      var _gateStarted = false;
-      function startWithLang(lang) {
-        if (_gateStarted) return;   // guard: focused button + key handler can both fire
-        _gateStarted = true;
-        lang = 'en';
-        safeStorage(function () { localStorage.setItem(LANG_KEY, lang); });
-        var sel = document.getElementById('languageSelector');
-        if (sel) { sel.value = lang; }
+      var _audioPrimed = false;
+      function primeAudioOnce() {
+        if (_audioPrimed) return;
+        _audioPrimed = true;
         primeAudio();
-        var gate = document.getElementById('startGate');
-        if (gate) {
-          gate.style.display = 'none';
-          gate.setAttribute('hidden', '');
-          gate.setAttribute('aria-hidden', 'true');
-          ['startEnglish', 'startReturning'].forEach(function (id) {
-            var btn = document.getElementById(id);
-            if (btn) { btn.disabled = true; btn.tabIndex = -1; }
-          });
-        }
-
-        // Move focus to the Tutorial button (a plain button), never a dropdown or
-        // combobox, so a screen reader does not read out list-navigation hints
-        // for a focused control on startup.
-        var tutorialBtn = document.getElementById('tutorialBtn');
-        if (tutorialBtn) tutorialBtn.focus();
-
-        // Keep page-load speech short and calm: one welcome line that names the
-        // first action. The longer command list stays behind "what can I do
-        // here", "help", and "say more" — it is never spoken automatically.
-        setTimeout(function () {
-          speak('Welcome to CodeUp. It works best on Chrome. You can speak or type commands to learn Python. Try saying: start tutorial, or type it in the command box.');
-        }, 800);
+        document.removeEventListener('pointerdown', primeAudioOnce, true);
+        document.removeEventListener('keydown', primeAudioOnce, true);
       }
-
-      function setupStartGate() {
-        // Pilot mode: always show the single English start button, never the
-        // returning-user shortcut. This avoids confusion when localStorage state
-        // gets weird across sessions.
-        var savedLang = null;
-        var gate = document.getElementById('startGate');
-        if (!gate) return;
-
-        var firstTimeBtns = document.getElementById('startGateButtons');
-        var returningBtns = document.getElementById('startGateReturning');
-        var enBtn  = document.getElementById('startEnglish');
-        var rBtn   = document.getElementById('startReturning');
-        var msg    = document.getElementById('startGateMsg');
-
-        if (savedLang) {
-          // Returning user — single Begin button.
-          firstTimeBtns.style.display = 'none';
-          returningBtns.style.display = 'block';
-          msg.textContent = 'Welcome back to CodeUp. Press Enter to begin.';
-          requestAnimationFrame(function () { rBtn.focus(); });
-          rBtn.addEventListener('click', function () { startWithLang('en'); });
-          function rKey(e) {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault();
-              document.removeEventListener('keydown', rKey);
-              startWithLang('en');
-            }
-          }
-          document.addEventListener('keydown', rKey);
-        } else {
-          // First-time user — English only (Hindi temporarily hidden). Enter,
-          // Space, or 1 begins. startWithLang() is guarded against double-fire,
-          // so the focused button activating on Enter/Space is harmless.
-          requestAnimationFrame(function () { enBtn.focus(); });
-          enBtn.addEventListener('click', function () { startWithLang('en'); });
-          function pickKey(e) {
-            if (e.key === 'Enter' || e.key === ' ' || e.key === '1') {
-              e.preventDefault();
-              document.removeEventListener('keydown', pickKey);
-              startWithLang('en');
-            }
-          }
-          document.addEventListener('keydown', pickKey);
-        }
-      }
-
-      window.addEventListener('load', setupStartGate);
+      document.addEventListener('pointerdown', primeAudioOnce, true);
+      document.addEventListener('keydown', primeAudioOnce, true);
 
       window.addEventListener('DOMContentLoaded', function () {
-        // Detect Firefox up front and warn the user once
-        var isFirefox = navigator.userAgent.toLowerCase().indexOf('firefox') !== -1;
-        if (isFirefox && !safeStorage(function () { return localStorage.getItem('firefoxWarningShown'); })) {
-          setTimeout(function () {
-            speak('Note: voice input is not supported in Firefox. All other features work, but for voice control please use Chrome or Edge.');
-            safeStorage(function () { localStorage.setItem('firefoxWarningShown', 'true'); });
-          }, 3500);
-        }
+        // English-only is the default — no modal, no language prompt, the IDE is
+        // usable immediately. Set the language up front so anything that reads it
+        // sees English from load. (Hindi stays hidden in the UI; backend Hindi
+        // parsing is untouched.)
+        safeStorage(function () { localStorage.setItem(LANG_KEY, 'en'); });
+        var langSel = document.getElementById('languageSelector');
+        if (langSel) langSel.value = 'en';
 
         // Tutorial open/close/next + panel buttons are wired in
         // static/tutorial.js (TutorialController._bind). Nothing to do here.
 
-
-        // Accessibility preferences
+        // Accessibility preferences. Restore them SILENTLY: restoring a saved
+        // colour mode must not auto-speak on page load. There is no automatic
+        // startup speech of any kind now — the IDE opens calmly, and the learner
+        // hears guidance only when they ask ("what can I do here", "start
+        // tutorial", "help").
         loadAccessibilityPreferences();
-        // We intentionally do NOT speak an accessibility shortcut list on page
-        // load. The old Alt+A / Alt+D / Alt+M colour-mode announcement was the
-        // stray phrase heard before startup, and it made the page talk for too
-        // long for first-time learners. Those controls are labelled buttons and
-        // the keyboard shortcuts still work; that guidance now lives only in the
-        // visible/ARIA UI, never in automatic speech.
+
+        // Non-blocking onboarding banner: Dismiss hides it and remembers the
+        // choice. The same guidance also sits by the command box, so dismissing
+        // loses nothing.
+        var banner  = document.getElementById('cuStartBanner');
+        var dismiss = document.getElementById('cuStartBannerDismiss');
+        if (banner && safeStorage(function () { return localStorage.getItem('cuStartBannerDismissed'); }) === 'true') {
+          banner.style.display = 'none';
+        }
+        if (dismiss) {
+          dismiss.addEventListener('click', function () {
+            if (banner) banner.style.display = 'none';
+            safeStorage(function () { localStorage.setItem('cuStartBannerDismissed', 'true'); });
+          });
+        }
       });
 
       // ── Accessibility preferences ────────────────────────────────────────
-      function applyColorVisionMode(mode) {
+      // `silent` suppresses the spoken confirmation. It is passed when restoring
+      // the saved preference on page load, so the IDE never auto-speaks on open;
+      // user-driven changes (the selector, Alt+A) still speak normally.
+      function applyColorVisionMode(mode, silent) {
         document.body.classList.remove(
           'theme-protanopia','theme-deuteranopia',
           'theme-tritanopia','theme-high-contrast'
@@ -500,7 +441,7 @@
           'tritanopia':    'Tritanopia mode for blue-blind users',
           'high-contrast': 'High contrast mode'
         };
-        speak((modeNames[mode] || mode) + ' activated.');
+        if (!silent) speak((modeNames[mode] || mode) + ' activated.');
       }
 
       function loadAccessibilityPreferences() {
@@ -511,7 +452,7 @@
 
         var sel = document.getElementById('colorVisionMode');
         if (sel) sel.value = colorMode;
-        applyColorVisionMode(colorMode);
+        applyColorVisionMode(colorMode, true);   // restore silently on page load
 
         var dyslexiaBtn = document.getElementById('dyslexiaToggle');
         if (dyslexiaMode && dyslexiaBtn) {

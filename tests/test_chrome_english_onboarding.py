@@ -82,14 +82,6 @@ def _index_html():
     return _read("templates/index.html")
 
 
-def _welcome_speech():
-    """The single page-load welcome line spoken by startWithLang()."""
-    html = _index_html()
-    m = re.search(r"speak\('(Welcome to CodeUp[^']*)'\)", html)
-    assert m, "page-load welcome speak('Welcome to CodeUp …') not found in index.html"
-    return m.group(1)
-
-
 def _spoken_literals(html):
     """Every simple string literal passed as the first arg to speak('…')/speak(\"…\").
 
@@ -150,16 +142,16 @@ class TestEnglishOnly:
 
 
 # --------------------------------------------------------------------------- #
-# 2. Chrome-first compatibility messaging
+# 2. Chrome-first compatibility messaging (now in the non-blocking banner/hint)
 # --------------------------------------------------------------------------- #
 class TestChromeMessaging:
-    def test_ide_start_gate_recommends_chrome_and_warns_about_brave(self):
+    def test_ide_banner_recommends_chrome_and_warns_about_brave(self):
         low = _index_html().lower()
         assert "works best on google chrome" in low
         assert "brave" in low
         assert "privacy-heavy" in low
 
-    def test_ide_start_gate_offers_typed_command_fallback(self):
+    def test_ide_banner_offers_typed_command_fallback(self):
         low = _index_html().lower()
         assert "command box" in low
         assert "type the command in the box" in low or "type a command" in low
@@ -174,31 +166,59 @@ class TestChromeMessaging:
 
 
 # --------------------------------------------------------------------------- #
-# 3. Short, calm page-load welcome speech
+# 3. Open directly to the IDE — no blocking gate, no automatic startup speech
 # --------------------------------------------------------------------------- #
-class TestStartupSpeech:
-    def test_welcome_is_short(self):
-        speech = _welcome_speech()
-        assert len(speech) < 320, len(speech)  # one line, not a manual
+class TestDirectToIdeNoGate:
+    def test_no_blocking_start_gate_in_dom(self):
+        html = _index_html()
+        # The whole modal gate is gone (id, the "Start in English" button, and
+        # the returning-user shortcut).
+        assert 'id="startGate"' not in html
+        assert "Start in English" not in html
+        assert 'id="startEnglish"' not in html
+        assert 'id="startReturning"' not in html
 
-    def test_welcome_recommends_chrome(self):
-        assert "chrome" in _welcome_speech().lower()
+    def test_command_box_is_present_immediately(self):
+        html = _index_html()
+        # The typed-command fallback is usable the moment the page loads.
+        assert 'id="voiceText"' in html
+        assert 'id="sendCommandBtn"' in html
 
-    def test_welcome_offers_speak_or_type(self):
-        low = _welcome_speech().lower()
-        assert "speak or type" in low
-        assert "command box" in low  # typed fallback named explicitly
+    def test_non_blocking_banner_and_first_use_hint_exist(self):
+        html = _index_html()
+        assert 'id="cuStartBanner"' in html
+        assert 'id="cuFirstUseHint"' in html
+        # The banner is a region, not a modal dialog/overlay.
+        m = re.search(r'<div id="cuStartBanner"[^>]*>', html)
+        assert m and 'role="region"' in m.group(0)
+        assert 'aria-modal' not in m.group(0)
 
-    def test_welcome_suggests_start_tutorial(self):
-        assert "start tutorial" in _welcome_speech().lower()
 
-    def test_welcome_does_not_dump_a_huge_command_list(self):
-        low = _welcome_speech().lower()
-        for adv in ADVANCED_DUMP:
-            assert adv not in low, adv
+class TestNoStartupSpeech:
+    def test_no_auto_welcome_speech_on_load(self):
+        # The old multi-line / one-line welcome auto-speech is gone entirely.
+        lits = _spoken_literals(_index_html())
+        for lit in lits:
+            assert "welcome to codeup" not in lit.lower(), lit
 
-    def test_welcome_has_no_cycle_phrase(self):
-        assert "cycle" not in _welcome_speech().lower()
+    def test_no_auto_firefox_speech_on_load(self):
+        # The Firefox notice no longer auto-speaks on load (app.js still surfaces
+        # it when the user actually tries to use voice).
+        for lit in _spoken_literals(_index_html()):
+            assert "not supported in firefox" not in lit.lower(), lit
+
+    def test_no_spoken_shell_string_dumps_a_command_list(self):
+        for lit in _spoken_literals(_index_html()):
+            low = lit.lower()
+            for adv in ADVANCED_DUMP:
+                assert adv not in low, (adv, lit)
+
+    def test_saved_color_mode_restore_is_silent_on_load(self):
+        # loadAccessibilityPreferences() restores the colour mode with the silent
+        # flag so the IDE never auto-speaks "… activated." on page load.
+        html = _index_html()
+        assert re.search(r"applyColorVisionMode\(colorMode,\s*true\)", html)
+        assert re.search(r"function applyColorVisionMode\(mode,\s*silent\)", html)
 
 
 # --------------------------------------------------------------------------- #
@@ -214,12 +234,13 @@ class TestCycleBugRemoved:
         for literal in _spoken_literals(_index_html()):
             assert "cycle" not in literal.lower(), literal
 
-    def test_startup_focus_lands_on_a_button_not_a_dropdown(self):
+    def test_no_autofocus_traps_a_control_on_load(self):
         html = _index_html()
-        # The gate's primary action and the post-start focus are buttons, so a
-        # screen reader never announces combobox/list navigation hints on load.
-        assert re.search(r'<button id="startEnglish"[^>]*autofocus', html)
-        assert "getElementById('tutorialBtn')" in html
+        # With the gate gone there is no autofocus stealing focus into a button
+        # or dropdown on load — the page opens with the IDE ready, nothing grabs
+        # the screen reader into a control that announces navigation hints.
+        assert "autofocus" not in html
+        assert not re.search(r"<select[^>]*autofocus", html)
         assert not re.search(r"<select[^>]*autofocus", html)
 
 

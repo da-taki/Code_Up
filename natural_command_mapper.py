@@ -18,6 +18,17 @@ ALLOWED_INTENTS = {
     "help_short",
     "help_more",
     "start_tutorial",
+    "insert_print_statement",
+    "insert_variable_example",
+    "insert_input_example",
+    "insert_if_statement",
+    "insert_for_loop",
+    "insert_while_loop",
+    "insert_list_example",
+    "insert_function_example",
+    "add_comments",
+    "simplify_current_code",
+    "convert_loop_type",
     "insert_beginner_loop",
     "run_code",
     "read_output",
@@ -57,7 +68,32 @@ _BLOCKED_KEYS = {
     "command_to_run",
     "executable",
 }
-_LOOP_SLOT_KEYS = {"start", "stop", "output"}
+_LEGACY_LOOP_SLOT_KEYS = {"start", "stop", "output"}
+_INTENT_SLOT_KEYS = {
+    "insert_beginner_loop": _LEGACY_LOOP_SLOT_KEYS,
+    "insert_print_statement": {"text", "value"},
+    "insert_variable_example": {"kind", "name", "value"},
+    "insert_input_example": {"kind", "name"},
+    "insert_if_statement": {"kind", "variable", "threshold"},
+    "insert_for_loop": {
+        "start", "stop", "step", "kind", "output", "variable", "collection",
+        "count", "direction",
+    },
+    "insert_while_loop": {
+        "start", "stop", "step", "kind", "output", "variable", "count",
+        "direction",
+    },
+    "insert_list_example": {"kind", "collection", "loop"},
+    "insert_function_example": {"kind", "name"},
+    "add_comments": {"target"},
+    "simplify_current_code": {"target"},
+    "convert_loop_type": {"target", "to", "from"},
+    "generate_beginner_program": {"kind", "topic", "prompt"},
+    "edit_previous_program": {"kind", "target", "to"},
+}
+_NUMERIC_SLOT_KEYS = {"start", "stop", "step", "count", "threshold"}
+_BOOL_SLOT_KEYS = {"loop"}
+_SAFE_SLOT_TEXT_RE = re.compile(r"^[A-Za-z0-9 _.,:-]{0,80}$")
 
 
 def mapper_messages(command_text: str, *, has_code: bool = False) -> Tuple[str, str]:
@@ -69,9 +105,10 @@ def mapper_messages(command_text: str, *, has_code: bool = False) -> Tuple[str, 
         "CodeUp command to one known intent. Return JSON only. Use only these "
         f"allowed intents: {allowed}. Prefer unknown_clarify if unsure. Never "
         "invent new commands. Never include API keys or internal details. Never "
-        "put code in the response. Schema: {\"intent\":\"insert_beginner_loop\","
-        "\"confidence\":0.0,\"slots\":{\"start\":0,\"stop\":3,"
-        "\"output\":\"print_numbers\"},\"reason\":\"short log reason\"}."
+        "put code in the response. Slots may describe only small template choices "
+        "such as text, kind, start, stop, step, collection, or to. Schema: "
+        "{\"intent\":\"insert_for_loop\",\"confidence\":0.0,"
+        "\"slots\":{\"start\":1,\"stop\":5},\"reason\":\"short log reason\"}."
     )
     user = (
         f"Editor has code: {'yes' if has_code else 'no'}\n"
@@ -139,8 +176,14 @@ def validate_mapping(mapping: Any) -> Tuple[bool, str]:
     if not isinstance(slots, dict):
         return False, "invalid_slots"
 
+    allowed_slot_keys = _INTENT_SLOT_KEYS.get(intent, set())
+    if slots and intent not in _INTENT_SLOT_KEYS:
+        return False, "unexpected_slots"
+    if set(slots) - allowed_slot_keys:
+        return False, "invalid_slots"
+
     if intent == "insert_beginner_loop":
-        if set(slots) - _LOOP_SLOT_KEYS:
+        if set(slots) - _LEGACY_LOOP_SLOT_KEYS:
             return False, "invalid_loop_slots"
         try:
             start = int(slots.get("start", 0))
@@ -150,10 +193,29 @@ def validate_mapping(mapping: Any) -> Tuple[bool, str]:
         output = str(slots.get("output", "print_numbers") or "")
         if start != 0 or stop != 3 or output != "print_numbers":
             return False, "unsupported_loop_slots"
-    elif slots:
-        # The first mapper version only needs loop slots. Other commands route
-        # through existing handlers and require no AI-provided payload.
-        return False, "unexpected_slots"
+    else:
+        for key, value in slots.items():
+            if key in _NUMERIC_SLOT_KEYS:
+                try:
+                    number = int(value)
+                except (TypeError, ValueError):
+                    return False, "invalid_numeric_slot"
+                if abs(number) > 100:
+                    return False, "slot_out_of_range"
+                if key == "step" and number == 0:
+                    return False, "invalid_step"
+                continue
+            if key in _BOOL_SLOT_KEYS:
+                if isinstance(value, bool):
+                    continue
+                if str(value).strip().lower() in {"true", "false", "yes", "no", "1", "0"}:
+                    continue
+                return False, "invalid_bool_slot"
+            text_value = str(value or "")
+            if "\n" in text_value or "\r" in text_value:
+                return False, "unsafe_slot_text"
+            if not _SAFE_SLOT_TEXT_RE.match(text_value):
+                return False, "unsafe_slot_text"
 
     reason = str(mapping.get("reason", "") or "")
     if len(reason) > 180:

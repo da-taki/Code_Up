@@ -152,6 +152,66 @@ function Stats() {
   );
 }
 
+// New-learner onboarding: what CodeUp is (and is not), the environment tips a
+// blind beginner needs, and an explicit, screen-reader-friendly "how to start"
+// list. Kept plain and semantic (real heading + ordered list) so it reads well
+// in NVDA/JAWS and never depends on the animation.
+function StartHere() {
+  const steps = [
+    'Open CodeUp — click "Open the IDE", then pick your language.',
+    'Allow microphone permission if you want to talk to CodeUp.',
+    'No microphone? Use the command box — type a command and press Enter.',
+    'Try: "what can I do here" — to hear what you can do.',
+    'Try: "start tutorial" — to begin the guided, spoken lessons.',
+    'Try: "insert a for loop that prints the first 3 whole numbers".',
+    'Try: "run" — to run your program and hear the output.',
+    'Try: "explain this code" — to hear how your program works.',
+  ];
+  return (
+    <section id="start-here" className="start-here" aria-labelledby="start-here-heading"
+             style={{ padding: "72px 0", borderTop: "1px solid var(--line, rgba(0,0,0,0.12))" }}>
+      <div className="wrap reveal">
+        <span className="eyebrow">New here? Start in five minutes</span>
+        <h2 id="start-here-heading" style={{ marginTop: 8 }}>
+          A voice-first way to learn <span className="accent">Python basics</span>.
+        </h2>
+        <p style={{ maxWidth: 760, lineHeight: 1.7 }}>
+          CodeUp is built for blind and low-vision beginners. You create, run,
+          debug, and understand small Python programs by speaking or typing, and
+          everything important is read aloud. It is for <em>learning the basics</em> —
+          it works <em>alongside</em> your screen reader, Braille display, and editor.
+          It is not a replacement for NVDA, JAWS, Braille, or VS&nbsp;Code.
+        </p>
+        <div className="start-here-grid"
+             style={{ display: "flex", flexWrap: "wrap", gap: 32, marginTop: 24 }}>
+          <div style={{ flex: "1 1 320px", minWidth: 280 }}>
+            <h3 style={{ marginBottom: 12 }}>How to start</h3>
+            <ol style={{ lineHeight: 1.8, paddingLeft: 22 }}>
+              {steps.map((s, i) => (
+                <li key={i}>{s}</li>
+              ))}
+            </ol>
+          </div>
+          <div style={{ flex: "1 1 280px", minWidth: 260 }}>
+            <h3 style={{ marginBottom: 12 }}>Before you begin</h3>
+            <ul style={{ lineHeight: 1.8, paddingLeft: 22 }}>
+              <li>Put on headphones, or turn on your speaker, so you can hear CodeUp.</li>
+              <li>Use a recent Chrome or Edge browser, and allow it to play sound and speech.</li>
+              <li>Allow the microphone if you want voice. You can always type instead.</li>
+              <li>Say "help" any time, or "stop everything" to stop the talking.</li>
+            </ul>
+          </div>
+        </div>
+        <div className="cta-row" style={{ marginTop: 28 }}>
+          <a className="btn btn-primary" href="/ide">
+            Open the IDE <span className="arrow">→</span>
+          </a>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function CTA() {
   return (
     <section className="cta">
@@ -198,5 +258,6 @@ function Foot() {
 
 window.Features = Features;
 window.Stats = Stats;
+window.StartHere = StartHere;
 window.CTA = CTA;
 window.Foot = Foot;

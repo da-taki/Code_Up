@@ -1088,11 +1088,13 @@ def test_voice_intent_parsing(client, voice_input, expected_action, check):
 
 
 def test_voice_unknown_command(client):
-    """Completely nonsense input resolves to unknown or confirm, never crashes."""
+    """Completely nonsense input clarifies or confirms, never crashes."""
     res = client.post("/voice-command", json={"text": "xyzzy blort flibble"})
     assert res.status_code == 200
     data = res.get_json()
-    assert data["action"] in ("unknown", "confirm")
+    assert data["action"] in ("clarify", "confirm")
+    if data["action"] == "clarify":
+        assert data.get("needs_clarification") is True
 
 
 def test_deterministic_voice_command_does_not_call_conversational_ai(client, monkeypatch):

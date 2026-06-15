@@ -216,7 +216,20 @@ _LOOP_COMMAND_RE = re.compile(
 )
 _LOOP_OUTPUT_HINT_RE = re.compile(
     r"\b(first\s+(?:3|three)|(?:3|three)\s+(?:whole\s+)?numbers?|whole\s+numbers?|"
-    r"numbers?|zero\s+to\s+two|0\s+to\s+2|print|prints|prince|trends|friends)\b",
+    r"numbers?|zero\s+to\s+two|0\s+to\s+2|0\s+1\s+2|zero\s+one\s+two|"
+    r"print|prints|show|shows|display|displays|prince|trends|friends)\b",
+    re.IGNORECASE,
+)
+_PRINT_NUMBER_LOOP_RE = re.compile(
+    r"^(?:please\s+|hey\s+|ok\s+|okay\s+|alright\s+|can\s+you\s+|could\s+you\s+|would\s+you\s+)*"
+    r"(?:print|show|display)\s+(?P<tail>.+?)\s+"
+    r"(?:using|with|through|in)\s+(?:a\s+|an\s+|the\s+)?(?:for\s+)?loop\b.*$",
+    re.IGNORECASE,
+)
+_PRINT_SEQUENCE_REQUEST_RE = re.compile(
+    r"^(?:please\s+|hey\s+|ok\s+|okay\s+|alright\s+|can\s+you\s+|could\s+you\s+|would\s+you\s+)*"
+    r"(?:make|have|get)\s+it\s+(?:print|prints|show|shows|display|displays)\s+"
+    r"(?P<tail>.+)$",
     re.IGNORECASE,
 )
 _NOISY_LOOP_REPAIRS = (
@@ -247,6 +260,18 @@ def repair_noisy_loop_transcript(text: str) -> str:
         repaired = pattern.sub(replacement, repaired)
     repaired = re.sub(r"\s+", " ", repaired).strip()
     return repaired
+
+
+def looks_like_print_sequence_request(text: str) -> bool:
+    """True for shorthand like 'make it print 0 1 2'."""
+    raw = " ".join(str(text or "").split())
+    if not raw:
+        return False
+    match = _PRINT_SEQUENCE_REQUEST_RE.match(raw)
+    if not match:
+        return False
+    start, count, _explicit = _loop_bounds(match.group("tail") or "")
+    return start == 0 and count == 3
 
 
 def looks_like_unclear_loop_command(text: str) -> bool:
@@ -289,6 +314,8 @@ def _loop_bounds(tail: str):
         a, b = _to_number(m.group(1)), _to_number(m.group(2))
         if a is not None and b is not None and b >= a:
             return a, (b - a + 1), True
+    if re.search(r"\b(?:0\s+1\s+2|zero\s+one\s+two)\b", low):
+        return 0, 3, True
     # "first 3 whole numbers" / "three numbers" / "5 natural numbers".
     m = re.search(r"\b(?:first\s+)?([a-z0-9-]+)\s+(?:whole\s+|natural\s+|counting\s+)?numbers?\b", low)
     if m:
@@ -321,15 +348,24 @@ def build_counting_loop_insert(text: str):
     if m:
         tail = m.group("tail") or ""
     else:
-        m = _BARE_COUNTING_LOOP_RE.match(repaired)
+        m = _PRINT_NUMBER_LOOP_RE.match(repaired)
+        if m:
+            tail = m.group("tail") or ""
+        else:
+            m = _PRINT_SEQUENCE_REQUEST_RE.match(repaired)
+            if m:
+                tail = m.group("tail") or ""
+            else:
+                m = _BARE_COUNTING_LOOP_RE.match(repaired)
         if not m:
             return None
-        tail = m.group("tail") or ""
-        no_verb_fragment = True
-        # "for loop" by itself may be a topic, not a command. Repair no-verb
-        # fragments only when the learner also supplied number/output hints.
-        if not _LOOP_OUTPUT_HINT_RE.search(raw) and not _LOOP_OUTPUT_HINT_RE.search(repaired):
-            return None
+        if m.re is _BARE_COUNTING_LOOP_RE:
+            tail = m.group("tail") or ""
+            no_verb_fragment = True
+            # "for loop" by itself may be a topic, not a command. Repair no-verb
+            # fragments only when the learner also supplied number/output hints.
+            if not _LOOP_OUTPUT_HINT_RE.search(raw) and not _LOOP_OUTPUT_HINT_RE.search(repaired):
+                return None
     start, count, explicit = _loop_bounds(tail)
     if start is None:
         return None

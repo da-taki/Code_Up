@@ -175,7 +175,11 @@ const VoiceEngine = (function () {
   }
 
   function _getVoiceForLang(lang) {
-    if (lang === 'hi') return _hindiVoice;
+    // Hindi mode is temporarily hidden in the UI because browser Hindi
+    // text-to-speech quality is inconsistent, so every utterance uses the one
+    // resolved English voice — even if a 'hi' item somehow reaches here.
+    // _hindiVoice is still resolved in _loadVoices(); to restore Hindi
+    // narration later, hand back _hindiVoice for lang === 'hi' again.
     return _englishVoice;
   }
 

@@ -2,7 +2,7 @@
 const { useEffect, useState, useRef } = React;
 
 // ────────────────────────────────────────────────────────────
-// Voice typewriter — cycles through bilingual command list
+// Voice typewriter — cycles through the command list (English only)
 // ────────────────────────────────────────────────────────────
 const VOICE_LINES = [
   { say: "run the code",                     act: "▸ python sieve.py", lang: "EN", key: "Ctrl+Enter" },
@@ -13,10 +13,6 @@ const VOICE_LINES = [
   { say: "set breakpoint at line 10",        act: "▸ bp added · line 10", lang: "EN", key: "F9" },
   { say: "explain simply",                   act: "▸ beginner-mode error", lang: "EN", key: "—" },
   { say: "remember this as quick sort",      act: "▸ macro saved", lang: "EN", key: "—" },
-  { say: "चलाओ",                              act: "▸ कोड चल रहा है",  lang: "हिं", key: "Ctrl+Enter" },
-  { say: "लाइन बीस पर जाओ",                  act: "▸ cursor → line 20", lang: "हिं", key: "Alt+G" },
-  { say: "कोड समझाओ",                         act: "▸ AI summary",       lang: "हिं", key: "—" },
-  { say: "मदद",                               act: "▸ help opened",      lang: "हिं", key: "Alt+H" },
 ];
 
 function Voice() {
@@ -50,8 +46,9 @@ function Voice() {
           </div>
           <p className="desc">
             A grammar-based intent parser. Not exact-match. Speak naturally in
-            English or Hindi — say what you'd say to a person who can read code
-            for you. CodeUp will figure it out.
+            English — say what you'd say to a person who can read code
+            for you. CodeUp will figure it out. Prefer to type? Every command
+            works typed into the command box too.
           </p>
         </div>
 
@@ -67,7 +64,7 @@ function Voice() {
               {cur.act}
             </div>
             <div className="voice-meta">
-              <div><div className="label">Language</div><div className="value">{cur.lang === "EN" ? "English (en-US)" : "हिंदी (hi-IN)"}</div></div>
+              <div><div className="label">Language</div><div className="value">English (en-US)</div></div>
               <div><div className="label">Hotkey</div><div className="value">{cur.key}</div></div>
               <div><div className="label">Engine</div><div className="value">Web Speech API</div></div>
             </div>

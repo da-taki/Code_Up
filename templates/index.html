@@ -132,14 +132,14 @@
         <button class="cu-button" id="stepNarrationBtn" aria-label="Run with step narration">Step Narration</button>
         <button class="cu-button" id="mistakeReplayBtn" aria-label="Compare before and after mistake">Mistake Replay</button>
         <button class="cu-button cu-button-secondary" id="saveBtn" aria-label="Save current code as snippet">Save</button>
-        <select id="languageSelector" class="cu-language-selector" aria-label="Select language for AI responses">
+        <!-- English-only for this external-testing release. Hindi mode is
+             temporarily hidden because browser Hindi text-to-speech quality is
+             inconsistent. The backend Hindi parsing is left untouched; to bring
+             the picker back, restore the Hindi <option>s here and the voice
+             language selector. getLanguage() reads this control, so keeping a
+             single English option makes English the default everywhere. -->
+        <select id="languageSelector" class="cu-language-selector" aria-label="Response language: English" disabled title="CodeUp is English-only for now">
           <option value="en">English</option>
-          <option value="hi">हिंदी (Hindi)</option>
-        </select>
-        <select id="voiceLangSelector" class="cu-language-selector" aria-label="Voice recognition language">
-          <option value="auto">Auto</option>
-          <option value="en">English</option>
-          <option value="hi">Hindi</option>
         </select>
       </div>
 
@@ -290,17 +290,19 @@
       <h2 id="startGateTitle" style="font-size:1.6rem;margin-bottom:8px;color:var(--text-main);font-family:var(--font-main);">CodeUp</h2>
       <p style="font-size:0.85rem;color:var(--text-dim);margin-bottom:18px;font-style:italic;">Learn the basics of Python by voice — built for blind and low-vision beginners</p>
       <p id="startGateMsg" style="color:var(--text-main);line-height:1.7;margin-bottom:16px;">
-        CodeUp is a voice-first place to learn Python basics. It works <em>alongside</em> your screen reader and headphones — it does not replace NVDA, JAWS, Braille, or VS&nbsp;Code. Choose your language to begin. Then say or type "start tutorial" for a guided lesson, or "what can I do here" to hear example commands.
+        CodeUp is a voice-first place to learn Python basics, in English. It works <em>alongside</em> your screen reader and headphones — it does not replace NVDA, JAWS, Braille, or VS&nbsp;Code. Say or type "start tutorial" for a guided lesson, or "what can I do here" to hear example commands.
+      </p>
+      <p id="startGateChrome" style="color:var(--text-main);line-height:1.6;margin-bottom:16px;font-size:0.92rem;">
+        CodeUp works best on Google Chrome. Some browsers, especially Brave or privacy-heavy browsers, may block the microphone or speech. If voice does not work, open this page in Chrome — you can still type commands in the command box.
       </p>
       <p id="startGateTips" style="color:var(--text-dim);font-size:0.9rem;line-height:1.6;margin-bottom:24px;">
         Tip: put on headphones or turn on your speaker, and allow the microphone if you want to talk. If voice does not work, just type the command in the box and press Enter.
       </p>
+      <!-- English-only start. Hindi is temporarily hidden for this external-testing
+           release (browser Hindi TTS quality is inconsistent). -->
       <div id="startGateButtons" style="display:flex;gap:12px;flex-wrap:wrap;">
-        <button id="startEnglish" class="cu-button cu-button-primary" style="flex:1;min-width:140px;font-size:1rem;padding:12px 16px;" autofocus>
-          English (1)
-        </button>
-        <button id="startHindi" class="cu-button" style="flex:1;min-width:140px;font-size:1rem;padding:12px 16px;">
-          हिंदी / Hindi (2)
+        <button id="startEnglish" class="cu-button cu-button-primary" style="flex:1;min-width:200px;font-size:1rem;padding:12px 16px;" autofocus>
+          Start in English (Enter)
         </button>
       </div>
       <div id="startGateReturning" style="display:none;">
@@ -370,55 +372,48 @@
         } catch (e) {}
       }
 
+      // English-only for this external-testing release. Hindi mode is hidden in
+      // the UI because browser Hindi text-to-speech quality is inconsistent, so
+      // this always runs the English path. The `lang` argument is kept so the
+      // Hindi branch can be restored later without touching callers.
+      var _gateStarted = false;
       function startWithLang(lang) {
+        if (_gateStarted) return;   // guard: focused button + key handler can both fire
+        _gateStarted = true;
+        lang = 'en';
         safeStorage(function () { localStorage.setItem(LANG_KEY, lang); });
         var sel = document.getElementById('languageSelector');
-        if (sel) { sel.value = lang; sel.dispatchEvent(new Event('change')); }
+        if (sel) { sel.value = lang; }
         primeAudio();
         var gate = document.getElementById('startGate');
         if (gate) {
           gate.style.display = 'none';
           gate.setAttribute('hidden', '');
           gate.setAttribute('aria-hidden', 'true');
-          ['startEnglish', 'startHindi', 'startReturning'].forEach(function (id) {
+          ['startEnglish', 'startReturning'].forEach(function (id) {
             var btn = document.getElementById(id);
             if (btn) { btn.disabled = true; btn.tabIndex = -1; }
           });
         }
 
+        // Move focus to the Tutorial button (a plain button), never a dropdown or
+        // combobox, so a screen reader does not read out list-navigation hints
+        // for a focused control on startup.
         var tutorialBtn = document.getElementById('tutorialBtn');
         if (tutorialBtn) tutorialBtn.focus();
 
-        if (typeof window.warnIfHindiUnavailable === 'function') {
-          window.warnIfHindiUnavailable(lang);
-        }
+        // Keep page-load speech short and calm: one welcome line that names the
+        // first action. The longer command list stays behind "what can I do
+        // here", "help", and "say more" — it is never spoken automatically.
         setTimeout(function () {
-          if (lang === 'hi') {
-            // Hindi: keep it short — demo testing has been English-only.
-            speak('CodeUp में स्वागत है। शुरू करने के लिए माइक चालू करें।');
-          } else {
-            // Combine into a single utterance so Chrome doesn't drop the
-            // first line when queueing multiple speak() calls back-to-back.
-            speak('Welcome to CodeUp, a Python IDE built for blind learners. Say "start tutorial" to begin the guided tutorial, or say "what can I do here" to hear example commands.');
-            // Stagger the rest so each has time to actually play. These queue in
-            // order through the same VoiceEngine path, so the learner hears the
-            // whole onboarding without overlap.
-            setTimeout(function () {
-              speak('CodeUp helps you learn the basics of Python. It works together with your screen reader and headphones; it does not replace them.');
-            }, 100);
-            setTimeout(function () {
-              speak('If you would like to talk, allow the microphone, then press Control Shift M to turn on voice control. If the microphone does not work, you can always type a command into the box and press Enter.');
-            }, 200);
-            setTimeout(function () {
-              speak('To start learning now, say, or type: start tutorial. To hear what you can do, say: what can I do here. If you ever get stuck, just say: help. Let us begin.');
-            }, 300);
-          }
+          speak('Welcome to CodeUp. It works best on Chrome. You can speak or type commands to learn Python. Try saying: start tutorial, or type it in the command box.');
         }, 800);
       }
 
       function setupStartGate() {
-        // Pilot mode: always show language picker, never the returning-user shortcut.
-        // This avoids confusion when localStorage state gets weird across sessions.
+        // Pilot mode: always show the single English start button, never the
+        // returning-user shortcut. This avoids confusion when localStorage state
+        // gets weird across sessions.
         var savedLang = null;
         var gate = document.getElementById('startGate');
         if (!gate) return;
@@ -426,46 +421,36 @@
         var firstTimeBtns = document.getElementById('startGateButtons');
         var returningBtns = document.getElementById('startGateReturning');
         var enBtn  = document.getElementById('startEnglish');
-        var hiBtn  = document.getElementById('startHindi');
         var rBtn   = document.getElementById('startReturning');
         var msg    = document.getElementById('startGateMsg');
 
         if (savedLang) {
-          // Returning user — single Begin button, language already chosen
+          // Returning user — single Begin button.
           firstTimeBtns.style.display = 'none';
           returningBtns.style.display = 'block';
-          msg.textContent = savedLang === 'hi'
-            ? 'CodeUp में वापस स्वागत है। शुरू करने के लिए Enter दबाएं।'
-            : 'Welcome back to CodeUp. Press Enter to begin.';
+          msg.textContent = 'Welcome back to CodeUp. Press Enter to begin.';
           requestAnimationFrame(function () { rBtn.focus(); });
-          rBtn.addEventListener('click', function () { startWithLang(savedLang); });
+          rBtn.addEventListener('click', function () { startWithLang('en'); });
           function rKey(e) {
             if (e.key === 'Enter' || e.key === ' ') {
               e.preventDefault();
               document.removeEventListener('keydown', rKey);
-              startWithLang(savedLang);
+              startWithLang('en');
             }
           }
           document.addEventListener('keydown', rKey);
         } else {
-          // First-time user — pick language
+          // First-time user — English only (Hindi temporarily hidden). Enter,
+          // Space, or 1 begins. startWithLang() is guarded against double-fire,
+          // so the focused button activating on Enter/Space is harmless.
           requestAnimationFrame(function () { enBtn.focus(); });
-
-          // Trap Tab between the two language buttons until choice made
-          function trapTab(e) {
-            if (e.key !== 'Tab') return;
-            var active = document.activeElement;
-            e.preventDefault();
-            if (active === enBtn) hiBtn.focus(); else enBtn.focus();
-          }
-          gate.addEventListener('keydown', trapTab);
-
           enBtn.addEventListener('click', function () { startWithLang('en'); });
-          hiBtn.addEventListener('click', function () { startWithLang('hi'); });
-
           function pickKey(e) {
-            if (e.key === '1') { e.preventDefault(); document.removeEventListener('keydown', pickKey); startWithLang('en'); }
-            if (e.key === '2') { e.preventDefault(); document.removeEventListener('keydown', pickKey); startWithLang('hi'); }
+            if (e.key === 'Enter' || e.key === ' ' || e.key === '1') {
+              e.preventDefault();
+              document.removeEventListener('keydown', pickKey);
+              startWithLang('en');
+            }
           }
           document.addEventListener('keydown', pickKey);
         }
@@ -489,13 +474,12 @@
 
         // Accessibility preferences
         loadAccessibilityPreferences();
-        var announced = safeStorage(function () { return localStorage.getItem('accessibilityAnnouncementMade'); });
-        if (!announced) {
-          setTimeout(function () {
-            speak('Accessibility features available. Press Alt+A to cycle color modes, Alt+D for dyslexia mode, Alt+M for reduced motion.');
-            safeStorage(function () { localStorage.setItem('accessibilityAnnouncementMade', 'true'); });
-          }, 2000);
-        }
+        // We intentionally do NOT speak an accessibility shortcut list on page
+        // load. The old Alt+A / Alt+D / Alt+M colour-mode announcement was the
+        // stray phrase heard before startup, and it made the page talk for too
+        // long for first-time learners. Those controls are labelled buttons and
+        // the keyboard shortcuts still work; that guidance now lives only in the
+        // visible/ARIA UI, never in automatic speech.
       });
 
       // ── Accessibility preferences ────────────────────────────────────────

@@ -1051,7 +1051,7 @@ body.theme-night .tk-num { color: #e7c773; }
   to   { transform: scale(1.0); opacity: 0; }
 }
 
-/* Hindi/English bilingual art */
+/* Say / type input art */
 .bil-art {
   display: grid;
   grid-template-columns: 1fr auto 1fr;

@@ -37,6 +37,7 @@ def _edit_code(data):
     ("loop from 1 to 5", FOR_1_TO_5),
     ("print numbers 1 to 5", FOR_1_TO_5),
     ("loop even to 10", EVEN_TO_10),
+    ("print even numbers up to 10", EVEN_TO_10),
     ("loop odd to 9", ODD_TO_9),
     ("make a fruits list loop", FRUITS_LOOP),
     ("make a safe while loop", SAFE_WHILE),
@@ -88,6 +89,7 @@ def test_infinite_loop_command_clarifies_and_does_not_insert_code(client):
 
 def test_existing_spoken_insert_and_noisy_loop_repairs_still_work(client):
     assert _edit_code(_vc(client, "insert print hello", code="")) == 'print("hello")'
+    assert _edit_code(_vc(client, "print hello", code="")) == 'print("Hello")'
     assert _edit_code(_vc(client, "insert a for loop that prints hello three times", code="")) == (
         'for i in range(3):\n    print("hello")'
     )

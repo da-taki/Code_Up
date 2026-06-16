@@ -304,12 +304,13 @@ def test_requested_loop_phrases_insert_exact_beginner_loop(client, phrase):
     assert phrase.lower() not in data["ai_action"]["code"].lower()
 
 
-def test_make_it_print_sequence_with_existing_code_clarifies_not_raw_insert(client):
+def test_make_it_print_sequence_with_existing_code_edits_not_raw_insert(client):
     data = _vc(client, "make it print 0 1 2", code='print("old")')
 
-    assert data["action"] == "clarify"
-    assert data["needs_clarification"] is True
-    assert "ai_action" not in data
+    assert data["action"] == "conversational_edit"
+    assert data["ai_action"]["action"] == "replace_code"
+    assert data["ai_action"]["code"] == 'print("0 1 2")'
+    assert "make it print" not in data["ai_action"]["code"].lower()
 
 
 def test_nonsense_loop_command_clarifies_not_raw_insert(client):

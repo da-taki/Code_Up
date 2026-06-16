@@ -39,6 +39,7 @@ ALLOWED_INTENTS = {
     "replay_mistake",
     "summarize_structure",
     "generate_beginner_program",
+    "edit_current_code",
     "edit_previous_program",
     "export_project",
     "stop_everything",
@@ -89,14 +90,29 @@ _INTENT_SLOT_KEYS = {
     "simplify_current_code": {"target"},
     "convert_loop_type": {"target", "to", "from"},
     "generate_beginner_program": {"kind", "topic", "prompt"},
-    "edit_previous_program": {"kind", "target", "to"},
+    "edit_current_code": {
+        "edit_type", "target", "to", "from", "new_value", "old_value",
+        "row", "line", "condition", "variable", "value", "kind", "prompt",
+    },
+    "edit_previous_program": {
+        "edit_type", "target", "to", "from", "new_value", "old_value",
+        "row", "line", "condition", "variable", "value", "kind", "prompt",
+    },
 }
-_NUMERIC_SLOT_KEYS = {"start", "stop", "step", "count", "threshold"}
+_NUMERIC_SLOT_KEYS = {"start", "stop", "step", "count", "threshold", "new_value", "old_value", "row", "line"}
 _BOOL_SLOT_KEYS = {"loop"}
 _SAFE_SLOT_TEXT_RE = re.compile(r"^[A-Za-z0-9 _.,:-]{0,80}$")
 
 
-def mapper_messages(command_text: str, *, has_code: bool = False) -> Tuple[str, str]:
+def mapper_messages(
+    command_text: str,
+    *,
+    has_code: bool = False,
+    normalized_text: str = "",
+    has_recent_generated: bool = False,
+    current_mode: str = "",
+    memory_summary: str = "",
+) -> Tuple[str, str]:
     """Build the strict system/user prompt for the AI mapper."""
 
     allowed = ", ".join(sorted(ALLOWED_INTENTS))
@@ -105,17 +121,80 @@ def mapper_messages(command_text: str, *, has_code: bool = False) -> Tuple[str, 
         "CodeUp command to one known intent. Return JSON only. Use only these "
         f"allowed intents: {allowed}. Prefer unknown_clarify if unsure. Never "
         "invent new commands. Never include API keys or internal details. Never "
-        "put code in the response. Slots may describe only small template choices "
-        "such as text, kind, start, stop, step, collection, or to. Schema: "
+        "put code in the response. For natural follow-up edits that refer to the "
+        "current program with words like it, this, the loop, the output, the row, "
+        "or instead, prefer edit_current_code when editor code is available and "
+        "edit_previous_program when the user is referring to a recent generated "
+        "program. Slots may describe only small template choices or edit facts "
+        "such as text, kind, target, start, stop, step, row, old_value, new_value, "
+        "or to. Schema: "
         "{\"intent\":\"insert_for_loop\",\"confidence\":0.0,"
         "\"slots\":{\"start\":1,\"stop\":5},\"reason\":\"short log reason\"}."
     )
     user = (
         f"Editor has code: {'yes' if has_code else 'no'}\n"
+        f"Recent generated program: {'yes' if has_recent_generated else 'no'}\n"
+        f"Current mode or tutorial state: {str(current_mode or '(none)')[:120]}\n"
+        f"Short memory summary: {str(memory_summary or '(none)')[:400]}\n"
+        f"Normalized command: {str(normalized_text or command_text or '')[:500]}\n"
         f"Student command: {str(command_text or '')[:500]}\n"
         "Return one JSON object only."
     )
     return system, user
+
+
+_DETERMINISTIC_EXACT_RE = re.compile(
+    r"^(?:run|run code|execute|stop|stop everything|help|what can i do(?: here)?|"
+    r"start tutorial|begin tutorial|more|print hello(?: world)?|print numbers 1 to 5|"
+    r"print even numbers up to 10|make a while loop|while true loop|make an if statement|"
+    r"check if marks are passing|make a list of fruits|function that adds two numbers)$",
+    re.IGNORECASE,
+)
+_EDIT_LIKE_RE = re.compile(
+    r"\b(?:make\s+it|make\s+this|make\s+that|change\s+it|change\s+this|change\s+that|"
+    r"edit\s+this|edit\s+that|replace|add|remove|use\s+(?:while|for|numbers|stars)|"
+    r"now\s+make|do\s+this|arey|instead|rather\s+than|row|line\s+\d+|"
+    r"condition|loop|output|passing\s+marks|ask\s+the\s+user|input|"
+    r"bigger|smaller|shorter|clearer|triangle|square|wider)\b",
+    re.IGNORECASE,
+)
+_INDIRECT_CODE_REF_RE = re.compile(
+    r"\b(?:it|this|that|the\s+loop|the\s+output|the\s+row|the\s+condition|"
+    r"the\s+code|same\s+thing|current\s+program)\b",
+    re.IGNORECASE,
+)
+_CONVERSATIONAL_RE = re.compile(
+    r"\b(?:please|can you|could you|would you|a little|arey|now|also|same thing|"
+    r"make it|do this|do the same)\b",
+    re.IGNORECASE,
+)
+
+
+def should_consult_ai_for_command(raw_text: str, normalized_text: str = "", context: Optional[Dict[str, Any]] = None) -> bool:
+    """Policy gate for using AI understanding before vague fallback routing."""
+
+    context = context or {}
+    text = " ".join(str(normalized_text or raw_text or "").lower().strip().rstrip(".!?").split())
+    if not text:
+        return False
+    if _DETERMINISTIC_EXACT_RE.match(text):
+        return False
+    if bool(context.get("security_sensitive")):
+        return False
+    deterministic_confidence = float(context.get("deterministic_confidence") or 0.0)
+    has_code = bool(context.get("has_code"))
+    has_recent_generated = bool(context.get("has_recent_generated"))
+    if deterministic_confidence and deterministic_confidence >= 0.9 and not _EDIT_LIKE_RE.search(text):
+        return False
+    if _EDIT_LIKE_RE.search(text):
+        return True
+    if has_code and _INDIRECT_CODE_REF_RE.search(text):
+        return True
+    if has_recent_generated and (_INDIRECT_CODE_REF_RE.search(text) or _CONVERSATIONAL_RE.search(text)):
+        return True
+    if deterministic_confidence < 0.55 and (_CONVERSATIONAL_RE.search(text) or len(text.split()) >= 3):
+        return True
+    return False
 
 
 def _extract_json_object(raw: Any) -> Optional[dict]:
@@ -253,6 +332,10 @@ def map_command(
     *,
     ai_fn: Callable[[str, str], str],
     has_code: bool = False,
+    normalized_text: str = "",
+    has_recent_generated: bool = False,
+    current_mode: str = "",
+    memory_summary: str = "",
 ) -> Dict[str, Any]:
     """Call the AI mapper and return a safe status object.
 
@@ -260,7 +343,14 @@ def map_command(
     the execution decision from the validated intent and confidence band.
     """
 
-    system, user = mapper_messages(command_text, has_code=has_code)
+    system, user = mapper_messages(
+        command_text,
+        has_code=has_code,
+        normalized_text=normalized_text,
+        has_recent_generated=has_recent_generated,
+        current_mode=current_mode,
+        memory_summary=memory_summary,
+    )
     try:
         raw = ai_fn(system, user)
     except Exception as exc:  # AI failures must not break command routing.

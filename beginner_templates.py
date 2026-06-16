@@ -531,7 +531,7 @@ def _match_loop(low: str) -> Optional[TemplateResult]:
     if not re.search(
         r"^(?:please\s+|hey\s+|ok\s+|okay\s+|can\s+you\s+|could\s+you\s+|would\s+you\s+)*"
         r"(?:(?:insert|add|put|write|make|create|build|generate|give\s+me)\b.*\b(?:for\s+|while\s+)?loop\b|"
-        r"(?:for\s+|while\s+)?loop\b|print\s+numbers?\b)",
+        r"(?:for\s+|while\s+)?loop\b|print\s+(?:(?:even|odd)\s+)?numbers?\b)",
         low,
     ):
         return None
@@ -541,7 +541,7 @@ def _match_loop(low: str) -> Optional[TemplateResult]:
             code=make_list_template("fruits", loop=True),
             speech="Inserted a fruits list and a loop that prints each fruit.",
         )
-    if not re.search(r"\b(?:loop|for\s+loop|while\s+loop|print\s+numbers?)\b", low):
+    if not re.search(r"\b(?:loop|for\s+loop|while\s+loop|print\s+(?:(?:even|odd)\s+)?numbers?)\b", low):
         return None
     if "while" in low:
         bounds = _inclusive_bounds(low)

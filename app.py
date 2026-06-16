@@ -76,6 +76,7 @@ import trainer_review
 import lesson_builder
 import screen_reader_bridge
 import natural_command_mapper
+import natural_code_editor
 import beginner_templates
 from command_normalization import normalize_command_transcript
 from speech_output import sanitize_speech_text
@@ -1252,6 +1253,21 @@ def call_conversation_orchestrator_ai(system_prompt: str, user_prompt: str) -> s
         return future.result(timeout=MAX_GEMINI_TIMEOUT + 1)
     except Exception:
         return ""
+
+
+def _structured_ai_available() -> bool:
+    """Return True when structured mapper/planner calls have a configured key."""
+    if _env_flag_disabled("CODEUP_AI_ENABLED") or _env_flag_disabled("AI_ENABLED") or _env_flag_disabled("GROQ_ENABLED"):
+        return False
+    extra_keys = _configured_extra_cloud_keys()
+    if (
+        _env_flag_disabled("GEMINI_ENABLED")
+        and not extra_keys
+        and not _usable_cloud_key(os.environ.get("GROQ_API_KEY", ""))
+    ):
+        return False
+    manager = groq_key_manager.get_groq_key_manager()
+    return manager.has_keys(env=_groq_failover_env(), extra_keys=extra_keys)
 
 
 # Core concept words a coach rephrase must keep if the note states them.
@@ -7389,6 +7405,33 @@ def _spoken_insert_response(text, code):
             "heard": text, "speech": loop_confirmation, "spoken_code": loop_python,
         }
 
+    bare_print = re.match(r"^\s*print\s+(.+?)\s*$", str(text or ""), re.IGNORECASE)
+    if bare_print and build_exact_symbol_generation(text) is None:
+        bare_content = bare_print.group(1).strip()
+        if re.search(
+            r"\b(?:kya|kyun|karta|kare|karo|hai|ko|ke|mein|andar|bahar|pehle|wali|"
+            r"hata|taaki|dikhe|aaye)\b",
+            str(text or ""),
+            re.IGNORECASE,
+        ):
+            return None
+        if re.search(r"\b(?:even|odd)\s+numbers?\b", bare_content, re.IGNORECASE):
+            return None
+        if re.search(r"\b(?:statement|function|indent|indented|indentation|four\s+spaces|loop)\b", bare_content, re.IGNORECASE):
+            return None
+        python = beginner_templates.make_print_template(bare_content)
+        confirmation = "I added print(\"Hello\") to the editor. Say run to see the output."
+        if python != 'print("Hello")':
+            confirmation = f"I added {' '.join(python.split())} to the editor. Say run to see the output."
+        return {
+            "success": True,
+            "action": "conversational_edit",
+            "ai_action": {"action": "append_code", "code": python, "spoken_confirmation": confirmation},
+            "heard": text,
+            "speech": confirmation,
+            "spoken_code": python,
+        }
+
     content = intent_repair.extract_insert_content(text)
     if not content:
         if intent_repair.looks_like_unclear_loop_command(text):
@@ -8399,10 +8442,29 @@ def _sparse_command_response(text, code, mem, body, *, cursor_line=None,
 
 def _call_ai_natural_command_mapper(text: str, code: str) -> Dict[str, Any]:
     """Ask the strict AI mapper for intent JSON only."""
+    memory_summary = ""
+    has_recent_generated = False
+    current_mode = ""
+    try:
+        mem = session_memory.get_memory(get_trace_storage())
+        snap = session_memory.snapshot(mem, utterance=text)
+        has_recent_generated = bool(mem.get("last_gen_prompt") or mem.get("last_generated_code"))
+        current_mode = str(mem.get("tutorial_module") or "")
+        memory_summary = (
+            f"last action: {snap.get('last_action') or '(none)'}; "
+            f"last generation: {snap.get('last_gen_prompt') or '(none)'}; "
+            f"last edit: {snap.get('last_edit_summary') or snap.get('last_edit_request') or '(none)'}"
+        )
+    except Exception:
+        pass
     return natural_command_mapper.map_command(
         text,
         ai_fn=call_conversation_orchestrator_ai,
         has_code=bool(str(code or "").strip()),
+        normalized_text=text,
+        has_recent_generated=has_recent_generated,
+        current_mode=current_mode,
+        memory_summary=memory_summary,
     )
 
 
@@ -8468,6 +8530,235 @@ def _ai_mapper_medium_clarification(text: str, mapping: Dict[str, Any]) -> dict:
     }
 
 
+def _planner_project_files_from_body(body: Dict[str, Any]) -> Dict[str, str]:
+    project = body.get("project")
+    if isinstance(project, dict) and isinstance(project.get("files"), dict):
+        return {str(k): str(v) for k, v in project["files"].items()}
+    return {}
+
+
+def _call_ai_code_edit_planner(
+    text: str,
+    current_code: str,
+    mem: Dict[str, Any],
+    body: Dict[str, Any],
+    mapper_slots: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    project_files = _planner_project_files_from_body(body)
+    active_file = ""
+    project = body.get("project")
+    if isinstance(project, dict):
+        active_file = str(project.get("active_file") or project.get("entry") or "")
+    active_file = active_file or str(mem.get("last_active_file") or "main.py")
+    return natural_code_editor.plan_edit(
+        current_code=current_code,
+        edit_instruction=text,
+        ai_fn=call_conversation_orchestrator_ai,
+        previous_generation_request=str(mem.get("last_gen_prompt") or ""),
+        last_run_output=str(mem.get("last_run_output") or ""),
+        last_error=str(mem.get("last_run_error") or ""),
+        last_edit_summary=str(mem.get("last_edit_summary") or ""),
+        active_file=active_file,
+        project_files=project_files,
+        mapper_slots=mapper_slots or {},
+    )
+
+
+def _natural_code_edit_clarification(
+    text: str,
+    message: str,
+    *,
+    reason: str,
+    confidence: float = 0.0,
+    mapped_intent: str = "edit_current_code",
+    source: str = "natural_code_editor",
+) -> dict:
+    safe_reason = groq_key_manager.redact_known_keys(reason)[:80]
+    return {
+        "success": True,
+        "action": "clarify",
+        "intent": "clarify",
+        "message": message,
+        "speech": message,
+        "needs_clarification": True,
+        "heard": text,
+        "confidence": confidence,
+        "mapped_intent": mapped_intent,
+        "reason": safe_reason,
+        "natural_code_edit": True,
+        "source": source,
+    }
+
+
+def _natural_code_edit_response(
+    *,
+    text: str,
+    current_code: str,
+    updated_code: str,
+    summary: str,
+    confidence: float,
+    mem: Dict[str, Any],
+    source: str,
+    mapped_intent: str = "edit_current_code",
+) -> dict:
+    response = _make_conversational_edit_response(
+        "replace_code",
+        code=updated_code,
+        spoken_confirmation=summary or "Updated the current code.",
+        confidence=confidence,
+        requires_confirmation=False,
+        source=source,
+        allow_unconfirmed_replace=True,
+    )
+    if response is None:
+        return _natural_code_edit_clarification(
+            text,
+            "I understood the edit, but the updated code did not pass CodeUp's safety checks.",
+            reason="response_build_failed",
+            confidence=confidence,
+            mapped_intent=mapped_intent,
+            source=source,
+        )
+    session_memory.record_code_edit(
+        mem,
+        instruction=text,
+        old_code=current_code,
+        new_code=updated_code,
+        summary=summary,
+    )
+    response.update({
+        "heard": text,
+        "speech": summary or "Updated the current code.",
+        "spoken_code": updated_code,
+        "mapped_intent": mapped_intent,
+        "natural_code_edit": True,
+        "edit_summary": summary,
+        "source": source,
+    })
+    return response
+
+
+def _response_from_code_edit_plan(
+    text: str,
+    current_code: str,
+    mem: Dict[str, Any],
+    plan: Dict[str, Any],
+    *,
+    mapped_intent: str = "edit_current_code",
+    source: str = "natural_code_editor",
+) -> dict:
+    action = str(plan.get("action") or "")
+    confidence = float(plan.get("confidence", 0.0) or 0.0)
+    if action == "refuse_unsafe":
+        message = plan.get("summary") or "I will not make that unsafe code change."
+        return _natural_code_edit_clarification(
+            text, message, reason="refuse_unsafe", confidence=confidence,
+            mapped_intent=mapped_intent, source=source,
+        )
+    if action == "ask_clarification" or plan.get("needs_clarification"):
+        message = plan.get("clarification_question") or plan.get("summary") or "What change should I make?"
+        return _natural_code_edit_clarification(
+            text, message, reason="planner_clarification", confidence=confidence,
+            mapped_intent=mapped_intent, source=source,
+        )
+    if confidence < natural_code_editor.HIGH_CONFIDENCE_THRESHOLD:
+        message = "I think this is an edit, but I need one clearer instruction before changing the code."
+        reason = "medium_confidence" if confidence >= natural_code_editor.MEDIUM_CONFIDENCE_THRESHOLD else "low_confidence"
+        return _natural_code_edit_clarification(
+            text, message, reason=reason, confidence=confidence,
+            mapped_intent=mapped_intent, source=source,
+        )
+    if action == "replace_current_code":
+        return _natural_code_edit_response(
+            text=text,
+            current_code=current_code,
+            updated_code=str(plan.get("updated_code") or ""),
+            summary=str(plan.get("summary") or "Updated the current code."),
+            confidence=confidence,
+            mem=mem,
+            source=source,
+            mapped_intent=mapped_intent,
+        )
+    if action == "update_project_files":
+        message = "I understood a multi-file edit, but this command box can safely apply only the current editor file right now."
+        return _natural_code_edit_clarification(
+            text, message, reason="project_edit_not_applied", confidence=confidence,
+            mapped_intent=mapped_intent, source=source,
+        )
+    return _natural_code_edit_clarification(
+        text,
+        "I understood this as a code edit, but the plan used an action CodeUp will not run.",
+        reason="action_not_allowed",
+        confidence=confidence,
+        mapped_intent=mapped_intent,
+        source=source,
+    )
+
+
+def _route_ai_code_edit_planner(
+    text: str,
+    current_code: str,
+    mem: Dict[str, Any],
+    body: Dict[str, Any],
+    mapping: Optional[Dict[str, Any]] = None,
+) -> dict:
+    if not str(current_code or "").strip():
+        message = 'I can edit code after you create some. Try saying "generate code for..." first.'
+        return _natural_code_edit_clarification(
+            text, message, reason="no_code", mapped_intent=str((mapping or {}).get("intent") or "edit_current_code"),
+        )
+    local_guard = natural_code_editor.local_edit(current_code, text)
+    if local_guard.get("status") in {"refuse", "clarify"} and natural_code_editor.is_unsafe_edit_instruction(text):
+        return _natural_code_edit_clarification(
+            text,
+            local_guard.get("message") or "I will not make that unsafe code change.",
+            reason=local_guard.get("status") or "unsafe_instruction",
+            mapped_intent=str((mapping or {}).get("intent") or "edit_current_code"),
+            source="local",
+        )
+    planner = _call_ai_code_edit_planner(text, current_code, mem, body, (mapping or {}).get("slots") or {})
+    if planner.get("status") != "planned":
+        return _natural_code_edit_clarification(
+            text,
+            "I understood this as a code edit, but I could not get a safe edit plan. Please say the change more directly.",
+            reason=str(planner.get("reason") or planner.get("status") or "planner_failed"),
+            mapped_intent=str((mapping or {}).get("intent") or "edit_current_code"),
+            source="natural_code_editor",
+        )
+    return _response_from_code_edit_plan(
+        text,
+        current_code,
+        mem,
+        planner.get("plan") or {},
+        mapped_intent=str((mapping or {}).get("intent") or "edit_current_code"),
+        source="natural_code_editor",
+    )
+
+
+def _route_local_natural_code_edit(text: str, current_code: str, mem: Dict[str, Any]) -> Optional[dict]:
+    local = natural_code_editor.local_edit(current_code, text)
+    status = local.get("status")
+    if status == "edited":
+        return _natural_code_edit_response(
+            text=text,
+            current_code=current_code,
+            updated_code=str(local.get("updated_code") or ""),
+            summary=str(local.get("summary") or "Updated the current code."),
+            confidence=float(local.get("confidence", 0.82) or 0.82),
+            mem=mem,
+            source="local",
+        )
+    if status in {"clarify", "refuse"}:
+        return _natural_code_edit_clarification(
+            text,
+            str(local.get("message") or "Please say the edit more clearly."),
+            reason=status,
+            confidence=float(local.get("confidence", 0.0) or 0.0),
+            source="local",
+        )
+    return None
+
+
 def _route_ai_natural_command_mapper(
     text: str,
     current_code: str,
@@ -8509,6 +8800,10 @@ def _route_ai_natural_command_mapper(
     }
     has_code = bool(str(current_code or "").strip())
     has_error = bool(str(error_context or mem.get("last_run_error", "") or "").strip())
+
+    if intent_name in {"edit_current_code", "edit_previous_program"}:
+        edit_code = current_code or str(mem.get("last_generated_code") or "")
+        return _route_ai_code_edit_planner(text, edit_code, mem, body, mapping)
 
     template_result = beginner_templates.build_from_mapping(
         intent_name,
@@ -8642,6 +8937,39 @@ def voice():
             pass
         return jsonify(response_dict), status_code
 
+    def _try_natural_command_understanding():
+        if natural_code_editor.is_unsafe_edit_instruction(text):
+            local_edit = _route_local_natural_code_edit(text, current_code, mem)
+            if local_edit is not None:
+                return _store_and_return(local_edit)
+
+        ai_command_context = {
+            "deterministic_confidence": confidence,
+            "has_code": bool(str(current_code or "").strip()),
+            "has_recent_generated": bool(mem.get("last_gen_prompt") or mem.get("last_generated_code")),
+            "security_sensitive": False,
+        }
+        should_consult = natural_command_mapper.should_consult_ai_for_command(raw_text, text, ai_command_context)
+        if not should_consult and not natural_code_editor.is_vague_edit_instruction(text):
+            return None
+        if _structured_ai_available():
+            mapped_ai = _route_ai_natural_command_mapper(
+                text,
+                current_code,
+                mem,
+                body,
+                cursor_line=cursor_line,
+                error_context=error_context,
+                verbosity=verbosity,
+            )
+            if mapped_ai.get("action") == "clarify":
+                _log_unrecognized_command(text, get_session_id())
+            return _store_and_return(mapped_ai)
+        local_edit = _route_local_natural_code_edit(text, current_code, mem)
+        if local_edit is not None:
+            return _store_and_return(local_edit)
+        return None
+
     early_text = " ".join(text.lower().strip().rstrip(".!?").split())
     if early_text == "stop":
         return _store_and_return({"success": True, "action": "stop_everything", "heard": text, "confidence": 0.96})
@@ -8734,6 +9062,25 @@ def voice():
             "ai_action": {"action": "append_code", "code": broken},
             "intentional_error": True, "heard": text, "speech": speech,
         })
+
+    if (
+        str(current_code or "").strip()
+        and not re.match(
+            r"^\s*(?:go\s+to|read|describe|delete|set\s+breakpoint|watch\s+variable|"
+            r"load\s+(?:the\s+)?snippet|save\s+.*snippet|live\s+input\s+mode|"
+            r"preflight\s+input\s+mode)\b",
+            text,
+            re.IGNORECASE,
+        )
+        and (
+            natural_code_editor.looks_like_edit_request(text)
+            or natural_code_editor.is_vague_edit_instruction(text)
+            or natural_code_editor.is_unsafe_edit_instruction(text)
+        )
+    ):
+        natural_understanding = _try_natural_command_understanding()
+        if natural_understanding is not None:
+            return natural_understanding
 
     # ---- 3b. Safe beginner template commands -------------------------------
     # Rich deterministic examples ("loop from 1 to 5", "safe while loop",
@@ -9332,6 +9679,18 @@ def voice():
             return _store_and_return({"success": True, "action": "tutorial_practice", "module": slots.get("module"), "confidence": confidence})
         if intent == "set_color_mode":
             return _store_and_return({"success": True, "action": "set_color_mode", "mode": slots.get("mode", "default"), "confidence": confidence})
+
+    if (
+        not str(current_code or "").strip()
+        and (
+            natural_code_editor.is_unsafe_edit_instruction(text)
+            or natural_code_editor.is_vague_edit_instruction(text)
+            or re.search(r"\b(?:make\s+it|change\s+it|change\s+this|do\s+this|now\s+make\s+it)\b", text, re.IGNORECASE)
+        )
+    ):
+        local_edit = _route_local_natural_code_edit(text, current_code, mem)
+        if local_edit is not None:
+            return _store_and_return(local_edit)
 
     conversational = _route_conversational_voice_action(
         text,

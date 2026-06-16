@@ -43,6 +43,7 @@ def test_generate_code_exact_pattern_bypasses_cloud_ai(client, monkeypatch):
     [
         "print five stars",
         "make a 5 by 5 star pattern",
+        "generate code to print a 5x5 pattern",
         "make a 5 by 5 pattern where the third row has 6 stars",
     ],
 )
@@ -53,6 +54,14 @@ def test_voice_command_exact_patterns_route_to_generation_without_cloud_ai(clien
     assert data["action"] == "generate_code"
     assert data["source"] == "deterministic_exact"
     assert data["input_source"] == "voice"
+
+
+def test_sized_pattern_without_symbol_defaults_to_stars(client, monkeypatch):
+    monkeypatch.setattr(app_module, "call_gemini", lambda *a, **k: (_ for _ in ()).throw(AssertionError("cloud AI called")))
+    data = client.post("/generate-code", json={"prompt": "generate code to print a 5x5 pattern", "source": "typed"}).get_json()
+    assert data["success"] is True
+    assert data["source"] == "deterministic_exact"
+    assert data["code"] == 'for row in range(5):\n    print("*" * 5)\n'
 
 
 def test_voice_command_ambiguous_exact_task_routes_to_clarification(client, monkeypatch):

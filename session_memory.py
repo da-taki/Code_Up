@@ -51,6 +51,9 @@ def new_memory() -> Dict[str, Any]:
         "last_generated_code": "",   # bounded latest generated single-file code
         "last_project_manifest": {},  # bounded latest generated/open project facts
         "last_edit_request": "",
+        "last_edit_summary": "",
+        "last_edit_old_code": "",
+        "last_edit_new_code": "",
         "last_fix_explanation": "",
         "student_satisfied": None,
         "last_run_output": "",
@@ -277,10 +280,22 @@ def record_edit_request(mem: Dict[str, Any], instruction: str) -> None:
     mem["student_satisfied"] = False
 
 
+def record_code_edit(mem: Dict[str, Any], *, instruction: str = "", old_code: str = "",
+                     new_code: str = "", summary: str = "") -> None:
+    if instruction:
+        mem["last_edit_request"] = _clip(instruction, _MAX_PROMPT)
+    mem["last_edit_old_code"] = _clip(old_code, _MAX_CODE)
+    mem["last_edit_new_code"] = _clip(new_code, _MAX_CODE)
+    mem["last_generated_code"] = _clip(new_code, _MAX_CODE) if new_code else mem.get("last_generated_code", "")
+    mem["last_edit_summary"] = _clip(summary, 300)
+    mem["student_satisfied"] = False
+
+
 def clear_edit_memory(mem: Dict[str, Any]) -> None:
     for key in (
         "last_gen_prompt", "last_gen_summary", "last_generated_code",
-        "last_project_manifest", "last_edit_request", "last_fix_explanation",
+        "last_project_manifest", "last_edit_request", "last_edit_summary",
+        "last_edit_old_code", "last_edit_new_code", "last_fix_explanation",
         "project_files", "last_active_file", "last_opened_file",
     ):
         mem[key] = [] if key == "project_files" else ({} if key == "last_project_manifest" else "")
@@ -335,6 +350,7 @@ def snapshot(mem: Dict[str, Any], *, utterance: str = "", file_name: str = "") -
         "last_gen_prompt": _clip(mem.get("last_gen_prompt", ""), 200),
         "last_gen_summary": _clip(mem.get("last_gen_summary", ""), 200),
         "last_edit_request": _clip(mem.get("last_edit_request", ""), 200),
+        "last_edit_summary": _clip(mem.get("last_edit_summary", ""), 200),
         "current_file": file_name or mem.get("last_active_file", ""),
         "tutorial_module": mem.get("tutorial_module", ""),
         "project_files": (mem.get("project_files") or [])[:20],

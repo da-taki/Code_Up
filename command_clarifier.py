@@ -110,6 +110,12 @@ def assess(text: str, *, intent: str = "", confidence: float = 0.0, code: str = 
     #    the learner's intent is honoured. A fully specified request has no
     #    missing slots and is never clarified.
     slots = clarification_flow.extract_pattern_slots(text)
+    if (
+        isinstance(exact_result, dict)
+        and exact_result.get("success")
+        and not (slots.get("special_row") is not None and slots.get("special_count") is None)
+    ):
+        return None
     if clarification_flow.is_pattern_clarifiable(slots) and (
         slots.get("special_row") or clarification_flow.has_pattern_intent(text)
     ):

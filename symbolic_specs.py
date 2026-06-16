@@ -233,6 +233,17 @@ def constraint_summary(prompt: str) -> List[str]:
     return summary
 
 
+def _should_default_pattern_to_stars(normalized: str, rows: Optional[int], cols: Optional[int], symbol: Optional[str]) -> bool:
+    if not (rows and cols) or symbol:
+        return False
+    if "pattern" not in normalized:
+        return False
+    if re.search(r"\b(?:symbols?|shape|shapes|thing|things|cube|diamond)\b", normalized):
+        return False
+    exception_row, exception_count = _row_exception(normalized)
+    return exception_row is None and exception_count is None
+
+
 def _voice_guidance(source: str, understood: str) -> str:
     if source != "voice":
         return ""
@@ -305,6 +316,10 @@ def build_exact_symbol_generation(prompt: str, *, source: str = "typed") -> Opti
     rows, cols = _dimensions(normalized)
     symbol = _find_symbol(normalized)
     exception_row, exception_count = _row_exception(normalized)
+    defaulted_symbol = False
+    if _should_default_pattern_to_stars(normalized, rows, cols, symbol):
+        symbol = "*"
+        defaulted_symbol = True
     if rows is not None or cols is not None or "pattern" in normalized:
         if rows and cols and symbol:
             if exception_row and exception_count:
@@ -319,7 +334,10 @@ def build_exact_symbol_generation(prompt: str, *, source: str = "typed") -> Opti
                     return _success(code, f"{rows} rows, {cols} {symbol} per row, row {exception_row} has {exception_count}", source)
                 return _clarification()
             code = f"for row in range({rows}):\n    print({json_string(symbol)} * {cols})\n"
-            return _success(code, f"{rows} rows and {cols} columns using {symbol}", source)
+            understood = f"{rows} rows and {cols} columns using {symbol}"
+            if defaulted_symbol:
+                understood += " (defaulted to stars)"
+            return _success(code, understood, source)
         return _clarification()
 
     count_symbol = re.search(rf"\bprint\s+(?:exactly\s+)?({NUM_RE})\s+([*#/+\-%])(?:\s|$)", normalized)

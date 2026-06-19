@@ -1,9 +1,3 @@
-"""
-Accessible code-map landmarks / bookmarks (Sprint 2, Feature 5).
-
-Named, session-scoped code bookmarks (landmarks.py). Read-only with respect to
-code, and deliberately separate from CodeUp's existing output bookmarks.
-"""
 import pytest
 
 import app as app_module
@@ -28,9 +22,6 @@ def _vc(client, text, **kw):
     return client.post("/voice-command", json={"text": text, "code": LOOP, **kw}).get_json()
 
 
-# =====================================================================
-# Pure landmark store
-# =====================================================================
 
 class TestLandmarkStore:
 
@@ -57,9 +48,6 @@ class TestLandmarkStore:
         assert store == {}
 
 
-# =====================================================================
-# Route lifecycle (session-scoped)
-# =====================================================================
 
 class TestLandmarkRoute:
 
@@ -88,7 +76,6 @@ class TestLandmarkRoute:
         assert cleared["action"] == "bookmark_deleted"
 
     def test_missing_target_asks_to_navigate(self, client):
-        # Fresh session, no navigation and empty editor -> ask.
         d = client.post("/voice-command", json={"text": "bookmark this loop as main loop", "code": ""}).get_json()
         assert d["action"] == "bookmark_error"
         assert "go to the loop" in d["message"].lower()
@@ -96,10 +83,8 @@ class TestLandmarkRoute:
     def test_bookmarks_are_session_scoped(self, client):
         _vc(client, "go to the loop")
         _vc(client, "bookmark this loop as main loop")
-        # A different session/client has no landmarks.
         other = app_module.app.test_client()
         d = other.post("/voice-command", json={"text": "go to bookmark main loop", "code": LOOP}).get_json()
-        # No landmark named "main loop" here -> falls through to output bookmark read.
         assert d["action"] != "bookmark_read"
 
     def test_bookmarking_does_not_edit_code(self, client):
@@ -108,6 +93,5 @@ class TestLandmarkRoute:
         assert "ai_action" not in d and "newCode" not in d
 
     def test_output_bookmark_still_works(self, client):
-        # Regression: bare "bookmark this" is still the existing output bookmark.
         d = _vc(client, "bookmark this")
         assert d["action"] == "bookmark_output"

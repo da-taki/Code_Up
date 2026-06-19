@@ -1,17 +1,4 @@
 'use strict';
-/*
- * Pure-logic tests for the spoken-code normalizers in static/app.js — the layer
- * that turns a learner's spoken "insert ..." command into real Python. These
- * functions are the crux of the voice-driven tutorial (string vs number
- * quoting, condition normalization, indentation), so they get direct coverage.
- *
- * The functions live inside app.js (which needs a browser to load fully), so we
- * extract just the marked, side-effect-free block between
- *   // ==== SPOKEN-CODE-NORMALIZERS-START
- *   // ==== SPOKEN-CODE-NORMALIZERS-END
- * and evaluate it in an isolated vm context. Bridged into pytest by
- * tests/test_tutorial_frontend.py (skipped if node is unavailable).
- */
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
@@ -61,7 +48,6 @@ function check(name, fn) {
   catch (err) { console.error('FAILED: ' + name); console.error(err && err.message ? err.message : err); process.exit(1); }
 }
 
-// --- Variable values: text is quoted, numbers/booleans stay literal ----------
 check('string variable values are quoted', () => {
   assert.strictEqual(N.normalizeSpokenValue('Taknoor'), '"Taknoor"');
   assert.strictEqual(N.normalizeSpokenValue('Aman'), '"Aman"');
@@ -77,7 +63,6 @@ check('boolean and none values', () => {
   assert.strictEqual(N.normalizeSpokenValue('false'), 'False');
 });
 
-// --- Conditions: spoken comparisons become real Python operators -------------
 check('comparison conditions normalize', () => {
   assert.strictEqual(N.normalizeSpokenCondition('age is greater than 10'), 'age > 10');
   assert.strictEqual(N.normalizeSpokenCondition('whether age is greater than 10'), 'age > 10');
@@ -89,7 +74,6 @@ check('condition read back in words', () => {
   assert.strictEqual(N.spokenConditionPhrase('count <= 3'), 'count is less than or equal to 3');
 });
 
-// --- Lines: for-headers, indentation, prints, increments ---------------------
 check('for-loop header', () => {
   assert.strictEqual(N.normalizeSpokenCodeText('for i in range 3'), 'for i in range(3):');
 });
@@ -102,9 +86,6 @@ check('print message vs print variable', () => {
   assert.strictEqual(N.normalizeSpokenCodeText('print name'), 'print(name)');
 });
 check('a mis-heard print keyword is safely corrected', () => {
-  // "insert prent hello world" reaches the normalizer as "prent hello world";
-  // a clear near-miss of "print" is forgiven so the beginner's command still
-  // becomes valid Python. A correct "print ..." stays unaffected.
   assert.strictEqual(N.normalizeSpokenCodeText('prent hello world'), 'print("hello world")');
   assert.strictEqual(N.normalizeSpokenCodeText('prnt hello world'), 'print("hello world")');
   assert.strictEqual(N.normalizeSpokenCodeText('print hello world'), 'print("hello world")');
@@ -117,10 +98,6 @@ check('indented counter increment', () => {
   assert.strictEqual(N.normalizeSpokenCodeText('indented count equals count plus 1'), '    count = count + 1');
 });
 
-// End-to-end: the exact "insert ..." commands the tutorial tells the learner to
-// say must build the exact example programs the backend validators accept (see
-// tests/test_tutorial_insert_pipeline.py::test_rewritten_examples_still_validate).
-// Here we mirror the insert helpers' simple templates with the pure normalizers.
 check('canonical tutorial commands build the example programs', () => {
   const variable = (name, value) => name + ' = ' + N.normalizeSpokenValue(value);
   const ifHeader = (c) => 'if ' + N.normalizeSpokenCondition(c) + ':';
@@ -175,7 +152,6 @@ check('project file aliases keep safe fallback for missing files', () => {
   assert.strictEqual(A.resolveProjectFileAlias('missing file', ['main.py']).path, 'missing_file');
 });
 
-// --- Run output speech: every run must be speakable, in one clean utterance ----
 check('single-line output is spoken with the value', () => {
   assert.strictEqual(N.formatRunOutputSpeech('Taki\n'), 'Program output: Taki.');
 });
@@ -185,8 +161,6 @@ check('multi-line output is read as a comma list, not raw newlines', () => {
 check('empty output is stated plainly, never a dangling label', () => {
   assert.strictEqual(N.formatRunOutputSpeech(''), 'Program ran successfully with no printed output.');
   assert.strictEqual(N.formatRunOutputSpeech('   \n  \n'), 'Program ran successfully with no printed output.');
-  // The backend's no-output placeholder is spoken as a clean success message,
-  // not "Program output: Program finished with no output."
   assert.strictEqual(N.formatRunOutputSpeech('Program finished with no output.'),
     'Program ran successfully with no printed output.');
   assert.strictEqual(N.formatFullOutputSpeech('Program finished with no output.'),
@@ -207,7 +181,6 @@ check('a single very long line is summarized with correct singular grammar', () 
   const spoken = N.formatRunOutputSpeech('x'.repeat(300));
   assert.ok(/Program produced 1 line of output/.test(spoken), spoken);  // "1 line", not "1 lines"
   assert.ok(/It starts with:/.test(spoken), spoken);
-  // Preview is truncated (~160 chars + framing), never the full 300-char dump.
   assert.ok(!spoken.includes('x'.repeat(200)), 'preview must be truncated, not dump the whole line');
   assert.ok(spoken.length < 270, 'preview too long: ' + spoken.length);
   assert.ok(/read full output/.test(spoken), spoken);

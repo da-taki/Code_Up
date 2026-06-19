@@ -1,10 +1,3 @@
-"""Global beginner concept questions ("why do we use quotes", "what does range
-3 mean") answered anywhere — not only inside the tutorial.
-
-Answers are deterministic and grounded in the current editor code when it helps
-(the actual string literal, the actual range count), so Key 2 can later make
-them warmer/shorter without inventing anything. Pure and Flask-free.
-"""
 
 import re
 from typing import List, Optional, Tuple
@@ -31,20 +24,12 @@ _TRIGGERS = [
 ]
 
 
-# Concepts answered by the existing code-grounded _TRIGGERS path. These are
-# rephrased by Key 2 when available (the deterministic text is the fallback).
 GROUNDED_KINDS = {"quotes", "indentation", "colon", "range", "print", "variable"}
 
-# Sentinels for safe deterministic responses that must never run/edit code or
-# fall into fuzzy command confirmation.
 UNKNOWN_CONCEPT = "__unknown_concept__"   # concept-form question, topic unknown
-IDENTITY_QUERY = "__identity__"           # "who are you", "what is your name"
-NON_CODE_QUERY = "__non_code__"           # "what time is it", "are you working"
+IDENTITY_QUERY = "__identity__"
+NON_CODE_QUERY = "__non_code__"
 
-# Deterministic, beginner-friendly, spoken-safe explanations for the broader
-# (often advanced) concepts that the narrow _TRIGGERS list did not cover. No
-# markdown, no emojis, two to four short sentences. Returned verbatim so the AI
-# grounding step cannot truncate them to a single sentence.
 _CONCEPTS = {
     "recursion": (
         "Recursion is when a function calls itself to solve a smaller version of the same "
@@ -119,7 +104,6 @@ _NON_CODE_MESSAGE = (
     "code, run code, explain code, debug errors, summarize structure, make trainer notes, or "
     "export your project.")
 
-# Identity questions ("who are you", "what is your name").
 _IDENTITY_RE = re.compile(
     r"^(?:hey|ok|okay|so)?[,\s]*(?:"
     r"who\s+are\s+you|who\s+is\s+this|what\s+are\s+you|what\s+is\s+codeup|"
@@ -127,7 +111,6 @@ _IDENTITY_RE = re.compile(
     r"are\s+you\s+(?:a\s+|an\s+)?(?:robot|human|real|ai|bot|person|chatgpt|gpt)|"
     r"introduce\s+yourself|tell\s+me\s+about\s+yourself"
     r")\s*\??$", re.IGNORECASE)
-# Non-code small talk / status questions ("what time is it", "are you working").
 _NON_CODE_RE = re.compile(
     r"^(?:hey|ok|okay|so)?[,\s]*(?:"
     r"what\s+time\s+is\s+it|what(?:'s| is)\s+the\s+time|"
@@ -138,8 +121,6 @@ _NON_CODE_RE = re.compile(
     r"is\s+(?:this|it)\s+working|do\s+you\s+work"
     r")\s*\??$", re.IGNORECASE)
 
-# Command targets that "explain X" / "teach me X" point at — never treat these as
-# an unknown concept; defer to the real structure/follow-up/code routing.
 _WEAK_DEFER_WORDS = {
     "it", "again", "structure", "outline", "code", "program", "file", "line",
     "output", "error", "everything", "this", "that", "these", "those", "here",
@@ -147,8 +128,6 @@ _WEAK_DEFER_WORDS = {
 
 
 def classify_non_code_query(text: str) -> Optional[str]:
-    """Identity / non-code small-talk questions get a safe, scoped response
-    instead of a fuzzy command confirmation. Returns a sentinel or None."""
     t = " ".join(str(text or "").lower().strip().split())
     if not t:
         return None
@@ -167,15 +146,10 @@ def non_code_answer(kind: str) -> str:
     return _UNKNOWN_CONCEPT_MESSAGE
 
 
-# Spoken-friendly labels for concept KINDS when they are recorded in the recap /
-# trainer notes ("you touched on ..."). Internal snake_case keys like "big_o"
-# must never be read aloud verbatim.
 _CONCEPT_DISPLAY = {"big_o": "time complexity", "oop": "object-oriented programming"}
 
 
 def concept_label(kind: str) -> str:
-    """A spoken-friendly label for a recorded concept kind. Returns '' for the
-    internal sentinels (identity / non-code / unknown) so they are not recorded."""
     kind = str(kind or "").strip()
     if not kind or kind.startswith("__"):
         return ""
@@ -183,14 +157,11 @@ def concept_label(kind: str) -> str:
 
 
 def _weak_command_target(topic: str) -> bool:
-    """True when an 'explain X' / 'teach me X' topic is really a command target
-    (structure, it, again, this code, ...) rather than an unknown concept."""
     t = (topic or "").lower()
     if _CODE_REF_RE.search(t):
         return True
     return bool(set(re.findall(r"[a-z]+", t)) & _WEAK_DEFER_WORDS)
 
-# Aliases for the concepts above (the ones we answer here).
 _CONCEPT_ALIASES = {
     "recursion": ["recursion", "recursive function", "recursive functions", "recursive"],
     "inheritance": ["inheritance", "parent class", "child class", "subclass", "superclass", "inherit"],
@@ -210,10 +181,6 @@ _CONCEPT_ALIASES = {
     "return": ["return", "return value", "return values", "return statement"],
 }
 
-# Concepts already answered well by the existing concept-mentor / _TRIGGERS path.
-# We recognise them here only to DEFER (return None) so we never steal their
-# richer, code-grounded answers — and so the unknown-concept fallback does not
-# fire for them.
 _DEFER_ALIASES = [
     "loop", "loops", "for loop", "for loops", "while loop", "while loops",
     "list", "lists", "dictionary", "dictionaries", "dict", "dicts",
@@ -227,8 +194,6 @@ _CONCEPT_ALIASES_BY_LEN = sorted(_CONCEPT_BY_ALIAS, key=len, reverse=True)
 _DEFER_SET = set(_DEFER_ALIASES)
 _DEFER_BY_LEN = sorted(_DEFER_SET, key=len, reverse=True)
 
-# Definitional forms ("what is X", "define X"). These clearly ask for a
-# definition, so an unrecognised topic gets the helpful concept fallback.
 _DEFINITIONAL_FORM_RE = re.compile(
     r"^(?:hey|ok|okay|so|um|hmm)?[,\s]*"
     r"(?:"
@@ -238,9 +203,6 @@ _DEFINITIONAL_FORM_RE = re.compile(
     r")\s*$",
     re.IGNORECASE,
 )
-# Command-overloaded forms ("explain X", "teach me X", "how does X work"). These
-# double as real commands ("explain structure", "explain it again"), so they only
-# count as a concept question when X is a KNOWN concept — otherwise we defer.
 _WEAK_FORM_RE = re.compile(
     r"^(?:hey|ok|okay|so|um|hmm)?[,\s]*"
     r"(?:"
@@ -252,8 +214,6 @@ _WEAK_FORM_RE = re.compile(
     r")\s*$",
     re.IGNORECASE,
 )
-# Words that signal the learner means THEIR code, not a general concept — defer
-# to Ask My Code / navigation / the mentor instead of a generic explanation.
 _CODE_REF_RE = re.compile(
     r"\b(this|these|that|those|my\s+code|my\s+program|the\s+code|the\s+program|"
     r"current\s+code|the\s+output|the\s+error|this\s+line|the\s+line|here)\b", re.IGNORECASE)
@@ -270,7 +230,6 @@ def _extract_topic(rx, t: str) -> Optional[str]:
 
 
 def _lookup_concept(topic: str) -> Optional[str]:
-    """Return a known concept kind, None to defer, or UNKNOWN_CONCEPT."""
     topic = re.sub(r"\s+", " ", (topic or "").lower()).strip()
     if not topic:
         return None
@@ -293,20 +252,13 @@ def classify_concept_question(text: str) -> Optional[str]:
     t = " ".join(str(text or "").lower().strip().rstrip(".!?").split())
     if not t:
         return None
-    # 1) Existing code-grounded beginner triggers (quotes, range, print, ...).
     for kind, phrases in _TRIGGERS:
         for phrase in phrases:
             if t == phrase or t.startswith(phrase) or phrase in t:
                 return kind
-    # 2a) Definitional forms ("what is recursion", "define a tuple"): a known
-    # concept, a deferred one (None), or the helpful unknown-concept fallback.
     topic = _extract_topic(_DEFINITIONAL_FORM_RE, t)
     if topic is not None:
         return _lookup_concept(topic)
-    # 2b) Command-overloaded forms ("explain X", "teach me X"). A known concept
-    # is answered; a command target ("explain structure", "explain it again") is
-    # deferred to its real route; a genuine unknown concept ("explain flarbology")
-    # gets the safe unsupported-concept fallback rather than fuzzy confirmation.
     topic = _extract_topic(_WEAK_FORM_RE, t)
     if topic is not None:
         kind = _lookup_concept(topic)
@@ -338,7 +290,6 @@ def _number_list(n: int) -> str:
 
 
 def answer_concept(kind: str, code: str = "") -> Tuple[str, List[str]]:
-    """Return (deterministic answer, required facts to preserve under grounding)."""
     code = code or ""
     if kind == "quotes":
         literal = _first_string_literal(code)

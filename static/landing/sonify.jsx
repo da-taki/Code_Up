@@ -1,10 +1,6 @@
 /* global React */
 const { useEffect, useState, useRef } = React;
 
-// ────────────────────────────────────────────────────────────
-// Sonification demo — rows of code sync with pitch bars below.
-// A tiny WebAudio engine plays tones when the user hits play.
-// ────────────────────────────────────────────────────────────
 
 const SONIFY_CODE = [
   { kind: "kw",  indent: 0, html: '<span class="sonify-tok-cmt"># sieve of eratosthenes</span>' },
@@ -18,7 +14,6 @@ const SONIFY_CODE = [
   { kind: "kw",  indent: 1, html: '<span class="sonify-tok-kw">return</span> [<span class="sonify-tok-id">i</span> <span class="sonify-tok-kw">for</span> <span class="sonify-tok-id">i</span>, <span class="sonify-tok-id">p</span> <span class="sonify-tok-kw">in</span> <span class="sonify-tok-fn">enumerate</span>(<span class="sonify-tok-id">sieve</span>) <span class="sonify-tok-kw">if</span> <span class="sonify-tok-id">p</span>]' },
 ];
 
-// pitch in Hz: indent → A2..C5; kind → instrument family
 const PITCH = [110, 165, 220, 330, 440, 660];
 const TONE_FOR = { fn: "sine", lp: "triangle", if: "square", kw: "sawtooth", id: "sine" };
 const TAG_FOR  = { fn: "function", lp: "loop", if: "branch", kw: "keyword", id: "stmt" };
@@ -79,7 +74,6 @@ function Sonify() {
     // eslint-disable-next-line
   }, [step, playing]);
 
-  // ambient idle: quietly cycle the highlight even when not playing
   useEffect(() => {
     if (playing) return;
     if (document.body.classList.contains("no-motion")) return;

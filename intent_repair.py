@@ -1,25 +1,9 @@
-"""Key 2 intent repair layer for messy voice commands.
-
-CodeUp is voice-first, so the router must understand the *intent* behind casual,
-polite, filler-laden speech — not match literal command strings. This module:
-
-  * extracts the real command from conversational noise wherever it appears
-    (deterministic cores searched anywhere, not a brittle filler-strip list);
-  * builds valid beginner Python for spoken insert commands, deciding text vs
-    variable vs number from the actual editor code (AST), not blindly;
-  * falls back to Key 2 (``ai_fn``) only when deterministic repair is unsure,
-    and validates every Key 2 decision against an allowlist of known actions.
-
-Deterministic CodeUp still executes and validates. Key 2 only analyzes intent.
-Pure/Flask-free so it is easy to unit test.
-"""
 
 import ast
 import json
 import re
 from typing import Any, Callable, Dict, Optional, Set
 
-# Only these intent categories may ever be executed from a repaired decision.
 ALLOWED_ACTIONS = {
     "stop_speaking", "stop_listening", "start_listening", "stop_everything",
     "run", "generate_code", "insert_line", "insert_block", "explain_code",
@@ -52,9 +36,6 @@ def _quote(text: str) -> str:
     return '"' + str(text or "").replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-# ---------------------------------------------------------------------------
-# Editor context: which names are real variables (so we never quote them)
-# ---------------------------------------------------------------------------
 def _collect_target(node: ast.AST, names: Set[str]) -> None:
     if isinstance(node, ast.Name):
         names.add(node.id)
@@ -64,13 +45,8 @@ def _collect_target(node: ast.AST, names: Set[str]) -> None:
 
 
 def defined_names(code: str) -> Set[str]:
-    """Names bound anywhere in ``code`` — assignments, for-targets, function defs
-    and params, with-as, comprehensions, imports — so ``print i`` inside a loop
-    stays ``print(i)`` while an undefined ``print name`` becomes text."""
     names: Set[str] = set()
     code = code or ""
-    # Regex pass first so half-written code (a bare "for i in range(3):" with no
-    # body yet, as the tutorial builds it line by line) still exposes its names.
     for match in re.finditer(r"^[ \t]*([A-Za-z_]\w*)\s*=(?!=)", code, re.MULTILINE):
         names.add(match.group(1))
     for match in re.finditer(r"\bfor\s+([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s+in\b", code):
@@ -109,11 +85,7 @@ def defined_names(code: str) -> Set[str]:
     return names
 
 
-# ---------------------------------------------------------------------------
-# Spoken insert -> valid beginner Python
-# ---------------------------------------------------------------------------
 def print_argument_python(content: str, code: str = "", said_variable: bool = False) -> str:
-    """Decide text vs variable vs number for a print() argument."""
     raw = " ".join(str(content or "").split())
     if not raw:
         return '""'
@@ -136,8 +108,6 @@ def print_argument_python(content: str, code: str = "", said_variable: bool = Fa
 
 
 def build_insert_python(spoken: str, code: str = "") -> Optional[str]:
-    """Return valid Python for a spoken print/loop insert, or None if this is not
-    a print/loop insert (so the existing pipeline handles it)."""
     raw = " ".join(str(spoken or "").split())
     if not raw:
         return None
@@ -172,10 +142,6 @@ def build_insert_python(spoken: str, code: str = "") -> Optional[str]:
     return None
 
 
-# ---------------------------------------------------------------------------
-# Simple counting-loop inserts ("insert a for loop", "make a loop that prints
-# the first 3 whole numbers", "generate a loop that prints 0 to 2", ...)
-# ---------------------------------------------------------------------------
 def _oxford_join(items) -> str:
     items = [str(i) for i in items]
     if not items:
@@ -187,9 +153,6 @@ def _oxford_join(items) -> str:
     return ", ".join(items[:-1]) + ", and " + items[-1]
 
 
-# Insert/generate verb + (article/adjective) + a "(for) loop" object. The loop
-# must be the object — phrasings like "make a beginner lesson on loops" name a
-# lesson, not a loop, and are rejected by _LOOP_GUARD_RE below.
 _COUNTING_LOOP_RE = re.compile(
     r"^(?:please\s+|hey\s+|ok\s+|okay\s+|alright\s+|can\s+you\s+|could\s+you\s+|would\s+you\s+)*"
     r"(?:insert|add|put|write|type|make|generate|create|build|give\s+me)\s+"
@@ -198,8 +161,6 @@ _COUNTING_LOOP_RE = re.compile(
     r"(?:for\s+|counting\s+)?loop\b(?P<tail>.*)$",
     re.IGNORECASE,
 )
-# Words that mean this is NOT a plain counting-loop insert (a lesson/report about
-# loops, or the existing "prints X N times" value-loop) — defer to other routes.
 _LOOP_GUARD_RE = re.compile(
     r"\b(lesson|exercise|quiz|report|trainer|handoff|story|tutorial|class|function|times)\b",
     re.IGNORECASE,
@@ -252,7 +213,6 @@ _HINGLISH_LOOP_ROUTE_RE = re.compile(
 
 
 def repair_noisy_loop_transcript(text: str) -> str:
-    """Repair ASR-damaged loop insert wording without touching non-loop text."""
     repaired = " ".join(str(text or "").split())
     if not re.search(r"\b(?:for\s+loop|loop)\b", repaired, re.IGNORECASE):
         return repaired
@@ -263,7 +223,6 @@ def repair_noisy_loop_transcript(text: str) -> str:
 
 
 def looks_like_print_sequence_request(text: str) -> bool:
-    """True for shorthand like 'make it print 0 1 2'."""
     raw = " ".join(str(text or "").split())
     if not raw:
         return False
@@ -275,7 +234,6 @@ def looks_like_print_sequence_request(text: str) -> bool:
 
 
 def looks_like_unclear_loop_command(text: str) -> bool:
-    """True when a loop edit command should clarify instead of raw-inserting."""
     raw = " ".join(str(text or "").split())
     if not raw or _LOOP_GUARD_RE.search(raw):
         return False
@@ -295,20 +253,10 @@ def looks_like_unclear_loop_command(text: str) -> bool:
 
 
 def _loop_bounds(tail: str):
-    """Read (start, count, explicit) from the part after 'loop'.
-
-    Returns (start, count, explicit) where the loop prints ``count`` integers
-    starting at ``start``; ``explicit`` is True when the learner stated a count
-    or range (vs. a bare "insert a for loop"). Returns (None, None, None) when
-    the tail asks for something other than printed numbers (e.g. a string),
-    so the existing insert pipeline keeps handling it.
-    """
     low = " ".join(str(tail or "").lower().split())
-    # Drop a trailing "in/into the editor" so a bare loop stays bare.
     low = re.sub(r"\b(?:in|into|to)\s+(?:the\s+)?editor\b\.?$", "", low).strip()
     if not low:
-        return 0, 3, False  # bare loop -> a useful default counting loop
-    # "0 to 2" / "zero to two" / "0 through 2" -> inclusive range start..stop.
+        return 0, 3, False
     m = re.search(r"\b([a-z0-9-]+)\s+(?:to|through|up\s+to)\s+([a-z0-9-]+)\b", low)
     if m:
         a, b = _to_number(m.group(1)), _to_number(m.group(2))
@@ -316,29 +264,17 @@ def _loop_bounds(tail: str):
             return a, (b - a + 1), True
     if re.search(r"\b(?:0\s+1\s+2|zero\s+one\s+two)\b", low):
         return 0, 3, True
-    # "first 3 whole numbers" / "three numbers" / "5 natural numbers".
     m = re.search(r"\b(?:first\s+)?([a-z0-9-]+)\s+(?:whole\s+|natural\s+|counting\s+)?numbers?\b", low)
     if m:
         n = _to_number(m.group(1))
         if n is not None and n > 0:
             return 0, n, True
-    # Generic "print numbers" / "counting" with no explicit count -> default 3.
     if re.search(r"\bnumbers?\b|\bcount(?:ing)?\b", low):
         return 0, 3, True
-    # Tail present but not number-related (e.g. "that prints hello") -> defer.
     return None, None, None
 
 
 def build_counting_loop_insert(text: str):
-    """Recognise a request for a simple counting loop that prints numbers and
-    return ``(python, confirmation)``, or None to let other handlers take it.
-
-    Handles bare "insert a for loop", "put a for loop in the editor",
-    "add a for loop", "make a loop that prints three numbers",
-    "generate a loop that prints 0 to 2", and
-    "insert loop printing first three whole numbers" — all of which should
-    produce a real beginner loop, never a range(0) / pass stub.
-    """
     raw = " ".join(str(text or "").split())
     if not raw or _LOOP_GUARD_RE.search(raw):
         return None
@@ -362,8 +298,6 @@ def build_counting_loop_insert(text: str):
         if m.re is _BARE_COUNTING_LOOP_RE:
             tail = m.group("tail") or ""
             no_verb_fragment = True
-            # "for loop" by itself may be a topic, not a command. Repair no-verb
-            # fragments only when the learner also supplied number/output hints.
             if not _LOOP_OUTPUT_HINT_RE.search(raw) and not _LOOP_OUTPUT_HINT_RE.search(repaired):
                 return None
     start, count, explicit = _loop_bounds(tail)
@@ -396,7 +330,6 @@ _VALUE_KEYWORD = (
 
 
 def _sanitize_name(name: Optional[str]) -> Optional[str]:
-    """Turn a spoken name into a valid Python identifier, or None if impossible."""
     if not name:
         return None
     candidate = re.sub(r"[^0-9a-zA-Z_]+", "_", str(name).strip().lower()).strip("_")
@@ -408,7 +341,6 @@ def _sanitize_name(name: Optional[str]) -> Optional[str]:
 
 
 def _value_python(value: str) -> "tuple[str, str]":
-    """Build the Python literal for a spoken value and report its type."""
     v = " ".join(str(value or "").split()).strip().strip(".")
     number = _to_number(v)
     if number is not None:
@@ -419,9 +351,6 @@ def _value_python(value: str) -> "tuple[str, str]":
 
 
 def parse_variable_assignment(utterance: str, code: str = "") -> Optional[Dict[str, Any]]:
-    """Recognise a natural variable-assignment command and return its slots, or
-    None. Slots include name, value, value_type, missing[], and python (when
-    complete) so deterministic code can build/validate the assignment."""
     t = " ".join(str(utterance or "").split())
 
     set_form = re.match(r"^(?:please\s+)?set\s+([A-Za-z_]\w*)\s+(?:to|=|equals?\s+to|equals?)\s+(.+)$", t, re.IGNORECASE)
@@ -476,8 +405,6 @@ def _variable_slots(name: Optional[str], value: Optional[str]) -> Dict[str, Any]
 
 
 def parse_variable_answer(text: str, pending: Dict[str, Any]) -> Optional[str]:
-    """Complete a remembered variable assignment from the user's answer; returns
-    the Python line, or None if the answer is unusable (caller re-asks)."""
     if pending.get("missing") == "name" or not pending.get("name"):
         match = re.search(r"(?:call(?:\s+it)?|name(?:\s+it)?|named|called)\s+([A-Za-z_]\w*)", text, re.IGNORECASE)
         candidate = match.group(1) if match else text
@@ -486,7 +413,6 @@ def parse_variable_answer(text: str, pending: Dict[str, Any]) -> Optional[str]:
             return None
         py_value, _ = _value_python(pending.get("value") or "")
         return f"{name} = {py_value}"
-    # Missing value: the answer is the value.
     raw = " ".join(str(text or "").split()).strip().strip(".")
     if not raw:
         return None
@@ -502,8 +428,6 @@ def variable_question(slots: Dict[str, Any]) -> str:
 
 
 def extract_insert_content(utterance: str) -> Optional[str]:
-    """Pull the code part out of a spoken insert command, tolerating polite
-    wrappers ("can you put ... in the editor")."""
     t = " ".join(str(utterance or "").split())
     m = re.match(
         r"^(?:please\s+|hey\s+|ok\s+|okay\s+|alright\s+)*"
@@ -515,9 +439,6 @@ def extract_insert_content(utterance: str) -> Optional[str]:
     return m.group(1).strip() if m else None
 
 
-# ---------------------------------------------------------------------------
-# Natural-speech intent repair
-# ---------------------------------------------------------------------------
 def _decision(intent: str, action: str, confidence: float, canonical: str,
               slots: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     return {"handled": True, "intent": intent, "action": action, "confidence": confidence,
@@ -559,14 +480,10 @@ def _match_generation(t: str) -> Optional[Dict[str, Any]]:
 
 def repair(utterance: str, *, code: str = "",
            ai_fn: Optional[Callable[[str, str], str]] = None) -> Dict[str, Any]:
-    """Analyze a messy command into a structured, allowlisted decision."""
     t = _norm(utterance)
     if not t:
         return _noop()
 
-    # Speech-control semantics are distinct and high priority. "Stop everything"
-    # cancels actions; "stop speaking" only cancels narration; "stop listening"
-    # turns off the mic. These must never collapse into one another.
     if re.search(r"\bstop\s+everything\b|\bcancel\s+everything\b|\bstop\s+all\b|\bcancel\s+all\b|\babort\b|\bstop\s+all\s+actions\b", t):
         return _decision("control", "stop_everything", 0.95, "stop everything")
     if re.search(r"\bstop\s+(?:speaking|talking|narrating|the\s+narration|the\s+voice|the\s+speech)\b"
@@ -601,8 +518,6 @@ def repair(utterance: str, *, code: str = "",
 
 def _ai_repair(utterance: str, code: str,
                ai_fn: Optional[Callable[[str, str], str]]) -> Optional[Dict[str, Any]]:
-    """Key 2 fallback: only used when deterministic repair is unsure. Output is
-    validated against the allowlist; Key 2 may not invent files/output/errors."""
     if not ai_fn:
         return None
     system = (
@@ -642,7 +557,6 @@ def _parse_decision(raw: str) -> Optional[Dict[str, Any]]:
 
 
 def validate_decision(decision: Dict[str, Any]) -> bool:
-    """Reject anything outside the allowlist or structurally wrong."""
     if not isinstance(decision, dict):
         return False
     action = decision.get("action")

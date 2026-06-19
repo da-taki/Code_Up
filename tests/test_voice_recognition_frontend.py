@@ -1,17 +1,3 @@
-"""
-Voice-recognition lifecycle stability (Part 1).
-
-Browser SpeechRecognition cannot be exercised headlessly, so — as this repo
-already does for frontend wiring — these are structural assertions over the
-shipped static/app.js, proving the lifecycle has a clear state model:
-
-  * an UNEXPECTED end auto-restarts only while voice is still WANTED;
-  * an intentional stop ("stop listening" / voice off) prevents auto-restart;
-  * restarts are debounced (single timer), backed off, and capped so there is no
-    restart storm, and a guard prevents two recognizers running at once;
-  * hidden tabs defer restart and resume on visibility;
-  * the typed-command path is independent of recognition and still works.
-"""
 import os
 
 import pytest
@@ -38,9 +24,6 @@ def client(monkeypatch):
         yield c
 
 
-# =====================================================================
-# State model exists
-# =====================================================================
 
 class TestStateModel:
 
@@ -55,24 +38,16 @@ class TestStateModel:
         assert "function _safeStartRecognition()" in app_js
 
 
-# =====================================================================
-# 1. Unexpected onend schedules a restart only when voice is wanted
-# =====================================================================
 
 class TestUnexpectedEndRestarts:
 
     def test_onend_restarts_when_wanted(self, app_js):
-        # The real handler (not the teardown `recognition.onend = null`).
         start = app_js.index("recognition.onend = () => {")
         block = app_js[start:start + 800]
         assert "_scheduleRecognitionRestart()" in block
-        # Stays off when the user turned voice off.
         assert "if (!_voiceEnabledByUser) return;" in block
 
 
-# =====================================================================
-# 2. Intentional stop prevents auto-restart
-# =====================================================================
 
 class TestIntentionalStopNoRestart:
 
@@ -90,16 +65,12 @@ class TestIntentionalStopNoRestart:
         assert _vc(client, "stop listening")["action"] == "pause_voice"
 
 
-# =====================================================================
-# 3. Debounced, backed off, no storm, no double instances
-# =====================================================================
 
 class TestNoStormNoDoubleInstance:
 
     def test_single_debounced_timer(self, app_js):
         start = app_js.index("function _scheduleRecognitionRestart()")
         block = app_js[start:start + 1400]
-        # One timer, cleared before being re-armed.
         assert "clearTimeout(_restartTimer)" in block
         assert "_restartTimer = setTimeout(" in block
 
@@ -122,9 +93,6 @@ class TestNoStormNoDoubleInstance:
         assert "recognition.onend = null" in block
 
 
-# =====================================================================
-# Hidden-tab handling
-# =====================================================================
 
 class TestHiddenTab:
 
@@ -137,9 +105,6 @@ class TestHiddenTab:
         assert "addEventListener('visibilitychange'" in app_js
 
 
-# =====================================================================
-# 4. Typed command path is unaffected by recognition
-# =====================================================================
 
 class TestTypedPathUnaffected:
 

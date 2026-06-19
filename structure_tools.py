@@ -1,17 +1,3 @@
-"""
-Non-visual code understanding: deterministic structure snapshot + navigation.
-
-Pure / Flask-free and AST-based. Powers three Sprint-2 features:
-  * build_structure_snapshot(code) — a short spoken/visible overview of what is
-    in a program (functions, loops, conditions, prints, calls, imports, ...).
-  * navigate(code, target, ...) — find the first function/loop/condition/print/
-    error/etc. (or next/previous/current block) and return its line + block text.
-  * find_symbol(code, name, mode) — where a variable is used / changed / defined.
-
-Everything is derived from the AST (with safe regex fallbacks for unparseable
-code). Nothing is invented and no cloud AI is involved.
-"""
-
 from __future__ import annotations
 
 import ast
@@ -38,7 +24,6 @@ def _end_line(node: ast.AST) -> int:
 
 
 def _preview(code_lines: List[str], line: int, end_line: int) -> str:
-    """A short one-line preview of a block (first non-empty line, trimmed)."""
     for idx in range(line - 1, min(end_line, len(code_lines))):
         text = code_lines[idx].strip()
         if text:
@@ -62,7 +47,6 @@ def _block_label(node: ast.AST) -> str:
 
 
 def _collect_blocks(tree: ast.AST, code_lines: List[str]) -> List[Dict[str, Any]]:
-    """All compound blocks (functions, loops, conditions, ...) sorted by line."""
     blocks: List[Dict[str, Any]] = []
     for node in ast.walk(tree):
         if isinstance(node, tuple(_BLOCK_TYPES.keys())):
@@ -84,7 +68,6 @@ def _collect_blocks(tree: ast.AST, code_lines: List[str]) -> List[Dict[str, Any]
 
 
 def _nesting_depth(tree: ast.AST) -> int:
-    """Maximum nesting depth of compound blocks."""
     best = 0
 
     def walk(node, depth):
@@ -110,7 +93,6 @@ def _call_name(node: ast.Call) -> str:
 
 
 def build_structure_snapshot(code: str) -> Dict[str, Any]:
-    """Return a deterministic structure overview of ``code``."""
     code = code or ""
     code_lines = code.splitlines()
     line_count = len(code_lines)
@@ -121,7 +103,6 @@ def build_structure_snapshot(code: str) -> Dict[str, Any]:
 
     tree = _safe_parse(code)
     if tree is None:
-        # Unparseable: light regex cues so we still say something useful.
         cues = []
         if re.search(r"\bdef\s+\w+", code):
             cues.append("a function")
@@ -165,7 +146,6 @@ def build_structure_snapshot(code: str) -> Dict[str, Any]:
     blocks = _collect_blocks(tree, code_lines)
     depth = _nesting_depth(tree)
 
-    # Build the spoken summary from real counts.
     def _phrase(n, singular, plural=None):
         plural = plural or (singular + "s")
         return f"{_count_word(n)} {singular if n == 1 else plural}"
@@ -250,9 +230,6 @@ def _concepts(imports, assigns, loops, conditions, functions, classes, prints, i
     return order
 
 
-# ---------------------------------------------------------------------------
-# Navigation by meaning
-# ---------------------------------------------------------------------------
 
 _TARGET_BLOCKLABELS = {
     "function": {"function"},
@@ -269,7 +246,6 @@ _TARGET_BLOCKLABELS = {
 def navigate(code: str, target: str, *, cursor_line: Optional[int] = None,
              last_error_line: Optional[int] = None,
              last_block: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Find a code target and return navigation info (deterministic)."""
     code = code or ""
     code_lines = code.splitlines()
     target = (target or "").strip().lower()
@@ -277,7 +253,6 @@ def navigate(code: str, target: str, *, cursor_line: Optional[int] = None,
     if not code.strip():
         return _nav_none("There is no code to navigate yet.")
 
-    # The error target uses the last run's error line, not the AST.
     if target in ("error", "the error", "mistake", "bug"):
         if last_error_line and 1 <= last_error_line <= max(1, len(code_lines)):
             preview = code_lines[last_error_line - 1].strip() if last_error_line <= len(code_lines) else ""
@@ -288,11 +263,9 @@ def navigate(code: str, target: str, *, cursor_line: Optional[int] = None,
     tree = _safe_parse(code)
     blocks = _collect_blocks(tree, code_lines) if tree is not None else []
 
-    # next / previous / current block relative to cursor (or last navigated block).
     if "block" in target and any(w in target for w in ("next", "previous", "prev", "current", "this")):
         return _nav_relative_block(blocks, target, cursor_line, last_block)
 
-    # print statement target (prints are calls, not compound blocks).
     if "print" in target:
         hits = _find_print_lines(tree, code_lines) if tree is not None else []
         if hits:
@@ -301,7 +274,6 @@ def navigate(code: str, target: str, *, cursor_line: Optional[int] = None,
                             code_lines[line - 1].strip() if line <= len(code_lines) else "", "print", len(hits))
         return _nav_none("I could not find a print statement in this program.")
 
-    # Compound-block targets.
     wanted = None
     for key, labels in _TARGET_BLOCKLABELS.items():
         if key in target:
@@ -371,19 +343,14 @@ def _nav_relative_block(blocks, target, cursor_line, last_block) -> Dict[str, An
         if after:
             return emit(after[0], "The next")
         return _nav_none("You are already at the last block.")
-    # previous
     before = [b for b in blocks if b["line"] < ref_line]
     if before:
         return emit(before[-1], "The previous")
     return _nav_none("You are already at the first block.")
 
 
-# ---------------------------------------------------------------------------
-# Symbol search: where is X used / changed / defined
-# ---------------------------------------------------------------------------
 
 def find_symbol(code: str, name: str, mode: str = "used") -> Dict[str, Any]:
-    """Find lines where ``name`` is used / changed / defined."""
     code = code or ""
     name = (name or "").strip()
     mode = (mode or "used").lower()

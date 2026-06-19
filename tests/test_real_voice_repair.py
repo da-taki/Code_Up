@@ -1,8 +1,3 @@
-"""End-to-end voice-repair tests: short onboarding, real multi-turn pattern
-clarification, intentional broken-code examples, global concept Q&A, and the
-guards that keep clean commands fast. AI is disabled, so these assert the
-deterministic path that runs whenever Key 2 is missing/busy.
-"""
 import os
 
 import pytest
@@ -29,18 +24,16 @@ def _vc(client, text, **kw):
     return client.post("/voice-command", json={"text": text, **kw}).get_json()
 
 
-# 1 + 2 — onboarding vs full list
 def test_first_help_returns_short_onboarding(client):
     d = _vc(client, "what can I do here")
     assert d["action"] == "deterministic_message"
     assert d.get("onboarding") is True
-    # General, demo-safe capabilities — not a bizarre over-specific example.
     msg = d["message"].lower()
     assert "generate code" in msg
     assert "run code" in msg and "explain it" in msg
     assert "star pattern" not in msg and "5 by 5" not in msg
     assert "more examples" in msg
-    assert len(d["message"]) < 320  # short, not the long command dump
+    assert len(d["message"]) < 320
 
 
 @pytest.mark.parametrize("text", ["what can you do", "how do I use this", "what should I try", "help me start"])
@@ -57,7 +50,6 @@ def test_second_level_help_variants(client, text):
     assert _vc(client, text)["action"] == "more_help"
 
 
-# 3 + 4 — vague pattern asks a useful question, never "type a precise command"
 def test_vague_pattern_asks_specific_question(client):
     d = _vc(client, "make a five by five thing with the third line different", source="voice")
     assert d["action"] == "clarify"
@@ -74,7 +66,6 @@ def test_never_tells_user_to_type_a_precise_command(client, text):
     assert "type a precise command" not in (d.get("message", "") + d.get("speech", "")).lower()
 
 
-# 5 + 6 + 7 — pending pattern clarification understands the answer
 def test_pending_pattern_accepts_rather_than_answer(client):
     first = _vc(client, "make a five by five star pattern with the third line different", source="voice")
     assert first["action"] == "clarify"
@@ -95,12 +86,10 @@ def test_pending_pattern_accepts_combined_answer(client):
 def test_clarification_answer_is_never_unrecognized(client):
     _vc(client, "make a five by five thing with the third line different", source="voice")
     d = _vc(client, "six instead of five", source="voice")
-    # Still missing the symbol -> ask one more specific question, never "unknown".
     assert d["action"] in ("generate_code", "clarify")
     assert d["action"] != "unknown"
 
 
-# 8 + 9 — intentional broken-code examples
 def test_insert_without_closing_quote_makes_broken_code(client):
     d = _vc(client, "insert print hello world without closing quote")
     assert d["action"] == "conversational_edit"
@@ -111,7 +100,6 @@ def test_insert_without_closing_quote_makes_broken_code(client):
 def test_intentional_indentation_error(client):
     d = _vc(client, "make an indentation error with if age greater than 10")
     code = d["ai_action"]["code"]
-    # The print is NOT indented under the if -> a real IndentationError example.
     assert "if age > 10:" in code
     assert "\nprint(" in code and "\n    print(" not in code
 
@@ -119,12 +107,10 @@ def test_intentional_indentation_error(client):
 def test_normal_insert_is_not_treated_as_broken(client):
     d = _vc(client, "insert print hello")
     assert d.get("intentional_error") is not True
-    # A normal insert produces valid (quoted) Python, not a broken example.
     assert d["action"] == "conversational_edit"
     assert d["ai_action"]["code"] == 'print("hello")'
 
 
-# 10 + 11 — global concept Q&A outside the tutorial
 def test_why_quotes_works_outside_tutorial(client):
     d = _vc(client, "why do we use quotes", code='print("Hello")')
     assert d["action"] == "deterministic_message"
@@ -139,7 +125,6 @@ def test_what_does_range_mean_works_outside_tutorial(client):
     assert "0, 1, and 2" in d["message"]
 
 
-# 12 - 15 — clean / existing commands still route, never hijacked
 def test_run_code_routes_normally(client):
     assert _vc(client, "run", code="print(1)")["action"] == "run"
 
@@ -164,7 +149,6 @@ def test_delete_that_file_asks_clarification_not_invented_file(client):
     assert ".py" not in d["message"]
 
 
-# 16 — Key 2 unavailable still gives deterministic clarification
 def test_key2_unavailable_gives_deterministic_clarification(client, monkeypatch):
     monkeypatch.setattr(app_module, "call_conversation_orchestrator_ai", lambda *a, **k: "")
     d = _vc(client, "make a five by five thing with the third line different", source="voice")
@@ -172,7 +156,6 @@ def test_key2_unavailable_gives_deterministic_clarification(client, monkeypatch)
     assert "third line" in d["message"]
 
 
-# 17 — tutorial navigation cancels current speech before acting
 def test_tutorial_navigation_cancels_speech_before_acting():
     with open(os.path.join(ROOT, "static", "tutorial.js"), encoding="utf-8") as fh:
         src = fh.read()
@@ -180,5 +163,4 @@ def test_tutorial_navigation_cancels_speech_before_acting():
     block = src[start:start + 3000]
     cancel = block.index("SpeechManager.cancelAll")
     switch = block.index("switch (kind)")
-    # The shared stop-speech path is invoked before the navigation switch runs.
     assert cancel < switch

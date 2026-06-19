@@ -30,14 +30,9 @@ def _action(client, text, code="print('keep me')\n"):
 
 def test_startup_guidance_uses_spoken_commands_not_tab_only():
     src = _read("templates/index.html")
-    # /ide now opens directly into the IDE: no blocking start gate and no
-    # automatic welcome speech (see test_chrome_english_onboarding). The two
-    # starting commands are still surfaced as non-blocking on-page text (banner +
-    # hint by the command box), never as a tab-only instruction.
     assert 'id="startGate"' not in src
     assert "start tutorial" in src
     assert "what can I do here" in src
-    # Never a tab-only instruction (bad for voice-first beginners).
     assert "Press Tab to reach the Tutorial button" not in src
 
 
@@ -47,8 +42,6 @@ def test_startup_guidance_uses_spoken_commands_not_tab_only():
     "how do I use this",
 ])
 def test_first_level_onboarding_returns_short_guidance_without_cloud_ai(client, monkeypatch, text):
-    # First-level onboarding phrases now return a short beginner-friendly guide
-    # (deterministic), not the old long command dump, and must not call cloud AI.
     def fail_call(*args, **kwargs):
         raise AssertionError("onboarding help must not call cloud AI")
 
@@ -70,7 +63,6 @@ def test_first_level_onboarding_returns_short_guidance_without_cloud_ai(client, 
     "guide me",
 ])
 def test_help_phrases_route_to_help_without_cloud_ai(client, monkeypatch, text):
-    # Explicit help requests still route to the command help, without cloud AI.
     def fail_call(*args, **kwargs):
         raise AssertionError("help must not call cloud AI")
 
@@ -86,8 +78,6 @@ def test_help_phrases_route_to_help_without_cloud_ai(client, monkeypatch, text):
     "command list",
 ])
 def test_long_help_stays_behind_explicit_request_without_cloud_ai(client, monkeypatch, text):
-    # The long command list stays behind an explicit "more/full" request, never
-    # the first onboarding reply, and must not call cloud AI.
     def fail_call(*args, **kwargs):
         raise AssertionError("help must not call cloud AI")
 
@@ -130,9 +120,6 @@ def test_existing_demo_commands_still_route(client, text, expected_action):
 
 
 def test_onboarding_message_is_general_not_pattern_specific():
-    # The first-level onboarding reply must describe broad capabilities, not
-    # bizarre over-specific examples like "5 by 5 star pattern where row 3 has 6
-    # stars". This guards against onboarding regressing into arbitrary demos.
     msg = app_module._ONBOARDING_MESSAGE.lower()
     for cap in ("generate code", "run code", "explain it", "debug", "tutorial"):
         assert cap in msg, cap
@@ -141,10 +128,6 @@ def test_onboarding_message_is_general_not_pattern_specific():
 
 
 def test_spoken_beginner_guide_leads_with_capabilities_not_star_patterns():
-    # The spoken beginner command guide (what a blind learner hears on "help")
-    # must lead with general capabilities and must not feature arbitrary star
-    # patterns, which confuse beginners and are not demo-safe. The visible guide
-    # may still list exact-symbol examples; the *spoken* version must not.
     src = _read("static/app.js")
     start = src.index("const BEGINNER_COMMAND_GUIDE_SPEECH")
     end = src.index(";", start)

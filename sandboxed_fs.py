@@ -1,10 +1,3 @@
-"""
-Sandboxed Virtual File System for CodeUp
-
-Provides safe file operations within a confined workspace directory.
-All file operations are restricted to /workspace folder.
-"""
-
 import atexit
 import os
 import shutil
@@ -24,23 +17,14 @@ def _max_file_size() -> int:
 
 
 class SandboxedFileSystem:
-    """Manages file operations within a sandboxed workspace."""
     
     def __init__(self, workspace_dir: Optional[str] = None):
-        """
-        Initialize sandboxed filesystem.
-        
-        Args:
-            workspace_dir: Path to workspace root. If None, uses temp directory.
-        """
         if workspace_dir is None:
-            # Create a temp directory for the workspace
             self.workspace_dir = tempfile.mkdtemp(prefix="codeup_workspace_")
         else:
             self.workspace_dir = workspace_dir
             os.makedirs(self.workspace_dir, exist_ok=True)
         
-        # Ensure workspace path is absolute and normalized
         self.workspace_dir = os.path.abspath(self.workspace_dir)
         self.created_at = time.time()
         self.last_accessed = self.created_at
@@ -52,21 +36,7 @@ class SandboxedFileSystem:
         return _max_file_size()
     
     def _validate_path(self, filepath: str) -> str:
-        """
-        Validate and normalize path to ensure it's within workspace.
-        Resolves symlinks on both sides to prevent symlink-escape attacks.
-
-        Args:
-            filepath: Path to validate
-
-        Returns:
-            Absolute normalized path within workspace
-
-        Raises:
-            ValueError: If path attempts to escape workspace (including via symlink)
-        """
         candidate = Path(self.workspace_dir) / filepath
-        # Resolve symlinks. strict=False so non-existent paths (writes) still resolve.
         resolved = candidate.resolve(strict=False)
         workspace_resolved = Path(self.workspace_dir).resolve(strict=False)
         try:
@@ -76,30 +46,16 @@ class SandboxedFileSystem:
         return str(resolved)
     
     def write(self, filepath: str, content: str, encoding: str = "utf-8") -> Dict:
-        """
-        Write file to workspace.
-        
-        Args:
-            filepath: Path relative to workspace
-            content: File content
-            encoding: Text encoding (default: utf-8)
-            
-        Returns:
-            {"success": bool, "path": str, "size": int, "error": str}
-        """
         try:
             self.touch()
             limit = self.max_file_size()
-            # enforce size limit before writing to avoid resource exhaustion
             if len(content.encode(encoding)) > limit:
                 raise ValueError(f"File exceeds maximum size of {limit} bytes")
 
             abs_path = self._validate_path(filepath)
             
-            # Ensure parent directory exists
             os.makedirs(os.path.dirname(abs_path), exist_ok=True)
             
-            # Write file
             with open(abs_path, "w", encoding=encoding) as f:
                 f.write(content)
             
@@ -118,16 +74,6 @@ class SandboxedFileSystem:
             }
     
     def read(self, filepath: str, encoding: str = "utf-8") -> Dict:
-        """
-        Read file from workspace.
-        
-        Args:
-            filepath: Path relative to workspace
-            encoding: Text encoding (default: utf-8)
-            
-        Returns:
-            {"success": bool, "content": str, "size": int, "error": str}
-        """
         try:
             self.touch()
             abs_path = self._validate_path(filepath)
@@ -173,15 +119,6 @@ class SandboxedFileSystem:
             }
     
     def delete(self, filepath: str) -> Dict:
-        """
-        Delete file from workspace.
-        
-        Args:
-            filepath: Path relative to workspace
-            
-        Returns:
-            {"success": bool, "path": str, "error": str}
-        """
         try:
             self.touch()
             abs_path = self._validate_path(filepath)
@@ -215,15 +152,6 @@ class SandboxedFileSystem:
             }
     
     def list_files(self, dirpath: str = ".") -> Dict:
-        """
-        List files in workspace directory.
-        
-        Args:
-            dirpath: Directory path relative to workspace
-            
-        Returns:
-            {"success": bool, "files": list, "dirs": list, "error": str}
-        """
         try:
             self.touch()
             abs_path = self._validate_path(dirpath)
@@ -272,7 +200,6 @@ class SandboxedFileSystem:
             }
     
     def get_workspace_info(self) -> Dict:
-        """Get information about the workspace."""
         try:
             self.touch()
             total_files = 0
@@ -297,7 +224,6 @@ class SandboxedFileSystem:
             }
 
     def cleanup(self):
-        """Remove the entire workspace directory (use with caution)."""
         try:
             if os.path.exists(self.workspace_dir):
                 shutil.rmtree(self.workspace_dir)
@@ -307,7 +233,6 @@ class SandboxedFileSystem:
         return {"success": True}
 
 
-# Per-session sandbox storage (thread-safe dict keyed by session id)
 _sandboxes: dict = {}
 _sandboxes_lock = threading.Lock()
 SANDBOX_WORKSPACE_TTL_SECONDS = int(os.environ.get("SANDBOX_WORKSPACE_TTL_SECONDS", "3600"))
@@ -354,12 +279,6 @@ def _cleanup_all_sandboxes_on_exit():
         _sandboxes.clear()
 
 def get_sandbox(session_id: str = "default") -> "SandboxedFileSystem":
-    """
-    Get or create a sandbox for a specific session.
-    Each session gets its own isolated temp directory.
-    Pass session_id from Flask's get_session_id() so users
-    never share each other's workspace.
-    """
     with _sandboxes_lock:
         now = time.time()
         max_age = _workspace_ttl_seconds()

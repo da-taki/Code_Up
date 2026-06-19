@@ -1,17 +1,3 @@
-"""
-Run-output speech (Problem 3) — a critical accessibility contract.
-
-A blind learner cannot read the visible output box, so every run result MUST be
-spoken. This module covers:
-  * backend routing of the "read output" family ("read full output", etc.),
-  * frontend wiring (structural assertions over the shipped static/app.js, the
-    way this repo tests frontend behaviour): the run handler speaks the output
-    through a single well-formed utterance, the explicit read-back reads the full
-    stored output, the error path still speaks, and stop never clears the box.
-
-The pure formatting logic (multi-line -> "0, 1, 2.", long -> summary + offer) is
-exercised directly in tests/spoken_code.test.js (bridged via the node tests).
-"""
 import os
 
 import pytest
@@ -42,9 +28,6 @@ def _vc(client, text, **kw):
     return client.post("/voice-command", json={"text": text, **kw}).get_json()
 
 
-# =====================================================================
-# Backend: the "read output" family routes to read_output
-# =====================================================================
 
 class TestReadOutputRouting:
 
@@ -57,13 +40,9 @@ class TestReadOutputRouting:
         assert _vc(client, text)["action"] == "read_output"
 
     def test_read_the_code_is_not_read_output(self, client):
-        # Guard: reading the code is narration, not the output read-back.
         assert _vc(client, "read the code")["action"] != "read_output"
 
 
-# =====================================================================
-# Frontend wiring (structural over static/app.js)
-# =====================================================================
 
 class TestRunOutputSpeechWiring:
 
@@ -73,7 +52,6 @@ class TestRunOutputSpeechWiring:
 
     def test_run_handler_speaks_output_through_the_formatter(self, app_js):
         assert "speak(formatRunOutputSpeech(data.output))" in app_js
-        # The fragile two-call pattern must be gone (it could collide / be cut off).
         assert "speak('Program output:');" not in app_js
 
     def test_run_handler_still_stores_full_output(self, app_js):
@@ -86,14 +64,12 @@ class TestRunOutputSpeechWiring:
         assert "window.lastRunOutput" in block
 
     def test_error_run_is_spoken(self, app_js):
-        # The failure branch must speak the error (line + last line of traceback).
         assert "speak(`Error${lineHint}: ${lastLine}`)" in app_js
 
     def test_dispatch_routes_read_output_to_speak_output(self, app_js):
         assert "action === 'read_output') speakOutput();" in app_js
 
     def test_stop_everything_preserves_the_output_box(self, app_js):
-        # stop_everything cancels speech but must NOT clear the visible output.
         start = app_js.index("action === 'stop_everything'")
         block = app_js[start:start + 600]
         assert "Preserve the last program output" in block
@@ -101,5 +77,4 @@ class TestRunOutputSpeechWiring:
         assert "clearOutput" not in block
 
     def test_stop_speaking_does_not_clear_output(self, app_js):
-        # The dedicated stop-speaking path only cancels speech.
         assert "function cancelAll()" in app_js

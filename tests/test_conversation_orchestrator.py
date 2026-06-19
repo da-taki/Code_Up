@@ -180,8 +180,6 @@ def _marks_rewrite_plan(actions=None):
 
 
 def test_rough_generation_is_rewritten_by_key2_before_coding_path():
-    # No wake phrase and no connector: a vague generation ask must still be sent
-    # to Key 2, which rewrites the rough prompt before the coding path runs.
     def fake_ai(system, user):
         assert "make a marks thing" in user
         return _marks_rewrite_plan()
@@ -193,8 +191,6 @@ def test_rough_generation_is_rewritten_by_key2_before_coding_path():
 
 
 def test_non_forced_multi_action_generation_is_rewritten_before_split():
-    # "make a marks thing and explain it" has no wake and no "then"; Key 2 still
-    # gets first crack so the rough prompt is rewritten rather than passed raw.
     def fake_ai(system, user):
         return _marks_rewrite_plan(actions=[
             {
@@ -213,8 +209,6 @@ def test_non_forced_multi_action_generation_is_rewritten_before_split():
 
 
 def test_generation_falls_back_to_deterministic_when_key2_missing():
-    # Key 2 missing/busy (no ai_plan_fn): the deterministic split still yields a
-    # safe action sequence instead of crashing or dropping the request.
     plan = orchestrate_command("make a marks thing and explain it")
     assert [action["type"] for action in plan["actions"]] == ["generate_code", "explain"]
 
@@ -258,7 +252,6 @@ def test_voice_route_sends_rough_generation_to_key2(client, monkeypatch):
         return _marks_rewrite_plan()
 
     monkeypatch.setattr(app_module, "call_conversation_orchestrator_ai", fake_orchestrator_ai)
-    # The coding model (Key 1) must not be invoked during the orchestration step.
     monkeypatch.setattr(app_module, "call_gemini", lambda *a, **k: (_ for _ in ()).throw(AssertionError("Key 1 called during orchestration")))
     data = client.post("/voice-command", json={"text": "make a marks thing", "code": ""}).get_json()
     assert data["action"] == "generate_code"

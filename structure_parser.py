@@ -1,28 +1,10 @@
-"""
-AST-based code structure extractor for CodeUp.
-
-Provides CodeAnalyzer, which walks a Python source string and returns a
-summary of imports, functions (with typed parameter info, async flag,
-and parent class), classes, and loops.
-"""
-
 import ast
 from typing import Any, Dict, List, Optional
 
 
 class CodeAnalyzer:
-    """Extract structural information from Python source using the AST."""
 
     def analyze(self, code: str) -> Dict[str, Any]:
-        """
-        Parse *code* and return a structure dict with keys:
-            imports   – list of import strings
-            functions – list of {name, line, params, is_async, parent_class}
-            classes   – list of {name, line, methods: [str]}
-            loops     – list of {type, line}
-
-        Returns {"error": <message>} on SyntaxError.
-        """
         try:
             tree = ast.parse(code)
         except SyntaxError as e:
@@ -35,9 +17,6 @@ class CodeAnalyzer:
             "loops":     self._collect_loops(tree),
         }
 
-    # ------------------------------------------------------------------
-    # Private collectors
-    # ------------------------------------------------------------------
 
     def _collect_imports(self, tree: ast.AST) -> List[str]:
         imports: List[str] = []
@@ -52,20 +31,13 @@ class CodeAnalyzer:
         return imports
 
     def _collect_functions(self, tree: ast.AST) -> List[Dict[str, Any]]:
-        """
-        Collect functions with parent class info so the UI can show
-        'MyClass.my_method' instead of a flat list.
-        """
         functions: List[Dict[str, Any]] = []
 
-        # Walk top-level nodes so we can track which class we're inside
         for node in ast.walk(tree):
             if isinstance(node, ast.ClassDef):
-                # Methods inside this class
                 for item in ast.walk(node):
                     if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) \
                             and item is not node:
-                        # Only direct children (one level deep)
                         if item in ast.walk(node) and self._is_direct_child(node, item):
                             functions.append({
                                 "name":         item.name,
@@ -75,7 +47,6 @@ class CodeAnalyzer:
                                 "parent_class": node.name,
                             })
 
-        # Top-level functions (not inside any class)
         for node in ast.iter_child_nodes(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 functions.append({
@@ -86,12 +57,10 @@ class CodeAnalyzer:
                     "parent_class": None,
                 })
 
-        # Sort by line number for a natural reading order
         functions.sort(key=lambda f: f["line"])
         return functions
 
     def _is_direct_child(self, parent: ast.AST, candidate: ast.AST) -> bool:
-        """Return True if candidate is a direct child node of parent."""
         return candidate in ast.iter_child_nodes(parent)
 
     def _collect_classes(self, tree: ast.AST) -> List[Dict[str, Any]]:
@@ -119,9 +88,6 @@ class CodeAnalyzer:
                 loops.append({"type": "while", "line": node.lineno})
         return loops
 
-    # ------------------------------------------------------------------
-    # Parameter helpers
-    # ------------------------------------------------------------------
 
     def _extract_params(self, args: ast.arguments) -> List[Dict[str, Optional[str]]]:
         params: List[Dict[str, Optional[str]]] = []

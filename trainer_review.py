@@ -1,21 +1,8 @@
-"""Trainer Review Mode — a concise trainer-facing review of what the learner
-*did* this session and how they learned, built from deterministic session
-memory and the current project.
-
-This is different from the project report (which describes what the project
-contains). It never invents student performance or institutional details — it
-only restates facts already recorded in session memory.
-
-Pure and Flask-free.
-"""
-
 from typing import Any, Dict, List, Optional
 
 import learning_recap
 import structure_tools
 
-# Feature tags (from session_memory._FEATURE_BY_ACTION) that indicate the
-# learner used CodeUp's handoff / review features.
 _HANDOFF_FEATURES = {"exported the project", "made a project report", "reviewed the session"}
 _DEBUG_FEATURES = {"debugged errors"}
 
@@ -80,7 +67,6 @@ def _hints_clause(mem: Dict[str, Any]) -> str:
 
 
 def _project_clause(code: str, project_files: List[str], entry: str) -> str:
-    """A description of the project (no leading label)."""
     if len(project_files) > 1:
         helpers = ", ".join(project_files[:6])
         tail = f" The entry point is {entry}." if entry else ""
@@ -108,7 +94,6 @@ def _join(items: List[str]) -> str:
 def build_trainer_review(code: str, project_state: Optional[Dict[str, Any]] = None,
                          session_memory: Optional[Dict[str, Any]] = None,
                          verbosity: str = "normal") -> Dict[str, Any]:
-    """Return {message (markdown), speech (short summary)} for a trainer."""
     code = code or ""
     mem = session_memory or {}
     verbosity = (verbosity or "normal").strip().lower()
@@ -135,7 +120,6 @@ def build_trainer_review(code: str, project_state: Optional[Dict[str, Any]] = No
     debugging = _has_debugging(mem)
     handoff = bool(_HANDOFF_FEATURES.intersection(features))
 
-    # ----- spoken summary -----
     bits: List[str] = []
     if worked:
         bits.append(f"The learner practised {_join(worked)}")
@@ -157,7 +141,6 @@ def build_trainer_review(code: str, project_state: Optional[Dict[str, Any]] = No
         speech += " They also used CodeUp's handoff features (export, report, or recap)."
     speech += f" Suggested next activity: {next_activity}"
 
-    # ----- markdown for the trainer -----
     lines = ["**Trainer notes**", ""]
     if worked:
         lines.append(f"- **Worked on:** {_join(worked)}")

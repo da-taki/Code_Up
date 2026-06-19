@@ -1,13 +1,3 @@
-"""
-Project report / teacher-handoff support for CodeUp.
-
-Deterministic and Flask-free. Builds a concise, fact-grounded summary of the
-learner's current program or multi-file project: file roles, detected Python
-concepts (from the AST), how to run it, requirements, and the last run result.
-Nothing is invented — every statement is derived from the actual files, real
-metadata, or the session's stored run output/error. The Flask layer may pass the
-result through Key 2 only to soften wording, grounded in these facts.
-"""
 
 from __future__ import annotations
 
@@ -17,7 +7,6 @@ from typing import Any, Dict, List, Optional
 
 import learning_recap
 
-# Friendly concept labels in a stable, beginner-first order.
 _CONCEPT_ORDER = [
     "print output", "variables", "loops", "conditionals (if/else)", "functions",
     "classes", "imports", "lists", "dictionaries", "list comprehension",
@@ -26,13 +15,11 @@ _CONCEPT_ORDER = [
 
 
 def detect_python_concepts(code: str) -> List[str]:
-    """Return the beginner Python concepts present in ``code`` (AST-based)."""
     found = set()
     text = code or ""
     try:
         tree = ast.parse(text)
     except SyntaxError:
-        # Fall back to light regex cues so broken code still reports something.
         if re.search(r"\bprint\s*\(", text):
             found.add("print output")
         if re.search(r"^\s*\w+\s*=(?!=)", text, re.MULTILINE):
@@ -79,9 +66,6 @@ def _ordered(found) -> List[str]:
     return [c for c in _CONCEPT_ORDER if c in found]
 
 
-# ---------------------------------------------------------------------------
-# Deterministic "what the program does" explanation (AST-based, beginner-facing)
-# ---------------------------------------------------------------------------
 _NUM_WORDS = {0: "zero", 1: "one", 2: "two", 3: "three", 4: "four", 5: "five",
               6: "six", 7: "seven", 8: "eight", 9: "nine", 10: "ten"}
 
@@ -102,14 +86,12 @@ def _oxford(items: List[str]) -> str:
 
 
 def _flatten_output(out: str, limit: int = 200) -> str:
-    """Join the non-empty lines of program output into a clean spoken phrase."""
     lines = [ln.strip() for ln in str(out or "").splitlines() if ln.strip()]
     joined = ", ".join(lines)
     return (joined[:limit] + "...") if len(joined) > limit else joined
 
 
 def _sentence_end(text: str) -> str:
-    """A terminal period, unless the text already ends with sentence punctuation."""
     return "" if str(text or "")[-1:] in ".!?:" else "."
 
 
@@ -128,7 +110,6 @@ def _assign_target_name(node: ast.AST) -> str:
 
 
 def _for_range_info(node: ast.For):
-    """If the loop iterates a literal range(...), return (start, stop, display)."""
     it = node.iter
     if not _call_is(it, "range"):
         return None
@@ -160,8 +141,6 @@ def _block_has_print(node: ast.AST) -> bool:
 
 
 def _name_in_print(tree: ast.AST, name: str) -> bool:
-    """True if ``name`` actually appears inside a print(...) call (so we never
-    claim a variable is printed when it is not)."""
     if not name:
         return False
     for node in ast.walk(tree):
@@ -173,12 +152,6 @@ def _name_in_print(tree: ast.AST, name: str) -> bool:
 
 
 def describe_program_behavior(code: str) -> List[str]:
-    """Beginner-facing sentences describing what ``code`` actually does.
-
-    Grounded entirely in the AST: loop bounds, the action a loop repeats,
-    functions, variables, conditionals and printing. Returns [] for empty code
-    and one honest sentence for code that does not parse.
-    """
     code = code or ""
     if not code.strip():
         return []
@@ -252,7 +225,6 @@ def describe_program_behavior(code: str) -> List[str]:
 
 
 def _multifile_behavior(files: Dict[str, str], entry: str) -> List[str]:
-    """How the files of a project fit together (entry point + local imports)."""
     if not files:
         return []
     entry = entry if entry in files else next(iter(sorted(files)), "")
@@ -274,7 +246,6 @@ def _multifile_behavior(files: Dict[str, str], entry: str) -> List[str]:
 
 
 def _last_output_speech(mem: Optional[Dict[str, Any]]) -> str:
-    """A short spoken phrase about the most recent run result, or ''."""
     mem = mem or {}
     ok = mem.get("last_run_ok")
     err = (mem.get("last_run_error") or "").strip()
@@ -296,7 +267,6 @@ def _looks_like_python(path: str) -> bool:
 
 
 def _file_role(path: str, content: str) -> str:
-    """A short, deterministic guess of a file's role from its name/content."""
     low = path.lower()
     name = low.rsplit("/", 1)[-1]
     if name in ("main.py", "app.py", "run.py", "__main__.py"):
@@ -319,7 +289,6 @@ def _file_role(path: str, content: str) -> str:
 
 
 def summarize_files(project_files: Dict[str, str]) -> List[Dict[str, Any]]:
-    """One summary record per file: path, role, line count, detected concepts."""
     summaries: List[Dict[str, Any]] = []
     for path in sorted((project_files or {}).keys()):
         content = project_files[path] if isinstance(project_files.get(path), str) else str(project_files.get(path) or "")
@@ -358,14 +327,6 @@ def _last_run_line(mem: Optional[Dict[str, Any]]) -> str:
 def build_project_report(project_state: Dict[str, Any],
                          mem: Optional[Dict[str, Any]] = None,
                          verbosity: str = "normal") -> Dict[str, Any]:
-    """Build a fact-grounded report for the current program/project.
-
-    ``project_state`` keys (all optional): ``is_project`` (bool), ``name``,
-    ``files`` ({path: content}), ``code`` (single-file editor code), ``entry``,
-    ``requirements`` (list). ``mem`` is the session working-memory dict.
-    ``verbosity`` (concise/normal/detailed/beginner/expert) tunes the spoken
-    summary length only — the written report always contains the full facts.
-    """
     project_state = project_state or {}
     is_project = bool(project_state.get("is_project")) and bool(project_state.get("files"))
 
@@ -389,7 +350,6 @@ def build_project_report(project_state: Dict[str, Any],
 
     requirements = [str(r).strip() for r in (project_state.get("requirements") or []) if str(r).strip()]
     if not requirements:
-        # Infer obvious third-party libs from imports as a fallback.
         third = {"numpy", "pandas", "matplotlib"}
         joined = "\n".join(files.values())
         requirements = sorted({lib for lib in third if re.search(rf"\bimport\s+{lib}\b|\bfrom\s+{lib}\b", joined)})
@@ -466,14 +426,6 @@ def _render_markdown(title, is_project, file_summaries, concepts, requirements,
 def _render_speech(title, is_project, file_summaries, concepts, run_instruction,
                    verbosity: str = "normal", behavior=None, last_output: str = "",
                    session_features=None, errors_fixed: str = "", next_step: str = ""):
-    """Return ``(speech, speech_more)``.
-
-    ``speech`` is a learner-safe summary that ALWAYS starts at the beginning
-    ("Project report ready...") — never on session history or next steps — and
-    invites "say more". ``speech_more`` is the continuation (errors fixed,
-    session history, next step) spoken only when the learner asks for it. The
-    written markdown report still carries every fact.
-    """
     if not file_summaries:
         return ("There is no code or project to report on yet. Create or generate some code first.", "")
     behavior = behavior or []
@@ -482,7 +434,6 @@ def _render_speech(title, is_project, file_summaries, concepts, run_instruction,
         head = f"Project report ready. This is a multi-file Python project with {len(file_summaries)} files: {names}."
     else:
         head = "Project report ready. This is a single-file Python program."
-    # Concise/expert: keep it to the essentials (what it is + how to run).
     if str(verbosity or "").lower() in ("concise", "expert"):
         return (f"{head} {run_instruction}", "")
     behavior_part = (" " + " ".join(behavior)) if behavior else (
@@ -490,8 +441,6 @@ def _render_speech(title, is_project, file_summaries, concepts, run_instruction,
     concept_part = (" Concepts used: " + ", ".join(concepts) + ".") if concepts else ""
     last_part = (" " + last_output) if last_output else ""
     summary = f"{head}{behavior_part}{concept_part} {run_instruction}{last_part} Say more to hear next steps."
-    # The continuation, revealed only by "say more": fixed errors, what the
-    # learner did this session, and the suggested next step.
     more_bits: List[str] = []
     if errors_fixed:
         more_bits.append(errors_fixed)

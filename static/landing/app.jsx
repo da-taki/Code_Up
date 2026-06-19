@@ -1,11 +1,11 @@
 /* global React, ReactDOM, Nav, Hero, Sonify, Voice, IDE, Features, Stats, StartHere, CTA, Foot, useReveal, TweaksPanel, useTweaks, TweakSection, TweakRadio, TweakToggle */
 const { useEffect } = React;
 
-const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+const TWEAK_DEFAULTS = {
   "theme": "paper",
   "motion": true,
   "grain": true
-}/*EDITMODE-END*/;
+};
 
 function App() {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);

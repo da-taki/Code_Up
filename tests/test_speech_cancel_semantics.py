@@ -1,16 +1,3 @@
-"""
-Speech-cancellation semantics.
-
-Backend: "stop speaking" cancels narration only; "stop everything" cancels
-speech + tones + queued narration but does NOT pause the mic. (Distinctness is
-also covered in test_voice_control_and_variable_insert.py.)
-
-Frontend (structural assertions over the shipped static/app.js, the way this repo
-already tests frontend wiring): cancellation clears the queue, bumps a speech
-epoch so an async callback that resolves after "stop" refuses to speak, the
-"stop everything" handler preserves the output box (status only), and the long
-narrations check the epoch so they stop too.
-"""
 import os
 
 import pytest
@@ -46,9 +33,6 @@ def _block_after(haystack, marker, length=600):
     return haystack[idx:idx + length]
 
 
-# =====================================================================
-# Backend routing semantics
-# =====================================================================
 
 class TestStopRouting:
 
@@ -66,9 +50,6 @@ class TestStopRouting:
         assert d["action"] != "pause_voice"
 
 
-# =====================================================================
-# Frontend: cancellation clears queue + bumps epoch
-# =====================================================================
 
 class TestCancellationWiring:
 
@@ -92,9 +73,6 @@ class TestCancellationWiring:
         assert "function bumpSpeechEpoch()" in app_js
 
 
-# =====================================================================
-# Frontend: async narrations stop after a cancel (epoch checks)
-# =====================================================================
 
 class TestAsyncNarrationsRespectCancel:
 
@@ -111,21 +89,15 @@ class TestAsyncNarrationsRespectCancel:
         assert "_narrEpoch !== currentSpeechEpoch()" in block
 
 
-# =====================================================================
-# Frontend: stop everything preserves the output box (Part 3)
-# =====================================================================
 
 class TestOutputPreserved:
 
     def test_stop_everything_does_not_overwrite_output(self, app_js):
         block = _block_after(app_js, "action === 'stop_everything'")
-        # The visible program output must be preserved: announce via the status/
-        # ARIA region, never rewrite the output box with "Stopped".
         assert "out('Stopped" not in block and 'out("Stopped' not in block
         assert "srAnnounce('Stopped" in block or 'srAnnounce("Stopped' in block
 
     def test_stop_everything_still_cancels_speech_tones_and_job(self, app_js):
-        # Regression guard mirroring test_tts_voice_consistency.
         block = _block_after(app_js, "action === 'stop_everything'")
         assert "SpeechManager.cancelAll()" in block
         assert "SonificationManager.clearAll()" in block

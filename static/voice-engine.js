@@ -1,13 +1,7 @@
 'use strict';
 
-/**
- * VoiceEngine — unified real-time conversational voice system for CodeUp.
- * Single module containing: VoiceManager, SpeechManager, streaming handler,
- * interrupt controller, and state machine.
- */
 const VoiceEngine = (function () {
 
-  // ─── STATE MACHINE ───────────────────────────────────────────────────────────
   const States = Object.freeze({
     IDLE: 'IDLE',
     LISTENING: 'LISTENING',
@@ -61,14 +55,12 @@ const VoiceEngine = (function () {
     }
   }
 
-  // ─── DEBUG ──────────────────────────────────────────────────────────────────
   function _debug(...args) {
     if (typeof window !== 'undefined' && window.CODEUP_DEBUG) {
       console.log('[VoiceEngine]', ...args);
     }
   }
 
-  // ─── CONFIGURATION ──────────────────────────────────────────────────────────
   const Config = {
     speechChunkSize: 260,
     streamNarrationMinChars: 140,
@@ -98,7 +90,6 @@ const VoiceEngine = (function () {
     try { return localStorage.getItem('codeup_voice_lang') || 'auto'; } catch (e) { return 'auto'; }
   }
 
-  // ─── LANGUAGE DETECTION ─────────────────────────────────────────────────────
   const DEVANAGARI_RANGE = /[ऀ-ॿ]/;
 
   function detectLanguage(text) {
@@ -135,7 +126,6 @@ const VoiceEngine = (function () {
     return segments;
   }
 
-  // ─── VOICE SELECTION ────────────────────────────────────────────────────────
   let _voices = [];
   let _englishVoice = null;
   let _hindiVoice = null;
@@ -145,19 +135,12 @@ const VoiceEngine = (function () {
     _voices = window.speechSynthesis.getVoices();
     if (!_voices.length) return;
 
-    // Prefer high-quality voices
     const enVoices = _voices.filter(v => v.lang && v.lang.startsWith('en'));
     const hiVoices = _voices.filter(v => v.lang && v.lang.startsWith('hi'));
 
-    // Names that are reliably female / male across common platforms. Used to
-    // keep one stable, acceptable female voice and to never fall back to a
-    // default male voice (e.g. "Microsoft David"). This is a deterministic
-    // preference + safe fallback, not a hardcoded single voice.
     const FEMALE = /(zira|aria|jenny|michelle|clara|samantha|susan|google us english|google uk english female|female|heera|swara|kalpana)/i;
     const MALE = /(\bdavid\b|\bmark\b|george|james|\bguy\b|daniel|google uk english male|\bmale\b|ravi|hemant|madhur|prabhat)/i;
 
-    // Keep "Google US English" (the existing preferred, female voice) at the
-    // top, then any known female, then online, then any non-male, then first.
     _englishVoice = enVoices.find(v => v.name.includes('Google') && !MALE.test(v.name)) ||
                     enVoices.find(v => FEMALE.test(v.name)) ||
                     enVoices.find(v => v.name.includes('Microsoft') && v.name.includes('Online') && !MALE.test(v.name)) ||
@@ -175,25 +158,13 @@ const VoiceEngine = (function () {
   }
 
   function _getVoiceForLang(lang) {
-    // Hindi mode is temporarily hidden in the UI because browser Hindi
-    // text-to-speech quality is inconsistent, so every utterance uses the one
-    // resolved English voice — even if a 'hi' item somehow reaches here.
-    // _hindiVoice is still resolved in _loadVoices(); to restore Hindi
-    // narration later, hand back _hindiVoice for lang === 'hi' again.
     return _englishVoice;
   }
 
-  // ─── SPEECH MANAGER (TTS output) ───────────────────────────────────────────
   let _narrationQueue = [];
   let _currentUtterance = null;
   let _isSpeaking = false;
   let _narrationAborted = false;
-  // Generation counter guarding the deferred speechSynthesis.cancel() calls that
-  // cancelSpeech() schedules for the Chrome "stuck speaking" quirk. Each cancel
-  // captures the generation it was scheduled in; a later speak() bumps the
-  // generation so those stale cancels become no-ops instead of silencing the
-  // FIRST chunk of the new response. Without this, cancelAll()+speak() (the
-  // normal command path) only ever leaves the tail of the response audible.
   let _cancelGeneration = 0;
 
   function sanitizeSpeechText(text) {
@@ -215,14 +186,11 @@ const VoiceEngine = (function () {
     if (!text || !Config.voiceEnabled) return Promise.resolve();
     if (!('speechSynthesis' in window)) return Promise.resolve();
 
-    // If an interrupt happened very recently (<100ms ago), drop this speak call
-    // to avoid stale callbacks from cancelled async flows
     if (_narrationAborted && (Date.now() - _interruptTimestamp) < 100) {
       return Promise.resolve();
     }
     _narrationAborted = false;
     // New narration is starting: invalidate any deferred cancels still pending
-    // from a previous cancelSpeech() so they cannot silence this first chunk.
     _cancelGeneration++;
 
     const chunks = _semanticSpeechChunks(sanitizeSpeechText(text));
@@ -315,7 +283,6 @@ const VoiceEngine = (function () {
       _isSpeaking = false;
       _currentUtterance = null;
       if (item.resolve) item.resolve();
-      // Chain next chunk immediately for smooth flow
       if (!_narrationAborted) {
         _dequeueNarration();
       } else {
@@ -326,7 +293,6 @@ const VoiceEngine = (function () {
     _currentUtterance.onend = cleanup;
     _currentUtterance.onerror = cleanup;
 
-    // Safety timeout
     const timeout = Math.max(5000, item.text.length * 100);
     const timer = setTimeout(() => {
       if (!finished) {
@@ -344,16 +310,11 @@ const VoiceEngine = (function () {
   function cancelSpeech() {
     _narrationAborted = true;
     const myGeneration = ++_cancelGeneration;
-    // Resolve all pending queue items to prevent promise leaks
     const pending = _narrationQueue.splice(0);
     pending.forEach(item => { if (item.resolve) try { item.resolve(); } catch (e) {} });
     _currentUtterance = null;
     _isSpeaking = false;
     try { window.speechSynthesis.cancel(); } catch (e) {}
-    // Multi-cancel for Chrome quirk — but ONLY while this cancel is still the
-    // most recent intent. If speak() starts new narration before these fire it
-    // bumps _cancelGeneration, so these become no-ops and never cut off the new
-    // response's first chunk (the "only speaks the end" accessibility bug).
     [50, 150, 300].forEach(delay => {
       setTimeout(() => {
         if (_cancelGeneration !== myGeneration) return;
@@ -386,24 +347,19 @@ const VoiceEngine = (function () {
     _requestEpoch++;
     _debug('INTERRUPT triggered');
 
-    // 1. Cancel speech immediately
     cancelSpeech();
 
-    // 2. Abort active AI request
     if (_activeAbortController) {
       _activeAbortController.abort();
       _activeAbortController = null;
     }
 
-    // 3. Clear streaming state
     StreamHandler.abort();
 
-    // 4. Release request lock so new commands can proceed
     _requestLocked = false;
 
-    // 5. Reset to LISTENING
     if (VoiceInput.isEnabledByUser() && VoiceInput.isActive()) {
-      _state = States.LISTENING; // Force — bypass validation for interrupt
+      _state = States.LISTENING;
       _updateUIState(States.LISTENING);
     } else {
       _state = States.IDLE;
@@ -415,7 +371,6 @@ const VoiceEngine = (function () {
     return epoch < _requestEpoch;
   }
 
-  // ─── REQUEST LOCK (prevent duplicates) ─────────────────────────────────────
   let _requestLocked = false;
   let _lastTranscript = '';
   let _lastTranscriptTime = 0;
@@ -426,7 +381,6 @@ const VoiceEngine = (function () {
       _debug('Request locked — dropping duplicate');
       return false;
     }
-    // Deduplication: ignore identical transcript within window
     const now = Date.now();
     if (transcript === _lastTranscript && (now - _lastTranscriptTime) < DEDUP_WINDOW_MS) {
       _debug('Duplicate transcript — ignoring');
@@ -442,7 +396,6 @@ const VoiceEngine = (function () {
     _requestLocked = false;
   }
 
-  // ─── STREAMING HANDLER ──────────────────────────────────────────────────────
   const StreamHandler = (function () {
     let _reader = null;
     let _aborted = false;
@@ -468,15 +421,12 @@ const VoiceEngine = (function () {
 
         const contentType = response.headers.get('content-type') || '';
 
-        // SSE stream
         if (contentType.includes('text/event-stream')) {
           await _handleSSE(response, epoch, onChunk, onDone);
         }
-        // NDJSON stream
         else if (contentType.includes('application/x-ndjson') || contentType.includes('text/plain')) {
           await _handleNDJSON(response, epoch, onChunk, onDone);
         }
-        // Fallback: standard JSON (non-streaming)
         else {
           const data = await response.json();
           if (!isStaleCallback(epoch) && !_aborted) {
@@ -528,7 +478,6 @@ const VoiceEngine = (function () {
                   if (onChunk) onChunk(chunk);
                 }
               } catch (e) {
-                // Plain text SSE data
                 if (data.trim()) {
                   fullText += data;
                   if (onChunk) onChunk(data);
@@ -596,7 +545,6 @@ const VoiceEngine = (function () {
     return { streamResponse, abort };
   })();
 
-  // ─── VOICE INPUT MANAGER ────────────────────────────────────────────────────
   const VoiceInput = (function () {
     let _recognition = null;
     let _active = false;
@@ -778,7 +726,6 @@ const VoiceEngine = (function () {
       if (_state !== States.PROCESSING && _state !== States.RESPONDING && _state !== States.SPEAKING) {
         setState(States.LISTENING);
       }
-      // Force fresh session
       try {
         _recognition.stop();
         _lastActivity = Date.now();
@@ -790,7 +737,6 @@ const VoiceEngine = (function () {
     function setLanguage(lang) {
       if (_recognition && _active && _enabledByUser) {
         _recognition.lang = lang === 'hi' ? 'hi-IN' : 'en-US';
-        // Restart to apply
         try {
           _recognition.stop(); // onend will restart
           _lastActivity = Date.now();
@@ -851,10 +797,8 @@ const VoiceEngine = (function () {
     const cleaned = transcript.trim();
     if (!cleaned) return;
 
-    // Barge-in: if currently speaking or responding, interrupt
     if (_state === States.SPEAKING || _state === States.RESPONDING || _state === States.PROCESSING) {
       interrupt();
-      // Small delay to let cancellation complete
       await new Promise(r => setTimeout(r, 50));
     }
 
@@ -862,7 +806,6 @@ const VoiceEngine = (function () {
 
     try {
       if (!setState(States.PROCESSING)) {
-        // Force transition for interrupt recovery
         _state = States.PROCESSING;
         _updateUIState(States.PROCESSING);
       }
@@ -874,7 +817,6 @@ const VoiceEngine = (function () {
       _debug('Command handler error:', e);
     } finally {
       _releaseRequestLock();
-      // If we're still in PROCESSING after the command, transition back
       if (_state === States.PROCESSING) {
         if (VoiceInput.isEnabledByUser() && VoiceInput.isActive()) {
           _state = States.LISTENING;
@@ -887,7 +829,6 @@ const VoiceEngine = (function () {
     }
   }
 
-  // ─── STREAMING CONVERSATION ─────────────────────────────────────────────────
   let _streamBuffer = '';
   let _streamUICallback = null;
 
@@ -957,13 +898,11 @@ const VoiceEngine = (function () {
 
     return new Promise((resolve, reject) => {
       StreamHandler.streamResponse(url, body,
-        // onChunk
         (chunk) => {
           if (isStaleCallback(epoch)) return;
           fullText += chunk;
           narrationBuffer += chunk;
 
-          // Update UI immediately
           if (_streamUICallback) _streamUICallback(fullText, chunk);
 
           if (opts.narrate !== false) {
@@ -978,7 +917,6 @@ const VoiceEngine = (function () {
             }
           }
         },
-        // onDone
         (data, error) => {
           if (isStaleCallback(epoch)) { resolve({ aborted: true }); return; }
 
@@ -994,10 +932,8 @@ const VoiceEngine = (function () {
             else setState(States.IDLE);
             resolve({ error, fullText });
           } else {
-            // After narration completes, resume listening
             if (opts.narrate !== false && fullText) {
               setState(States.SPEAKING);
-              // Wait for speech queue to drain, then resume (with safety timeout)
               let checkCount = 0;
               const checkDone = setInterval(() => {
                 checkCount++;
@@ -1005,7 +941,6 @@ const VoiceEngine = (function () {
                   clearInterval(checkDone);
                   _resumeListeningAfterSpeech();
                 } else if (checkCount > 150) {
-                  // Safety: 30s max wait, then force resume
                   clearInterval(checkDone);
                   cancelSpeech();
                   _resumeListeningAfterSpeech();
@@ -1022,7 +957,6 @@ const VoiceEngine = (function () {
     });
   }
 
-  // Non-streaming request with narration support
   async function request(url, body, opts = {}) {
     const epoch = ++_requestEpoch;
     _activeAbortController = new AbortController();
@@ -1049,7 +983,6 @@ const VoiceEngine = (function () {
         _updateUIState(States.RESPONDING);
       }
 
-      // Narrate response
       const speechText = data.speech || data.reply || data.output || '';
       if (speechText && opts.narrate !== false) {
         setState(States.SPEAKING);
@@ -1071,7 +1004,6 @@ const VoiceEngine = (function () {
     }
   }
 
-  // ─── INITIALIZATION ─────────────────────────────────────────────────────────
   function init() {
     Config.language = _loadLanguagePreference();
 
@@ -1084,52 +1016,40 @@ const VoiceEngine = (function () {
     _debug('VoiceEngine initialized. Language:', Config.language);
   }
 
-  // ─── PUBLIC API ─────────────────────────────────────────────────────────────
   return {
-    // State
     States,
     getState,
     setState,
     onStateChange,
 
-    // Config
     configure,
     Config,
 
-    // Speech output
     speak,
     cancelSpeech,
 
-    // Voice input
     VoiceInput,
 
-    // Streaming
     streamingRequest,
     request,
     StreamHandler,
     setStreamUICallback,
 
-    // Interrupt
     interrupt,
     isStaleCallback,
 
-    // Command handling
     setCommandHandler,
 
-    // Language
     detectLanguage,
     splitByLanguage,
 
-    // Lifecycle
     init,
 
-    // Internals (for legacy integration)
     _acquireRequestLock,
     _releaseRequestLock,
   };
 })();
 
-// Auto-initialize when DOM is ready
 if (typeof document !== 'undefined') {
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => VoiceEngine.init());

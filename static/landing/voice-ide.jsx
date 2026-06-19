@@ -1,9 +1,6 @@
 /* global React */
 const { useEffect, useState, useRef } = React;
 
-// ────────────────────────────────────────────────────────────
-// Voice typewriter — cycles through the command list (English only)
-// ────────────────────────────────────────────────────────────
 const VOICE_LINES = [
   { say: "run the code",                     act: "▸ python sieve.py", lang: "EN", key: "Ctrl+Enter" },
   { say: "go to line twenty five",           act: "▸ cursor → line 25", lang: "EN", key: "Alt+G" },

@@ -21,18 +21,15 @@
  */
 (function () {
 
-  // ─── PURE STATE MACHINE (TutorialModel) ──────────────────────────────────
   function TutorialModel(order) {
     this.order = (order && order.length) ? order.slice() : ['print', 'variables', 'if', 'for', 'while'];
     this.active = false;
     this.moduleId = null;
-    // idle | intro | activity | decision
     this.stage = 'idle';
     this.succeeded = false;
     this.completed = [];
   }
 
-  /** Begin the tutorial. Always starts on the first module's intro. */
   TutorialModel.prototype.start = function () {
     this.active = true;
     this.moduleId = this.order[0];
@@ -41,17 +38,12 @@
     return this.moduleId;
   };
 
-  /** Move into the hands-on activity for the current module. */
   TutorialModel.prototype.beginActivity = function () {
     this.stage = 'activity';
     this.succeeded = false;
     return this.moduleId;
   };
 
-  /**
-   * Record a successful activity. Moves to the DECISION stage — never to the
-   * next module. The learner must explicitly choose to continue.
-   */
   TutorialModel.prototype.markSuccess = function () {
     this.succeeded = true;
     this.stage = 'decision';
@@ -61,13 +53,11 @@
     return this.moduleId;
   };
 
-  /** Move to the decision stage without recording success (used by "skip"). */
   TutorialModel.prototype.toDecision = function () {
     this.stage = 'decision';
     return this.moduleId;
   };
 
-  /** The id of the module after the current one, or null if it is the last. */
   TutorialModel.prototype.nextModuleId = function () {
     var i = this.order.indexOf(this.moduleId);
     if (i === -1 || i + 1 >= this.order.length) return null;
@@ -88,14 +78,12 @@
     return n;
   };
 
-  /** Practise the current module again (re-enter its activity). */
   TutorialModel.prototype.practiceAgain = function () {
     this.stage = 'activity';
     this.succeeded = false;
     return this.moduleId;
   };
 
-  /** Jump straight to a specific module's intro. */
   TutorialModel.prototype.gotoModule = function (id) {
     if (this.order.indexOf(id) === -1) return false;
     this.active = true;
@@ -105,7 +93,6 @@
     return true;
   };
 
-  /** Leave the tutorial cleanly. */
   TutorialModel.prototype.exit = function () {
     this.active = false;
     this.stage = 'idle';
@@ -138,7 +125,6 @@
       return false;
     }
 
-    // Exit — checked first so "exit tutorial" never reads as something else.
     if (has([
       'exit tutorial', 'close tutorial', 'stop tutorial', 'end tutorial',
       'leave tutorial', 'quit tutorial', 'exit the tutorial', 'stop the tutorial',
@@ -148,7 +134,6 @@
       return 'exit';
     }
 
-    // Repeat the instruction (distinct from "try again", which redoes the work).
     if (has([
       'repeat that', 'repeat the instruction', 'repeat instructions',
       'repeat the instructions', 'say that again', 'say it again', 'say again',
@@ -159,7 +144,6 @@
       return 'repeat';
     }
 
-    // Redo the activity.
     if (has([
       'try again', 'practise again', 'practice again', 'practise this again',
       'practice this again', 'do it again', 'one more time', 'let me try again',
@@ -168,12 +152,10 @@
       return 'again';
     }
 
-    // Recap / summary of the current topic.
     if (has(['recap', 'summary', 'summarise', 'summarize', 'remind me', 'go over it again'])) {
       return 'recap';
     }
 
-    // Fill in an example for me.
     if (has([
       'give me an example', 'show me an example', 'fill it in', 'fill in an example',
       'fill it in for me', 'do it for me', 'type it for me', 'write it for me',
@@ -182,12 +164,10 @@
       return 'example';
     }
 
-    // Ask for a hint (bare "help" stays a global command).
     if (has(['give me a hint', 'i need a hint', 'need a hint', 'a hint', 'give me a clue', 'a clue', 'help me out']) || t === 'hint' || t === 'clue') {
       return 'hint';
     }
 
-    // Continue to the next topic (decision stage).
     if (has([
       'continue', 'next topic', 'next lesson', 'next module', 'go on', 'keep going',
       'move on', 'proceed', 'go ahead', 'yes please', 'carry on'
@@ -199,9 +179,6 @@
   };
 
   // AI-tutor coach requests (friendlier explanations, adaptive hints,
-  // encouragement). Mirrors tutorial_engine.classify_coach_request on the server
-  // and is checked BEFORE classifyDecision so "say that again simpler" is coached
-  // rather than read as a plain "repeat". Specific topics win over generic ones.
   TutorialModel.COACH_TRIGGERS = [
     ['why_quotes', ['why do we use quotes', 'why use quotes', 'why the quotes', 'why quotes', 'what are quotes for', 'what do quotes do', 'purpose of quotes']],
     ['why_indentation', ['why do we indent', 'why the indentation', 'why indentation', 'why indent', 'what is indentation', 'what does indentation do', 'why four spaces']],
@@ -224,13 +201,6 @@
     return null;
   };
 
-  // ─── STAGED ACTIVITY MODEL (declarative, pure) ───────────────────────────
-  // Each module's hands-on activity is built line by line, by voice. A step is
-  // satisfied when its `check(code)` predicate matches the live editor text.
-  // Checks are cumulative and order-independent: the controller advances past
-  // every satisfied step, so a learner can build pieces in any order and still
-  // progress. These predicates are pure (regex over a code string) so they run
-  // under Node and are unit-tested in tests/tutorial_model.test.js.
   function _hasAssign(code) {
     // A real assignment line (x = ...), not a comparison (x == ...).
     return /^[ \t]*[A-Za-z_]\w*\s*=(?!=)\s*\S/m.test(String(code || ''));
@@ -247,7 +217,6 @@
   function _hasWhileHeader(code) { return /^[ \t]*while\b.*:\s*$/m.test(String(code || '')); }
   function _hasIndentedPrint(code) { return /^[ \t]+print\s*\(/m.test(String(code || '')); }
   function _hasIncrement(code) {
-    // Indented "count = count + 1" or "count += 1".
     return /^[ \t]+[A-Za-z_]\w*\s*(?:=(?!=)\s*[A-Za-z_]\w*\s*[-+]|[-+]=)/m.test(String(code || ''));
   }
 
@@ -360,8 +329,6 @@
     ],
   };
 
-  // Export the pure model + staged-activity definitions for Node-based unit
-  // testing. Nothing below this point runs under Node (it needs document/window).
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = { TutorialModel: TutorialModel, TUTORIAL_STEPS: TUTORIAL_STEPS };
   }
@@ -370,7 +337,6 @@
     return; // Node / non-browser: model only.
   }
 
-  // ─── BROWSER HELPERS (resolve the app's proven globals defensively) ───────
   function _speak(text, opts) {
     if (!text) return;
     try {
@@ -391,7 +357,6 @@
     try { if (typeof srAnnounce === 'function') { srAnnounce(msg); return; } } catch (e) {}
   }
   function _setCode(code) {
-    // ALWAYS preserve speech: setCode() otherwise calls SpeechManager.cancelAll(),
     // which is the classic "narration shown but not spoken" bug.
     try { if (typeof setCode === 'function') return setCode(code, { preserveSpeech: true, source: 'tutorial', allowNonPython: true }); } catch (e) {}
     try { if (window.setCode) return window.setCode(code, { preserveSpeech: true, source: 'tutorial', allowNonPython: true }); } catch (e) {}
@@ -411,7 +376,6 @@
     var ta = document.querySelector('#editor textarea');
     if (ta) { try { ta.focus(); } catch (e) {} }
   }
-  // During tutorial activities the learner types/says insert COMMANDS, not raw
   // Python — so keyboard focus goes to the command box, never the code editor.
   function _focusCommandBox() {
     var el = document.getElementById('voiceText');
@@ -419,9 +383,6 @@
   }
   function _safeStorage(fn) { try { return fn(); } catch (e) { return null; } }
 
-  // ─── FALLBACK CONTENT (used only if /tutorial/modules cannot be fetched) ──
-  // Mirrors tutorial_engine.py. Concept + example are spoken in the intro; the
-  // step-by-step "insert ..." prompts come from TUTORIAL_STEPS above.
   var FALLBACK_CONTENT = {
     order: ['print', 'variables', 'if', 'for', 'while'],
     count: 5,
@@ -481,7 +442,6 @@
 
   var PROGRESS_KEY = 'codeup_tutorial_progress';
 
-  // ─── CONTROLLER ───────────────────────────────────────────────────────────
   var Controller = {
     model: new TutorialModel(FALLBACK_CONTENT.order),
     content: null,
@@ -489,7 +449,7 @@
     _hintIndex: 0,
     _lastInstruction: '',
     _validating: false,
-    _stepIndex: 0,  // which staged step of the current activity we are on
+    _stepIndex: 0,
 
     get active() { return this.model.active; },
     get step() { return this.model.moduleNumber(); },  // legacy compat
@@ -499,7 +459,6 @@
       return this.content.modules[this.model.moduleId] || null;
     },
 
-    // Ordered build steps for the current module's activity (may be empty).
     _steps: function () {
       return TUTORIAL_STEPS[this.model.moduleId] || [];
     },
@@ -547,7 +506,6 @@
       _safeStorage(function () { localStorage.setItem(PROGRESS_KEY, JSON.stringify(done)); });
     },
 
-    // ── lifecycle ──────────────────────────────────────────────────────────
     open: function () {
       var self = this;
       this._ensureContent().then(function () {
@@ -569,7 +527,6 @@
       });
     },
 
-    // Jump straight to one topic ("practise for loops").
     practice: function (moduleId) {
       var self = this;
       this._ensureContent().then(function () {
@@ -588,7 +545,6 @@
       });
     },
 
-    // close() / exit() — leave cleanly. close() kept for backward compatibility.
     close: function () { this.exit(false); },
     exit: function (startCoding) {
       if (this._pendingValidate) { clearTimeout(this._pendingValidate); this._pendingValidate = null; }
@@ -604,13 +560,11 @@
       _focusEditor();
     },
 
-    // next() — advance at a decision point (used by the "tutorial next" command).
     next: function () {
       if (this.model.stage === 'decision') { this._continue(); }
       else { this._repeatInstruction(); }
     },
 
-    // ── module flow ──────────────────────────────────────────────────────────
     _enterModuleIntro: function (moduleId, opts) {
       opts = opts || {};
       if (!opts.skipModelReset) {
@@ -636,7 +590,6 @@
       this._coachHintIndex = 0;
       var m = this._module();
       if (!m) return;
-      // Fresh editor for the activity so the learner builds from a clean slate.
       _setCode('');
       var first = this._currentStep();
       this._lastInstruction = first ? first.prompt : (m.task || '');
@@ -649,9 +602,7 @@
       _focusCommandBox();
     },
 
-    // Observe a real insertion made through the normal voice/typed pipeline (the
     // tutorial never intercepts insert commands — it watches their result). The
-    // insert helper has already read the new line back; here we confirm the
     // structure and prompt the next step. Speech is queued, so nothing overlaps.
     onInsert: function () {
       if (!this.model.active || this.model.stage !== 'activity') return;
@@ -659,14 +610,13 @@
       if (!steps.length) return;
       var code = _getCode();
       var advanced = false;
-      // Advance past every step the code now satisfies (order-independent).
       while (this._stepIndex < steps.length && steps[this._stepIndex].check(code)) {
         var done = steps[this._stepIndex];
         this._stepIndex++;
         advanced = true;
         if (done.readback) _speak(done.readback);
       }
-      if (!advanced) return;  // the generic read-back already played; wait for more.
+      if (!advanced) return;
       if (this._stepIndex < steps.length) {
         var next = steps[this._stepIndex];
         this._lastInstruction = next.prompt;
@@ -683,9 +633,7 @@
       }
     },
 
-    // Called by window._tutorialOnRunSuccess / _tutorialOnRunError.
     onRunResult: function (ranOk) {
-      // Only react during an active hands-on activity. Never auto-advance.
       if (!this.model.active || this.model.stage !== 'activity') return;
       if (this._validating) return;
       this._validating = true;
@@ -695,14 +643,11 @@
 
       this._validate(self.model.moduleId, code, ranOk, output).then(function (res) {
         self._validating = false;
-        // Guard: the learner may have exited or moved on while we waited.
         if (!self.model.active || self.model.stage !== 'activity') return;
         if (res.passed) {
           self._failCount = 0;
           self._celebrateAndDecide(res.feedback);
         } else {
-          // Repeated failure on the same activity: lead with warm encouragement
-          // (deterministic, no AI needed) before the same factual hint.
           self._failCount = (self._failCount || 0) + 1;
           if (self._failCount >= 2) {
             _speak('You are doing fine. This part trips up everyone at first. Let us take it one small step.');
@@ -733,7 +678,6 @@
         .catch(function () { return self._localValidate(moduleId, code, ranOk); });
     },
 
-    // Offline fallback validator (lightweight; backend AST check is primary).
     _localValidate: function (moduleId, code, ranOk) {
       var m = (this.content && this.content.modules[moduleId]) || {};
       var c = String(code || '');
@@ -806,7 +750,6 @@
       _srAnnounce('Repeating the instruction.');
     },
 
-    // Read the editor back, line by line, announcing indentation — so a blind
     // learner can hear the structure they have built so far.
     _readMyCode: function () {
       var trimmed = String(_getCode() || '').replace(/\s+$/, '');
@@ -827,7 +770,6 @@
     },
 
     _giveHint: function () {
-      // Prefer the hint for the exact build step the learner is on.
       if (this.model.stage === 'activity') {
         var cur = this._currentStep();
         if (cur && cur.hint) { _speak('Hint. ' + cur.hint); _srAnnounce('Hint given'); return; }
@@ -845,7 +787,6 @@
       var m = this._module();
       if (!m) return;
       _setCode(m.example_code);
-      // A full example satisfies every build step; jump to the run prompt.
       this._stepIndex = this._steps().length;
       this._lastInstruction = 'Say run code, or press Control and Enter, to run it.';
       this.render();
@@ -868,10 +809,7 @@
       this._setStatus('Choose: continue, recap, or exit.');
     },
 
-    // ── AI tutor coach ───────────────────────────────────────────────────────
-    // Asks the backend coach, which restates KNOWN lesson facts (Key 2 may
     // rephrase them more warmly). On any failure it falls back to a deterministic
-    // local line, so the tutorial never depends on AI being reachable.
     _coach: function (requestType, text) {
       var self = this;
       var attempts = (requestType === 'another_hint') ? (this._coachHintIndex || 0) : (this._failCount || 0);
@@ -899,18 +837,13 @@
       if (m && m.concept) { _speak(m.concept); } else { this._giveHint(); }
     },
 
-    // ── utterance interception (returns true if consumed) ────────────────────
     handleUtterance: function (text) {
       if (!this.model.active) return false;
       var low = String(text || '').toLowerCase().trim().replace(/[.!?]+$/, '').replace(/\s+/g, ' ');
 
-      // AI-tutor coach phrases are handled first so "say that again simpler" is
-      // coached, not read as a plain repeat. Real coding commands (insert/run)
-      // are never coach phrases, so they still flow through untouched.
       var coachReq = TutorialModel.classifyCoachRequest(text);
       if (coachReq) { this._coach(coachReq, text); return true; }
 
-      // "read my code" / "read my program" — read the editor back. Line-specific
       // reads ("read line 2") are NOT consumed; they fall through to the IDE.
       if (low === 'read my code' || low === 'read my program' || low === 'read the code' ||
           low === 'read my program back' || low === 'read it back' || low === 'read back my code') {
@@ -918,7 +851,6 @@
         return true;
       }
 
-      // "skip" / "move on" during an activity -> offer the decision point.
       if (this.model.stage === 'activity' && (low === 'skip' || low === 'skip this' || low === 'skip this topic' || low === 'move on')) {
         this._skipToDecision();
         return true;
@@ -927,9 +859,7 @@
       var kind = TutorialModel.classifyDecision(text);
       if (!kind) return false;
 
-      // Tutorial navigation (continue, next, hint, repeat, recap, try again,
       // exit tutorial, start coding) must not collide with narration: stop any
-      // current speech through the shared engine BEFORE doing the action.
       if (typeof SpeechManager !== 'undefined' && SpeechManager.cancelAll) {
         SpeechManager.cancelAll();
       }
@@ -943,7 +873,6 @@
         case 'again':  this._practiceAgain(); return true;
         case 'continue':
           if (this.model.stage === 'decision') { this._continue(); return true; }
-          // "continue" said mid-activity: nudge them through the current step.
           var cur = this._currentStep();
           _speak('Let us finish this first. ' + (cur ? cur.prompt : 'Say give me an example if you would like help.'));
           return true;
@@ -951,7 +880,6 @@
       }
     },
 
-    // ── view / panel ─────────────────────────────────────────────────────────
     _showPanel: function () {
       var p = document.getElementById('tutorialOverlay');
       if (p) p.removeAttribute('hidden');
@@ -992,7 +920,6 @@
       }
     },
 
-    // ── DOM wiring ───────────────────────────────────────────────────────────
     _bind: function () {
       var self = this;
       function on(id, fn) {
@@ -1010,14 +937,11 @@
       on('tutorialRecapBtn', function () { self._recap(); });
       on('tutorialStopBtn', function () { self.exit(true); });
 
-      // Run hooks from runCode(). Both fire ~1.5–2s after a run so program
-      // output is spoken first; we then queue tutorial feedback after it.
       window._tutorialOnRunSuccess = function () { self.onRunResult(true); };
       window._tutorialOnRunError = function () { self.onRunResult(false); };
     }
   };
 
-  // Expose for app.js (voice/typed command routing + restartTutorial).
   window.TutorialController = Controller;
 
   if (document.readyState === 'loading') {

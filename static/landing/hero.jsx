@@ -1,9 +1,6 @@
 /* global React */
 const { useEffect, useState, useRef } = React;
 
-// ────────────────────────────────────────────────────────────
-// Reveal-on-scroll
-// ────────────────────────────────────────────────────────────
 function useReveal() {
   useEffect(() => {
     const els = document.querySelectorAll(".reveal");
@@ -23,9 +20,6 @@ function useReveal() {
   }, []);
 }
 
-// ────────────────────────────────────────────────────────────
-// Top nav
-// ────────────────────────────────────────────────────────────
 function Nav() {
   return (
     <nav className="nav">
@@ -47,9 +41,6 @@ function Nav() {
   );
 }
 
-// ────────────────────────────────────────────────────────────
-// Hero waveform — animated bars driven by sin/cos
-// ────────────────────────────────────────────────────────────
 function Waveform({ count = 96 }) {
   const [t, setT] = useState(0);
   const noMotion = useRef(false);
@@ -71,7 +62,6 @@ function Waveform({ count = 96 }) {
   const bars = [];
   for (let i = 0; i < count; i++) {
     const x = i / count;
-    // a code-like silhouette: peaks at function "openings"
     const env =
       0.55 +
       0.35 * Math.sin(x * Math.PI * 1.6 + t * 0.6) +
@@ -90,15 +80,11 @@ function Waveform({ count = 96 }) {
   return <div className="hero-wave" aria-hidden="true" role="presentation">{bars}</div>;
 }
 
-// ────────────────────────────────────────────────────────────
-// Hero
-// ────────────────────────────────────────────────────────────
 function Hero() {
   return (
     <section id="top" className="hero" aria-labelledby="hero-heading">
-      {/* Second skip link — only visible/reachable after the editor-hero one,
-          so screen reader users have an explicit way past the decorative
-          waveform and ticker without tabbing through every animated element. */}
+      {
+}
       <a href="#features" className="skip-link" style={{top: '40px'}}>Skip decorative hero</a>
       <div className="hero-grid-bg" aria-hidden="true" role="presentation"></div>
       <div className="wrap hero-top">
@@ -148,12 +134,7 @@ function Hero() {
   );
 }
 
-// ────────────────────────────────────────────────────────────
-// Voice command marquee
-// ────────────────────────────────────────────────────────────
 function Ticker() {
-  // aria-hidden — this is a decorative scrolling marquee. Real command list
-  // lives in the Voice section below with semantic markup.
   const cmds = [
     'run', 'go to line twenty five', 'sonify block', 'tell the story',
     'explain this code', 'what changed here', 'set breakpoint at line 10',

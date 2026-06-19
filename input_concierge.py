@@ -1,16 +1,3 @@
-"""input() concierge.
-
-Beginner programs that call ``input()`` would otherwise block or fail with a
-confusing error in CodeUp's pre-flight run model. This module makes them
-accessible: it detects the input() calls (and their int/float wrappers) in the
-current code, understands natural value-supplying commands, normalises spoken
-numbers, and produces an ordered list of values for the existing pre-flight run
-path (the ``inputs`` list consumed by ``/run``).
-
-Everything here is pure/deterministic so it is easy to unit test. Key 2 is used
-only as an optional fallback (``ai_value_fn``) for messy phrases such as
-"name Taknoor age sixteen"; simple typed forms work with no AI at all.
-"""
 
 import ast
 import re
@@ -20,13 +7,10 @@ from intent_parser import IntentParser, _ONES
 
 _PARSER = IntentParser()
 
-# Sample value pools for "use sample values", rotated so multiple inputs of the
-# same type are not identical.
 _SAMPLE_STR_POOL = ["Taknoor", "Asha", "Noor", "Kiran"]
 _SAMPLE_INT_POOL = ["16", "21", "30", "42"]
 _SAMPLE_FLOAT_POOL = ["92.5", "85.0", "78.5", "90.0"]
 
-# Words stripped when deriving a short field name from an input() prompt.
 _LABEL_STOPWORDS = {
     "enter", "please", "your", "the", "a", "an", "type", "input", "give", "me",
     "what", "is", "are", "value", "values", "of", "for", "tell", "put", "write",
@@ -36,12 +20,8 @@ _LABEL_STOPWORDS = {
 _NUM_RE = re.compile(r"-?\d+(?:\.\d+)?")
 
 
-# ---------------------------------------------------------------------------
-# Detection
-# ---------------------------------------------------------------------------
 
 def field_name(label: str) -> str:
-    """Derive a short field keyword from an input() prompt label."""
     tokens = re.findall(r"[a-zA-Z]+", (label or "").lower())
     keywords = [t for t in tokens if t not in _LABEL_STOPWORDS]
     if keywords:
@@ -50,12 +30,6 @@ def field_name(label: str) -> str:
 
 
 def detect_inputs(code: str) -> List[Dict[str, str]]:
-    """Detect input() calls in source order with an inferred type.
-
-    Returns ``[{"label", "name", "type"}]`` where type is "str", "int" or
-    "float". ``int(input(...))`` -> int, ``float(input(...))`` -> float, a bare
-    ``input(...)`` -> str.
-    """
     found: List[Dict[str, str]] = []
     try:
         tree = ast.parse(code or "")
@@ -95,16 +69,8 @@ def uses_input(code: str) -> bool:
     return bool(re.search(r"\binput\s*\(", code or ""))
 
 
-# ---------------------------------------------------------------------------
-# Spoken-number normalisation
-# ---------------------------------------------------------------------------
 
 def normalize_spoken_number(phrase: str) -> Optional[str]:
-    """Convert a spoken number phrase to a numeric string, else None.
-
-    'sixteen' -> '16', 'ninety two' -> '92', 'ninety two point five' -> '92.5',
-    '16' -> '16', '92.5' -> '92.5'.
-    """
     s = (phrase or "").strip().lower()
     if not s:
         return None
@@ -137,15 +103,11 @@ def normalize_spoken_number(phrase: str) -> Optional[str]:
 
 
 def normalize_value(raw: str) -> str:
-    """Normalise a single raw token: spoken number -> digits, else trimmed text."""
     value = (raw or "").strip().strip(",.;:")
     number = normalize_spoken_number(value)
     return number if number is not None else value
 
 
-# ---------------------------------------------------------------------------
-# Command parsing
-# ---------------------------------------------------------------------------
 
 _SAMPLE_RE = re.compile(r"\bsample\s+values?\b", re.IGNORECASE)
 _RUN_WITH_PREFIX = re.compile(
@@ -157,8 +119,6 @@ _IS_ARE_RE = re.compile(r"\b[a-zA-Z]\w*\s+(?:is|are)\s+\S", re.IGNORECASE)
 
 
 def _values_from_rest(rest: str) -> List[str]:
-    """Split a value chunk: numeric lists split on whitespace/comma, otherwise
-    the chunk is kept whole (a name or a multi-word spoken number)."""
     rest = rest.strip()
     if not rest:
         return []
@@ -171,7 +131,6 @@ def _values_from_rest(rest: str) -> List[str]:
 
 
 def _parse_spec(spec: str) -> Tuple[List[Tuple[str, List[str]]], List[str]]:
-    """Parse a value spec into (named pairs, positional values)."""
     pairs: List[Tuple[str, List[str]]] = []
     positional: List[str] = []
     clauses = re.split(r"\s*(?:,|;|\band\b)\s*", spec, flags=re.IGNORECASE)
@@ -196,13 +155,6 @@ def _parse_spec(spec: str) -> Tuple[List[Tuple[str, List[str]]], List[str]]:
 
 
 def parse_value_command(text: str) -> Optional[Dict[str, Any]]:
-    """Recognise and parse a value-supplying command, else return None.
-
-    Returns ``{"sample", "explicit", "pairs", "positional"}``. ``explicit`` is
-    True when the text used a clear trigger ("run with", "use values", "sample
-    values"); non-explicit "name is X" forms still parse but the caller should
-    confirm at least one field matches the code before acting on them.
-    """
     raw = (text or "").strip()
     if not raw:
         return None
@@ -229,9 +181,6 @@ def parse_value_command(text: str) -> Optional[Dict[str, Any]]:
     return {"sample": False, "explicit": explicit, "pairs": pairs, "positional": positional}
 
 
-# ---------------------------------------------------------------------------
-# Mapping + validation
-# ---------------------------------------------------------------------------
 
 def _norm_field(name: str) -> str:
     return re.sub(r"[^a-z0-9]", "", (name or "").lower())
@@ -251,14 +200,12 @@ def _map_positions(code_inputs: List[Dict[str, str]], parsed: Dict[str, Any]) ->
     named = [(field, list(vals)) for field, vals in parsed.get("pairs", [])]
     positional: List[str] = list(parsed.get("positional", []))
 
-    # Named mapping first; repeated fields (loops) pop sequentially.
     for i, inp in enumerate(code_inputs):
         for field, vals in named:
             if vals and _field_match(field, inp["name"]):
                 values[i] = vals.pop(0)
                 break
 
-    # Leftover named values whose field never matched fall back to positional.
     leftover: List[str] = []
     for _field, vals in named:
         leftover.extend(vals)
@@ -273,7 +220,6 @@ def _map_positions(code_inputs: List[Dict[str, str]], parsed: Dict[str, Any]) ->
 
 
 def _coerce(value_type: str, value: str) -> Tuple[bool, str]:
-    """Normalise + type-check a value. Returns (ok, normalised_value)."""
     normalised = normalize_value(value)
     if value_type == "int":
         try:
@@ -321,7 +267,6 @@ def _describe(code_inputs: List[Dict[str, str]], values: List[str]) -> str:
 
 
 def concierge_request_message(code_inputs: List[Dict[str, str]]) -> str:
-    """The proactive "what should I use?" prompt for code that needs input."""
     names = [inp["name"] for inp in code_inputs] or ["a value"]
     listed = ", ".join(names[:-1]) + " and " + names[-1] if len(names) > 1 else names[0]
     example_pairs = " and ".join(f"{inp['name']} {_example_for(inp['type'])}" for inp in code_inputs[:3])
@@ -335,9 +280,6 @@ _NUMBER_WORDS = set(_ONES) | {"twenty", "thirty", "forty", "fifty", "sixty", "se
 
 
 def _looks_like_value_attempt(text: str, code_inputs: List[Dict[str, str]]) -> bool:
-    """Heuristic guard for the anchored messy-phrase path: the text must clearly
-    reference the program's fields (two of them, or one plus a number) so we
-    never mistake an ordinary sentence for a value command."""
     low = (text or "").lower()
     tokens = set(re.findall(r"[a-z]+", low))
     field_hits = sum(
@@ -349,8 +291,6 @@ def _looks_like_value_attempt(text: str, code_inputs: List[Dict[str, str]]) -> b
 
 
 def _anchored_parse(text: str, code_inputs: List[Dict[str, str]]) -> Optional[Dict[str, Any]]:
-    """Segment a trigger-less phrase ("name Taknoor age sixteen") into named
-    pairs by anchoring on the program's known input field names."""
     field_names = [inp["name"] for inp in code_inputs if inp["name"]]
     if not field_names:
         return None
@@ -381,8 +321,6 @@ def _map_and_validate(
 ) -> Tuple[Optional[List[str]], Optional[str]]:
     values = _map_positions(code_inputs, parsed) if parsed else [None] * len(code_inputs)
 
-    # Key 2 fallback for messy phrases: only when the deterministic map left
-    # gaps and an AI function is available. Never breaks the simple path.
     if ai_value_fn and any(v is None for v in values):
         ai_values = None
         try:
@@ -417,23 +355,12 @@ def build_input_plan(
     *,
     ai_value_fn: Optional[Callable[[List[Dict[str, str]], str], Optional[List[str]]]] = None,
 ) -> Optional[Dict[str, Any]]:
-    """High-level concierge entry point for a value-supplying command.
-
-    Returns None when ``text`` is not an input-value command. Otherwise a dict
-    with ``status`` in:
-      * ``ask_for_code`` — there is no code yet (req 7)
-      * ``no_input``     — code has no input(); caller should run normally (req 8)
-      * ``type_error``   — friendly clarification in ``message`` (req 6)
-      * ``ready``        — ``values`` ready for the run path, plus ``message``/``summary``
-    """
     parsed = parse_value_command(text)
     if parsed is None and not (code or "").strip():
         return None
 
     code_inputs = detect_inputs(code)
 
-    # Trigger-less messy phrase ("name Taknoor age sixteen"): recognise it only
-    # when it clearly references the program's own fields, by anchoring on them.
     if parsed is None:
         if code_inputs and _looks_like_value_attempt(text, code_inputs):
             parsed = _anchored_parse(text, code_inputs)
@@ -450,17 +377,10 @@ def build_input_plan(
         }
 
     if not code_inputs:
-        # Honour the "just run" shortcut (req 8) ONLY when the user explicitly
-        # offered values ("run with name Taki and age 16") or asked for samples.
-        # A bare "X is Y" / "what is Z" sentence must never be treated as a run
-        # command on a program with no input() — otherwise asking "what is
-        # recursion" would execute the editor code. Fall through to Q&A instead.
         if parsed.get("explicit") or parsed.get("sample"):
             return {"status": "no_input"}
         return None
 
-    # Non-explicit "name is X" forms must match at least one real field, so we
-    # never hijack unrelated sentences that happen to contain "is"/"are".
     if not parsed["explicit"] and not parsed["sample"]:
         provided_fields = [f for f, _ in parsed.get("pairs", [])]
         if not any(_field_match(f, inp["name"]) for f in provided_fields for inp in code_inputs):

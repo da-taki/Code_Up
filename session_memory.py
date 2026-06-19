@@ -1,22 +1,3 @@
-"""Per-session short-term working memory + contextual follow-up resolution.
-
-CodeUp is voice-first: a blind beginner should be able to say "explain it
-again", "why did it fail", "run it again", or "do the same with 10" without
-restating everything. This module keeps a small, bounded, per-session memory of
-the immediate conversation context and resolves those follow-up commands to the
-app's existing real actions.
-
-Design notes:
-  * Pure/deterministic and Flask-free, so it is easy to unit test. The app wires
-    it into the per-session ``get_trace_storage()`` dict (no database).
-  * Bounded: every stored string is clipped and lists are capped, so memory can
-    never grow without limit. We store summaries/references, never giant code
-    bodies, and never secrets/keys (the app only ever passes it task text).
-  * Deterministic resolution is the source of truth. Key 2 is optional and only
-    used by the caller to refine an ambiguous referent ("it"/"that"/"same"); it
-    can never invent an error, output, or file that memory does not hold.
-"""
-
 import re
 import time
 from typing import Any, Dict, List, Optional
@@ -39,15 +20,14 @@ def _clip(value: Any, limit: int = _MAX_TEXT) -> str:
 
 
 def new_memory() -> Dict[str, Any]:
-    """The shape of per-session working memory (all bounded)."""
     return {
         "last_utterance": "",
         "latest_user_request": "",
         "last_intent": "",
         "last_action": "",
-        "last_actions": [],          # last action-sequence (list of action names)
+        "last_actions": [],
         "last_gen_prompt": "",       # last generation request (prompt text)
-        "last_gen_summary": "",      # short summary of last generated code (not the body)
+        "last_gen_summary": "",
         "last_generated_code": "",   # bounded latest generated single-file code
         "last_project_manifest": {},  # bounded latest generated/open project facts
         "last_edit_request": "",
@@ -68,19 +48,15 @@ def new_memory() -> Dict[str, Any]:
         "input_values": [],
         "input_prompts": [],
         "code_map_summary": "",
-        "features_used": [],          # human-friendly feature tags used this session
-        "concepts_practiced": [],     # concepts the learner touched (for the recap)
+        "features_used": [],
+        "concepts_practiced": [],
         "pending_clarification": None,
-        # Sprint 2 (non-visual code understanding)
-        "hint_level": "small",        # staged-hint level: small | bigger | answer
-        "landmarks": {},              # named code bookmarks: name -> {line, ...}
+        "hint_level": "small",
+        "landmarks": {},
         "last_navigated": None,       # last navigate-by-meaning target block
     }
 
 
-# Map a /voice-command action to a human-friendly "feature used" tag for the
-# session recap. Actions not listed (navigation, confirmations, control) are not
-# counted as a learning feature.
 _FEATURE_BY_ACTION = {
     "run": "ran code",
     "generate_code": "generated code",
@@ -110,7 +86,6 @@ _FEATURE_BY_ACTION = {
 
 
 def record_activity(mem: Dict[str, Any], action: str, *, concept: str = "") -> None:
-    """Record a learning feature used and/or a concept practised (bounded, unique)."""
     feature = _FEATURE_BY_ACTION.get(str(action or ""))
     if feature:
         feats = mem.setdefault("features_used", [])
@@ -125,9 +100,6 @@ def record_activity(mem: Dict[str, Any], action: str, *, concept: str = "") -> N
             del concepts[20:]
 
 
-# ---------------------------------------------------------------------------
-# Sprint 2: staged hints, landmarks, navigation memory
-# ---------------------------------------------------------------------------
 _HINT_LEVELS = ("small", "bigger", "answer")
 
 
@@ -142,7 +114,6 @@ def set_hint_level(mem: Dict[str, Any], level: str) -> str:
 
 
 def escalate_hint(mem: Dict[str, Any]) -> str:
-    """Advance to the next stronger hint level (capped at 'answer')."""
     idx = _HINT_LEVELS.index(get_hint_level(mem))
     mem["hint_level"] = _HINT_LEVELS[min(idx + 1, len(_HINT_LEVELS) - 1)]
     return mem["hint_level"]
@@ -162,7 +133,6 @@ def get_landmarks(mem: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def record_navigation(mem: Dict[str, Any], nav: Optional[Dict[str, Any]]) -> None:
-    """Remember the last navigate-by-meaning target (for 'bookmark this block')."""
     if not nav or not nav.get("line"):
         return
     mem["last_navigated"] = {
@@ -179,7 +149,6 @@ def get_last_navigated(mem: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 def get_memory(storage: Dict[str, Any]) -> Dict[str, Any]:
-    """Return (creating if needed) the memory dict inside a session storage."""
     mem = storage.get(MEMORY_KEY)
     if not isinstance(mem, dict):
         mem = new_memory()
@@ -187,9 +156,6 @@ def get_memory(storage: Dict[str, Any]) -> Dict[str, Any]:
     return mem
 
 
-# ---------------------------------------------------------------------------
-# Recording (called after key events)
-# ---------------------------------------------------------------------------
 def record_utterance(mem: Dict[str, Any], text: str, intent: str = "", action: str = "") -> None:
     mem["last_utterance"] = _clip(text)
     if intent:
@@ -312,9 +278,6 @@ def record_code_map(mem: Dict[str, Any], summary: str) -> None:
     mem["code_map_summary"] = _clip(summary, 400)
 
 
-# ---------------------------------------------------------------------------
-# Pending clarification (a real question CodeUp asked and must understand)
-# ---------------------------------------------------------------------------
 def set_pending(mem: Dict[str, Any], pending: Optional[Dict[str, Any]]) -> None:
     if not pending:
         mem["pending_clarification"] = None
@@ -339,7 +302,6 @@ def clear_pending(mem: Dict[str, Any]) -> None:
 
 
 def snapshot(mem: Dict[str, Any], *, utterance: str = "", file_name: str = "") -> Dict[str, Any]:
-    """A small, bounded context bundle for Key 2 referent resolution."""
     return {
         "utterance": _clip(utterance, 200),
         "last_intent": mem.get("last_intent", ""),
@@ -357,17 +319,11 @@ def snapshot(mem: Dict[str, Any], *, utterance: str = "", file_name: str = "") -
     }
 
 
-# ---------------------------------------------------------------------------
-# Follow-up classification
-# ---------------------------------------------------------------------------
 def _norm(text: str) -> str:
     return " ".join(str(text or "").lower().strip().rstrip(".!?").split())
 
 
 def _match(t: str, phrases: List[str]) -> bool:
-    # Whole-utterance match (equal, or the phrase plus trailing detail). This
-    # deliberately avoids substring matching so "ask mentor why did this fail"
-    # is NOT mistaken for the bare "why did this fail" follow-up.
     for p in phrases:
         if t == p or t.startswith(p + " "):
             return True
@@ -412,12 +368,6 @@ _MODIFY = ["do the same", "add comments", "add a comment", "add some comments",
 _SUMMARIZE = ["summarize what i did", "summarise what i did", "summarize my work",
               "summarise my work", "what did i do", "what have i done", "recap my session"]
 
-# Correction / "oh I meant ..." follow-ups: after generating or editing code the
-# learner refines it in natural speech. We strip the correction lead-in and treat
-# the remainder as a modification instruction (resolved against the last
-# generation / current editor code). Kept tight so a plain command after a filler
-# (e.g. "actually run it") is NOT hijacked: a leading "actually"/"no" only counts
-# as a correction when the remainder is itself a modify-style instruction.
 _CORRECTION_LEADIN_RE = re.compile(
     r"^(?:oh[,\s]+)?i\s+(?:meant|mean)\b[:,]?\s*"
     r"|^oh[,\s]+(?=make|use|change|print|turn|add|rename|it\b)"
@@ -436,8 +386,6 @@ _MODIFY_HINT_RE = re.compile(
     r"shorter\b|longer\b|simpler\b|easier\b|the\s+output)\b",
     re.IGNORECASE,
 )
-# An instruction with no actionable target ("change that", "make it", a bare
-# pronoun) is ambiguous: the caller asks one clarifying question instead.
 _VAGUE_INSTRUCTION_RE = re.compile(
     r"^(?:change|make|use|fix|update|modify|do|edit|replace)\s+(?:it|that|this|the\s+code|something)?(?:\s+also)?$"
     r"|^add\s+(?:it|that|this|something)(?:\s+also)?$"
@@ -447,20 +395,10 @@ _VAGUE_INSTRUCTION_RE = re.compile(
 
 
 def detect_correction(text: str) -> Optional[str]:
-    """If ``text`` is a natural correction of just-generated code, return the
-    modification instruction (the part after the lead-in); otherwise None.
-
-    Examples:
-      "oh I meant make it first ten even numbers" -> "make it first ten even numbers"
-      "actually use a while loop instead"         -> "actually use a while loop instead"
-      "actually run it"                           -> None (plain command, not an edit)
-    """
     raw = " ".join(str(text or "").split())
     if not raw:
         return None
     low = raw.lower()
-    # Trailing/embedded "instead" is a strong correction signal; keep the whole
-    # utterance as the instruction so "use a while loop instead" stays intact.
     if re.search(r"\binstead\b", low):
         return raw
     match = _CORRECTION_LEADIN_RE.match(raw)
@@ -476,16 +414,10 @@ def detect_correction(text: str) -> Optional[str]:
 
 
 def instruction_is_vague(instruction: str) -> bool:
-    """True when a modification instruction has no actionable target."""
     return bool(_VAGUE_INSTRUCTION_RE.match(_norm(instruction)))
 
 
 def classify_followup(text: str) -> Optional[str]:
-    """Classify a whole utterance into a follow-up category, or None.
-
-    Specific multi-file/run forms are checked before generic explain/run so a
-    "run that file again" is not read as a bare "run again".
-    """
     t = _norm(text)
     if not t:
         return None
@@ -513,16 +445,11 @@ def classify_followup(text: str) -> Optional[str]:
         return "modify"
     if _match(t, _SUMMARIZE):
         return "summarize_session"
-    # "oh I meant ...", "actually use ... instead": a correction of the code we
-    # just produced. Checked last so specific follow-ups above still win.
     if detect_correction(text):
         return "modify"
     return None
 
 
-# ---------------------------------------------------------------------------
-# Follow-up resolution (deterministic; Key 2 refinement is the caller's job)
-# ---------------------------------------------------------------------------
 def _clarify(message: str, referent: str = "unknown", confidence: float = 0.4) -> Dict[str, Any]:
     return {"handled": False, "resolved_action": "", "referent": referent,
             "confidence": confidence, "clarification": message, "params": {}}
@@ -535,7 +462,6 @@ def _act(action: str, referent: str, params: Optional[Dict[str, Any]] = None,
 
 
 def build_modify_prompt(text: str, referent_prompt: str, has_code: bool) -> str:
-    """Ground a modification request in the previous generation / current code."""
     instruction = _norm(text)
     parts: List[str] = []
     if referent_prompt:
@@ -551,12 +477,6 @@ def build_modify_prompt(text: str, referent_prompt: str, has_code: bool) -> str:
 
 def resolve_followup(category: str, text: str, mem: Dict[str, Any], *,
                      code: str = "", error: str = "") -> Dict[str, Any]:
-    """Resolve a classified follow-up against memory into an action decision.
-
-    Returns a decision dict: {handled, resolved_action, referent, confidence,
-    clarification, params}. ``handled`` is False when we must ask one short
-    clarification (the referent context is missing).
-    """
     code = (code or "").strip()
     recent_error = (error or "").strip() or _clip(mem.get("last_run_error", ""), _MAX_ERROR)
     has_gen = bool(mem.get("last_gen_prompt"))
@@ -611,7 +531,6 @@ def resolve_followup(category: str, text: str, mem: Dict[str, Any], *,
                         "run with name Taknoor and age 16.", referent="no_inputs")
 
     if category == "modify":
-        # For a natural correction ("oh I meant ...") use the stripped instruction.
         instruction = detect_correction(text) or text
         if instruction_is_vague(instruction):
             return _clarify("What change would you like? For example, say: make it use ten, "
@@ -652,7 +571,6 @@ def resolve_followup(category: str, text: str, mem: Dict[str, Any], *,
 
 
 def session_summary(mem: Dict[str, Any]) -> str:
-    """A short, fact-grounded recap built only from stored memory."""
     bits: List[str] = []
     if mem.get("last_gen_prompt"):
         bits.append(f"generated code for {mem['last_gen_prompt']}")

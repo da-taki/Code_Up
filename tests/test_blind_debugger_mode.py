@@ -1,9 +1,3 @@
-"""Blind Debugger Mode (NAB value sprint, Feature 1).
-
-A guided, teacher-style debugging response built from deterministic facts +
-the staged hint engine. Never edits code. Also guards that the new routing
-does not shadow Sprint 1 / Sprint 2 commands. No cloud AI is involved.
-"""
 import pytest
 
 import app as app_module
@@ -69,7 +63,6 @@ class TestBuilder:
     def test_does_not_edit_code(self):
         r = debug_teacher.build_blind_debugger_response(
             LOOP_BAD_INDENT, {}, {"error": "IndentationError on line 2"})
-        # No code-editing fields are ever returned.
         assert "ai_action" not in r
         assert "code" not in r
 
@@ -82,7 +75,6 @@ class TestBuilder:
 
 
 class TestTeacherFirst:
-    """Problem 4 — debug like a teacher BEFORE offering staged hints."""
 
     def test_indentation_gives_explanation_and_likely_fix(self):
         r = debug_teacher.build_blind_debugger_response(
@@ -91,7 +83,6 @@ class TestTeacherFirst:
         assert "indentation error" in low
         assert "likely fix" in low and "indent" in low
         assert "four spaces" in low  # concrete fix
-        # The why-it-works explanation is present.
         assert "loop" in low
 
     def test_nameerror_explains_and_gives_likely_fix(self):
@@ -109,8 +100,6 @@ class TestTeacherFirst:
         assert "likely fix" in low and "colon" in low
 
     def test_hint_commands_come_after_the_explanation(self):
-        # The optional "bigger hint" offer must appear AFTER the likely fix, never
-        # before the learner has been taught the problem.
         r = debug_teacher.build_blind_debugger_response(
             LOOP_BAD_INDENT, {}, {"error": "IndentationError: expected an indented block on line 2"})
         low = r["message"].lower()
@@ -119,8 +108,6 @@ class TestTeacherFirst:
         assert low.index("indentation error") < low.index("bigger hint")
 
     def test_normal_response_is_not_just_a_hint_wrap(self):
-        # Regression: the old debugger led with "Small hint: ..." — the teacher
-        # response must instead carry a real fix + reasoning.
         r = debug_teacher.build_blind_debugger_response(
             LOOP_BAD_INDENT, {}, {"error": "IndentationError on line 2"})
         assert "small hint:" not in r["message"].lower()
@@ -161,9 +148,6 @@ class TestRoute:
         assert d.get("blind_debugger") is True
 
 
-# =====================================================================
-# Regression guards — NAB routing must not shadow Sprint 1 / Sprint 2.
-# =====================================================================
 
 class TestNabRegression:
 

@@ -1,9 +1,3 @@
-"""Trainer Review Mode (NAB value sprint, Feature 4).
-
-A concise trainer-facing review of what the learner did and how they learned,
-built only from deterministic session memory. Different from the project report.
-Never invents performance or institutional details. No cloud AI is involved.
-"""
 import pytest
 
 import app as app_module
@@ -62,7 +56,6 @@ class TestReview:
             assert forbidden not in low
 
     def test_differs_from_project_report(self):
-        # Trainer notes describe the learner's activity, not the project contents.
         r = trainer_review.build_trainer_review(
             LOOP_OK, {}, {"features_used": ["ran code"], "concepts_practiced": ["loops"]})
         assert "trainer notes" in r["message"].lower()
@@ -77,6 +70,5 @@ class TestRoute:
 
     def test_does_not_collide_with_project_report(self, client):
         d = client.post("/voice-command", json={"text": "make a project report"}).get_json()
-        # Still the Sprint-1 project report, not trainer notes.
         assert d["action"] == "project_report"
         assert d.get("trainer_review") is not True

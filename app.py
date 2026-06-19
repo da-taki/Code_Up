@@ -53,18 +53,10 @@ from sandboxed_fs import cleanup_sandbox, cleanup_stale_sandboxes, get_sandbox
 from symbolic_specs import build_exact_symbol_generation, constraint_summary, validate_exact_output
 from structure_parser import CodeAnalyzer
 import tutorial_engine
-# Optional, isolated Intel OpenVINO local-intent demo (Intel AI Global Impact
-# Festival). Importing this module is always safe: its OpenVINO import is
-# guarded, so CodeUp runs normally whether or not OpenVINO is installed. This
-# is a diagnostic prototype only and is NOT part of the real command router.
 from openvino_intent_demo import classify_local_intent
-# Sprint 1: learner handoff + accessibility. All deterministic and Flask-free;
-# routes below thread them through the existing session/sandbox model.
 import export_support
 import report_support
 import learning_recap
-# Sprint 2: non-visual code understanding. All deterministic / Flask-free; routed
-# through the existing /voice-command + session model.
 import structure_tools
 import error_replay
 import hint_engine
@@ -142,19 +134,9 @@ def _configure_secret_key(flask_app: Flask):
         "FLASK_SECRET_KEY must be set outside testing/development modes."
     )
 
-# ---------------------------------------------------------------------------
-# Interactive run (Mechanism B) state
-# ---------------------------------------------------------------------------
-# Each live run gets a UUID. The state dict holds the subprocess handle,
-# FIFO path, output buffer, completion flag, and a queue.Queue that the SSE
-# generator reads chunks from. Cleanup happens on subprocess exit OR when
-# the SSE client disconnects (whichever comes first).
 _active_runs = {}  # run_id -> dict
 _active_runs_lock = threading.Lock()
 
-# Voice macros: per-session named code snippets the student can recall by name.
-# Stored on disk alongside snippets but in a separate file so they don't clutter
-# the snippet list. Keyed by sanitized session id.
 _voice_macros_lock = threading.RLock()
 _shared_macros_lock = threading.Lock()
 _shared_macro_lookup_lock = threading.Lock()
@@ -163,8 +145,6 @@ _SHARED_MACRO_LOOKUP_LIMIT = 30
 _SHARED_MACRO_LOOKUP_WINDOW = 60
 _SHARED_MACRO_LOOKUP_MAX_KEYS = 1000
 
-# Output bookmarks: per-session list of {label, position, timestamp, output_id}.
-# In-memory only (cheap, ephemeral, scoped to session).
 _output_bookmarks = {}  # session_id -> list[dict]
 _output_bookmarks_lock = threading.Lock()
 
@@ -172,26 +152,18 @@ _voice_telemetry_lock = threading.Lock()
 _voice_telemetry: List[Dict[str, Any]] = []
 _VOICE_TELEMETRY_CAP = 1000
 
-# Thread-local storage for per-request Gemini API key.
-# (_trace_context was removed along with run_with_trace — session storage handles traces.)
 _api_context = threading.local()
 
 _session_ai_keys: Dict[str, Dict[str, Any]] = {}
 _session_ai_keys_lock = threading.Lock()
 
-# Session-based trace storage (prevents concurrent user interference)
-# Keys: session_id (UUID), Values: {last_trace, current_trace_index, trace_timestamp, trace_duration_ms, last_voice_action}
 _session_traces = {}  # dict[str, dict]
 _session_traces_lock = threading.Lock()
 
-# Tunable limits — kept together at module top so deployment can tweak via env
 SESSION_TTL_SECONDS = int(os.environ.get("CODEUP_SESSION_TTL", "3600"))
 _session_ttl = SESSION_TTL_SECONDS  # back-compat alias
 
-# Background cleanup thread for old sessions
 def _session_cleanup_worker():
-    """Background thread that periodically cleans up expired sessions and
-    bounded structures that would otherwise leak in long-running deployments."""
     while not _cleanup_stop_event.wait(300):  # Run cleanup every 5 minutes
         try:
             cleanup_old_sessions()
@@ -208,9 +180,6 @@ def _session_cleanup_worker():
 
 
 def cleanup_stale_runs():
-    """Reap _active_runs whose subprocess has exited or whose started_at
-    is older than 5 minutes. Live runs are capped at 60s server-side, so
-    anything older is definitely abandoned."""
     now = time.time()
     stale_ids = []
     with _active_runs_lock:
@@ -227,16 +196,12 @@ def cleanup_stale_runs():
 
 
 def cleanup_orphan_bookmarks_and_telemetry():
-    """Drop bookmarks for sessions no longer in _session_traces, and trim
-    voice telemetry to its cap. Bounded by session count so this never
-    grows past O(active_sessions)."""
     with _session_traces_lock:
         live_sessions = set(_session_traces.keys())
     with _output_bookmarks_lock:
         for sid in list(_output_bookmarks.keys()):
             if sid not in live_sessions:
                 del _output_bookmarks[sid]
-    # Telemetry already self-trims on insert, but guarantee the cap here too
     with _voice_telemetry_lock:
         if len(_voice_telemetry) > _VOICE_TELEMETRY_CAP:
             del _voice_telemetry[:len(_voice_telemetry) - _VOICE_TELEMETRY_CAP]
@@ -246,7 +211,6 @@ _cleanup_stop_event = threading.Event()
 
 
 def start_background_services():
-    """Start process-local background maintenance once the app is running."""
     global _cleanup_thread
     with _cleanup_thread_lock:
         if _cleanup_thread and _cleanup_thread.is_alive():
@@ -260,8 +224,6 @@ def start_background_services():
         _cleanup_thread.start()
         return _cleanup_thread
 
-# Bounded ThreadPoolExecutor for Gemini API calls (prevents resource exhaustion)
-# Max 3 concurrent requests with queue size limit
 _gemini_executor = None
 _gemini_executor_lock = threading.Lock()
 
@@ -275,7 +237,6 @@ def _get_gemini_executor():
 
 
 def shutdown_background_services():
-    """Release lazy process-local resources during interpreter shutdown."""
     global _cleanup_thread, _gemini_executor
     with _cleanup_thread_lock:
         _cleanup_stop_event.set()
@@ -294,17 +255,12 @@ def shutdown_background_services():
 
 atexit.register(shutdown_background_services)
 
-# FIX H-1: Track active+queued requests with a thread-safe counter instead of
-# accessing private ThreadPoolExecutor internals (_threads, _work_queue).
 _gemini_active_requests = 0
 _gemini_active_lock = threading.Lock()
-_gemini_queued_requests = 0  # separate counter for submitted-but-not-started tasks
+_gemini_queued_requests = 0
 
-# lock used to serialize tracer installation to avoid cross-thread interference
 _tracer_lock = threading.Lock()
 
-# Subprocess resource limits — POSIX only. Defined at module scope so each
-# subprocess.Popen call doesn't pay the cost of redefining + importing.
 SUBPROCESS_MEMORY_LIMIT_MB = int(os.environ.get("CODEUP_SUBPROCESS_MEMORY_MB", "512"))
 SUBPROCESS_CPU_LIMIT_SECONDS = int(os.environ.get("CODEUP_SUBPROCESS_CPU_SECONDS", "3"))
 SUBPROCESS_WALL_TIMEOUT_SECONDS = int(os.environ.get("CODEUP_SUBPROCESS_WALL_SECONDS", "8"))
@@ -329,7 +285,6 @@ else:
 app = Flask(__name__)
 _configure_secret_key(app)
 
-# Session configuration
 SESSION_COOKIE_NAME = 'codeup_session'
 SESSION_COOKIE_MAX_AGE = 3600 * 24 * 7  # 7 days
 if "SESSION_COOKIE_SECURE" in os.environ:
@@ -345,17 +300,8 @@ def ensure_background_services_started():
     if not _is_testing_mode():
         start_background_services()
 
-# FIX C-1: Register ONE module-level after_request handler instead of
-# registering a new permanent handler on every new-session request.
-# Previously get_session_id() contained @app.after_request inside its body,
-# causing an unbounded accumulation of handlers and duplicate Set-Cookie headers.
 @app.after_request
 def set_session_cookie(response):
-    """Set session cookie if not already present.
-
-    Uses the same session_id that get_session_id() generated during this
-    request (stashed on flask.g) so storage and cookie always agree.
-    """
     if not request.cookies.get(SESSION_COOKIE_NAME):
         session_id = getattr(g, 'session_id', None) or str(uuid.uuid4())
         response.set_cookie(
@@ -370,12 +316,6 @@ def set_session_cookie(response):
 
 
 def get_session_id():
-    """Get or create a persistent session ID using cookies.
-
-    Caches the generated ID on flask.g so set_session_cookie can reuse the
-    same value. Otherwise storage gets keyed under one UUID and the cookie
-    sent to the client is a different UUID.
-    """
     session_id = request.cookies.get(SESSION_COOKIE_NAME)
     if session_id:
         return session_id
@@ -388,7 +328,6 @@ def get_session_id():
 
 
 def _make_session_storage():
-    """Single source of truth for the shape of per-session trace storage."""
     now = time.time()
     return {
         'last_trace': [],
@@ -404,7 +343,6 @@ def _make_session_storage():
 
 
 def get_trace_storage():
-    """Get the trace storage dict for current session."""
     session_id = get_session_id()
     with _session_traces_lock:
         if session_id not in _session_traces:
@@ -415,11 +353,9 @@ def get_trace_storage():
 
 
 def cleanup_old_sessions():
-    """Clean up sessions that have been idle longer than _session_ttl."""
     now = time.time()
     expired = []
     with _session_traces_lock:
-        # FIX H-2 (continued): expire based on last_accessed, not created_at.
         expired = [sid for sid, data in _session_traces.items()
                    if now - data.get('last_accessed', 0) > _session_ttl]
         for sid in expired:
@@ -436,13 +372,9 @@ def cleanup_old_sessions():
             del _session_ai_keys[sid]
 
 
-# ==========================
-# REQUEST SIZE VALIDATION
-# ==========================
-# Hard limits to prevent resource exhaustion
 MAX_REQUEST_SIZE = 1_000_000  # 1 MB max request body
 MAX_CODE_SIZE = 100_000       # 100 KB max code
-MAX_GEMINI_TIMEOUT = 30       # 30 second timeout for LLM calls
+MAX_GEMINI_TIMEOUT = 30
 MAX_API_KEY_SIZE = 8_000
 MAX_VOICE_TEXT_SIZE = 2_000
 MAX_LEARNING_TOPIC_SIZE = 500
@@ -459,23 +391,14 @@ MAX_CONVERSATIONAL_CONTEXT_SIZE = 8_000
 MAX_CONVERSATIONAL_EDIT_CODE_SIZE = 4_000
 MAX_CONVERSATIONAL_CONFIRM_CODE_SIZE = 12_000
 
-# Per-session rate limiting for /run
-# Allows at most RUN_RATE_LIMIT executions per RUN_RATE_WINDOW seconds per session.
 RUN_RATE_LIMIT  = 30   # max runs
 RUN_RATE_WINDOW = 60   # per this many seconds
 _run_timestamps: dict = {}   # session_id -> list[float]
 _run_rate_lock = threading.Lock()
 
 def _check_run_rate_limit(session_id: str) -> bool:
-    """Return True if the session is within the rate limit, False if throttled.
-
-    Also opportunistically sweeps stale entries so _run_timestamps doesn't
-    grow without bound on long-running deployments. We sweep on roughly 1 in
-    every 50 calls to amortize the cost.
-    """
     now = time.time()
     with _run_rate_lock:
-        # Opportunistic cleanup: drop session entries that have no live timestamps
         if len(_run_timestamps) > 100 and random.random() < 0.02:
             stale = [sid for sid, ts in _run_timestamps.items()
                      if not any(now - t < RUN_RATE_WINDOW for t in ts)]
@@ -483,7 +406,6 @@ def _check_run_rate_limit(session_id: str) -> bool:
                 del _run_timestamps[sid]
 
         timestamps = _run_timestamps.get(session_id, [])
-        # Drop entries outside the window
         timestamps = [t for t in timestamps if now - t < RUN_RATE_WINDOW]
         if len(timestamps) >= RUN_RATE_LIMIT:
             _run_timestamps[session_id] = timestamps
@@ -493,21 +415,14 @@ def _check_run_rate_limit(session_id: str) -> bool:
         return True
     
     
-# Threshold for fuzzy voice command matching. Raised from 40 to 55 because
-# 40 was permissive enough that ambient speech ("no thanks", "what was that")
-# would fuzzy-match command keywords and trigger spurious confirm prompts.
-# 55 still allows for typos and partial commands but rejects genuinely
-# unrelated phrases. Below this threshold the input falls through to "unknown".
 VOICE_FUZZY_THRESHOLD = 55
 
 @app.before_request
 def validate_request_size():
-    """Reject oversized requests before processing."""
     if request.content_length and request.content_length > MAX_REQUEST_SIZE:
         return jsonify({"success": False, "error": "Request too large (max 1MB)"}), 413
 
 
-# Parse allowlist once at import time
 _ALLOWED_ORIGINS = {
     o.strip().lower()
     for o in os.environ.get("ALLOWED_ORIGINS", "").split(",")
@@ -517,14 +432,6 @@ _ALLOWED_ORIGINS = {
 
 @app.before_request
 def enforce_same_origin():
-    """Block cross-origin POST/PUT/DELETE requests.
-
-    Policy:
-      - Same-origin (Origin host == Host) is allowed.
-      - Origin in ALLOWED_ORIGINS env var (comma-separated) is allowed.
-      - In FLASK_TESTING=true mode, headerless requests (test client, curl) are allowed.
-      - Outside testing mode, a request with neither Origin nor Referer is REJECTED.
-    """
     if request.method not in ("POST", "PUT", "DELETE", "PATCH"):
         return None
 
@@ -532,13 +439,11 @@ def enforce_same_origin():
     referer = request.headers.get("Referer")
     host = request.headers.get("Host", "").lower()
 
-    # No Origin and no Referer
     if not origin and not referer:
         if _is_testing_mode():
             return None
         return jsonify({"success": False, "error": "Missing Origin/Referer header"}), 403
 
-    # Check Origin first (more reliable)
     if origin:
         origin_lower = origin.lower()
         origin_host = origin_lower.split("://", 1)[-1]
@@ -548,7 +453,6 @@ def enforce_same_origin():
             return None
         return jsonify({"success": False, "error": "Cross-origin request blocked"}), 403
 
-    # Fall back to Referer
     if referer:
         try:
             from urllib.parse import urlparse
@@ -569,12 +473,6 @@ SNIPPETS_FILE = os.environ.get("SNIPPETS_FILE", "snippets.json")
 DATA_DIR = os.environ.get("DATA_DIR", ".")
 
 def _snippets_path(session_id: str = None) -> str:
-    """Return the absolute path to the snippets file for a given session.
-
-    Each session gets its own snippets file so students sharing a lab
-    machine don't see each other's saved code. The session_id is
-    sanitized to a UUID-safe filename.
-    """
     try:
         os.makedirs(DATA_DIR, exist_ok=True)
     except OSError as e:
@@ -583,7 +481,6 @@ def _snippets_path(session_id: str = None) -> str:
     if session_id is None:
         session_id = get_session_id()
 
-    # Sanitize: only allow hex chars and dashes (UUID format)
     safe_id = re.sub(r'[^a-fA-F0-9\-]', '', session_id)[:64]
     if not safe_id:
         safe_id = "default"
@@ -591,19 +488,14 @@ def _snippets_path(session_id: str = None) -> str:
     filename = f"snippets_{safe_id}.json"
     return os.path.join(DATA_DIR, filename)
 
-# ==========================
-# BASIC HELPERS
-# ==========================
 
 def safejson() -> dict:
-    """Safely parse JSON from the request, returning a dict."""
     d = request.get_json(silent=True)
     if isinstance(d, dict):
         return d
     return {}
 
 def safe(v: Any, d: Any = "") -> Any:
-    """Return `v` when not None, otherwise return default `d`."""
     return v if v is not None else d
 
 def _safe_text(value: Any, default: str = "", limit: Optional[int] = None) -> str:
@@ -735,7 +627,6 @@ def _prepare_project_run(body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     }
 
 def _looks_like_non_python_code(code: str) -> bool:
-    """Reject whole-document HTML/CSS/JS accidentally pasted into the Python IDE."""
     text = str(code or "").lstrip("\ufeff \t\r\n")
     if not text:
         return False
@@ -785,7 +676,6 @@ def _reject_non_python_response(code: str):
     return None
 
 def load_snippets() -> dict:
-    """Load snippets from disk and return a dict with key `snippets`."""
     path = _snippets_path()
     if not os.path.exists(path):
         return {"snippets": []}
@@ -809,8 +699,6 @@ def load_snippets() -> dict:
 _snippets_lock = threading.RLock()
 
 def save_snippets(d: dict) -> None:
-    """Save snippets atomically using temp-then-move to prevent corruption.
-    On POSIX, also fsyncs the directory so the rename is durable across power loss."""
     path = _snippets_path()
     dirpath = os.path.dirname(path) or "."
 
@@ -833,7 +721,6 @@ def save_snippets(d: dict) -> None:
                     pass
                 raise
             os.replace(temp_path, path)
-            # Fsync the directory so the rename itself is durable
             if sys.platform != "win32":
                 try:
                     dir_fd = os.open(dirpath, os.O_RDONLY)
@@ -851,20 +738,12 @@ def save_snippets(d: dict) -> None:
                 pass
             raise
 
-# ==========================
-# GEMINI API CONFIG
-# ==========================
 
-# FIX L-2: `from typing import Any` moved to top-of-file import (already present above).
-# The original file had it buried at line 140 after helper function definitions.
 
-# default global fallback key (will only be used if session key missing)
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "Insert_API_Key_Here")
 
-# FIX L-3: Updated deprecated "gemini-pro" model name to a current model identifier.
 GEMINI_MODEL = "llama-3.3-70b-versatile"
 
-# helper to retrieve current API key (browser session overrides process env)
 def _current_api_key():
     if has_request_context():
         session_id = get_session_id()
@@ -884,7 +763,6 @@ def _usable_cloud_key(key: str) -> str:
 
 
 def _configured_extra_cloud_keys():
-    """Session/legacy keys that should be tried before environment failover."""
     keys = []
     for key in (_current_api_key(), os.environ.get("GEMINI_API_KEY", "")):
         usable = _usable_cloud_key(key)
@@ -906,7 +784,6 @@ def _groq_failover_env():
 
 
 def _configured_cloud_api_key():
-    """Return a usable cloud AI key from session config or environment."""
     extra = _configured_extra_cloud_keys()
     if extra:
         return extra[0]
@@ -919,12 +796,6 @@ def _env_flag_disabled(name: str) -> bool:
     return str(os.environ.get(name, "")).strip().lower() in {"0", "false", "no", "off", "disabled"}
 
 def _cloud_ai_disabled_for_request(key: str) -> bool:
-    """Return True only when AI is explicitly disabled for this request.
-
-    GEMINI_ENABLED is kept as a legacy offline/test switch. If a real Groq key
-    is configured, do not let that stale flag kill every AI feature.
-    Use CODEUP_AI_ENABLED=0 or GROQ_ENABLED=0 for a deliberate hard disable.
-    """
     if _env_flag_disabled("CODEUP_AI_ENABLED") or _env_flag_disabled("AI_ENABLED"):
         return True
     if _env_flag_disabled("GROQ_ENABLED"):
@@ -976,7 +847,6 @@ _UNSAFE_GENERATED_CALLS = {
 
 
 def _generated_code_safety_error(code: str, prompt: str = "") -> str:
-    """Return a user-safe error if generated code uses blocked operations."""
     try:
         tree = ast.parse(code or "")
     except SyntaxError:
@@ -1017,7 +887,6 @@ def _generation_explanation(prompt: str, code: str) -> str:
 
 
 def _call_ollama(system_prompt, user_prompt, temperature=0.2, max_tokens=None):
-    """Call local Ollama instance. Returns response string or None on failure."""
     if os.environ.get("OLLAMA_ENABLED", "0") != "1":
         return None
     try:
@@ -1049,17 +918,11 @@ def _call_ollama(system_prompt, user_prompt, temperature=0.2, max_tokens=None):
 
 
 def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en", max_tokens=None):
-    """Call Groq API with hard timeout, falling back to local Ollama if Groq fails.
-
-    Function name kept as call_gemini for backward compat with all callers.
-    Order: Groq cloud → Ollama local → friendly error message.
-    """
     max_tokens = _normalize_ai_max_tokens(max_tokens)
     key = _configured_cloud_api_key()
     extra_keys = _configured_extra_cloud_keys()
 
     def _try_ollama_fallback():
-        """Try the local Ollama fallback. Returns response or None."""
         sp = system_prompt
         if language == "hi":
             sp = f"आप एक सहायक हैं जो हिंदी में सहायता प्रदान करते हैं। {system_prompt}"
@@ -1120,7 +983,6 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en", max_
             return e.user_message
         except Exception as e:
             err_str = str(e).lower()
-            # Try Ollama before returning a user-facing error
             local = _try_ollama_fallback()
             if local:
                 return f"[offline mode] {local}"
@@ -1208,7 +1070,6 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en", max_
 
 
 def call_conversation_orchestrator_ai(system_prompt: str, user_prompt: str) -> str:
-    """Use central Groq failover for structured command interpretation."""
     if _env_flag_disabled("CODEUP_AI_ENABLED") or _env_flag_disabled("AI_ENABLED") or _env_flag_disabled("GROQ_ENABLED"):
         return ""
     extra_keys = _configured_extra_cloud_keys()
@@ -1256,7 +1117,6 @@ def call_conversation_orchestrator_ai(system_prompt: str, user_prompt: str) -> s
 
 
 def _structured_ai_available() -> bool:
-    """Return True when structured mapper/planner calls have a configured key."""
     if _env_flag_disabled("CODEUP_AI_ENABLED") or _env_flag_disabled("AI_ENABLED") or _env_flag_disabled("GROQ_ENABLED"):
         return False
     extra_keys = _configured_extra_cloud_keys()
@@ -1270,7 +1130,6 @@ def _structured_ai_available() -> bool:
     return manager.has_keys(env=_groq_failover_env(), extra_keys=extra_keys)
 
 
-# Core concept words a coach rephrase must keep if the note states them.
 _COACH_CONCEPT_VOCAB = (
     "quotes", "quote", "text", "variable", "indentation", "indent", "block",
     "print", "message", "loop", "while", "for", "if", "string", "even", "average",
@@ -1278,12 +1137,6 @@ _COACH_CONCEPT_VOCAB = (
 
 
 def _ai_coach_rephrase(base_text: str) -> str:
-    """Use Key 2 to rephrase a known teaching note into one warmer short line.
-
-    Returns "" (so the deterministic note is used) when Key 2 is missing/busy or
-    the reply looks unsafe. The model may ONLY restate the given note — guardrails
-    reject anything with code, multiple sentences of bloat, or excessive length so
-    the coach can never invent code, output, or validation results."""
     base_text = str(base_text or "").strip()
     if not base_text:
         return ""
@@ -1298,9 +1151,6 @@ def _ai_coach_rephrase(base_text: str) -> str:
     coached = str(raw or "").strip().strip('"').strip()
     if not coached:
         return ""
-    # The rephrase must preserve the note's core concept terms (e.g. quotes/text/
-    # variable, indentation/block, print/message) and invent no code or numbers,
-    # else we keep the deterministic note.
     concept_terms = [t for t in _COACH_CONCEPT_VOCAB if grounded_ai.fact_present(t, base_text)]
     ok, _reason = grounded_ai.validate(
         coached, deterministic_text=base_text, required_facts=concept_terms,
@@ -1310,9 +1160,6 @@ def _ai_coach_rephrase(base_text: str) -> str:
 
 
 def _concierge_ai_values(code_inputs, text):
-    """Key 2 fallback for the input concierge: map a messy spoken value phrase to
-    ordered input values. Returns a list of string values aligned to the prompts,
-    or None. Never raises — the deterministic path stays the source of truth."""
     try:
         labels = [str(inp.get("label") or inp.get("name") or f"Input {i + 1}") for i, inp in enumerate(code_inputs)]
         types = [str(inp.get("type") or "str") for inp in code_inputs]
@@ -1364,7 +1211,6 @@ def extract_code(text: str):
     return "\n".join(lines).strip()
 
 def _local_code_generation_fallback(prompt: str) -> str:
-    """Small deterministic fallback for common beginner prompts when AI is blank."""
     lower = (prompt or "").lower()
     if (
         ("zero to two" in lower or "0 to 2" in lower or "numbers zero" in lower)
@@ -1412,9 +1258,6 @@ def _should_use_local_generation_fallback(raw: str) -> bool:
     lower = (raw or "").strip().lower()
     return not lower or "empty response" in lower
 
-# ==========================
-# MAIN PAGE
-# ==========================
 
 @app.route("/")
 def landing():
@@ -1435,12 +1278,8 @@ def monaco_vs_asset(filename):
 
 @app.route("/healthz", methods=["GET"])
 def healthz():
-    """Simple liveness probe for deployment monitoring."""
     return jsonify({"status": "ok", "version": __version__}), 200
 
-# ==========================
-# DEMO PRESETS
-# ==========================
 
 DEMO_PRESETS = {
     "hello": {
@@ -1526,7 +1365,6 @@ DEMO_PRESETS = {
 
 @app.route("/demo-presets", methods=["GET"])
 def list_demo_presets():
-    """Return list of available demo presets (id, title, description)."""
     return jsonify({
         "success": True,
         "presets": [
@@ -1538,7 +1376,6 @@ def list_demo_presets():
 
 @app.route("/demo-presets/<preset_id>", methods=["GET"])
 def get_demo_preset(preset_id):
-    """Return a single preset's code by id."""
     preset = DEMO_PRESETS.get(preset_id)
     if not preset:
         return jsonify({"success": False, "error": "Preset not found"}), 404
@@ -1551,29 +1388,14 @@ def get_demo_preset(preset_id):
     })
 
 
-# ==========================
-# GUIDED TUTORIAL
-# ==========================
 
 @app.route("/tutorial/modules", methods=["GET"])
 def tutorial_modules():
-    """Return the spoken lesson pack (ordered modules + content).
-
-    The frontend tutorial fetches this once and narrates it through the proven
-    audible speech path. Content lives in tutorial_engine.py so it has a single
-    source of truth and stays unit-testable.
-    """
     return jsonify({"success": True, **tutorial_engine.module_pack()})
 
 
 @app.route("/tutorial/validate", methods=["POST"])
 def tutorial_validate():
-    """Validate one tutorial activity attempt.
-
-    Body: {module, code, ran_ok, output}. Returns a deterministic verdict with
-    spoken feedback and an optional hint. Validation is AST-based (many valid
-    answers accepted) and the while module gets a static safety pre-check.
-    """
     body = safejson()
     module_id = _safe_text(body.get("module"), "", limit=40).strip()
     code = _safe_text(body.get("code"), "", limit=MAX_CODE_SIZE + 1)
@@ -1601,13 +1423,6 @@ def tutorial_validate():
 
 @app.route("/tutorial/coach", methods=["POST"])
 def tutorial_coach():
-    """AI-assisted tutorial coaching (friendlier phrasing, hints, encouragement).
-
-    Body: {module, request|text, attempts}. The deterministic engine produces a
-    known-fact answer; Key 2 may only rephrase it more warmly. If Key 2 is
-    missing/busy the deterministic note is returned, so the tutorial never
-    depends on AI. The coach never validates code or invents program state.
-    """
     body = safejson()
     module_id = _safe_text(body.get("module"), "", limit=40).strip()
     raw_text = _safe_text(body.get("text"), "", limit=300)
@@ -1627,7 +1442,6 @@ def tutorial_coach():
     if request_type not in tutorial_engine.COACH_REQUESTS:
         request_type = tutorial_engine.classify_coach_request(raw_text) or ""
     if not request_type:
-        # Not a coach phrase — let the frontend fall back to its normal handling.
         return jsonify({"success": True, "handled": False})
 
     base = tutorial_engine.coach_response(module_id, request_type, attempts=attempts)
@@ -1649,18 +1463,8 @@ def tutorial_coach():
         "source": source,
     })
 
-# ==========================
-# API KEY CONFIGURATION
-# ==========================
 
 def set_gemini_api_key(key):
-    """Configure the cloud AI key for the current browser session.
-
-    Stores the key server-side by CodeUp session id so concurrent sessions can
-    each use a different key without exposing the secret in a client cookie.
-    Note: genai.configure() call removed here to avoid the global-mutation
-    race described in C-2; per-call clients are used in call_gemini() instead.
-    """
     cleaned = str(key or "").strip()
     _api_context.gemini_key = cleaned
     if has_request_context():
@@ -1673,7 +1477,6 @@ def set_gemini_api_key(key):
 
 @app.route("/api-config", methods=["POST"])
 def api_config():
-    """Set the Groq API key for the session."""
     body = safejson()
     api_key = _safe_text(body.get("api_key"), limit=MAX_API_KEY_SIZE).strip()
 
@@ -1692,12 +1495,8 @@ def api_config():
         _debug_log(f"API key configuration failed: {sanitize_traceback(str(e))}")
         return jsonify({"success": False, "error": "Could not configure the API key. Please check the key and try again."}), 500
 
-# ==========================
-# ERROR EXPLAINER
-# ==========================
 
 def sanitize_traceback(traceback_str: str) -> str:
-    """Remove sensitive paths and credentials from diagnostic text."""
     text = str(traceback_str or "")
     try:
         text = groq_key_manager.redact_known_keys(text, extra_keys=_configured_extra_cloud_keys())
@@ -1764,7 +1563,6 @@ def _extract_error_summary(error_text: str) -> Tuple[Optional[int], Optional[str
 
 
 def user_facing_error(error_text: str) -> str:
-    """Return concise error text for students, never internal traceback frames."""
     safe_text = sanitize_traceback(error_text)
     timeout_match = re.search(r'Execution timed out after\s+([0-9.]+)s', safe_text, flags=re.IGNORECASE)
     if timeout_match:
@@ -1908,8 +1706,6 @@ def explain_error(code: str, err_text: str, language="en", beginner=False) -> st
 
 @app.route("/explain-error-beginner", methods=["POST"])
 def explain_error_beginner():
-    """Beginner-friendly error explanation. Same input as /run's error path
-    but uses the gentle-tutor system prompt."""
     body = safejson()
     code = safe(body.get("code"), "")
     error_text = safe(body.get("error"), "")
@@ -1925,9 +1721,6 @@ def explain_error_beginner():
     return jsonify({"success": True, "explanation": explanation})
 
 
-# ==========================
-# CONVERSATIONAL MENTOR
-# ==========================
 
 MENTOR_MODES = {
     "general", "tiny_hint", "bigger_hint", "exact_fix", "slow_walkthrough",
@@ -1994,7 +1787,6 @@ def _line_range_for_node(node: ast.AST) -> Tuple[int, int]:
 
 
 def build_code_audio_map(code: str) -> str:
-    """Return a short audio-friendly code map without executing user code."""
     lines = code.splitlines()
     non_empty = [(idx + 1, line) for idx, line in enumerate(lines) if line.strip()]
     if not non_empty:
@@ -2051,7 +1843,6 @@ def build_code_audio_map(code: str) -> str:
 
 
 def _ast_block_children(node):
-    """Return immediate child body nodes of a block statement."""
     children = []
     for field_name in ('body', 'orelse', 'handlers', 'finalbody'):
         field = getattr(node, field_name, None)
@@ -2094,7 +1885,6 @@ def _condition_body_summary(node: ast.If) -> str:
 
 
 def _deepest_nesting(code: str) -> int:
-    """Compute the deepest nesting level of control flow in code."""
     try:
         tree = ast.parse(code)
     except SyntaxError:
@@ -2122,12 +1912,6 @@ def _deepest_nesting(code: str) -> int:
 
 
 def _enhanced_code_map(code: str) -> dict:
-    """Return structured code map data for the Audio Code Map feature.
-
-    Returns a dict with keys: summary (str), blocks (list), functions (list),
-    loops (list), conditions (list), assignments (list), prints (list),
-    nesting_depth (int), line_count (int), error (str or None).
-    """
     lines = code.splitlines()
     result = {
         "summary": "",
@@ -2262,7 +2046,6 @@ def _enhanced_code_map(code: str) -> dict:
 
 
 def _inside_loop_summary(code: str) -> str:
-    """Describe what is inside the first loop found in code."""
     try:
         tree = ast.parse(code)
     except SyntaxError:
@@ -2294,7 +2077,6 @@ def _inside_loop_summary(code: str) -> str:
 
 
 def _after_loop_summary(code: str) -> str:
-    """Describe what comes after the last loop in code."""
     try:
         tree = ast.parse(code)
     except SyntaxError:
@@ -2321,7 +2103,6 @@ def _after_loop_summary(code: str) -> str:
 
 
 def _list_functions_summary(code: str) -> str:
-    """List all functions defined in code."""
     try:
         tree = ast.parse(code)
     except SyntaxError:
@@ -2360,7 +2141,6 @@ def _hinglish_code_map_summary(code: str) -> str:
 
 @app.route("/audio-code-map", methods=["POST"])
 def audio_code_map():
-    """Enhanced Audio Code Map endpoint returning structured + spoken summary."""
     body = safejson()
     code = safe(body.get("code"), "")
     query = safe(body.get("query"), "")
@@ -2376,7 +2156,6 @@ def audio_code_map():
         msg = "Your code is empty. Write some Python and ask for a code map."
         return jsonify({"success": True, "reply": msg, "speech": msg, "auto_speak": True})
 
-    # Dispatch sub-queries
     query_lower = query.lower().strip()
     if "inside" in query_lower and "loop" in query_lower:
         reply = _inside_loop_summary(code)
@@ -2396,7 +2175,6 @@ def audio_code_map():
             reply = _hinglish_code_map_summary(code)
             return jsonify({"success": True, "reply": reply, "speech": reply, "auto_speak": True})
 
-        # Optionally use AI to make it friendlier
         key = _configured_cloud_api_key()
         if key and not _cloud_ai_disabled_for_request(key):
             system = (
@@ -2418,16 +2196,8 @@ def audio_code_map():
     return jsonify({"success": True, "reply": reply, "speech": reply, "auto_speak": True})
 
 
-# ==========================
-# VARIABLE WATCH / STEP NARRATION
-# ==========================
 
 def _run_with_trace_for_narration(code: str, watched_vars: set, session_id: str) -> dict:
-    """Run code in sandbox and return structured narration trace.
-
-    Returns dict with keys: success, narration (list of str), output (str),
-    error (str), steps (list of dict), raw_trace (list).
-    """
     sandbox = get_sandbox(session_id)
     workspace_dir = sandbox.workspace_dir
     trace_file = os.path.join(workspace_dir, f"trace_{uuid.uuid4().hex}.json")
@@ -2492,7 +2262,6 @@ def _run_with_trace_for_narration(code: str, watched_vars: set, session_id: str)
         except OSError:
             pass
 
-    # Build narration from trace events
     narration = []
     steps = []
     error_text = stderr.strip() if stderr else ""
@@ -2515,13 +2284,6 @@ def _run_with_trace_for_narration(code: str, watched_vars: set, session_id: str)
     step_count = 0
     MAX_NARRATION_STEPS = 200
 
-    # --- Source-line helpers for learner-visible cue semantics --------------
-    # Cues must reflect the indentation depth of the *source line a learner
-    # sees execute* (an output statement, an assignment), not the line where a
-    # variable change happens to be detected by the tracer. The raw trace is
-    # left untouched (the conditional-breakpoint feature and trace playback
-    # depend on it); all of this only shapes the spoken narration and the
-    # per-step indent depths the frontend turns into structural beeps.
     src_lines = (code or "").splitlines()
 
     def _src_line(lineno):
@@ -2540,11 +2302,6 @@ def _run_with_trace_for_narration(code: str, watched_vars: set, session_id: str)
         stripped = src.lstrip()
         return stripped.startswith('for ') or stripped.startswith('while ')
 
-    # Each executed print line maps to one learner-visible output line. When the
-    # count of executed print lines matches the produced output lines we can
-    # narrate and cue each output at the exact depth of the print that produced
-    # it. If they don't line up (multi-line prints, end='', echoed input), we
-    # fall back to a single collapsed "Output:" line with no misleading cue.
     out_lines = output_text.split('\n') if output_text else []
     print_exec_count = sum(
         1 for ev in trace
@@ -2553,13 +2310,9 @@ def _run_with_trace_for_narration(code: str, watched_vars: set, session_id: str)
     per_print_mode = print_exec_count > 0 and print_exec_count == len(out_lines)
     out_cursor = 0
 
-    # An assignment's effect is only visible to the tracer on the *next* line
-    # event, so a state change reported on line N was actually produced by the
-    # line that executed just before it. Track the last two executed lines so we
-    # can attribute each change to the line that caused it.
     prev1 = None  # most recently executed source line
-    prev2 = None  # the line executed before prev1 (the cause of a fresh change)
-    pending_output = None  # (line, value) deferred until the print actually runs
+    prev2 = None
+    pending_output = None
 
     def _flush_output():
         nonlocal pending_output, step_count
@@ -2582,8 +2335,6 @@ def _run_with_trace_for_narration(code: str, watched_vars: set, session_id: str)
         etype = event.get('type')
 
         if etype == 'line_exec':
-            # A new line is running, so any deferred print output has now been
-            # produced and is narrated before this line's effects.
             _flush_output()
             line = event.get('line')
             prev2 = prev1
@@ -2593,9 +2344,6 @@ def _run_with_trace_for_narration(code: str, watched_vars: set, session_id: str)
                 out_cursor += 1
 
         elif etype == 'state_change':
-            # Attribute the change to the line that caused it (prev2), not the
-            # line where the tracer noticed it. Skip the loop-induction variable
-            # bound by a for/while header so cues track learner-visible work.
             causing = prev2 if prev2 is not None else event.get('line')
             if _is_loop_header(causing):
                 continue
@@ -2643,8 +2391,6 @@ def _run_with_trace_for_narration(code: str, watched_vars: set, session_id: str)
 
     _flush_output()
 
-    # Only emit the collapsed output line when we could not narrate output
-    # per-statement above; otherwise it would duplicate the per-print steps.
     if output_text and not per_print_mode:
         narration.append(f"Output: {output_text[:500]}")
         narration_lines.append(None)
@@ -3082,7 +2828,6 @@ def audio_breakpoints_route():
 
 @app.route("/step-narration", methods=["POST"])
 def step_narration():
-    """Run code with step narration, reporting variable changes."""
     body = safejson()
     code = safe(body.get("code"), "")
     language = safe(body.get("language"), "en")
@@ -3112,7 +2857,6 @@ def step_narration():
 
     result = _run_with_trace_for_narration(code, watched, session_id)
 
-    # Save trace for step navigation
     if result.get("raw_trace"):
         save_execution_trace(result["raw_trace"])
 
@@ -3145,7 +2889,6 @@ def step_narration():
                 "auto_speak": True,
             })
 
-    # Build spoken narration
     narration_text = " ".join(result["narration"][:50])
     if language == "hi" and result["success"] and "for i in range(3)" in code and "print(i)" in code:
         narration_text = (
@@ -3154,7 +2897,6 @@ def step_narration():
             "Third iteration mein i two hai aur output two hai. Execution complete."
         )
 
-    # Optionally enhance with AI
     if result["success"] and language != "hi":
         key = _configured_cloud_api_key()
         if key and not _cloud_ai_disabled_for_request(key) and len(result["narration"]) > 2:
@@ -3195,7 +2937,6 @@ def step_narration():
 
 @app.route("/watch-variable", methods=["POST"])
 def watch_variable_route():
-    """Add or remove a variable from the watch list."""
     body = safejson()
     action = safe(body.get("action"), "add")
     variable = safe(body.get("variable"), "").strip()
@@ -3235,9 +2976,6 @@ def watch_variable_route():
     return jsonify({"success": True, "watched": watched, "speech": msg, "auto_speak": True})
 
 
-# ==========================
-# MISTAKE REPLAY / BEFORE-VS-AFTER
-# ==========================
 
 def _save_mistake_snapshot(
     session_id: str,
@@ -3247,7 +2985,6 @@ def _save_mistake_snapshot(
     output: str = "",
     explanation: str = "",
 ):
-    """Record code snapshots for mistake replay. Called from /run."""
     with _mistake_snapshots_lock:
         snap = _mistake_snapshots.get(session_id, {})
         snap["session_id"] = session_id
@@ -3266,7 +3003,6 @@ def _save_mistake_snapshot(
 
 
 def _compute_code_diff(before: str, after: str) -> dict:
-    """Compute structural and textual diff between before and after code."""
     import difflib
 
     before_lines = before.splitlines()
@@ -3285,7 +3021,6 @@ def _compute_code_diff(before: str, after: str) -> dict:
             "after_indent": _indent_width(after_line),
         }
 
-    # Textual diff
     changes = []
     matcher = difflib.SequenceMatcher(None, before_lines, after_lines)
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
@@ -3314,8 +3049,6 @@ def _compute_code_diff(before: str, after: str) -> dict:
                     f"so it moved {movement} the surrounding block."
                 )
 
-    # Keep this parse check as a future extension point for richer AST facts;
-    # indentation changes above must still work when the broken version is invalid.
     try:
         ast.parse(before)
         ast.parse(after)
@@ -3330,7 +3063,6 @@ def _compute_code_diff(before: str, after: str) -> dict:
 
 
 def _deterministic_mistake_explanation(before: str, after: str, diff: dict) -> str:
-    """Build a deterministic spoken explanation of what changed between versions."""
     if not diff["changes"]:
         return "I see no differences between the two versions."
 
@@ -3376,7 +3108,6 @@ def _deterministic_mistake_explanation_hinglish(before: str, after: str, diff: d
 
 @app.route("/mistake-replay", methods=["POST"])
 def mistake_replay():
-    """Compare before (error) and after (fix) versions of code."""
     body = safejson()
     language = safe(body.get("language"), "en")
     query = safe(body.get("query"), "compare")
@@ -3412,7 +3143,6 @@ def mistake_replay():
     elif language == "hi":
         reply = deterministic
     else:
-        # Try AI enhancement
         key = _configured_cloud_api_key()
         if key and not _cloud_ai_disabled_for_request(key):
             error_msg = snap.get("error_msg", "")
@@ -3460,13 +3190,6 @@ def mentor_code_map():
     return jsonify({"success": True, "reply": reply, "speech": reply, "auto_speak": True})
 
 
-# ==========================
-# CONCEPTUAL QUESTION FALLBACK
-# ==========================
-# Deterministic, context-aware explanations for the canonical beginner concepts
-# so conceptual questions still get a useful spoken answer when the AI mentor is
-# unavailable. This never inspects or mutates the editor beyond reading the code
-# string passed in, and never executes anything.
 
 _CONCEPT_NUMBER_WORDS = ["zero", "one", "two", "three", "four", "five", "six",
                          "seven", "eight", "nine", "ten"]
@@ -3504,11 +3227,6 @@ def _concept_word_to_int(token: str):
 
 
 def _concept_code_facts(code: str) -> dict:
-    """Read-only structural facts about the editor code for concept answers.
-
-    Uses a line scan (not the AST) so it still works on code with an
-    indentation error — needed to explain the broken-indentation case honestly.
-    """
     facts = {
         "has_code": bool((code or "").strip()),
         "syntax_ok": True,
@@ -3551,11 +3269,6 @@ def _concept_code_facts(code: str) -> dict:
 
 
 def _concept_fallback(message: str, code: str, language: str = "en") -> str:
-    """Short, beginner-friendly explanation for canonical Python concepts.
-
-    Context-aware where possible (refers to the current code), honest about
-    broken indentation, explanation-only, and capped for comfortable speech.
-    """
     q = (message or "").lower()
     hi = (language == "hi")
     facts = _concept_code_facts(code)
@@ -3566,7 +3279,6 @@ def _concept_fallback(message: str, code: str, language: str = "en") -> str:
     count_word = _concept_num_word(len(values)) if values else None
     print_arg = facts["print_arg"] or loop_var
 
-    # 0. "show me an example ..." — give a concrete example, no editor change.
     if "example" in q:
         if "loop" in q or re.search(r"\bfor\b", q):
             if hi:
@@ -3580,8 +3292,6 @@ def _concept_fallback(message: str, code: str, language: str = "en") -> str:
         return ('A simple example is print("Hello"). When you run it, Python displays Hello as output. '
                 'I have not changed your code.')
 
-    # 1. A specific line: "explain line two", "what is on line 2" (number only,
-    #    so "this line indented" is not mistaken for a line reference).
     mline = re.search(r"line\s+(\w+)", q)
     if mline and _concept_word_to_int(mline.group(1)) is not None:
         n = _concept_word_to_int(mline.group(1))
@@ -3604,7 +3314,6 @@ def _concept_fallback(message: str, code: str, language: str = "en") -> str:
             return f"Line {nw} is: {src}."
         return f"There is no line {mline.group(1)} in your program right now."
 
-    # 2. Colon after a header
     if "colon" in q:
         if facts["for_line"]:
             if hi:
@@ -3618,7 +3327,6 @@ def _concept_fallback(message: str, code: str, language: str = "en") -> str:
         return ("A colon at the end of a line, such as after a for, while, or if statement, tells Python "
                 "that an indented block is about to begin.")
 
-    # 3. Indentation / spaces (must win over print: "why is print indented")
     if "indent" in q or "space" in q:
         if facts["print_line"] and facts["print_indented"] is False and facts["has_code"]:
             if hi:
@@ -3657,7 +3365,6 @@ def _concept_fallback(message: str, code: str, language: str = "en") -> str:
         return ("Indentation is the spaces at the start of a line. In Python it shows which lines are inside "
                 "a block, such as the body of a loop or a function.")
 
-    # 4. range
     if "range" in q:
         if values:
             args = facts["range_args"] or str(len(values))
@@ -3672,7 +3379,6 @@ def _concept_fallback(message: str, code: str, language: str = "en") -> str:
         return ("range creates a sequence of numbers. For example, range(3) gives zero, one, and two — three "
                 "values starting from zero.")
 
-    # 5. Loop variable by name ("what does i mean") or the word "variable"
     if "variable" in q or re.search(r"\b" + re.escape(loop_var) + r"\b", q):
         if values:
             if hi:
@@ -3686,7 +3392,6 @@ def _concept_fallback(message: str, code: str, language: str = "en") -> str:
         return (f"{loop_var} is the loop variable. It takes a new value on each pass of the loop, and your "
                 f"code can use that value inside the loop.")
 
-    # 6. loop
     if "loop" in q or re.search(r"\bfor\b", q) or "while" in q:
         if values:
             if hi:
@@ -3700,7 +3405,6 @@ def _concept_fallback(message: str, code: str, language: str = "en") -> str:
         return ("A loop repeats an action several times. For example, a for loop can run a print statement once "
                 "for each number in a range.")
 
-    # 7. print
     if "print" in q:
         if facts["print_line"] and values:
             if hi:
@@ -3722,7 +3426,6 @@ def _concept_fallback(message: str, code: str, language: str = "en") -> str:
         return ("print is a Python function that shows a value as output. For example, print(\"Hello\") displays "
                 "Hello on the screen.")
 
-    # 8. Generic clarification — short, and offers concrete choices.
     if facts["has_code"] and facts["for_line"]:
         if hi:
             return ("Main aapke program ke hisson ko samjha sakta hoon, jaise loop, print statement, colon, ya "
@@ -3803,8 +3506,6 @@ def mentor_chat():
     )
     reply = call_gemini(system, user, temperature=0.25, language=language)
     if _ai_unavailable(reply):
-        # Conceptual questions get a deterministic, context-aware explanation so
-        # the live-demo concepts still work when the AI mentor is unavailable.
         if mode == "concept":
             concept_reply = _concept_fallback(message, code, language)
             return jsonify({"success": True, "reply": concept_reply, "speech": concept_reply, "auto_speak": True})
@@ -3817,7 +3518,6 @@ def mentor_chat():
 
 @app.route("/mentor/chat-stream", methods=["POST"])
 def mentor_chat_stream():
-    """Streaming version of /mentor/chat. Sends SSE events with incremental chunks."""
     body = safejson()
     raw_code = str(safe(body.get("code", ""), ""))
     raw_message = str(safe(body.get("message", ""), ""))
@@ -3887,7 +3587,6 @@ def mentor_chat_stream():
     def generate():
         try:
             if _cloud_ai_disabled_for_request(key) or not key:
-                # Fallback: non-streaming response as single chunk
                 reply = call_gemini(system, user, temperature=0.25, language=language)
                 yield f"data: {json.dumps({'chunk': reply})}\n\n"
                 yield "data: [DONE]\n\n"
@@ -3930,7 +3629,6 @@ def mentor_chat_stream():
         except GeneratorExit:
             return
         except Exception:
-            # On error, try non-streaming fallback; if that also fails, send error message
             try:
                 reply = call_gemini(system, user, temperature=0.25, language=language)
             except Exception:
@@ -3992,21 +3690,9 @@ def mentor_check_progress():
         return jsonify({"success": False, "error": reply, "reply": fallback, "speech": fallback, "auto_speak": True})
     return jsonify({"success": True, "reply": reply, "speech": reply, "auto_speak": True})
 
-# ==========================
-# RUN CODE (WITH AI ERROR EXPLANATION)
-# ==========================
 
-# Note: in-process execution (run_with_trace, SAFE_GLOBALS, SafeModule, etc.)
-# was removed. All user code runs in the subprocess sandbox below.
 
 def classify_semantic_errors(trace):
-    """
-    ⚠️ HEURISTIC DETECTION (Assistance Signal, Not Guaranteed)
-
-    These are heuristic patterns, not rigorous analysis. The real safety
-    limits are the subprocess timeout, the MAX_TRACE_EVENTS cap, and the
-    POSIX RLIMIT_AS / RLIMIT_CPU caps applied via preexec_fn.
-    """
     issues = []
     execution_count = {}
     truncated = False
@@ -4019,15 +3705,6 @@ def classify_semantic_errors(trace):
             line = event["line"]
             execution_count[line] = execution_count.get(line, 0) + 1
 
-    # 2000 is the sweet spot:
-    #   - Catches genuinely runaway code: tight loops with no termination,
-    #     recursion that's clearly wrong, accidental infinite-ish iteration.
-    #   - Stays above legitimate classroom exercises: a range(100) loop,
-    #     a nested 30x30, a prime sieve to 100 — all comfortably below.
-    #   - Sits below the 5000 trace cap so the warning can actually fire
-    #     before truncation makes the count meaningless.
-    # Previous 4500 was dead code (above truncation); 800 fired on legit
-    # nested-loop demos. 2000 was tuned against the bundled demo presets.
     HIGH_ITERATION_THRESHOLD = 2000
     for line, count in execution_count.items():
         if count > HIGH_ITERATION_THRESHOLD:
@@ -4046,13 +3723,6 @@ def classify_semantic_errors(trace):
 
 
 def save_execution_trace(trace, duration_ms=0):
-    """Store trace in session storage for replay features.
-
-    FIX H-3: All mutations to the session dict now happen inside the lock so
-    that two concurrent requests for the same session cannot race on
-    storage['last_trace'] etc. Previously get_trace_storage() released the
-    lock before returning, leaving mutations unprotected.
-    """
     session_id = get_session_id()
     with _session_traces_lock:
         if session_id not in _session_traces:
@@ -4067,17 +3737,9 @@ def save_execution_trace(trace, duration_ms=0):
 
 
 
-# Magic comment parser for `# inputs: foo, bar, baz` declared at top of code
 _INPUT_MAGIC_RE = re.compile(r'^\s*#\s*inputs?\s*:\s*(.+)$', re.IGNORECASE | re.MULTILINE)
 
 def _parse_magic_inputs(code: str):
-    """Look for `# inputs: a, b, c` near the top of the file (first 5 lines).
-
-    Returns a list of input strings, or [] if no magic comment found.
-    Comma-separated; whitespace stripped per item. If several magic input
-    comments are present near the top, the last one wins so a student can
-    revise the declaration by adding a newer line.
-    """
     head = '\n'.join(code.splitlines()[:5])
     matches = _INPUT_MAGIC_RE.findall(head)
     if not matches:
@@ -4089,7 +3751,6 @@ def _parse_magic_inputs(code: str):
 
 
 def _detect_input_prompts(code: str) -> List[str]:
-    """Return labels for input() calls whose prompt is a string literal."""
     prompts: List[str] = []
     try:
         tree = ast.parse(code)
@@ -4107,25 +3768,17 @@ def _detect_input_prompts(code: str) -> List[str]:
     return prompts[:50]
 
 
-# Track last output per session so we can narrate diffs on next run
-_last_outputs = {}  # session_id -> {"output": str, "timestamp": float}
+_last_outputs = {}
 _last_outputs_lock = threading.Lock()
 
-# Per-session watched variables for Variable Watch mode
 _watched_vars = {}  # session_id -> set[str]
 _watched_vars_lock = threading.Lock()
 
-# Per-session mistake replay state (before/after code snapshots)
-_mistake_snapshots = {}  # session_id -> {"error_code": str, "error_msg": str, "success_code": str, "success_output": str, "timestamp": float}
+_mistake_snapshots = {}
 _mistake_snapshots_lock = threading.Lock()
 
 
 def _compute_output_diff(prev: str, curr: str) -> dict:
-    """Return a structured diff between two outputs suitable for narration.
-
-    Returns dict with: identical (bool), summary (str), changed_lines (list of
-    {line_no, before, after, kind}). Kind is 'added', 'removed', or 'changed'.
-    """
     if prev == curr:
         return {"identical": True, "summary": "Output is identical to the previous run.", "changed_lines": []}
     if not prev:
@@ -4162,10 +3815,6 @@ def _compute_output_diff(prev: str, curr: str) -> dict:
         if tag == 'equal':
             continue
         if tag == 'replace':
-            # Split unequal-length replace into a paired "changed" region
-            # plus a trailing add or delete. Pairing past min() drifts the
-            # line numbers because we're indexing into curr while the extra
-            # rows belong to prev (or vice versa).
             paired = min(i2 - i1, j2 - j1)
             for k in range(paired):
                 changes.append({
@@ -4174,7 +3823,6 @@ def _compute_output_diff(prev: str, curr: str) -> dict:
                     "after": curr_lines[j1 + k],
                     "kind": "changed",
                 })
-            # Extra rows in prev → removed
             for k in range(paired, i2 - i1):
                 changes.append({
                     "line_no": j1 + paired + 1,
@@ -4182,7 +3830,6 @@ def _compute_output_diff(prev: str, curr: str) -> dict:
                     "after": "",
                     "kind": "removed",
                 })
-            # Extra rows in curr → added
             for k in range(paired, j2 - j1):
                 changes.append({
                     "line_no": j1 + k + 1,
@@ -4224,7 +3871,6 @@ def _compute_output_diff(prev: str, curr: str) -> dict:
             "change_start_line": first_change,
         }
 
-    # Cap at first 5 changes to avoid speech overload
     capped = changes[:5]
     if len(changes) <= 1:
         summary = f"{len(changes)} line changed since last run."
@@ -4249,13 +3895,10 @@ def run_code():
         return jsonify({"success": False, "error": str(e)}), 400
     if project_run:
         code = project_run["files"][project_run["entry"]]
-    # Mechanism A: pre-flight inputs. List of strings. Body wins; magic
-    # comment is the fallback so students can ship reproducible examples.
     inputs_from_body = body.get("inputs")
     if not isinstance(inputs_from_body, list):
         inputs_from_body = None
     inputs = inputs_from_body if inputs_from_body is not None else _parse_magic_inputs(code)
-    # Sanitize: stringify, cap length per item and total count
     inputs = [str(x)[:1000] for x in inputs[:50]]
 
     if len(code) > MAX_CODE_SIZE:
@@ -4292,18 +3935,12 @@ def run_code():
             "error": f"Rate limit exceeded. Max {RUN_RATE_LIMIT} runs per {RUN_RATE_WINDOW} seconds."
         }), 429
 
-    # Heuristic: detect input() use without provided inputs and surface a
-    # friendly hint up front. The subprocess will still raise the canonical
-    # error if it actually hits input() with an empty queue, but this helps
-    # catch the common case before the user waits for execution.
     input_prompts = _detect_input_prompts(code)
     uses_input = bool(input_prompts) or bool(re.search(r'\binput\s*\(', code))
     inputs_hint = None
     if uses_input and not inputs:
         concierge_inputs = detect_concierge_inputs(code)
         if concierge_inputs:
-            # Concierge phrasing names the fields and the spoken commands that
-            # supply them, so a beginner is never stuck guessing.
             inputs_hint = concierge_request_message(concierge_inputs)
         else:
             inputs_hint = (
@@ -4336,14 +3973,11 @@ def run_code():
                 code_file_path = code_file.name
             cleanup_code_file = True
 
-        # Write inputs queue to its own file. Empty file if no inputs — the
-        # subprocess handles that gracefully.
         inputs_file_path = None
         if inputs:
             with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False,
                                               encoding='utf-8', dir=workspace_dir) as if_handle:
                 for item in inputs:
-                    # Strip newlines from each input — they're line-delimited
                     if_handle.write(item.replace('\n', ' ').replace('\r', ' ') + '\n')
                 inputs_file_path = if_handle.name
 
@@ -4360,7 +3994,6 @@ def run_code():
                 env['CODEUP_LOCAL_MODULES'] = ",".join(project_run["local_modules"])
             if inputs_file_path:
                 env['CODEUP_INPUTS_FILE'] = inputs_file_path
-            # Make sure interactive mode is OFF for the standard /run path
             env.pop('CODEUP_INTERACTIVE', None)
             env.pop('CODEUP_INPUT_FIFO', None)
             env.pop('CODEUP_EXEC_CODE', None)
@@ -4442,8 +4075,6 @@ def run_code():
         else:
             error = _subprocess_exit_error(proc_handle.returncode)
 
-        # Compute output diff vs last run (only on success — error states aren't
-        # comparable in a useful way)
         diff_info = None
         if not error.strip():
             session_id = get_session_id()
@@ -4501,9 +4132,6 @@ def run_code():
         })
 
 
-# ==========================
-# ANALYZE
-# ==========================
 
 @app.route("/analyze", methods=["POST"])
 def analyze():
@@ -4605,17 +4233,9 @@ def analyze_deep():
     return jsonify({"analysis": analysis, "speech": analysis, "auto_speak": True})
 
 
-# ==========================
-# WALKTHROUGH (beginner-friendly program explanation)
-# ==========================
 
 
 def _literal_int(node) -> Optional[int]:
-    """Return the integer value of a literal AST node, or None.
-
-    Accepts plain int constants and unary-minus on an int (e.g. ``-1``) so a
-    canonical ``range(...)`` walkthrough can be computed without executing code.
-    """
     if isinstance(node, ast.Constant) and isinstance(node.value, int) and not isinstance(node.value, bool):
         return node.value
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
@@ -4625,15 +4245,6 @@ def _literal_int(node) -> Optional[int]:
 
 
 def _canonical_loop_walkthrough(code: str, language: str = "en") -> Optional[str]:
-    """Concise, correct explanation for the canonical beginner loop.
-
-    Matches a program whose only statement is ``for <var> in range(...):`` with a
-    single ``print(<var>)`` body, where the range bounds are integer literals.
-    For that shape we can state the iteration count, the exact values the loop
-    variable takes, and the resulting output — the things a blind beginner most
-    needs — without running the code or relying on AI. Returns None for anything
-    else so the general structural explanation is used instead.
-    """
     try:
         tree = ast.parse(code)
     except SyntaxError:
@@ -4657,7 +4268,6 @@ def _canonical_loop_walkthrough(code: str, language: str = "en") -> Optional[str
         return None
     if not values or len(values) > 50:
         return None
-    # Body must be exactly one print() call.
     if len(loop.body) != 1 or not isinstance(loop.body[0], ast.Expr):
         return None
     call = loop.body[0].value
@@ -4697,7 +4307,6 @@ def _canonical_loop_walkthrough(code: str, language: str = "en") -> Optional[str
 
 
 def _deterministic_walkthrough(code: str, language: str = "en") -> str:
-    """Build a basic structural explanation without AI."""
     lines = code.strip().splitlines()
     if not lines:
         return "There is no code to walk through yet."
@@ -4819,9 +4428,6 @@ def walkthrough():
     })
 
 
-# ==========================
-# ADVISE (FEATURE / IMPROVEMENT SUGGESTIONS)
-# ==========================
 
 @app.route("/advise", methods=["POST"])
 def advise():
@@ -4860,9 +4466,6 @@ def advise():
     advice = call_gemini(system, user, language=language)
     return jsonify({"advice": advice})
 
-# ==========================
-# INLINE DEBUG SUGGESTIONS
-# ==========================
 
 @app.route("/debug-suggestions", methods=["POST"])
 def debug_suggestions():
@@ -4912,24 +4515,18 @@ def debug_suggestions():
 
     return jsonify({"success": True, "suggestions": parsed_suggestions})
 
-# ==========================
-# DESCRIBE LINE
-# ==========================
 
 @app.route("/describe", methods=["POST"])
 def describe():
     body = safejson()
     code = safe(body.get("code"), "")
 
-    # FIX M-2: Added MAX_CODE_SIZE check (was missing from this endpoint).
     if len(code) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
     blocked = _reject_non_python_response(code)
     if blocked:
         return blocked
 
-    # FIX C-4: Wrap int() cast in try/except so non-numeric "line" values
-    # return a 400 instead of an unhandled 500 ValueError/TypeError.
     try:
         line = int(body.get("line", 1))
     except (ValueError, TypeError):
@@ -4960,9 +4557,6 @@ def describe():
     desc = call_gemini(system, user, language=language)
     return jsonify({"success": True, "description": desc})
 
-# ==========================
-# STRUCTURE PANEL (CODE NAVIGATION)
-# ==========================
 
 @app.route("/structure", methods=["POST"])
 def structure():
@@ -5048,23 +4642,18 @@ def structure_outline():
         return jsonify({"success": False, "error": structure_data["error"]})
     return jsonify({"success": True, "outline": _structure_outline_text(structure_data), "structure": structure_data})
 
-# ==========================
-# READ LINE WITH CONTEXT
-# ==========================
 
 @app.route("/read-line-context", methods=["POST"])
 def read_line_context():
     body = safejson()
     code = safe(body.get("code"), "")
 
-    # FIX M-2: Added MAX_CODE_SIZE check (was missing from this endpoint).
     if len(code) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
     blocked = _reject_non_python_response(code)
     if blocked:
         return blocked
 
-    # FIX C-4: Wrap int() cast to return 400 on bad input.
     try:
         line = int(body.get("line", 1))
     except (ValueError, TypeError):
@@ -5129,23 +4718,18 @@ def read_line_context():
         "content": current_line.strip()
     })
 
-# ==========================
-# VARIABLE TRACKING
-# ==========================
 
 @app.route("/track-variables", methods=["POST"])
 def track_variables():
     body = safejson()
     code = safe(body.get("code"), "")
 
-    # FIX M-2: Added MAX_CODE_SIZE check (was missing from this endpoint).
     if len(code) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
     blocked = _reject_non_python_response(code)
     if blocked:
         return blocked
 
-    # FIX C-4: Wrap int() cast to return 400 on bad input.
     try:
         line = int(body.get("line", 1))
     except (ValueError, TypeError):
@@ -5296,8 +4880,6 @@ def track_variables():
     })
 
 
-# Single-letter variable names get NATO-phonetic expansion so screen readers
-# don't mangle them ("x" → "ks" or "ex" depending on the engine).
 _SINGLE_LETTER_PRONUNCIATION = {
     'a': 'a', 'b': 'bee', 'c': 'see', 'd': 'dee', 'e': 'ee',
     'f': 'eff', 'g': 'gee', 'h': 'aitch', 'i': 'eye', 'j': 'jay',
@@ -5308,7 +4890,6 @@ _SINGLE_LETTER_PRONUNCIATION = {
 
 
 def pronounce_variable(var_name: str) -> str:
-    """Convert variable name to phonetic pronunciation for screen readers."""
     if not var_name or not isinstance(var_name, str):
         return "unknown variable"
 
@@ -5316,13 +4897,10 @@ def pronounce_variable(var_name: str) -> str:
     if not var_name:
         return "unknown variable"
 
-    # Single character — use phonetic spelling to avoid TTS ambiguity
     if len(var_name) == 1:
         return _SINGLE_LETTER_PRONUNCIATION.get(var_name.lower(), var_name)
 
     if "_" in var_name:
-        # Special case for dunders: __init__, __name__, __main__ etc.
-        # Pronounce as "dunder X" rather than "underscore underscore X underscore underscore"
         if var_name.startswith("__") and var_name.endswith("__") and len(var_name) > 4:
             inner = var_name[2:-2]
             return f"dunder {inner}"
@@ -5354,7 +4932,6 @@ def find_variable_usage():
     body = safejson()
     code = safe(body.get("code"), "")
 
-    # FIX M-2: Added MAX_CODE_SIZE check (was missing from this endpoint).
     if len(code) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
     blocked = _reject_non_python_response(code)
@@ -5410,9 +4987,6 @@ def find_variable_usage():
     })
 
 
-# ==========================
-# ERROR LOCATION BEACON
-# ==========================
 
 @app.route("/check-syntax", methods=["POST"])
 def check_syntax():
@@ -5453,10 +5027,6 @@ def check_syntax():
     except Exception as e:
         errors.append({"line": 1, "type": "UnknownError", "message": str(e), "severity": "medium"})
 
-    # FIX M-3: Only run the heuristic undefined-variable ast.parse() block when
-    # errors is empty (i.e. compile() succeeded). Previously the code fell through
-    # to ast.parse() even after a SyntaxError from compile(), causing a redundant
-    # and wasteful re-parse of known-invalid code.
     if not errors:
         try:
             tree = ast.parse(code)
@@ -5530,9 +5100,6 @@ def check_syntax():
         "error_count": len(errors)
     })
 
-# ==========================
-# FIX
-# ==========================
 
 @app.route("/fix", methods=["POST"])
 def fix():
@@ -5595,9 +5162,6 @@ def fix():
     if not fixed and raw and not _is_ai_service_message(raw):
         fixed = raw.strip()
 
-    # Reject suspicious "fixes" that bear no resemblance to the original. The LLM
-    # sometimes ignores "do not rewrite from scratch" and ships an unrelated
-    # solution, which is dangerous because the student loses their work.
     if fixed and code:
         import difflib
         ratio = difflib.SequenceMatcher(None, code, fixed).ratio()
@@ -5613,9 +5177,6 @@ def fix():
         return jsonify({"success": False, "error": raw.strip(), "code": ""})
     return jsonify({"success": True, "code": fixed})
 
-# ==========================
-# GENERATE CODE (NL → CODE)
-# ==========================
 
 @app.route("/generate-code", methods=["POST"])
 def generate_code():
@@ -5778,8 +5339,6 @@ def generate_code():
     user = f"{constraint_text}Task description:\n{prompt}"
     raw = call_gemini(system, user, temperature=0.2, language=language)
     code = extract_code(raw)
-    # Llama sometimes returns code without ``` fences. If extract_code came back empty,
-    # try using the raw response directly (assuming it's already plain code).
     if not code and raw and not _is_ai_service_message(raw):
         code = raw.strip()
     if not code:
@@ -5795,8 +5354,6 @@ def generate_code():
         error = raw.strip() if raw else "AI returned empty response. Try rephrasing."
         return jsonify({"success": False, "error": error, "code": ""})
 
-    # Verify the result actually parses as Python before shipping it to the editor.
-    # If the LLM returned an explanation paragraph by mistake, this catches it.
     try:
         compile(code, "<generated>", "exec")
         if not validate_exact_output(code, prompt):
@@ -5818,7 +5375,6 @@ def generate_code():
                                 "explanation": explanation, "speech": explanation})
             return jsonify({"success": False, "error": safety_error, "code": ""})
     except SyntaxError:
-        # One retry with a stricter system message
         retry_system = system + "\n\nIMPORTANT: Return ONLY syntactically valid Python. No prose. No markdown."
         raw_retry = call_gemini(retry_system, user, temperature=0.1, language=language)
         retry_code = extract_code(raw_retry) or (raw_retry.strip() if raw_retry and not _is_ai_service_message(raw_retry) else "")
@@ -5864,9 +5420,6 @@ def generate_code():
     return jsonify({"success": True, "code": code, "explanation": explanation, "speech": explanation})
 
 
-# ==========================
-# MULTI-FILE PROJECTS
-# ==========================
 
 @app.route("/project", methods=["GET", "POST"])
 def project_workspace():
@@ -6045,9 +5598,6 @@ def project_requirements():
         speech = "This project does not need third-party packages."
     return jsonify({"success": True, "requirements": requirements, "speech": speech})
 
-# ==========================
-# SNIPPETS
-# ==========================
 
 @app.route("/snippets", methods=["GET", "POST"])
 def snippets():
@@ -6141,9 +5691,6 @@ def snippet_detail(sid):
     speech = f"Updated snippet: {snippet_name}." if snippet_name else "Snippet updated."
     return jsonify({"success": True, "speech": speech})
 
-# ==========================
-# VOICE COMMANDS
-# ==========================
 
 COMMANDS = {
     "run": [
@@ -6226,17 +5773,8 @@ COMMANDS = {
 
 
 def best_two_commands(text: str):
-    """Return the top two DISTINCT command names by fuzzy score.
-
-    Bug fix: previously this scored every phrase independently, so a command
-    with multiple similar phrases could occupy both the best AND second slot
-    (e.g. "walk to" → ["walk through", "walk through"]). Now we collapse to
-    the best score per command name first, then pick the top two distinct
-    commands.
-    """
     text = text.lower().strip()
 
-    # Best score per command name
     per_command_best = {}
     for name, phrases in COMMANDS.items():
         top = 0
@@ -6246,7 +5784,6 @@ def best_two_commands(text: str):
                 top = s
         per_command_best[name] = top
 
-    # Sort commands by best score, take top two distinct names
     ranked = sorted(per_command_best.items(), key=lambda kv: kv[1], reverse=True)
 
     best_name, best_score = (None, 0)
@@ -6795,17 +6332,9 @@ def _route_conversational_voice_action(
         "confidence": 0.0,
     }
 
-# ==========================
-# FULL FILE NARRATION
-# ==========================
 
 @app.route("/narrate-file", methods=["POST"])
 def narrate_file():
-    """Narrate the entire file line-by-line in conversational, screen-reader-friendly form.
-
-    Unlike /analyze (brief summary) or /analyze-deep (line-by-line technical),
-    this produces a continuous spoken narrative meant to be played from start to finish.
-    """
     body = safejson()
     code = safe(body.get("code"), "")
     language = safe(body.get("language"), "en")
@@ -6818,7 +6347,6 @@ def narrate_file():
     if blocked:
         return blocked
 
-    # Cap at 5KB OR 50 lines, whichever comes first, to keep LLM input in budget.
     NARRATE_CHAR_CAP = 5000
     NARRATE_LINE_CAP = 50
     code_lines_full = code.splitlines()
@@ -6864,16 +6392,12 @@ def narrate_file():
         "truncated": was_truncated,
     })
 
-# ==========================
-# FILE SUMMARY
-# ==========================
 
 @app.route("/summarize", methods=["POST"])
 def summarize():
     body = safejson()
     code = safe(body.get("code"), "")
 
-    # FIX M-2: Added MAX_CODE_SIZE check (was missing from this endpoint).
     if len(code) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
     blocked = _reject_non_python_response(code)
@@ -6909,9 +6433,6 @@ def summarize():
     summary = call_gemini(system, user, language=language)
     return jsonify({"summary": summary})
 
-# ==========================
-# DIFF EXPLAIN
-# ==========================
 
 @app.route("/diff-explain", methods=["POST"])
 def diff_explain():
@@ -6919,7 +6440,6 @@ def diff_explain():
     before = safe(body.get("before"), "")
     after = safe(body.get("after"), "")
 
-    # FIX M-2: Added MAX_CODE_SIZE check (was missing from this endpoint).
     if len(before) > MAX_CODE_SIZE or len(after) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
     blocked = _reject_non_python_response(before) or _reject_non_python_response(after)
@@ -6947,9 +6467,6 @@ def diff_explain():
     explanation = call_gemini(system, user, language=language)
     return jsonify({"explanation": explanation})
 
-# ==========================
-# SUGGEST NEXT LINE
-# ==========================
 
 @app.route("/suggest-next", methods=["POST"])
 def suggest_next():
@@ -7003,14 +6520,10 @@ def suggest_next():
         return jsonify({"success": False, "suggestions": [], "error": "Could not generate suggestions right now."})
 
 def _trace_playback(direction):
-    """Advance, rewind, or report the current trace step. All reads and the
-    follow-up write happen under the same lock so a concurrent session
-    cleanup cannot delete the dict between fetch and mutation."""
     session_id = get_session_id()
     with _session_traces_lock:
         storage = _session_traces.get(session_id)
         if storage is None:
-            # Cleanup happened or session never ran code
             return "No execution trace available."
         storage['last_accessed'] = time.time()
         trace = list(storage.get('last_trace', []) or [])
@@ -7034,13 +6547,8 @@ def _trace_playback(direction):
     return _event_to_speech(event, idx, len(trace))
 
 
-# Telemetry: log unrecognized voice commands so we can grow the vocabulary
-# from real usage instead of guessing. Stored per-session, capped, opt-out via env.
 
 def _log_unrecognized_command(text: str, session_id: str):
-    """Record a command that the parser couldn't match. Used to identify
-    phrasings real users employ that the patterns don't yet cover.
-    Default-OFF — set VOICE_TELEMETRY=1 to enable."""
     if os.environ.get("VOICE_TELEMETRY", "0") != "1":
         return
     if not text or len(text) > 500:
@@ -7051,16 +6559,12 @@ def _log_unrecognized_command(text: str, session_id: str):
             "session": session_id[:8],  # truncated for privacy
             "timestamp": time.time(),
         })
-        # Keep only the most recent N entries
         if len(_voice_telemetry) > _VOICE_TELEMETRY_CAP:
             del _voice_telemetry[:len(_voice_telemetry) - _VOICE_TELEMETRY_CAP]
 
 
 @app.route("/voice-telemetry", methods=["GET"])
 def get_voice_telemetry():
-    """Return logged unrecognized commands for analysis. Auth-gated via
-    VOICE_TELEMETRY_TOKEN env var. Default-OFF: telemetry must be explicitly
-    enabled with VOICE_TELEMETRY=1 AND a token must be set and supplied."""
     if os.environ.get("VOICE_TELEMETRY", "0") != "1":
         return jsonify({"success": False, "error": "Telemetry disabled"}), 404
     expected_token = os.environ.get("VOICE_TELEMETRY_TOKEN", "")
@@ -7083,9 +6587,6 @@ _ONBOARDING_MESSAGE = (
     "generate code, or fix this code to debug. No microphone? Just type the "
     "command and press Enter. Say more, or more examples, for the full list."
 )
-# A clear, single first action for a brand-new learner ("what should I do
-# first"). Distinct from the onboarding command list above: it names ONE next
-# step (start the tutorial) and the typed fallback, rather than listing options.
 _FIRST_STEP_MESSAGE = (
     "The best first step is to say: start tutorial. I will then guide you, one "
     "small step at a time, to write and run your very first Python program. If "
@@ -7098,9 +6599,6 @@ _FIRST_HELP_RE = re.compile(
     r"where\s+do\s+i\s+start|how\s+does\s+this\s+work)\s*[.?!]?\s*$",
     re.IGNORECASE,
 )
-# "what should I do first" / "where do I begin" -> one clear first action.
-# Kept separate from _FIRST_HELP_RE so the answer is a single next step, not the
-# command menu.
 _FIRST_STEP_RE = re.compile(
     r"^\s*(?:what\s+should\s+i\s+do\s+first|what\s+do\s+i\s+do\s+first|"
     r"what(?:'s| is)\s+the\s+first\s+(?:step|thing)(?:\s+(?:to\s+do|i\s+should\s+do))?|"
@@ -7108,30 +6606,19 @@ _FIRST_STEP_RE = re.compile(
     r"what\s+should\s+i\s+do\s+to\s+(?:start|begin)|how\s+do\s+i\s+get\s+going)\s*[.?!]?\s*$",
     re.IGNORECASE,
 )
-# Beginner onboarding phrases that should open the guided tutorial directly
-# rather than falling through to concept Q&A, a clarification, or "unknown".
-# Deliberately NARROW so demo phrases are not shadowed:
-#   * "teach me this code"/"teach me this scored" stay -> analyze
-#   * "teach me inheritance"/"teach me flarbology" stay -> concept Q&A
-#   * "make a beginner lesson on loops" stays -> lesson builder (starts with "make")
-# Only an explicit Python/coding learning request lands here.
 _TUTORIAL_ONBOARD_RE = re.compile(
     r"^\s*(?:"
-    # start/open/begin/launch [the/a] <python|beginner|coding|...> tutorial/lesson/course
     r"(?:(?:hey|ok|okay|please|let'?s|lets|can\s+you|could\s+you|will\s+you|"
     r"i\s+(?:want|would\s+like|wanna)\s+to|i'?d\s+like\s+to)\s+){0,3}"
     r"(?:start|open|begin|launch|take\s+me\s+to)\s+(?:the\s+|a\s+)?"
     r"(?:python|beginner|beginner'?s|beginners|coding|programming|intro(?:ductory)?|first|basic)\s+"
     r"(?:python\s+|coding\s+|programming\s+)?(?:tutorial|lesson|lessons|course)"
     r"|"
-    # bare "<python|beginner|coding> tutorial/lesson"
     r"(?:python|beginner|beginner'?s|beginners|coding|programming|intro)\s+(?:tutorial|lesson|lessons|course)"
     r"|"
-    # "teach me python / coding / to code / programming / python basics / the basics"
     r"teach\s+me\s+(?:how\s+to\s+|to\s+)?"
     r"(?:python(?:\s+basics)?|code|coding|programming|program|the\s+basics(?:\s+of\s+python)?)"
     r"|"
-    # "(i want to / help me / let's) learn python / learn to code / learn coding"
     r"(?:(?:i\s+(?:want|would\s+like|wanna)\s+to\s+|help\s+me\s+|let'?s\s+|lets\s+)?learn)\s+"
     r"(?:python|to\s+code|coding|programming|the\s+basics(?:\s+of\s+python)?)"
     r")(?:\s+please|\s+now)?\s*[.?!]*\s*$",
@@ -7142,9 +6629,6 @@ _MORE_HELP_RE = re.compile(
     r"more\s+help|all\s+commands|list\s+commands|longer\s+list)\s*[.?!]?\s*$",
     re.IGNORECASE,
 )
-# "Say more" continues the last long spoken response (e.g. the project report's
-# next steps). It is distinct from "more examples"/"full help" above so the
-# frontend can resume a stored continuation rather than dump the command list.
 _SAY_MORE_RE = re.compile(
     r"^\s*(?:say\s+more(?:\s+to\s+(?:continue|hear(?:\s+(?:the\s+)?next\s+steps?)?))?|"
     r"tell\s+me\s+more|read\s+more|continue\s+reading|go\s+on)\s*[.?!]?\s*$",
@@ -7153,7 +6637,6 @@ _SAY_MORE_RE = re.compile(
 
 
 def _sanitize_voice_response(response: dict) -> dict:
-    """Keep display Markdown intact while making all speech fields TTS-safe."""
     if not isinstance(response, dict):
         return response
     for key in ("speech", "spoken_summary"):
@@ -7314,8 +6797,6 @@ def _deterministic_indentation_repair_command(text: str, code: str, error_contex
         source="local",
     )
 
-# Relative line navigation: "next line", "previous line", "go to the next line",
-# "read the previous line", "move down a line", etc. Group 1 is next|previous.
 _LINE_NAV_RE = re.compile(
     r"^\s*(?:go\s+to\s+|move\s+to\s+|read\s+|take\s+me\s+to\s+|go\s+)?"
     r"(?:the\s+)?(next|previous|prior|down\s+a|up\s+a)\s+line\s*$",
@@ -7334,11 +6815,7 @@ def _looks_like_new_command(text: str) -> bool:
 
 
 def _broken_code_request(text):
-    """If the user clearly asks for a broken example, return the broken code to
-    insert. Only fires on explicit *create-an-error* requests — never when the
-    user wants to fix/correct one, and never accidentally."""
     low = " ".join(str(text or "").lower().split())
-    # The user wants to FIX an error, not make one -> not a broken-code request.
     if re.search(r"\b(?:fix|correct|repair|debug|solve|resolve)\b", low):
         return None
     quote_trigger = (
@@ -7379,18 +6856,12 @@ def _unclear_loop_command_response(text):
 
 
 def _spoken_insert_response(text, code):
-    """Build valid beginner Python for a spoken print/loop insert and return a
-    conversational_edit, or None so the existing insert pipeline handles it."""
     if str(code or "").strip() and intent_repair.looks_like_print_sequence_request(text):
         msg = "Do you want me to replace the current code, or add a new loop that prints 0, 1, and 2?"
         return {"success": True, "action": "clarify", "intent": "clarify",
                 "message": msg, "speech": msg, "reason": "print_sequence_existing_code",
                 "needs_clarification": True, "heard": text}
 
-    # Simple counting loops first ("insert a for loop", "make a loop that prints
-    # three numbers", "generate a loop that prints 0 to 2", ...). These must
-    # produce a real beginner loop (for i in range(3): print(i)), never the weak
-    # range(0)/pass stub or a brittle exact-command-only match.
     counting_loop = intent_repair.build_counting_loop_insert(text)
     if counting_loop is not None:
         loop_python, loop_confirmation = counting_loop
@@ -7446,8 +6917,6 @@ def _spoken_insert_response(text, code):
         compile(textwrap.dedent(python), "<insert>", "exec")
     except SyntaxError:
         return None
-    # The frontend speaks ai_action.spoken_confirmation, so the learner hears what
-    # was inserted (not just "I applied that edit.").
     flat = " ".join(python.replace("\n", " ").split())
     if "\n" in python:
         confirmation = "I added a loop to the editor. Say run to see what it prints."
@@ -7462,10 +6931,6 @@ def _spoken_insert_response(text, code):
 
 
 def _spoken_variable_response(text, code, mem, intent):
-    """Build a valid Python variable assignment from natural speech, or ask one
-    specific question (remembered as a pending clarification) when the name or
-    value is missing. Only overrides generic/unknown inserts, never a real
-    different intent such as set_inputs."""
     if intent not in (None, "", "insert_variable", "append_line"):
         return None
     slots = intent_repair.parse_variable_assignment(text, code)
@@ -7495,7 +6960,6 @@ def _spoken_variable_response(text, code, mem, intent):
 
 
 def _template_result_voice_response(result, text, *, source="beginner_templates"):
-    """Convert a deterministic beginner template into a normal voice response."""
     if result is None:
         return None
     if result.needs_clarification or result.edit_action == "clarify":
@@ -7568,13 +7032,6 @@ def _beginner_template_command_response(text, code, *, mode="all"):
 
 
 def _route_repaired_intent(text, code, allow_ai=False):
-    """Map a Key 2 / deterministic intent-repair decision onto an existing action,
-    or None to fall through. Only allowlisted actions are ever executed.
-
-    ``allow_ai`` gates the Key 2 fallback: it is False for the high-confidence
-    deterministic pass that runs *before* the fuzzy/security matcher (so Key 2 can
-    never override an existing safe route), and True only for the last-resort pass
-    that runs *after* fuzzy matching has had its say."""
     ai_fn = call_conversation_orchestrator_ai if allow_ai else None
     decision = intent_repair.repair(text, code=code, ai_fn=ai_fn)
     if not intent_repair.validate_decision(decision):
@@ -7613,8 +7070,6 @@ def _route_repaired_intent(text, code, allow_ai=False):
 
 
 def _ground_concept_answer(answer, required_facts, code, text):
-    """Let Key 2 make a concept answer warmer/shorter, grounded so it cannot drop
-    the fact or invent code/output. Deterministic answer is the fallback."""
     if not answer:
         return answer
     system = (
@@ -7632,9 +7087,6 @@ def _ground_concept_answer(answer, required_facts, code, text):
 
 
 def _resolve_pending_clarification(pending, text, mem):
-    """Understand the user's answer to a question CodeUp asked. Returns a response
-    dict (a completed action or one more specific question), or None to fall
-    through to normal routing."""
     ptype = pending.get("type")
     if ptype == "pattern":
         merged = clarification_flow.parse_pattern_answer(text, pending.get("slots", {}))
@@ -7696,8 +7148,6 @@ def _resolve_pending_clarification(pending, text, mem):
     if ptype == "generate":
         answer = " ".join(str(text or "").split())
         low = answer.lower()
-        # User pivoted to a real command instead of answering: abandon the
-        # pending question and let normal routing handle it.
         if re.match(r"^(?:run|stop|clear|open|help|exit|cancel|never\s*mind|nevermind|"
                     r"pause|resume|quit|tutorial)\b", low):
             session_memory.clear_pending(mem)
@@ -7720,14 +7170,8 @@ def _resolve_pending_clarification(pending, text, mem):
 
 
 def _record_voice_memory(mem, text, intent, response):
-    """Record short-term working memory from a /voice-command response."""
     action = str(response.get("action") or "")
     session_memory.record_utterance(mem, text, intent or "", action)
-    # Track learning features/concepts for the "what did I learn today?" recap.
-    # concept_label() drops internal sentinels (identity / non-code / unknown,
-    # prefixed with "__") and maps snake_case kinds to a spoken-friendly label
-    # (e.g. "big_o" -> "time complexity"), so nothing ugly leaks into the recap
-    # or trainer notes as something the learner "practised".
     concept = concept_qa.concept_label(response.get("concept") or "")
     session_memory.record_activity(mem, action, concept=concept)
     if action == "action_sequence":
@@ -7759,10 +7203,6 @@ def _record_voice_memory(mem, text, intent, response):
 
 
 def _ai_modify_prompt(text, mem, params):
-    """Key 2 referent resolution for a modification follow-up ("do the same with
-    10"). Returns a refined generation prompt grounded in memory, or "" to keep
-    the deterministic prompt. Key 2 may only resolve the referent — it is given
-    bounded memory context and cannot invent facts."""
     snap = session_memory.snapshot(mem, utterance=text)
     if not snap.get("last_gen_prompt") and not snap.get("current_file"):
         return ""
@@ -7782,15 +7222,10 @@ def _ai_modify_prompt(text, mem, params):
     refined = str(call_conversation_orchestrator_ai(system, user) or "").strip().strip('"').strip()
     if not refined:
         return ""
-    # The rewrite must keep the new count/instruction and the prior subject (e.g.
-    # "10" and "even"), and invent no new numbers/files, else keep deterministic.
     last_prompt = snap.get("last_gen_prompt", "")
     required = grounded_ai.numbers(text) + grounded_ai.salient_terms(text)[:2] + grounded_ai.salient_terms(last_prompt)[:2]
     required = [f for f in dict.fromkeys(required) if f][:6]
     deterministic_prompt = params.get("prompt", "") if isinstance(params, dict) else ""
-    # deterministic_text is left empty here: the new request legitimately changes
-    # the old count, so we only require the new facts and forbid invented ones
-    # (the allow-list context still includes the prior prompt's numbers).
     ok, _reason = grounded_ai.validate(
         refined, deterministic_text="",
         required_facts=required,
@@ -7801,8 +7236,6 @@ def _ai_modify_prompt(text, mem, params):
 
 
 def _map_followup_decision(decision, text, mem):
-    """Map a session_memory follow-up decision to a /voice-command response, or
-    None to fall through to normal handling."""
     base = {
         "success": True,
         "heard": text,
@@ -7841,9 +7274,6 @@ def _map_followup_decision(decision, text, mem):
                 ]}
     if action == "modify_code":
         prompt = _ai_modify_prompt(text, mem, params) or params.get("prompt", "")
-        # A correction/modification edits the existing program: route to the
-        # generate path (which validates that the result parses before applying)
-        # with a prompt grounded in the prior generation and current editor code.
         return {**base, "action": "generate_code", "prompt": prompt,
                 "source": "memory_followup", "followup_edit": True}
     if action == "open_file":
@@ -7858,11 +7288,6 @@ def _map_followup_decision(decision, text, mem):
     return None
 
 
-# ---- vague generation clarification (deterministic, demo-safe) --------------
-# A generation request with no concrete "what should it do" content should ask
-# ONE short question rather than guess. This is the fallback used when the Key 2
-# orchestrator is unavailable or declined; a good prompt (numbers, a named task,
-# sample data) always generates immediately and is never clarified.
 _GEN_BOILERPLATE = {
     "please", "hey", "ok", "okay", "alright", "could", "would", "can", "you",
     "for", "me", "us", "generate", "create", "make", "write", "build", "code",
@@ -7890,18 +7315,14 @@ def _generation_spec_tokens(spec_text):
 
 
 def _generation_is_vague(spec_text):
-    """True when a generation spec has no concrete task content."""
     tokens = _generation_spec_tokens(spec_text)
     if not tokens:
         return True
     if all(w in _MARKS_WORDS for w in tokens):
-        # A bare domain hint ("make a marks thing") is not a task.
         return True
     has_action = any(w in _GEN_ACTION_WORDS for w in tokens) or bool(re.search(r"\d", str(spec_text or "")))
     if has_action:
         return False
-    # Two or more concrete content words also describe a real task
-    # ("prints hello", "reverse a string"); a lone vague noun does not.
     return len(tokens) < 2
 
 
@@ -7916,8 +7337,6 @@ def _vague_generation_question(text, tokens):
 
 
 def _vague_generation_clarification(text, intent, prompt, mem):
-    """If this is a generation request too vague to act on, return a clarify
-    response (remembering a pending 'generate' question); else None."""
     gen_like = intent == "generate_code" or looks_like_generation_request(text)
     if not gen_like:
         return None
@@ -7942,10 +7361,6 @@ def _complete_generation_prompt(kind, original, answer):
 
 
 def _verbosity_directive(verbosity: str) -> str:
-    """A short system-prompt suffix that nudges AI explanation length/style.
-
-    Empty for the default ('normal'/unknown), so deterministic fallbacks and
-    existing behaviour are completely unchanged when no verbosity is set."""
     v = str(verbosity or "").strip().lower()
     if v == "concise":
         return " Keep the explanation very short: at most three sentences."
@@ -7958,11 +7373,6 @@ def _verbosity_directive(verbosity: str) -> str:
     return ""
 
 
-# ---- Sprint 1 deterministic voice commands ----------------------------------
-# Export / report / recap / speech-rate / verbosity. Matched on the whole
-# (normalized) utterance so they are unambiguous and never mistaken for code
-# generation, project creation, or a concept question. Routed BEFORE the
-# concept/generation logic in the /voice-command route.
 _SPEECH_RATE_PATTERNS = [
     ("slow", 0.75, r"^(?:please\s+)?(?:speak\s+slower|slow\s+down|speak\s+more\s+slowly|talk\s+slower|slower\s+speech|slow\s+speech)$"),
     ("fast", 1.25, r"^(?:please\s+)?(?:speak\s+faster|speed\s+up|talk\s+faster|faster\s+speech|speak\s+more\s+quickly|speak\s+quicker)$"),
@@ -8000,7 +7410,6 @@ _RECAP_RE = re.compile(
 
 
 def _sprint1_command(text, mem, *, project_state=None, verbosity: str = "normal"):
-    """Deterministic Sprint-1 commands (export/report/recap/rate/verbosity) or None."""
     t = " ".join(str(text or "").lower().strip().rstrip(".!?").split())
     if not t:
         return None
@@ -8050,12 +7459,6 @@ def _sprint1_command(text, mem, *, project_state=None, verbosity: str = "normal"
     return None
 
 
-# ---- Sprint 2: non-visual code understanding (deterministic) ----------------
-# Structure snapshot, navigate-by-meaning, error replay, staged hints, code
-# landmarks. Whole-utterance matching on NEW phrasings only, so existing
-# route-tested commands (mentor "tiny hint", "compare before and after",
-# "replay my mistake", output bookmarks, "where am i in the program") are
-# untouched. parse_intent is not modified.
 _STRUCTURE_RE = re.compile(
     r"^(?:please\s+)?(?:summari[sz]e (?:the )?structure|give me (?:a )?structure snapshot|"
     r"structure snapshot|give me an audio overview|audio overview|audio structure snapshot|"
@@ -8102,7 +7505,6 @@ def _extract_error_line(error: str) -> Optional[int]:
 
 
 def _nav_response(nav, text, mem):
-    """Turn a structure_tools navigation result into a /voice-command response."""
     if nav.get("found"):
         session_memory.record_navigation(mem, nav)
         resp = {"success": True, "action": "navigate_code", "heard": text,
@@ -8128,26 +7530,22 @@ def _resolve_landmark_target(code, cursor_line, mem, construct):
 
 
 def _sprint2_command(text, code, mem, cursor_line, error_context, mistake_snapshot):
-    """Deterministic Sprint-2 commands, or None to fall through."""
     t = " ".join(str(text or "").lower().strip().rstrip(".!?").split())
     if not t:
         return None
     code = code or ""
 
-    # 1) Structure snapshot
     if _STRUCTURE_RE.match(t):
         snap = structure_tools.build_structure_snapshot(code)
         return {"success": True, "action": "deterministic_message", "heard": text,
                 "message": snap["summary"], "speech": snap["summary"], "structure": snap}
 
-    # 2) Error replay (new phrasings; reuses the run snapshots)
     if _REPLAY_RE.match(t) or t == "replay mistake":
         result = error_replay.from_snapshot(mistake_snapshot)
         return {"success": True, "action": "deterministic_message", "heard": text,
                 "message": result["explanation"], "speech": result["speech"],
                 "error_replay": True, "changed_lines": result.get("changed_lines", [])}
 
-    # 3) Landmarks — create (construct word disambiguates from output bookmarks)
     m = _LM_CREATE_RE.match(t)
     if m:
         construct, name = m.group(1), (m.group(2) or "").strip()
@@ -8164,9 +7562,6 @@ def _sprint2_command(text, code, mem, cursor_line, error_context, mistake_snapsh
             preview=target.get("preview", ""))
         return {**result, "heard": text}
 
-    # Landmark list / goto / read / delete / clear. For commands that collide
-    # with output bookmarks ("list bookmarks", "go to bookmark X"), only claim
-    # them when a code landmark actually matches; otherwise fall through.
     store = session_memory.get_landmarks(mem)
     if _LM_CLEAR_RE.match(t):
         return {**landmarks.clear_landmarks(store), "heard": text}
@@ -8183,7 +7578,6 @@ def _sprint2_command(text, code, mem, cursor_line, error_context, mistake_snapsh
         if store or "landmark" in t:
             return {**landmarks.list_landmarks(store), "heard": text}
 
-    # 4) Navigation by meaning
     if _NAV_GOTO_RE.match(t):
         target = _NAV_GOTO_RE.match(t).group(1)
         last_err_line = _extract_error_line(error_context) or _extract_error_line(mem.get("last_run_error", ""))
@@ -8202,7 +7596,6 @@ def _sprint2_command(text, code, mem, cursor_line, error_context, mistake_snapsh
         result = structure_tools.find_symbol(code, name.split()[-1], mode)
         return _nav_response(result, text, mem)
 
-    # 5) Staged hints
     level = None
     if _HINT_SMALL_RE.match(t):
         level = session_memory.set_hint_level(mem, "small")
@@ -8229,13 +7622,6 @@ def _sprint2_command(text, code, mem, cursor_line, error_context, mistake_snapsh
     return None
 
 
-# ---- NAB value sprint: classroom + non-visual learning features -------------
-# Deterministic teacher/learner tools layered on Sprint 1/2: Blind Debugger,
-# Concept Tutor, Ask My Code, Trainer Review, Lesson Builder, Screen Reader
-# Bridge. Whole-utterance matching on NEW phrasings only; routed AFTER Sprint
-# 1/2 and BEFORE generic concept Q&A so reserved phrases (onboarding, project
-# report, recap, structure, navigation, hints, replay, bookmarks) are never
-# shadowed. parse_intent is not modified; the OpenVINO route stays isolated.
 _DEBUG_TEACHER_RE = re.compile(
     r"^(?:please\s+)?(?:debug this like a teacher|debug my code|help me debug this|"
     r"why is my code failing|explain this error like a teacher)$", re.IGNORECASE)
@@ -8267,7 +7653,6 @@ _SR_BRIDGE_RE = re.compile(
 
 
 def _nab_payload_project_state(mem):
-    """Build a small, grounded project_state from session memory (file names only)."""
     files = mem.get("project_files") or []
     files = [str(f) for f in files] if isinstance(files, list) else []
     entry = mem.get("last_active_file") or (files[0] if files else "")
@@ -8275,12 +7660,6 @@ def _nab_payload_project_state(mem):
 
 
 def _nab_value_command(command, payload, memory):
-    """Route NAB classroom / non-visual learning commands to their deterministic
-    module. Returns a /voice-command response dict, or None to fall through.
-
-    Pure orchestration: never edits or runs code. ``payload`` carries the current
-    code, last run facts, verbosity, and a memory-derived project_state.
-    """
     t = " ".join(str(command or "").lower().strip().rstrip(".!?").split())
     if not t:
         return None
@@ -8289,7 +7668,6 @@ def _nab_value_command(command, payload, memory):
     last_run = payload.get("last_run") or {}
     project_state = payload.get("project_state") or {}
 
-    # 1) Blind Debugger Mode
     if _DEBUG_TEACHER_RE.match(t):
         result = debug_teacher.build_blind_debugger_response(code, memory, last_run, verbosity)
         return {"success": True, "action": "deterministic_message", "heard": command,
@@ -8298,7 +7676,6 @@ def _nab_value_command(command, payload, memory):
                 "concepts": result.get("concepts", []),
                 "next_commands": result.get("next_commands", []), "blind_debugger": True}
 
-    # 2) Concept-Aware Code Tutor
     if _CONCEPT_TUTOR_RE.match(t):
         result = concept_tutor.build_concept_lesson(code, memory, verbosity)
         return {"success": True, "action": "deterministic_message", "heard": command,
@@ -8306,13 +7683,11 @@ def _nab_value_command(command, payload, memory):
                 "concepts": result.get("concepts", []), "line": result.get("line"),
                 "concept_lesson": True}
 
-    # 3) Trainer Review Mode
     if _TRAINER_REVIEW_RE.match(t):
         result = trainer_review.build_trainer_review(code, project_state, memory, verbosity)
         return {"success": True, "action": "deterministic_message", "heard": command,
                 "message": result["message"], "speech": result["speech"], "trainer_review": True}
 
-    # 4) Accessible Lesson Builder
     if _LESSON_BUILDER_RE.match(t):
         topic = lesson_builder.extract_topic(t)
         result = lesson_builder.build_accessible_lesson(topic, verbosity)
@@ -8320,14 +7695,12 @@ def _nab_value_command(command, payload, memory):
                 "message": result["message"], "speech": result["speech"],
                 "topic": result.get("topic", ""), "lesson_builder": True}
 
-    # 5) Screen Reader Bridge Mode
     if _SR_BRIDGE_RE.match(t):
         result = screen_reader_bridge.build_screen_reader_bridge(code, project_state, t, verbosity)
         return {"success": True, "action": "deterministic_message", "heard": command,
                 "message": result["message"], "speech": result["speech"],
                 "target": result.get("target", ""), "screen_reader_bridge": True}
 
-    # 6) Ask My Code Mode — code-grounded questions (most general; checked last)
     if ask_code.looks_like_code_question(t):
         result = ask_code.answer_code_question(command, code, memory, verbosity)
         return {"success": True, "heard": command, "ask_my_code": True, **result}
@@ -8350,7 +7723,6 @@ _SPARSE_CLARIFICATION = (
 
 def _sparse_command_response(text, code, mem, body, *, cursor_line=None,
                              error_context="", verbosity="normal"):
-    """Repair sparse classroom prompts before one-word suggestion routing."""
     t = " ".join(str(text or "").lower().strip().rstrip(".!?").split())
     if not t:
         return None
@@ -8441,7 +7813,6 @@ def _sparse_command_response(text, code, mem, body, *, cursor_line=None,
 
 
 def _call_ai_natural_command_mapper(text: str, code: str) -> Dict[str, Any]:
-    """Ask the strict AI mapper for intent JSON only."""
     memory_summary = ""
     has_recent_generated = False
     current_mode = ""
@@ -8769,7 +8140,6 @@ def _route_ai_natural_command_mapper(
     error_context: str = "",
     verbosity: str = "normal",
 ) -> dict:
-    """Final strict mapper: AI returns intent JSON; CodeUp executes allowlisted handlers."""
 
     result = _call_ai_natural_command_mapper(text, current_code)
     if result.get("status") != "mapped":
@@ -8912,19 +8282,13 @@ def voice():
     storage = get_trace_storage()
     mem = session_memory.get_memory(storage)
 
-    # Handle repeat command
     if intent == "repeat":
         last_action = storage.get('last_voice_action', None)
         if not last_action:
             return jsonify({"success": True, "action": "unknown", "heard": "repeat", "message": "No previous command to repeat"})
-        # FIX M-4: Store last_voice_action as a (dict, status_code) tuple so that
-        # repeating preserves the original HTTP status code. Previously it was stored
-        # as response.get_json() (a plain dict) and returned directly, causing Flask
-        # to auto-serialize it as 200 OK regardless of the original status.
         return jsonify(last_action[0]), last_action[1]
 
     def _store_and_return(response_dict, status_code=200):
-        """Helper: save action for repeat, record working memory, then return."""
         if command_norm.get("changed"):
             response_dict.setdefault("raw_transcript", raw_text)
             response_dict.setdefault("normalized_text", text)
@@ -8987,16 +8351,8 @@ def voice():
         ):
             return _store_and_return({"success": True, "action": "more_help", "confidence": 0.86, "heard": text})
 
-    # ---- 1. Pending clarification answer ------------------------------------
-    # CodeUp only asks a question it can understand the answer to. If we are
-    # waiting on one, parse this utterance as the answer (unless it is clearly a
-    # brand-new command, in which case we drop the pending question).
     pending = session_memory.get_pending(mem)
     if pending:
-        # A pending "generate" question expects a free-form answer that often
-        # starts with a command word ("print the first five even numbers"), so we
-        # do NOT treat it as a brand-new command; the resolver itself detects a
-        # genuine pivot (e.g. "run") and returns None to fall through.
         if pending.get("type") != "generate" and _looks_like_new_command(text):
             session_memory.clear_pending(mem)
         else:
@@ -9004,7 +8360,6 @@ def voice():
             if resolved:
                 return _store_and_return(resolved)
 
-    # ---- 2. Short first-help vs. full command list --------------------------
     if _MORE_HELP_RE.match(text):
         return _store_and_return({"success": True, "action": "more_help", "confidence": 0.95})
     if _SAY_MORE_RE.match(text):
@@ -9015,11 +8370,6 @@ def voice():
             "message": _ONBOARDING_MESSAGE, "speech": _ONBOARDING_MESSAGE,
             "heard": text, "onboarding": True,
         })
-    # Beginner learning requests ("teach me Python", "start the Python tutorial",
-    # "beginner lesson") open the guided tutorial, which speaks its own first
-    # step. Checked here so they never fall through to concept Q&A, a "confirm"
-    # clarification, or "unknown". Plain "start tutorial" keeps its parse_intent
-    # route below (this pattern requires a learning qualifier).
     if _TUTORIAL_ONBOARD_RE.match(text):
         return _store_and_return({
             "success": True, "action": "start_tutorial",
@@ -9044,16 +8394,11 @@ def voice():
     if sparse_response is not None:
         return _store_and_return(sparse_response)
 
-    # ---- 2b. Relative line navigation ("next line" / "previous line") -------
-    # Core for non-visual reading. The frontend (nextLine/prevLine) moves and
-    # reads the line; routed here, before the conversational-edit handler, so the
-    # word "line" is not mistaken for an edit and swallowed.
     _line_nav = _LINE_NAV_RE.match(text)
     if _line_nav:
         action = "next_line" if _line_nav.group(1).lower() in ("next", "down a") else "prev_line"
         return _store_and_return({"success": True, "action": action, "confidence": 0.95, "heard": text})
 
-    # ---- 3. Intentional broken-code examples --------------------------------
     broken = _broken_code_request(text)
     if broken:
         speech = "Inserting a broken example so you can hear the error when you run it."
@@ -9082,25 +8427,14 @@ def voice():
         if natural_understanding is not None:
             return natural_understanding
 
-    # ---- 3b. Safe beginner template commands -------------------------------
-    # Rich deterministic examples ("loop from 1 to 5", "safe while loop",
-    # "variable example", "add comments") use the central template library.
     template_response = _beginner_template_command_response(text, current_code, mode="inserts")
     if template_response is not None:
         return _store_and_return(template_response)
 
-    # ---- 3c. Spoken print/loop inserts -> valid beginner Python -------------
-    # "insert print hello" / "put print hello in the editor" become
-    # print("hello") (text quoted, numbers bare, defined variables left bare),
-    # built deterministically with editor context. Other inserts (variables, if,
-    # while, for-headers) fall through to the existing pipeline.
     insert_response = _spoken_insert_response(text, current_code)
     if insert_response is not None:
         return _store_and_return(insert_response)
 
-    # ---- 3d. Natural variable assignments -> valid Python (or ask) ----------
-    # "set age to 16" -> age = 16; "insert a variable with the value Taki" asks
-    # "What should I name the variable?" and remembers it.
     variable_response = _spoken_variable_response(text, current_code, mem, intent)
     if variable_response is not None:
         return _store_and_return(variable_response)
@@ -9109,19 +8443,11 @@ def voice():
     if repair_response is not None:
         return _store_and_return(repair_response)
 
-    # ---- 3e. Sprint 1: export / report / recap / speech-rate / verbosity ----
-    # Deterministic, whole-utterance commands. Routed before concept Q&A and
-    # generation so "what did I learn today" recaps (not a concept answer) and
-    # "make a project report" reports (not a new project).
     voice_project_state = _project_state_from_voice_body(body, current_code)
     sprint1 = _sprint1_command(text, mem, project_state=voice_project_state, verbosity=verbosity)
     if sprint1 is not None:
         return _store_and_return(sprint1)
 
-    # ---- 3f. Sprint 2: structure / navigation / replay / hints / landmarks --
-    # Deterministic, whole-utterance commands routed before concept Q&A and
-    # generation so "what is in this program" summarizes structure (not a concept
-    # answer) and "where is total changed" navigates (not chat).
     with _mistake_snapshots_lock:
         _snap = dict(_mistake_snapshots.get(get_session_id(), {}))
     sprint2 = _sprint2_command(text, current_code, mem, cursor_line, error_context, _snap)
@@ -9132,9 +8458,6 @@ def voice():
     if analyze_alias is not None:
         return _store_and_return(analyze_alias)
 
-    # ---- 3g. NAB value sprint: classroom + non-visual learning tools --------
-    # Deterministic teacher/learner tools routed after Sprint 1/2 and before the
-    # generic concept Q&A so reserved phrases keep their existing behaviour.
     nab = _nab_value_command(text, {
         "code": current_code,
         "error": error_context or mem.get("last_run_error", ""),
@@ -9152,12 +8475,6 @@ def voice():
         reqs = _requirements_from_voice_body(body, current_code)
         return _store_and_return(_requirements_explanation(reqs))
 
-    # ---- 4. Identity / non-code small talk -> safe, scoped response ----------
-    # "who are you", "what is your name", "what time is it", "are you working":
-    # answer plainly and scoped to CodeUp/Python, BEFORE concept Q&A or the fuzzy
-    # matcher, so these never run code, edit code, or hit a "did you mean ..."
-    # confirmation. Checked before concept Q&A so identity forms ("what are you")
-    # are not treated as an unknown concept.
     non_code_kind = concept_qa.classify_non_code_query(text)
     if non_code_kind:
         msg = concept_qa.non_code_answer(non_code_kind)
@@ -9166,24 +8483,11 @@ def voice():
             "message": msg, "speech": msg, "heard": text, "concept": non_code_kind,
         })
 
-    # ---- 4b. Global concept Q&A (works outside the tutorial) ----------------
-    # Catches "what is X" / "explain X" for general Python/CS concepts (variables,
-    # loops, recursion, inheritance, big O, tuples, decorators, ...) BEFORE the
-    # orchestrator, input concierge, conversational-edit, or fuzzy matcher can
-    # mistake them — so a concept question is never run, edited, or sent to a
-    # weird clarification. Code-specific questions ("what does this function do")
-    # were already handled by Ask My Code above; generation ("write a program
-    # that ...") does not match these question forms and still generates.
     concept_kind = concept_qa.classify_concept_question(text)
     if concept_kind:
-        # "what does range 3 mean" only answers when the code actually has a range;
-        # otherwise let the normal concept-mentor route handle it.
         if concept_kind != "range" or re.search(r"\brange\s*\(", current_code or ""):
             answer, facts = concept_qa.answer_concept(concept_kind, current_code)
             if answer:
-                # Only the short, code-grounded beginner answers are rephrased by
-                # Key 2; general/advanced concept answers are returned verbatim so
-                # the multi-sentence explanation is never truncated.
                 if concept_kind in concept_qa.GROUNDED_KINDS:
                     message = _ground_concept_answer(answer, facts, current_code, text)
                 else:
@@ -9208,12 +8512,6 @@ def voice():
     ):
         orchestrator_text = f"{pending_clarification.get('original_text', '')} {text}".strip()
 
-    # ---- confidence-aware clarification for risky/ambiguous commands --------
-    # Ask one short question before a destructive file op with a vague referent,
-    # or a sized symbol-pattern request too vague to parse cleanly. Clear
-    # commands (exact patterns, run code, inserts, tutorial) are never blocked.
-    # Assess on the wake-stripped, noise-cleaned text so a complete exact-symbol
-    # request (e.g. "ast risks" -> asterisks) is recognized and never clarified.
     _clarifier_text = strip_wake_phrase(text).get("text") or text
     clarification = command_clarifier.assess(
         _clarifier_text,
@@ -9226,8 +8524,6 @@ def voice():
     )
     if clarification and clarification.get("needs_clarification"):
         message = clarification["message"]
-        # Remember the structured question so the user's next utterance is
-        # understood as the answer (see the pending-clarification block above).
         session_memory.set_pending(mem, clarification.get("pending"))
         return _store_and_return({
             "success": True,
@@ -9244,9 +8540,6 @@ def voice():
     wake_info = strip_wake_phrase(orchestrator_text)
     lower_orchestrator_text = orchestrator_text.lower()
     has_multi_connector = bool(re.search(r"\b(?:then|and then|after that)\b", lower_orchestrator_text))
-    # Route rough generation asks ("make a marks thing") to the Key 2 brain only
-    # when the deterministic parser could not already classify them — clean
-    # generation intents (e.g. multi-file projects) keep their fast existing path.
     rough_generation_request = bool(
         not intent
         and looks_like_generation_request(wake_info.get("text") or orchestrator_text)
@@ -9330,12 +8623,6 @@ def voice():
             "exact_symbol": True,
         })
 
-    # ---- session memory: contextual follow-ups ------------------------------
-    # Short follow-ups ("explain it again", "why did it fail", "fix that",
-    # "run it again", "do the same with 10", "open that file again") are resolved
-    # against this session's working memory and routed to the existing real
-    # actions. Runs after exact-symbol/orchestrator so those still win, and
-    # before the concierge so "run with the same values" reuses saved inputs.
     if not mem.get("last_gen_prompt"):
         template_transform_response = _beginner_template_command_response(
             text,
@@ -9362,11 +8649,6 @@ def voice():
     if template_transform_response is not None:
         return _store_and_return(template_transform_response)
 
-    # ---- input() concierge --------------------------------------------------
-    # Natural value-supplying commands ("run with name Taknoor and age 16",
-    # "use sample values", "name is Taknoor and age is sixteen") feed the
-    # existing pre-flight input run path. We only override the generic run-file
-    # intent, never a specific one (e.g. "run with step narration").
     if intent in (None, "run_project_file"):
         concierge = build_input_plan(current_code, text, ai_value_fn=_concierge_ai_values)
         if concierge:
@@ -9399,8 +8681,6 @@ def voice():
                     ],
                 })
             if status == "no_input":
-                # Values were offered but the code never calls input(): honour
-                # requirement 8 and just run the code normally.
                 return _store_and_return({"success": True, "action": "run", "heard": text, "input_concierge": True})
 
     if (
@@ -9411,11 +8691,6 @@ def voice():
     ):
         return _store_and_return({"success": True, "action": "explain_simply", "confidence": confidence})
 
-    # ---- vague generation clarification (deterministic, demo-safe) ----------
-    # Runs only after the Key 2 orchestrator declined, so a good rough prompt
-    # that Key 2 rewrote still generates. A vague ask ("generate code", "make a
-    # marks thing") gets one short question and a pending follow-up instead of a
-    # guessed/empty generation.
     vague = _vague_generation_clarification(text, intent, slots.get("prompt", ""), mem)
     if vague is not None:
         return _store_and_return(vague)
@@ -9466,9 +8741,6 @@ def voice():
         if intent == "mentor_chat":
             return _store_and_return({"success": True, "action": "mentor_chat", "message": slots.get("message", text), "mode": slots.get("mode", "general"), "confidence": confidence})
         if intent == "concept_question":
-            # Conceptual questions ("what is a loop", "why is print indented")
-            # are explanation-only: route to the mentor in concept mode, which
-            # returns spoken text and never edits the editor.
             return _store_and_return({"success": True, "action": "mentor_chat", "message": slots.get("message", text), "mode": "concept", "confidence": confidence})
         if intent == "analyze_deep":
             return _store_and_return({"success": True, "action": "analyze_deep", "confidence": confidence})
@@ -9630,7 +8902,6 @@ def voice():
             return _store_and_return({"success": True, "action": "explain_simply", "confidence": confidence})
         if intent == "narrate_diff":
             return _store_and_return({"success": True, "action": "narrate_diff", "confidence": confidence})
-        # Audio Code Map intents
         if intent == "code_map":
             return _store_and_return({"success": True, "action": "code_map", "confidence": confidence})
         if intent == "inside_loop":
@@ -9643,7 +8914,6 @@ def voice():
             return _store_and_return({"success": True, "action": "code_map", "query": "list functions", "confidence": confidence})
         if intent == "where_in_program":
             return _store_and_return({"success": True, "action": "code_map", "query": "where in program", "confidence": confidence})
-        # Variable Watch / Step Narration intents
         if intent == "watch_var":
             return _store_and_return({"success": True, "action": "watch_var", "variable": slots.get("variable", ""), "confidence": confidence})
         if intent == "stop_watching":
@@ -9658,7 +8928,6 @@ def voice():
             return _store_and_return({"success": True, "action": "what_changed_step", "speech": _trace_playback("current_change"), "confidence": confidence})
         if intent == "only_announce_changes":
             return _store_and_return({"success": True, "action": "only_announce_changes", "confidence": confidence})
-        # Mistake Replay intents
         if intent == "compare_before_after":
             return _store_and_return({"success": True, "action": "compare_before_after", "confidence": confidence})
         if intent == "replay_mistake":
@@ -9702,10 +8971,6 @@ def voice():
     if conversational and conversational.get("action") != "unknown":
         return _store_and_return(conversational)
 
-    # High-confidence DETERMINISTIC intent repair only (speech controls like
-    # "alright stop listening", plus run/explain/map/sonify/tutorial). Key 2 is
-    # NOT consulted here, so it can never override an existing fuzzy/security
-    # voice route — that fallback runs next and gets first refusal.
     repaired = _route_repaired_intent(text, current_code, allow_ai=False)
     if repaired is not None:
         return _store_and_return(repaired)
@@ -9715,13 +8980,9 @@ def voice():
             return _store_and_return(_unclear_loop_command_response(text))
         return jsonify(conversational)
 
-    # Fallback: fuzzy matching on COMMANDS
     lower_text = text.lower().strip()
     best, bscore, second, sscore = best_two_commands(lower_text)
 
-    # High-frequency commands skip the confirm prompt even at moderate confidence,
-    # because in a noisy classroom getting "did you mean run or fix?" on every
-    # command is more frustrating than occasionally running the wrong simple action.
     HIGH_FREQUENCY_COMMANDS = {"run", "analyze", "fix", "help", "speak", "read_output", "walk_through", "sonify_block", "stop_everything", "pause_voice", "resume_voice"}
 
     if best and bscore >= VOICE_FUZZY_THRESHOLD:
@@ -9740,8 +9001,6 @@ def voice():
             "confidence": bscore / 100.0
         })
 
-    # Strict AI natural-command mapper as the LAST resort. The AI returns intent
-    # JSON only; CodeUp validates it and routes to existing safe handlers.
     mapped_ai = _route_ai_natural_command_mapper(
         text,
         current_code,
@@ -9755,18 +9014,9 @@ def voice():
         _log_unrecognized_command(text, get_session_id())
     return _store_and_return(mapped_ai)
 
-# ==========================
-# CODE STRUCTURE BREADCRUMBS
-# ==========================
 
 @app.route("/breadcrumbs", methods=["POST"])
 def breadcrumbs():
-    """Return the nested-structure breadcrumb at a given line.
-
-    Walks the AST from the file root down, tracking which functions/classes/
-    loops/conditionals contain the target line. Returns a human-readable
-    string like 'function calculate, inside for loop, line 15'.
-    """
     body = safejson()
     code = safe(body.get("code"), "")
     if len(code) > MAX_CODE_SIZE:
@@ -9787,7 +9037,7 @@ def breadcrumbs():
     except SyntaxError as e:
         return jsonify({"success": False, "message": _syntax_error_message(e, code)})
 
-    trail = []  # list of (kind, name, start_line, end_line)
+    trail = []
 
     def end_line(node):
         explicit_end = getattr(node, 'end_lineno', None)
@@ -9844,18 +9094,9 @@ def breadcrumbs():
     return jsonify({"success": True, "breadcrumb": breadcrumb, "trail": trail})
 
 
-# ==========================
-# OUTPUT BOOKMARKS
-# ==========================
 
 @app.route("/bookmarks", methods=["GET", "POST", "DELETE"])
 def bookmarks():
-    """Per-session output bookmarks.
-
-    POST {label, position} → save bookmark at that output offset
-    GET → list all bookmarks for this session
-    DELETE → clear all bookmarks for this session
-    """
     session_id = get_session_id()
     if request.method == "GET":
         with _output_bookmarks_lock:
@@ -9875,14 +9116,12 @@ def bookmarks():
         position = 0
     position = max(0, position)
     if not label:
-        # Auto-name based on count
         with _output_bookmarks_lock:
             count = len(_output_bookmarks.get(session_id, []))
         label = f"bookmark {count + 1}"
 
     with _output_bookmarks_lock:
         marks = _output_bookmarks.setdefault(session_id, [])
-        # Cap at 20 per session
         if len(marks) >= 20:
             marks.pop(0)
         marks.append({
@@ -9895,7 +9134,6 @@ def bookmarks():
 
 @app.route("/bookmarks/read", methods=["POST"])
 def read_from_bookmark():
-    """Return the slice of output starting from a named bookmark."""
     body = safejson()
     label = str(safe(body.get("label"), "")).strip().lower()
     full_output = _safe_text(body.get("output"), "", limit=MAX_REQUEST_SIZE + 1)
@@ -9907,7 +9145,6 @@ def read_from_bookmark():
         marks = list(_output_bookmarks.get(session_id, []))
     match = next((m for m in marks if m["label"].lower() == label), None)
     if not match and marks:
-        # Fuzzy: take the most recent if no exact match
         match = marks[-1]
     if not match:
         return jsonify({"success": False, "error": "No bookmark found"})
@@ -9922,9 +9159,6 @@ def read_from_bookmark():
     })
 
 
-# ==========================
-# VOICE MACROS
-# ==========================
 
 def _macros_path(session_id=None):
     if session_id is None:
@@ -10197,9 +9431,6 @@ def get_shared_macro(code):
     })
 
 
-# ==========================
-# INTERACTIVE RUN (Mechanism B) — SSE streaming with input pipe
-# ==========================
 
 def _terminate_process_group(proc):
     if not proc or proc.poll() is not None:
@@ -10228,7 +9459,6 @@ def _wait_for_process_exit(proc, timeout=2):
 
 
 def _cleanup_run(run_id):
-    """Tear down a run's resources. Idempotent."""
     with _active_runs_lock:
         state = _active_runs.pop(run_id, None)
     if not state:
@@ -10256,13 +9486,6 @@ def _cleanup_run(run_id):
 
 @app.route("/run-stream/start", methods=["POST"])
 def run_stream_start():
-    """Start an interactive run. Returns a run_id. Client opens an SSE
-    connection at /run-stream/<run_id> to receive output events and posts
-    answers to /run-stream/<run_id>/input when prompted.
-
-    POSIX-only feature. On Windows, returns 501 with a friendly message
-    suggesting Mechanism A.
-    """
     if sys.platform == "win32":
         return jsonify({
             "success": False,
@@ -10285,7 +9508,6 @@ def run_stream_start():
     sandbox = get_sandbox(get_session_id())
     workspace_dir = sandbox.workspace_dir
 
-    # Create FIFO. Only one consumer (subprocess) and one producer (us).
     fifo_path = os.path.join(workspace_dir, f"input_{run_id}.fifo")
     try:
         os.mkfifo(fifo_path)
@@ -10293,7 +9515,6 @@ def run_stream_start():
         _debug_log(f"Could not create input pipe for interactive run: {sanitize_traceback(str(e))}")
         return jsonify({"success": False, "error": "Could not start live input mode. Please use the inputs panel and run again."}), 500
 
-    # Write code to temp file in workspace
     with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False,
                                       encoding='utf-8', dir=workspace_dir) as cf:
         cf.write(code)
@@ -10351,8 +9572,6 @@ def run_stream_start():
     with _active_runs_lock:
         _active_runs[run_id] = state
 
-    # Reader threads — push every line into the output queue. Watch for input
-    # sentinel and emit a structured event when seen.
     SENTINEL = "CODEUP::INPUT_REQUEST::"
 
     def _stdout_reader():
@@ -10396,8 +9615,6 @@ def run_stream_start():
                 pass
 
     def _waiter():
-        # Hard 60-second cap on interactive runs (longer than batch /run because
-        # users need time to think and answer prompts)
         deadline = time.time() + 60
         while proc.poll() is None and time.time() < deadline:
             time.sleep(0.2)
@@ -10421,12 +9638,10 @@ def run_stream_start():
 
 @app.route("/run-stream/<run_id>/stream", methods=["GET"])
 def run_stream(run_id):
-    """SSE endpoint. Yields events from the output queue until 'done'."""
     with _active_runs_lock:
         state = _active_runs.get(run_id)
     if not state:
         return jsonify({"success": False, "error": "Run not found or expired"}), 404
-    # Authorize: only the originating session can read its run
     if state.get("session_id") != get_session_id():
         return jsonify({"success": False, "error": "Forbidden"}), 403
 
@@ -10438,9 +9653,7 @@ def run_stream(run_id):
                 try:
                     event = output_queue.get(timeout=30)
                 except _queue_mod.Empty:
-                    # Heartbeat to keep connection alive through proxies
                     yield ": heartbeat\n\n"
-                    # Check if run is dead but no 'done' was emitted
                     proc = state.get("proc")
                     if proc and proc.poll() is not None:
                         _wait_for_process_exit(proc, timeout=0)
@@ -10466,7 +9679,6 @@ def run_stream(run_id):
 
 @app.route("/run-stream/<run_id>/input", methods=["POST"])
 def run_stream_input(run_id):
-    """Receive a line of input from the client and write it to the FIFO."""
     with _active_runs_lock:
         state = _active_runs.get(run_id)
     if not state:
@@ -10508,13 +9720,9 @@ def run_stream_cancel(run_id):
     return jsonify({"success": True})
 
 
-# ==========================
-# CURRENT EXECUTION POSITION (mid-run polling for live mode)
-# ==========================
 
 @app.route("/run-stream/<run_id>/position", methods=["GET"])
 def run_stream_position(run_id):
-    """Return whether the run is awaiting input. Used by the heartbeat UI."""
     with _active_runs_lock:
         state = _active_runs.get(run_id)
     if not state:
@@ -10533,9 +9741,6 @@ def run_stream_position(run_id):
     })
 
 
-# ==========================
-# SANDBOXED FILE SYSTEM
-# ==========================
 
 @app.route("/fs/write", methods=["POST"])
 def fs_write():
@@ -10582,25 +9787,15 @@ def fs_info():
     result = sandbox.get_workspace_info()
     return jsonify(result)
 
-# ==========================
-# EXECUTION TRACE (for playback)
-# ==========================
 
 @app.route("/execution-trace", methods=["GET"])
 def get_execution_trace():
-    """Get the last execution trace for playback.
-
-    Reads under the session lock and returns a snapshot copy so a concurrent
-    /run that's mid-write can't return a partially-mutated trace.
-    """
     session_id = get_session_id()
     with _session_traces_lock:
         if session_id not in _session_traces:
             _session_traces[session_id] = _make_session_storage()
         storage = _session_traces[session_id]
         storage['last_accessed'] = time.time()
-        # Snapshot under the lock — list copy is shallow but trace events are
-        # immutable dicts so this is safe.
         trace = list(storage.get('last_trace', []) or [])
         idx = storage.get('current_trace_index', -1)
         duration = storage.get('trace_duration_ms', 0)
@@ -10615,12 +9810,6 @@ def get_execution_trace():
 
 
 def _get_trace_event(index):
-    """Retrieve a single trace event by index from session storage.
-
-    FIX C-3 (continued): Previously read from _trace_context (never written),
-    so always returned None, making all voice trace-playback responses say
-    'No trace event at this position.' Now correctly reads from get_trace_storage().
-    """
     storage = get_trace_storage()
     trace = storage.get('last_trace', []) or []
     if index < 0 or index >= len(trace):
@@ -10647,9 +9836,6 @@ def _event_to_speech(event, idx=None, total=None):
     return f"{step_prefix}{t}: {event}"
 
 
-# ==========================
-# EXECUTION STORY MODE
-# ==========================
 
 def _local_execution_story(trace: List[Dict[str, Any]]) -> str:
     if not trace:
@@ -10698,9 +9884,8 @@ def execution_story():
             msg = "कोई execution trace उपलब्ध नहीं है। पहले अपना code चलाएं।"
         return jsonify({"success": False, "story": msg})
 
-    # Build a compact trace summary for the LLM
     events_summary = []
-    for e in trace[:50]:  # cap at 50 events to stay within token limit
+    for e in trace[:50]:
         t = e.get('type')
         if t == 'line_exec':
             events_summary.append(f"line {e.get('line')} executed")
@@ -10738,15 +9923,8 @@ def execution_story():
     return jsonify({"success": True, "story": story})
 
 
-# ==========================
-# MENTOR / LEARNING MODE
-# ==========================
 
 def _validate_quiz_response(parsed: dict) -> Optional[str]:
-    """Validate a quiz dict from the LLM. Returns None if valid, error string if not.
-    Defends against the LLM returning malformed or partial JSON that would crash
-    the frontend or confuse the learner. Restricts to exactly 3 options (A/B/C)
-    so the frontend regex can match cleanly."""
     if not isinstance(parsed, dict):
         return "Quiz response was not a dictionary"
     if not parsed.get("question") or not isinstance(parsed["question"], str):
@@ -10811,7 +9989,6 @@ def mentor_quiz():
     user = f"Topic: {topic}"
     raw = call_gemini(system, user, temperature=0.4, language=language)
 
-    # Detect AI-disabled / error responses before attempting JSON parse
     if _is_ai_service_message(raw):
         return jsonify({
             "success": False,
@@ -10834,7 +10011,6 @@ def mentor_quiz():
             "error": f"AI returned an incomplete quiz ({validation_error}). Try again.",
         })
 
-    # Normalize answer to uppercase for the frontend matcher
     parsed["answer"] = parsed["answer"].upper()
     return jsonify({"success": True, "quiz": parsed})
 
@@ -10865,7 +10041,6 @@ def mentor_explain():
     user = f"Concept: {concept}"
     explanation = call_gemini(system, user, temperature=0.2, language=language)
 
-    # Reject empty or near-empty responses so the frontend doesn't speak silence.
     if not explanation or not explanation.strip() or len(explanation.strip()) < 20:
         return jsonify({
             "success": False,
@@ -10920,10 +10095,6 @@ def explain_diff():
 
 
 def _validate_bug_challenge(parsed: dict) -> Optional[str]:
-    """Validate a bug challenge dict. Critical: the buggy code must be valid
-    enough to load into the editor (even if it doesn't run), and the fixed
-    code must actually compile, otherwise the student gets a 'fix' that's
-    worse than the original."""
     if not isinstance(parsed, dict):
         return "Challenge was not a dictionary"
     for key in ("code", "hint", "bug", "fixed"):
@@ -10935,7 +10106,6 @@ def _validate_bug_challenge(parsed: dict) -> Optional[str]:
     parsed["fixed"] = _strip_code_fences(parsed["fixed"])
     if _looks_like_non_python_code(parsed["code"]) or _looks_like_non_python_code(parsed["fixed"]):
         return "Challenge included non-Python code"
-    # The fixed code must at least parse — otherwise the LLM gave us garbage
     try:
         compile(parsed["fixed"], "<challenge>", "exec")
     except SyntaxError:
@@ -10995,26 +10165,9 @@ def mentor_bug_challenge():
     return jsonify({"success": True, "challenge": parsed})
 
 
-# ==========================
-# OPTIONAL OPENVINO LOCAL-INTENT DEMO (Intel AI Global Impact Festival)
-# ==========================
-# Isolated, diagnostic prototype. This route classifies a text command into a
-# coarse intent using local rules in openvino_intent_demo.py and reports whether
-# the OpenVINO runtime is present. It is intentionally NOT part of the real
-# voice-command router: it never edits the editor, runs code, mutates session
-# state, or calls the Key 2 (GROQ_API_KEY_2) orchestrator. CodeUp's existing
-# deterministic + Key 2 pipeline is unchanged.
 
 @app.route("/openvino-intent-demo", methods=["POST"])
 def openvino_intent_demo_route():
-    """Classify a command into a coarse intent (OpenVINO demo, diagnostic only).
-
-    Input JSON:  {"text": "insert print hello"}
-    Output JSON: {"available", "source", "intent", "confidence", "note"}
-
-    Read-only: does not touch the editor, run code, change session state, or
-    call any cloud AI key.
-    """
     body = safejson()
     text = safe(body.get("text"), "")
     if not isinstance(text, str):
@@ -11024,12 +10177,6 @@ def openvino_intent_demo_route():
     return jsonify(classify_local_intent(text))
 
 
-# ==========================
-# SPRINT 1 — LEARNER HANDOFF + ACCESSIBILITY
-# ==========================
-# Export ZIP, project report, session recap. Deterministic; no cloud AI is
-# required and none is called from the export path. Generated ZIPs live only in
-# a short-lived in-memory per-session store — never written to a tracked path.
 
 _EXPORTS: Dict[str, Dict[str, Any]] = {}
 _EXPORTS_LOCK = threading.Lock()
@@ -11051,7 +10198,6 @@ def _store_export(session_id: str, filename: str, data: bytes) -> str:
 
 
 def _export_files_from_body(body: Dict[str, Any]):
-    """Resolve the file map to export: the current project, else single main.py."""
     project = body.get("project")
     if isinstance(project, dict) and isinstance(project.get("files"), dict) and project["files"]:
         files = {str(k): (v if isinstance(v, str) else str(v or "")) for k, v in project["files"].items()}
@@ -11064,7 +10210,6 @@ def _export_files_from_body(body: Dict[str, Any]):
 
 @app.route("/export-project", methods=["POST"])
 def export_project_route():
-    """Package the current program/project into a downloadable ZIP (read-only)."""
     body = safejson()
     files, is_project = _export_files_from_body(body)
     if not files:
@@ -11103,7 +10248,6 @@ def export_project_route():
 
 @app.route("/download-export/<export_id>", methods=["GET"])
 def download_export_route(export_id):
-    """Serve a previously prepared export ZIP (scoped to the creating session)."""
     safe_id = re.sub(r"[^a-fA-F0-9]", "", str(export_id or ""))[:64]
     with _EXPORTS_LOCK:
         record = _EXPORTS.get(safe_id)
@@ -11137,7 +10281,6 @@ def _report_state_from_body(body: Dict[str, Any]) -> Dict[str, Any]:
 
 @app.route("/project-report", methods=["POST"])
 def project_report_route():
-    """Build a fact-grounded teacher-handoff report for the current project."""
     body = safejson()
     state = _report_state_from_body(body)
     verbosity = _safe_text(body.get("verbosity"), "normal", limit=20).lower() or "normal"
@@ -11148,25 +10291,15 @@ def project_report_route():
 
 @app.route("/learning-recap", methods=["POST"])
 def learning_recap_route():
-    """Summarise what the learner did this session (deterministic, from memory)."""
     mem = session_memory.get_memory(get_trace_storage())
     recap = learning_recap.build_recap(mem)
     return jsonify({"success": True, "action": "deterministic_message",
                     "message": recap["recap"], **recap})
 
 
-# ==========================
-# VOICE INTENTS — story, breakpoint, mentor
-# ==========================
-
-# These are handled in the /voice-command route.
-# New intents added to the bottom of the intent dispatch block:
-# story_mode, set_breakpoint, clear_breakpoints, watch_variable,
-# debug_continue, debug_step_in, debug_step_out,
-# mentor_mode, quiz_me, explain_concept, bug_challenge
 
 
-# ==========================
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5000"))

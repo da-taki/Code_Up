@@ -1,22 +1,3 @@
-"""
-CodeUp sandbox runner. Executed as a subprocess by app.py /run handler.
-
-Reads the user's code from $CODEUP_CODE_FILE and writes a JSON trace to
-$CODEUP_TRACE_FILE. Two input mechanisms supported:
-
-Mechanism A (default, pre-flight queue):
-  $CODEUP_INPUTS_FILE points to a file with one input value per line.
-  input() pops sequentially. Empty queue raises a friendly error.
-
-Mechanism B (interactive streaming):
-  $CODEUP_INTERACTIVE=1 enables it. input() writes a sentinel
-  (CODEUP::INPUT_REQUEST::<prompt>\n) to stdout, then blocks reading one
-  line from the FIFO at $CODEUP_INPUT_FIFO. Parent process drives the
-  conversation over SSE. Falls back to RuntimeError if FIFO read fails.
-
-Never imported by the parent app — only ever executed via
-`python sandbox_runner.py`.
-"""
 import ast as _ast
 import builtins as _builtins
 import collections as _collections
@@ -302,27 +283,19 @@ def _strict_import(name, globals_arg=None, locals_arg=None, fromlist=(), level=0
     raise ImportError(f"Module '{name}' is not allowed.")
 
 
-# ---------------------------------------------------------------------------
-# Input mechanisms
-# ---------------------------------------------------------------------------
 _INPUT_QUEUE = []
 _INPUT_INDEX = [0]
 _INPUT_LOAD_ERROR = [None]
 _INTERACTIVE = os.environ.get('CODEUP_INTERACTIVE', '0') == '1'
 _INPUT_FIFO = os.environ.get('CODEUP_INPUT_FIFO', '')
 
-# Sentinel pattern that the parent process watches for in stdout.
-# Format chosen to be unambiguous and unlikely to appear in user output.
 _INPUT_SENTINEL_PREFIX = "CODEUP::INPUT_REQUEST::"
 
 
 def _interactive_input(prompt=''):
-    """Mechanism B: write sentinel to stdout, block on FIFO read."""
-    # Echo prompt to stdout BEFORE the sentinel so the user hears it
     if prompt:
         sys.stdout.write(prompt)
         sys.stdout.flush()
-    # Sentinel tells parent process: pause output streaming, ask user for input
     sys.stdout.write(f"\n{_INPUT_SENTINEL_PREFIX}{prompt}\n")
     sys.stdout.flush()
 
@@ -332,9 +305,6 @@ def _interactive_input(prompt=''):
             "available. Switch to pre-flight inputs or restart the run."
         )
     try:
-        # Open the FIFO for reading. This blocks until parent writes a line.
-        # Open inside a `with` so the file handle is closed after each read,
-        # which is required for FIFOs to allow subsequent writes from parent.
         with open(_INPUT_FIFO, 'r', encoding='utf-8') as fifo:
             line = fifo.readline()
         if not line:
@@ -343,7 +313,6 @@ def _interactive_input(prompt=''):
                 "interrupted."
             )
         value = line.rstrip('\n').rstrip('\r')
-        # Echo what the user "typed" so it appears in the transcript
         sys.stdout.write(value + '\n')
         sys.stdout.flush()
         return value
@@ -352,7 +321,6 @@ def _interactive_input(prompt=''):
 
 
 def _queued_input(prompt=''):
-    """Mechanism A: pop from pre-declared queue."""
     if prompt:
         sys.stdout.write(prompt)
         sys.stdout.flush()
@@ -375,7 +343,6 @@ def _queued_input(prompt=''):
 
 
 def _select_input_func():
-    """Pick the input function based on environment configuration."""
     if _INTERACTIVE and _INPUT_FIFO:
         return _interactive_input
     return _queued_input

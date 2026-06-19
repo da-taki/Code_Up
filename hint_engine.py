@@ -1,16 +1,3 @@
-"""
-Confidence-based staged hints for CodeUp.
-
-Pure / Flask-free. Given the current code, the last error, and (optionally) the
-active tutorial module, produce a hint at one of three levels:
-  * small  — a gentle nudge,
-  * bigger — a more specific pointer,
-  * answer — the likely concrete fix.
-
-Detection is deterministic (driven mostly by the real error text, with light AST
-cues). When there is no active problem it asks the learner what they are solving
-rather than guessing. Key 2 may later polish wording, grounded in these facts.
-"""
 
 from __future__ import annotations
 
@@ -33,12 +20,9 @@ def _normalize_level(level: str) -> str:
 
 
 def _detect_problem(code: str, error: str) -> Dict[str, Any]:
-    """Return {type, name?} for the active problem, or {} if none."""
     code = code or ""
     err = error or ""
 
-    # Error-driven detection first: a real error means there is a problem to
-    # hint about, regardless of whether the editor code was sent along.
     if "IndentationError" in err or "unexpected indent" in err or "expected an indented block" in err:
         return {"type": "indentation"}
     name = re.search(r"NameError: name '([^']+)' is not defined", err)
@@ -53,7 +37,6 @@ def _detect_problem(code: str, error: str) -> Dict[str, Any]:
     if "ZeroDivisionError" in err:
         return {"type": "zerodivision"}
 
-    # No (recognised) error: look at the code itself.
     if not code.strip():
         return {"type": "empty"}
     if not _parses(code):
@@ -110,7 +93,6 @@ _HINTS = {
 
 
 def build_hint(context: Optional[Dict[str, Any]], level: str = "small") -> Dict[str, Any]:
-    """Return {hint, level, has_problem, problem_type}."""
     context = context or {}
     code = str(context.get("code") or "")
     error = str(context.get("error") or "")
@@ -121,7 +103,6 @@ def build_hint(context: Optional[Dict[str, Any]], level: str = "small") -> Dict[
     ptype = problem.get("type", "")
 
     if ptype == "empty" or not ptype:
-        # Tutorial gives a gentle module-specific nudge even without an error.
         if module:
             msg = f"For the {module} step, build the line the tutorial asked for, then run it so I can check it."
             return {"hint": msg, "level": level, "has_problem": False, "problem_type": "tutorial"}
@@ -140,7 +121,6 @@ def build_hint(context: Optional[Dict[str, Any]], level: str = "small") -> Dict[
     if table:
         return {"hint": table[level], "level": level, "has_problem": True, "problem_type": ptype}
 
-    # Known-but-untabled problem: generic staged guidance.
     staged = {
         "small": "Read the error message; it names the line and the kind of problem.",
         "bigger": "Focus on the line the error points to and what value it expects.",

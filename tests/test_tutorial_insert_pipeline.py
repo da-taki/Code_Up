@@ -1,16 +1,3 @@
-"""Voice-command pipeline tests for the guided tutorial's real code insertion.
-
-These cover the root-cause fix: a learner in the tutorial says an "insert ..."
-command, it reaches the *normal* /voice-command pipeline (the tutorial never
-swallows it), and the backend returns an action that inserts valid Python.
-
-  * insert a variable (string / numeric / synonyms)  -> insert_variable
-  * insert a while loop / if statement               -> insert_while / insert_if
-  * insert <spoken line> (for / indented print / increment) -> append_line
-  * pre-existing inserts (function / for-loop / print) still route correctly
-  * run still routes to run
-  * the rewritten lesson content actually teaches "insert ..." commands
-"""
 import pytest
 
 import app as app_module
@@ -32,12 +19,7 @@ def _act(client, text, code=""):
     return client.post("/voice-command", json={"text": text, "code": code}).get_json()
 
 
-# ---------------------------------------------------------------------------
-# insert_variable — the command that previously failed in the Variables lesson
-# ---------------------------------------------------------------------------
 class TestInsertVariable:
-    # Variable assignments are now built into valid Python (string quoted, numbers
-    # bare) and inserted via conversational_edit, deterministically validated.
     def test_string_variable_primary_phrasing(self, client):
         d = _act(client, "insert a variable named name and give it the value Taknoor")
         assert d["action"] == "conversational_edit"
@@ -58,9 +40,6 @@ class TestInsertVariable:
         assert d["ai_action"]["code"] == "age = 12"
 
 
-# ---------------------------------------------------------------------------
-# insert_while / insert_if
-# ---------------------------------------------------------------------------
 class TestInsertWhileIf:
     def test_insert_while_bare(self, client):
         d = _act(client, "insert while count is less than or equal to 3")
@@ -78,12 +57,7 @@ class TestInsertWhileIf:
         assert "age" in d["condition"]
 
 
-# ---------------------------------------------------------------------------
-# General "insert <spoken line>" — for loops, indented prints, increments
-# ---------------------------------------------------------------------------
 class TestGeneralInsertAppends:
-    # Non-print lines (for-headers, increments) still flow through append_line and
-    # are turned into Python by the frontend normalizer.
     @pytest.mark.parametrize("text,expected", [
         ("insert for i in range 3", "for i in range 3"),
         ("insert indented count equals count plus 1", "indented count equals count plus 1"),
@@ -93,8 +67,6 @@ class TestGeneralInsertAppends:
         assert d["action"] == "append_line", (text, d)
         assert d["text"] == expected
 
-    # Print inserts are now built into valid beginner Python by the backend
-    # (text quoted, defined variables left bare), inserted via conversational_edit.
     @pytest.mark.parametrize("text,code,expected_code", [
         ("insert print hello world", "", 'print("hello world")'),
         ("insert print name", "", 'print("name")'),
@@ -108,9 +80,6 @@ class TestGeneralInsertAppends:
         assert d["ai_action"]["code"] == expected_code
 
 
-# ---------------------------------------------------------------------------
-# Pre-existing inserts must not regress
-# ---------------------------------------------------------------------------
 class TestExistingInsertsPreserved:
     def test_insert_function(self, client):
         d = _act(client, "insert function called greet")
@@ -118,8 +87,6 @@ class TestExistingInsertsPreserved:
         assert d["function_name"] == "greet"
 
     def test_insert_for_loop_keyword(self, client):
-        # "insert a for loop" now builds a real beginner loop (not the old weak
-        # range(0)/pass stub) via the conversational-edit router.
         d = _act(client, "insert a for loop")
         assert d["action"] == "conversational_edit"
         assert d["ai_action"]["code"] == "for i in range(3):\n    print(i)"
@@ -132,15 +99,11 @@ class TestExistingInsertsPreserved:
         assert _act(client, "clear editor")["action"] == "clear_editor"
 
 
-# ---------------------------------------------------------------------------
-# The rewritten lessons are genuinely voice-first
-# ---------------------------------------------------------------------------
 class TestVoiceFirstLessonContent:
     @pytest.mark.parametrize("mid", ["print", "variables", "if", "for", "while"])
     def test_example_demonstrates_an_insert_command(self, mid):
         m = tutorial_engine.get_module(mid)
         assert "insert" in m["example_spoken"].lower(), mid
-        # Hints should also point at spoken insert commands, not "type Python".
         assert any("insert" in h.lower() for h in m["hints"]), mid
 
     @pytest.mark.parametrize("mid", ["print", "variables", "if", "for", "while"])
@@ -150,7 +113,6 @@ class TestVoiceFirstLessonContent:
         assert res["passed"] is True, (mid, res)
 
     def test_no_lesson_tells_learner_to_type_python_into_editor(self):
-        # The redesign moved away from "type your code" as the primary activity.
         for mid in ["print", "variables", "if", "for", "while"]:
             m = tutorial_engine.get_module(mid)
             blob = (m["task"] + " " + " ".join(m["hints"])).lower()

@@ -1,11 +1,3 @@
-"""
-Accessible code-map landmarks (named code bookmarks).
-
-Pure / Flask-free. A learner names important code locations ("main loop",
-"greeting") and later jumps to them by name. Storage is a plain dict the Flask
-layer keeps in the per-session working memory (no repo files). These are CODE
-landmarks and are intentionally separate from CodeUp's existing output bookmarks.
-"""
 
 from __future__ import annotations
 

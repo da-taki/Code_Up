@@ -1,31 +1,13 @@
-"""Grounded-response quality layer for Key 2 (GROQ_API_KEY_2).
-
-Deterministic systems hold the facts. Key 2 may rephrase those facts to be
-warmer/shorter, but it must never weaken, drop, replace, or invent them. This
-module validates an AI rephrase against the deterministic answer + bounded
-context before it is used; on any failure the deterministic text is returned.
-
-The validator checks, in order:
-  1. tone/length  — short, spoken-friendly, no code, single sentence when asked;
-  2. fact preservation — every required fact (and any number/filename the
-     deterministic answer states) must still appear;
-  3. no invention — the AI may not introduce a filename or number that is not in
-     the deterministic answer / bounded context.
-
-Pure and Flask-free, so it is trivial to unit test and reuse at every Key 2 site.
-"""
 
 import re
 from typing import Iterable, List, Sequence, Tuple
 
-# Generic words that never count as a "salient fact" to preserve.
 _STOPWORDS = {
     "a", "an", "the", "to", "of", "for", "with", "and", "or", "in", "on", "that",
     "this", "it", "is", "are", "do", "does", "make", "create", "generate", "build",
     "write", "code", "program", "please", "now", "then", "first", "next", "value",
     "values", "thing", "things", "something", "use", "using", "want", "would",
     "should", "same", "again", "number", "numbers", "print", "show", "display",
-    # spoken number words (a count being *changed* must not be force-preserved)
     "zero", "one", "two", "three", "four", "five", "six", "seven", "eight",
     "nine", "ten", "eleven", "twelve", "twenty", "thirty",
 }
@@ -48,7 +30,6 @@ def filenames(text: str) -> List[str]:
 
 
 def salient_terms(text: str, *, extra_stop: Iterable[str] = ()) -> List[str]:
-    """Content words worth preserving (drops stopwords and spoken numbers)."""
     stop = _STOPWORDS | {s.lower() for s in extra_stop}
     out: List[str] = []
     for word in _WORD_RE.findall(str(text or "").lower()):
@@ -58,7 +39,6 @@ def salient_terms(text: str, *, extra_stop: Iterable[str] = ()) -> List[str]:
 
 
 def fact_present(fact: str, text: str) -> bool:
-    """True if ``fact`` (case/space-insensitive, word-aware) appears in text."""
     f = _normalize(fact)
     if not f:
         return True
@@ -78,12 +58,10 @@ def validate(
     max_chars: int = 240,
     single_sentence: bool = False,
 ) -> Tuple[bool, str]:
-    """Return (ok, reason). ``ok`` means the AI rephrase is safe to use."""
     ai = str(ai_text or "").strip().strip('"').strip()
     if not ai:
         return False, "empty"
 
-    # 1. Tone / length / no code.
     if len(ai) > max_chars:
         return False, "too_long_chars"
     if len(ai.split()) > max_words:
@@ -98,15 +76,11 @@ def validate(
         if terminals > 2:
             return False, "too_many_sentences"
 
-    # 2. Fact preservation: explicit facts + numbers/filenames the
-    #    deterministic answer asserts must all survive.
     auto = list(numbers(deterministic_text)) + list(filenames(deterministic_text))
     for fact in list(required_facts) + auto:
         if not fact_present(fact, ai):
             return False, f"dropped_fact:{fact}"
 
-    # 3. No invention: any filename/number in the AI text must exist in the
-    #    deterministic answer or bounded context (never conjured).
     allowed = " ".join([deterministic_text, context, " ".join(required_facts)])
     allowed_numbers = set(numbers(allowed))
     allowed_files = set(filenames(allowed))
@@ -130,7 +104,6 @@ def ground(
     max_chars: int = 240,
     single_sentence: bool = False,
 ) -> str:
-    """Return the AI rephrase if it is grounded, else the deterministic text."""
     ok, _reason = validate(
         ai_text,
         deterministic_text=deterministic_text,

@@ -1,9 +1,3 @@
-"""Safe natural-language editing for current CodeUp Python code.
-
-The AI planner in this module may describe an edit, but it never executes
-anything. Callers validate the returned JSON here and then apply only
-allowlisted editor/project actions.
-"""
 
 from __future__ import annotations
 
@@ -179,7 +173,6 @@ def planner_messages(
     project_files: Optional[Dict[str, str]] = None,
     mapper_slots: Optional[Dict[str, Any]] = None,
 ) -> Tuple[str, str]:
-    """Build the strict system/user prompt for Layer B, the edit planner."""
 
     system = (
         "You are editing beginner Python code for a visually impaired learner. "
@@ -575,7 +568,6 @@ def _pattern_size_edit(code: str, instruction: str) -> Optional[Tuple[str, str]]
 
 
 def local_edit(current_code: str, instruction: str) -> Dict[str, Any]:
-    """Best-effort deterministic edits for common beginner Python follow-ups."""
 
     code = str(current_code or "").strip("\n")
     text = str(instruction or "").strip()

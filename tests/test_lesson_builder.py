@@ -1,9 +1,3 @@
-"""Accessible Lesson Builder (NAB value sprint, Feature 5).
-
-Deterministic lesson templates (no cloud AI). Each lesson has a concept, plain
-explanation, an exact CodeUp command, a practice task, a hint ladder, an
-expected solution, and a trainer note.
-"""
 import pytest
 
 import app as app_module
@@ -57,7 +51,7 @@ class TestLessons:
     def test_no_cloud_ai_required_deterministic(self):
         a = lesson_builder.build_accessible_lesson("loops")["message"]
         b = lesson_builder.build_accessible_lesson("loops")["message"]
-        assert a == b  # pure templates → identical every time
+        assert a == b
 
     def test_topic_extraction(self):
         assert lesson_builder.extract_topic("make a beginner lesson on loops") == "loops"

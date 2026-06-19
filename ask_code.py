@@ -1,12 +1,3 @@
-"""Ask My Code Mode — answer code-specific questions grounded in the current
-program. Extends the existing meaning-based navigation with a small set of
-deterministic question handlers (loop control, repeat counts, range what-ifs,
-function purpose, condition role, symbol location).
-
-Pure and Flask-free. Never edits or runs code, never answers general Python
-theory here (those go to the concept Q&A path); answers come only from the AST
-and source lines of the code that is on screen.
-"""
 
 import ast
 import re
@@ -18,9 +9,6 @@ _WORD = {0: "zero", 1: "one", 2: "two", 3: "three", 4: "four", 5: "five",
          6: "six", 7: "seven", 8: "eight", 9: "nine", 10: "ten"}
 _NUM = {v: k for k, v in _WORD.items()}
 
-# Conservative whole/partial phrasings that the router treats as "ask my code".
-# Deliberately code-referential so generic concept questions ("what does print
-# do", "what is a variable") still fall through to the concept Q&A path.
 _ROUTE_PATTERNS = [
     re.compile(r"^ask (?:about )?my code\b"),
     re.compile(r"^answer questions about my code$"),
@@ -323,9 +311,6 @@ def _answer_symbol(q: str, code: str) -> Optional[Dict[str, Any]]:
 
 def answer_code_question(question: str, code: str, session_memory: Optional[Dict[str, Any]] = None,
                          verbosity: str = "normal") -> Dict[str, Any]:
-    """Answer a code-grounded question. Returns a deterministic_message or
-    navigate_code action. Never hallucinates: unknown questions get a grounded
-    fallback that points at what *can* be answered."""
     q = _norm(question)
     code = code or ""
 
@@ -335,13 +320,11 @@ def answer_code_question(question: str, code: str, session_memory: Optional[Dict
     if not code.strip():
         return _msg("There is no code to ask about yet. Try creating or opening a program first.")
 
-    # Mode-entry phrases with no actual question.
     if q in ("ask my code", "ask about my code", "answer questions about my code", "ask my code mode"):
         msg = ("Ask me about your code. For example: what line controls the loop, why does this "
                "print three times, what does this function do, or where is a variable used.")
         return _msg(msg)
 
-    # Dispatch most-specific first.
     for handler in (
         lambda: _answer_conceptual_program(q, code),
         lambda: _answer_range_change(q, code) if "range" in q else None,

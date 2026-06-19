@@ -1,9 +1,6 @@
 /* global React */
 const { useEffect, useState } = React;
 
-// ────────────────────────────────────────────────────────────
-// Features grid + manifesto + stats + CTA + footer
-// ────────────────────────────────────────────────────────────
 
 function Features() {
   return (
@@ -152,10 +149,6 @@ function Stats() {
   );
 }
 
-// New-learner onboarding: what CodeUp is (and is not), the environment tips a
-// blind beginner needs, and an explicit, screen-reader-friendly "how to start"
-// list. Kept plain and semantic (real heading + ordered list) so it reads well
-// in NVDA/JAWS and never depends on the animation.
 function StartHere() {
   const steps = [
     'Open CodeUp — click "Open the IDE" and press Start in English.',

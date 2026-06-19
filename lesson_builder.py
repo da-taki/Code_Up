@@ -1,11 +1,3 @@
-"""Accessible Lesson Builder — generate a short, spoken-friendly lesson plan for
-a beginner topic. Fully deterministic templates (no cloud AI required), which is
-safer and more reliable for the demo.
-
-Each lesson includes: concept, plain explanation, an exact CodeUp command the
-learner can say, a practice task, a small/bigger hint ladder, the expected
-solution, and a trainer note. Pure and Flask-free.
-"""
 
 import re
 from typing import Any, Dict, Tuple
@@ -16,7 +8,6 @@ SUPPORTED = ["print", "variables", "if statements", "for loops", "while loops",
 _UNSUPPORTED_MESSAGE = ("I can build lessons for print, variables, if statements, loops, "
                         "functions, lists, dictionaries, and beginner debugging.")
 
-# topic phrase (already lowercased) -> canonical lesson key
 _ALIASES = {
     "print": "print", "printing": "print", "print statements": "print", "output": "print",
     "variable": "variables", "variables": "variables",
@@ -131,11 +122,9 @@ def _norm(text: str) -> str:
 
 
 def normalize_topic(topic: str) -> str:
-    """Map a free-text topic to a canonical lesson key, or '' if unsupported."""
     t = _norm(topic)
     if t in _ALIASES:
         return _ALIASES[t]
-    # tolerate trailing/leading filler ("the loops", "loops topic")
     for phrase, key in _ALIASES.items():
         if re.search(rf"\b{re.escape(phrase)}\b", t):
             return key
@@ -143,7 +132,6 @@ def normalize_topic(topic: str) -> str:
 
 
 def extract_topic(text: str) -> str:
-    """Pull the topic out of a lesson request like 'make a beginner lesson on loops'."""
     t = _norm(text)
     m = re.search(r"\b(?:on|for|about|in)\s+(.+)$", t)
     topic = m.group(1).strip() if m else t
@@ -152,19 +140,11 @@ def extract_topic(text: str) -> str:
 
 
 def _speech_solution(solution: str) -> str:
-    """A single-line, speech-friendly form: 'for i in range(5): print(i)'."""
     return " ".join(line.strip() for line in solution.splitlines() if line.strip())
 
 
 def _render_lesson(lesson: Dict[str, Any], verbosity: str) -> Tuple[str, str]:
-    """Return (display message, spoken message).
-
-    The expected solution is shown as real, copy-pasteable multi-line code in the
-    display message, but flattened to one readable line in the spoken message so a
-    screen-reader user hears it as a single flowing statement.
-    """
     display_solution = lesson["solution"].rstrip()
-    # (display line, spoken line) per section. Only the solution differs.
     sections = [
         (f"Lesson: {lesson['title']}.", f"Lesson: {lesson['title']}."),
         (f"Explanation: {lesson['explanation']}", f"Explanation: {lesson['explanation']}"),
@@ -176,10 +156,6 @@ def _render_lesson(lesson: Dict[str, Any], verbosity: str) -> Tuple[str, str]:
          f"Expected solution: {_speech_solution(lesson['solution'])}"),
         (f"Trainer note: {lesson['trainer_note']}", f"Trainer note: {lesson['trainer_note']}"),
     ]
-    # The trainer note (section 7) is teacher-facing: it stays in the written,
-    # display-only message but is NEVER spoken to the learner. A learner asking
-    # for a lesson should hear the lesson, not coaching notes about themselves —
-    # "make trainer notes" is the separate command for the spoken trainer review.
     TRAINER_NOTE = 7
     if verbosity == "concise":
         display_keep = [0, 1, 2, 6]
@@ -194,7 +170,6 @@ def _render_lesson(lesson: Dict[str, Any], verbosity: str) -> Tuple[str, str]:
 
 
 def build_accessible_lesson(topic: str, verbosity: str = "normal") -> Dict[str, Any]:
-    """Build a short accessible lesson plan for ``topic`` (deterministic)."""
     verbosity = (verbosity or "normal").strip().lower()
     key = normalize_topic(topic)
     if not key or key not in _LESSONS:

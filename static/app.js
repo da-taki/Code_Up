@@ -8,12 +8,8 @@ let snippetsCache = [];
 let pendingConfirm = null;
 let lastSpokenText = null;
 // Continuation text spoken when the learner says "say more" after a long
-// response (e.g. the project report's next steps). Set by the response that is
-// summarised, consumed once, then cleared. See sayMore() / setSayMoreContinuation().
 let _sayMoreContinuation = '';
 
-// Per-tab unique ID so quiz/bug-challenge state cannot bleed across tabs.
-// All transient interactive state is scoped under window._tabState[_tabId].
 const _tabId = (typeof crypto !== 'undefined' && crypto.randomUUID)
   ? crypto.randomUUID()
   : 'tab-' + Math.random().toString(36).slice(2);
@@ -23,39 +19,21 @@ function tabState() { return window._tabState[_tabId]; }
 let isListening = false;
 let recognition = null;
 let _restartTimer = null;
-// Manual voice intent for this tab. Auto-restart paths may run only while the
-// user has explicitly left voice enabled.
 let _voicePaused = false;
 let _voiceEnabledByUser = false;
 
-// --- Speech cancellation token -------------------------------------------
-// Every time speech is cancelled (stop speaking / stop everything / a new action
-// that interrupts narration) we bump this epoch. A long async narration captures
-// the epoch before it awaits, and any speak() it issues afterwards is dropped if
-// the epoch has since changed — so a network callback that resolves *after* the
-// user said "stop" can never start talking again.
 let _speechEpoch = 0;
 function currentSpeechEpoch() { return _speechEpoch; }
 function bumpSpeechEpoch() { _speechEpoch = (_speechEpoch + 1) % 1e9; return _speechEpoch; }
 
-// Accessibility: spoken speech rate (0.75 slow / 1.0 normal / 1.25 fast). The
-// SpeechManager fallback reads this; VoiceEngine reads its own Config.speechRate
-// which applySpeechRate() keeps in sync. Persisted in localStorage.
 let _speechRate = 1.0;
 
-// --- Voice-recognition lifecycle state (single source of truth) ----------
-// _voiceEnabledByUser (above) means recognition is WANTED. The flags below stop
-// double instances and restart storms when the browser ends recognition for its
 // own reasons (idle timeout, transient error).
-let _recognitionStarting = false;     // a start() call is in flight
+let _recognitionStarting = false;
 let _recognitionRestartCount = 0;     // consecutive rapid auto-restarts
-let _lastRecognitionStartAt = 0;      // when the current session actually started
-const _MAX_RAPID_RESTARTS = 6;        // give up after this many rapid failures (anti-storm)
+let _lastRecognitionStartAt = 0;
+const _MAX_RAPID_RESTARTS = 6;
 
-// Watchdog: track last time recognition was confirmed active. If voice is
-// supposedly listening but we haven't seen activity in a while, the session
-// may have silently died (common during long pauses). The watchdog kicks it
-// back to life.
 let _lastRecognitionActivity = Date.now();
 let _watchdogTimer = null;
 
@@ -64,16 +42,13 @@ function _startRecognitionWatchdog() {
   _watchdogTimer = setInterval(() => {
     if (!isListening || !_voiceEnabledByUser) return;  // not running, nothing to watch
     const idle = Date.now() - _lastRecognitionActivity;
-    // 45s of silence = Chrome has likely auto-stopped. Force a kick.
     if (idle > 45000) {
       _debugLog('Watchdog: recognition idle for', idle, 'ms — kicking');
       _lastRecognitionActivity = Date.now();  // reset to avoid kick loops
       try {
         if (!_voiceEnabledByUser) return;
-        // Stop to force a clean session; onend triggers the debounced restart.
         recognition.stop();
       } catch (e) {
-        // If stop failed the session may already be dead — restart safely.
         _scheduleRecognitionRestart();
       }
     }
@@ -87,9 +62,6 @@ function _stopRecognitionWatchdog() {
   }
 }
 
-// Start the existing recognition object safely: never while one is already
-// starting or active (prevents the "two recognizers at once" InvalidStateError),
-// and only while voice is still wanted.
 function _safeStartRecognition() {
   if (!recognition || !_voiceEnabledByUser) return;
   if (_recognitionStarting || isListening) return;
@@ -98,24 +70,17 @@ function _safeStartRecognition() {
     recognition.start();
     _lastRecognitionActivity = Date.now();
   } catch (e) {
-    // Almost always InvalidStateError when called too soon after onend.
     _recognitionStarting = false;
     _debugLog('Recognition start failed, backing off:', e && e.message ? e.message : e);
     _scheduleRecognitionRestart();
   }
 }
 
-// Debounced, backing-off auto-restart after an UNEXPECTED end. A single timer is
-// used (cleared before re-arming) so restarts never pile up, the delay grows with
-// each rapid failure, and after too many rapid failures we give up rather than
-// spin forever.
 function _scheduleRecognitionRestart() {
-  if (!_voiceEnabledByUser) return;            // user paused/stopped -> do not restart
+  if (!_voiceEnabledByUser) return;
   if (typeof document !== 'undefined' && document.hidden) return;  // resume on visibility instead
   if (_restartTimer) { clearTimeout(_restartTimer); _restartTimer = null; }
 
-  // A session that died almost immediately counts as a rapid failure; a healthy
-  // session (lasted a while) resets the counter.
   const sessionMs = _lastRecognitionStartAt ? Date.now() - _lastRecognitionStartAt : 0;
   if (sessionMs > 0 && sessionMs < 1500) _recognitionRestartCount++;
   else _recognitionRestartCount = 0;
@@ -129,8 +94,6 @@ function _scheduleRecognitionRestart() {
     return;
   }
 
-  // 400ms, 800ms, 1600ms ... capped at 4s. (Chrome also throws if start() is
-  // called too soon after onend, so a floor of ~400ms is required anyway.)
   const delay = Math.min(4000, 400 * Math.pow(2, _recognitionRestartCount));
   _restartTimer = setTimeout(() => {
     _restartTimer = null;
@@ -141,8 +104,6 @@ function _scheduleRecognitionRestart() {
   }, delay);
 }
 
-// When the user paused/stopped, recognition does not auto-restart. If the tab was
-// merely hidden (we skip restarts while hidden), resume once it is visible again.
 if (typeof document !== 'undefined' && document.addEventListener) {
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden && _voiceEnabledByUser && !isListening && !_recognitionStarting) {
@@ -152,26 +113,17 @@ if (typeof document !== 'undefined' && document.addEventListener) {
 }
 let _voiceStartIsUserInitiated = false;
 let _loadingSnippets = false;
-// Stored on window so the language-change handler in index.html can reset it.
 window._apiKeyPromptShown = false;
 
-// Pre-flight inputs queue (Mechanism A). Mirrors the inputs the user has
-// declared via voice or the inputs panel. Sent with every /run call.
 let _preflightInputs = [];
 let _preflightInputPlaceholders = [];
-// Exposed for inline scripts in index.html that can't see module-scoped `let`.
 window.getPreflightInputs = () => _preflightInputs.slice();
-// Live input mode toggle (Mechanism B). When true, "run" goes to /run-stream
-// instead of /run.
 let _liveInputMode = false;
 
-// Active streaming run state (only one at a time per tab)
-let _activeStreamRun = null;  // {runId, eventSource, awaitingPrompt, awaitingResolve}
+let _activeStreamRun = null;
 
-// Audio heartbeat timer — soft tone every 500ms while a run is in flight
 let _heartbeatTimer = null;
 
-// Last output stored for diff narration and bookmarks
 let _previousOutput = '';
 let _lastOutput = '';
 let _lastOutputDiff = null;
@@ -199,7 +151,6 @@ window.consecutiveErrors = 0;
 window.lastMentorReply = '';
 window._mentorSlowWalkthroughOffered = false;
 
-// Autosave config
 const AUTOSAVE_INTERVAL_MS = 30000;
 let _autosaveTimer = null;
 let _autosaveLastCode = '';
@@ -207,15 +158,12 @@ const AUTOSAVE_KEY = 'codeup_autosave_draft';
 const DEFAULT_PYTHON_STARTER = 'print("Hello CodeUp!")';
 const PYTHON_ONLY_MESSAGE = 'CodeUp is Python-only. Remove HTML, CSS, or JavaScript and use valid Python code.';
 
-// Set window.CODEUP_DEBUG = true in the browser console to see debug logs.
-// Off by default so deployments don't spam the console.
 const _debugLog = (...args) => {
   if (typeof window !== 'undefined' && window.CODEUP_DEBUG) {
     console.log(...args);
   }
 };
 
-// Utility: calculate indentation level (spaces and tabs)
 function getIndentLevel(line) {
   let indent = 0;
   for (let i = 0; i < line.length; i++) {
@@ -226,20 +174,16 @@ function getIndentLevel(line) {
   return indent;
 }
 
-// Escape regex special characters in user-supplied strings
 function escapeRegex(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-// ---------- APP STATE ----------
 const AppState = {
   isListening:  false,
   isSpeaking:   false,
   isExecuting:  false,
 };
 
-// Single helper to toggle visibility using the `hidden` attribute consistently.
-// Using style.display would permanently override the `hidden` attribute from HTML.
 function showEl(el) {
   if (!el) return;
   el.removeAttribute('hidden');
@@ -249,7 +193,6 @@ function hideEl(el) {
   el.setAttribute('hidden', '');
 }
 
-// ---------- SPEECH MANAGER ----------
 function sanitizeSpeechText(text) {
   return String(text || '')
     .replace(/```[a-zA-Z0-9_-]*\s*/g, ' ')
@@ -318,13 +261,8 @@ const SpeechManager = (function () {
     }
 
     function dequeue() {
-      // Gate on the actual synthesis state, not just our local pointer.
-      // Chrome can have currentUtterance==null while speechSynthesis is
-      // still draining a previously-cancelled utterance; if we dequeue
-      // into that gap we get doubled speech.
       if (currentUtterance || !queue.length) return;
       if (window.speechSynthesis && window.speechSynthesis.speaking) {
-        // Try again once the engine actually drains
         setTimeout(dequeue, 80);
         return;
       }
@@ -401,13 +339,6 @@ const SpeechManager = (function () {
 
     function enqueue(text, opts = {}) {
       // Test anchor for the single speech path: typeof VoiceEngine !== 'undefined'; VoiceEngine.speak(text, opts).
-      // Canonical speech path: delegate to VoiceEngine when present so every
-      // spoken line — including Step Narration — uses the one resolved
-      // preferred English voice and VoiceEngine's listen-pause / self-echo
-      // handling (which stops the narration from being cancelled by its own
-      // audio). cancelAll() already delegates to VoiceEngine.cancelSpeech, so
-      // this keeps a single speech manager. The legacy direct-synthesis queue
-      // below is only used when VoiceEngine is unavailable.
       const spokenText = sanitizeSpeechText(text);
       if (!spokenText) return Promise.resolve();
       if (typeof VoiceEngine !== 'undefined' && VoiceEngine.speak) {
@@ -431,17 +362,13 @@ const SpeechManager = (function () {
     }
 
     function cancelAll() {
-      // Invalidate any in-flight async narration: callbacks that captured an
-      // earlier epoch will see it has changed and refuse to speak.
       bumpSpeechEpoch();
       queue.length = 0;
       AppState.isSpeaking = false;
       currentUtterance = null;
-      // Delegate to VoiceEngine if available (it handles speechSynthesis.cancel internally)
       if (typeof VoiceEngine !== 'undefined' && VoiceEngine.cancelSpeech) {
         VoiceEngine.cancelSpeech();
       } else {
-        // Legacy path: direct speechSynthesis cancel
         try { window.speechSynthesis.cancel(); } catch (e) {}
         [50, 150, 300, 500].forEach(delay => {
           setTimeout(() => {
@@ -465,7 +392,6 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// ---------- SONIFICATION MANAGER ----------
 const SonificationManager = (function () {
   const jobs = new Map();
   const activeToneStops = new Set();
@@ -520,7 +446,6 @@ const SonificationManager = (function () {
   };
 })();
 
-// ---------- ERROR BEACON MANAGER ----------
 const ErrorBeaconManager = (function () {
   let intervalId = null;
   let currentLine = null;
@@ -546,7 +471,6 @@ const ErrorBeaconManager = (function () {
   };
 })();
 
-// ---------- AUDIO CUES ----------
 function cueSuccess() { SonificationManager.playTone(900, 0.05, 0.08); }
 function cueError()   { SonificationManager.playTone(200, 0.15, 0.08); }
 
@@ -568,7 +492,6 @@ function sonifyLine(lineContent, indentLevel) {
   }, 60);
 }
 
-// ---------- LINE READING ----------
 async function readLineEnhanced(line) {
   const model = getModel();
   if (!model) { speak('Editor not ready.'); return; }
@@ -579,7 +502,6 @@ async function readLineEnhanced(line) {
   }
   const lineText = model.getLineContent(line);
   const indent = Math.floor(getIndentLevel(lineText));
-  // Sonify first, then speak
   sonifyLine(lineText, indent);
   setTimeout(() => {
     const msg = `Line ${line}: ${lineText || 'empty line'}`;
@@ -588,7 +510,6 @@ async function readLineEnhanced(line) {
   }, 200);
 }
 
-// ---------- BLOCK SONIFICATION ----------
 async function sonifyCurrentBlock() {
   const model = getModel();
   if (!model) return;
@@ -632,9 +553,6 @@ async function sonifyCurrentBlock() {
     return;
   }
 
-  // Single audio job: replace any in-flight step narration so its deferred
-  // cues and speech can't overlap this block's tones. (Re-triggering step
-  // narration already clears sonification, so this makes the rule symmetric.)
   if (typeof _stepNarrationJob !== 'undefined' && _stepNarrationJob) {
     _stepNarrationJob.cancelled = true;
     _stepNarrationJob = null;
@@ -729,7 +647,6 @@ function showNavigationHistory() {
   speak(history);
 }
 
-// ---------- VARIABLE TRACKING ----------
 async function listVariables() {
   if (!ensureNotExecuting(() => listVariables(), 'list variables')) return;
   if (!ensurePythonEditorContent('list variables')) return;
@@ -755,10 +672,6 @@ async function listVariables() {
         ).join('\n');
         out(`Variables in ${data.current_scope}:\n\n${varList}`);
 
-        // Do not clear the speech queue here.
-        // Variable narration should flow naturally in sequence.
-        // cancelAll() was interrupting active utterances and
-        // occasionally causing Chrome speech synthesis deadlocks.
         speak(`Found ${data.variables.length} variables in ${data.current_scope}.`);
 
         data.variables.slice(0, 5).forEach(v =>
@@ -809,9 +722,7 @@ async function findVariable(varName) {
   }
 }
 
-// ---------- ERROR BEACON ----------
 async function checkSyntaxErrors() {
-  // Cancel any prior speech so "checking..." is heard immediately.
   SpeechManager.cancelAll();
   if (!ensurePythonEditorContent('check syntax')) return;
   showAI('Checking for errors...');
@@ -825,9 +736,6 @@ async function checkSyntaxErrors() {
     const data = await res.json();
     if (data.success && !data.has_errors) {
       out('No errors detected. Code looks good!');
-      // Cancel the "checking..." utterance so the result speaks cleanly.
-      // Without this, Chrome's synth sometimes truncates the second utterance
-      // mid-word when transitioning from one queued item to the next.
       stopErrorBeacon();
 
       speak('No errors detected.');
@@ -836,10 +744,7 @@ async function checkSyntaxErrors() {
       const errorList = data.errors.map(e => `Line ${e.line || 'unknown'}: ${e.type} - ${e.message}`).join('\n');
       out(`Found ${data.error_count} error(s):\n\n${errorList}`);
 
-      // Do NOT cancel speech here.
-      // The speech queue already handles sequencing safely now.
       // Canceling here was causing Chrome TTS race conditions
-      // where the first utterance cut off the second one.
       speak(`Found ${data.error_count} error${data.error_count !== 1 ? 's' : ''}.`);
       data.errors.forEach(e => speak(`${e.type} on line ${e.line || 'unknown'}.`));
 
@@ -852,8 +757,6 @@ async function checkSyntaxErrors() {
     console.error(e);
     out('Syntax check failed.');
 
-    // Do not cancel queued speech on syntax failure.
-    // Just append the failure message normally.
     speak('Syntax check failed.');
   } finally {
     hideAI();
@@ -867,7 +770,6 @@ function stopErrorBeacon() {
 
 function locateError() { checkSyntaxErrors(); }
 
-// ---------- HELP ----------
 const BEGINNER_COMMAND_GUIDE_SPEECH = 'You can build Python by speaking or typing. Main demo commands are generate code, run code, read output, analyze, explain this code to explain it, fix this code to debug, replay mistake, summarize structure, make project report, stop everything, and start tutorial. Voice works well for analyze, run, read output, fix this code, replay mistake, summarize structure, make project report, stop everything, and start tutorial. For exact symbols, patterns, or long prompts, typing is more reliable. Say more examples for a longer list.';
 const BEGINNER_COMMAND_GUIDE_VISIBLE = `You can type or speak natural commands.
 
@@ -1059,16 +961,13 @@ function pasteCode() {
   }).catch(() => speak('Failed to paste code.'));
 }
 
-// ---------- TTS ----------
 function speak(text, opts = {}) {
   // Test anchor for the single speech path: VoiceEngine.speak(text, opts).
   if (!text) return;
-  // Stale-utterance guard (epoch bumped by cancelAll on stop). See _speechEpoch.
   if (opts.epoch != null && opts.epoch !== _speechEpoch) return;
   const spokenText = sanitizeSpeechText(text);
   if (!spokenText) return;
   lastSpokenText = spokenText;
-  // Delegate to VoiceEngine when available so speech stays interruptible.
   if (typeof VoiceEngine !== 'undefined' && VoiceEngine.speak) {
     // Single speech path remains VoiceEngine.speak(text, opts); text is sanitized first.
     VoiceEngine.speak(spokenText, opts).catch(() => {});
@@ -1078,8 +977,6 @@ function speak(text, opts = {}) {
 }
 function speakOutput() {
   if (!ensureNotExecuting(() => speakOutput(), 'speak output')) return;
-  // Prefer the exact last run output (so "read full output" reads everything,
-  // even when the post-run summary was shortened); fall back to the box text.
   const panel = document.getElementById('output');
   const raw = (typeof window !== 'undefined' && window.lastRunOutput)
     ? window.lastRunOutput
@@ -1091,14 +988,10 @@ function repeatLastSpeech() {
 }
 
 // Store the spoken continuation for the next "say more". Sanitized so no raw
-// Markdown reaches TTS. Pass a falsy value to clear it.
 function setSayMoreContinuation(text) {
   _sayMoreContinuation = text ? sanitizeSpeechText(text) : '';
 }
 
-// "Say more" — continue the last long response from where it left off. If there
-// is nothing queued to continue, fall back to the full command list so the
-// learner still gets help.
 function sayMore() {
   if (_sayMoreContinuation) {
     const more = _sayMoreContinuation;
@@ -1125,10 +1018,6 @@ function buildVoiceCommandPayload(text, source = 'typed') {
   };
 }
 
-// ---------- ACCESSIBILITY: SPEECH RATE + VERBOSITY ----------
-// Both persist in localStorage for the browser session. Speech rate affects only
-// spoken output (never Python execution); verbosity is sent to the backend so it
-// can tune explanation length where safe.
 function applySpeechRate(rate) {
   const r = Math.max(0.5, Math.min(2.0, Number(rate) || 1.0));
   _speechRate = r;
@@ -1160,7 +1049,6 @@ function restoreAccessibilityPreferences() {
   getVerbosity();
 }
 
-// ---------- LEARNER HANDOFF: EXPORT ZIP + PROJECT REPORT ----------
 function offerProjectDownload(url, filename) {
   const safeName = String(filename || 'codeup_project.zip').replace(/[^a-zA-Z0-9_.\-]/g, '');
   let area = document.getElementById('exportDownloadArea');
@@ -1183,7 +1071,6 @@ function offerProjectDownload(url, filename) {
   link.style.cssText = 'display:inline-block;padding:6px 10px;color:var(--accent);text-decoration:underline;font-weight:600;';
   area.appendChild(link);
   try { link.focus(); } catch (e) {}
-  // Start the download now (this runs inside the user-initiated command flow).
   try { link.click(); } catch (e) {}
   return link;
 }
@@ -1229,7 +1116,6 @@ async function requestProjectReport() {
     const data = await res.json();
     const reportText = data.report_md || data.speech || 'No report available.';
     out(reportText);
-    // Speak the learner-safe summary from the beginning; stash the next-steps
     // continuation for "say more". The full markdown stays in the output box.
     speak(data.speech || 'Here is your project report.', { epoch });
     setSayMoreContinuation(data.speech_more || '');
@@ -1242,10 +1128,6 @@ async function requestProjectReport() {
   }
 }
 
-// ---------- AI BUBBLE ----------
-// Always-visible bubble whose contents change. Toggling visibility doesn't
-// fire aria-live announcements, but text changes inside an aria-live region
-// do — so we just update text and use a placeholder when idle.
 function showAI(msg) {
   const b = document.getElementById('aiBubble');
   if (!b) return;
@@ -1255,19 +1137,15 @@ function showAI(msg) {
 function hideAI() {
   const b = document.getElementById('aiBubble');
   if (!b) return;
-  // Set a brief idle message so the live region announces "Idle" rather than
-  // appearing to vanish without notice. Then hide visually after a short delay.
   b.textContent = 'Idle.';
   setTimeout(() => hideEl(b), 1500);
 }
 
-// ---------- API KEY MODAL ----------
 function openApiKeyModal() {
   const modal = document.getElementById('apiKeyModal');
   const input = document.getElementById('apiKeyInput');
   if (!modal) return;
   showEl(modal);
-  // Focus the input so screen readers announce the dialog
   requestAnimationFrame(() => {
     if (input) input.focus();
   });
@@ -1312,15 +1190,10 @@ async function submitApiKey() {
   }
 }
 
-// Detect when the backend says AI is unconfigured and prompt the user once.
 function maybePromptForApiKey(responseText) {
-  // Pilot mode: deployment uses .env. If the AI says "not configured",
-  // tell the user to ask the teacher rather than popping a runtime modal
-  // that needs server restart to take effect.
   if (!responseText) return false;
   const lower = String(responseText).toLowerCase();
 
-  // Notice offline-mode prefix and announce it (once per response, not once per session)
   if (lower.startsWith('[offline mode]')) {
     if (!window._offlineModeAnnounced) {
       window._offlineModeAnnounced = true;
@@ -1346,7 +1219,6 @@ function maybePromptForApiKey(responseText) {
   return false;
 }
 
-// ---------- MONACO SETUP ----------
 window.MonacoEnvironment = {
   getWorkerUrl: function () { return '/static/python.worker.js'; },
 };
@@ -1363,15 +1235,11 @@ require(['vs/editor/editor.main'], function () {
     fontSize:             16,
     minimap:              { enabled: false },
     automaticLayout:      true,
-    // Accessibility — critical for screen reader users
     accessibilitySupport: 'on',
     ariaLabel:            'Python code editor. Use arrow keys to navigate, type to edit. Press Escape to stop speech, Control Shift M to toggle voice control, F1 for editor commands.',
-    // Slightly larger line height helps screen-reader sync with cursor
     lineHeight:           24,
-    // Make sure tabs and tab-trapping work as users expect
     tabSize:              4,
     insertSpaces:         true,
-    // Word wrap helps users who navigate by line
     wordWrap:             'on',
   });
 
@@ -1832,13 +1700,8 @@ function setCode(v, opts) {
   lastSpokenText = null;
   window.executionTrace = [];
   window.traceIndex = 0;
-  // Navigation history points to line numbers in the OLD code. After a setCode,
-  // those line numbers may not exist anymore. Clear it so "go back" doesn't
-  // jump into invalid territory.
   navigationHistory = [];
   historyIndex = -1;
-  // Breakpoints reference lines in the OLD code. Clear them and their decorations
-  // so the gutter dots don't end up pointing at unrelated lines.
   if (typeof _breakpoints !== 'undefined') {
     _breakpoints.clear();
     _watchedVars.clear();
@@ -1901,15 +1764,12 @@ function applyCommandUnderstanding(data, heardText) {
   });
 }
 
-// Convenience: write to output panel AND speak it. Removes the boilerplate
-// `out(x); speak(x);` pair that appears 30+ times in this file.
 function tellUser(text, opts) {
   if (!text) return;
   out(text);
   speak(text, opts || {});
 }
 
-// ---------- PENDING ACTIONS ----------
 const pendingActions = [];
 async function flushPendingActions() {
   while (pendingActions.length) {
@@ -1926,11 +1786,9 @@ function ensureNotExecuting(actionFn, description) {
   return true;
 }
 
-// ---------- HEARTBEAT (audio progress indicator) ----------
 function startHeartbeat() {
   stopHeartbeat();
   _heartbeatTimer = setInterval(() => {
-    // Very soft brief tone — barely audible but present
     SonificationManager.playTone(440, 0.03, 0.025);
   }, 500);
 }
@@ -1941,12 +1799,9 @@ function stopHeartbeat() {
   }
 }
 
-// ---------- LAST ERROR FOR BEGINNER RE-EXPLANATION ----------
 let _lastErrorContext = null;  // {code, error, language}
 
-// ---------- RUN ----------
 async function runCode(runFile) {
-  // Live input mode reroutes through the streaming endpoint
   if (_liveInputMode) {
     return runCodeStreaming();
   }
@@ -2010,14 +1865,11 @@ async function runCode(runFile) {
       window.consecutiveErrors = 0;
       window._mentorSlowWalkthroughOffered = false;
 
-      // Diff narration: only mention if there were changes from the previous run
       const diff = data.diff;
       _lastOutputDiff = diff;
       _previousOutput = _lastOutput;
       _lastOutput = data.output || '';
 
-      // Speak the output as ONE well-formed utterance (comma-joined lines, empty
-      // and long output handled). The visible box above keeps the exact text.
       speak(formatRunOutputSpeech(data.output));
 
       if (diff && !diff.identical && diff.total_changes > 0) {
@@ -2037,9 +1889,6 @@ async function runCode(runFile) {
     } else {
       out('ERROR:\n' + (data.error || ''));
       cueError();
-      // Avoid clearing speech here.
-      // The queued narration system already handles sequencing.
-      // Clearing here could interrupt the spoken error explanation.
       _lastErrorContext = {
         code: getCode(),
         error: data.error || '',
@@ -2050,7 +1899,6 @@ async function runCode(runFile) {
       window.lastRunError = data.error || '';
       window.lastRunOutput = '';
       window.consecutiveErrors = (window.consecutiveErrors || 0) + 1;
-      // Don't let "narrate diff" replay an old comparison after an error run.
       _lastOutputDiff = null;
       const errLines = (data.error || '').trim().split('\n').filter(Boolean);
       const lastLine = errLines[errLines.length - 1] || 'Unknown error';
@@ -2065,8 +1913,6 @@ async function runCode(runFile) {
         speak(data.inputs_hint);
       }
       maybeOfferSlowWalkthroughAfterErrors();
-      // Tutorial: let the guided tutorial offer a spoken hint after a failed
-      // attempt. Fires after the error has been spoken so they don't collide.
       if (typeof window._tutorialOnRunError === 'function') {
         setTimeout(function () { window._tutorialOnRunError(); }, 1500);
       }
@@ -2081,7 +1927,6 @@ async function runCode(runFile) {
   }
 }
 
-// ---------- STREAMING RUN (Mechanism B — live interactive input) ----------
 async function runCodeStreaming() {
   SpeechManager.cancelAll();
   if (!ensurePythonEditorContent('live run')) return;
@@ -2131,7 +1976,6 @@ async function runCodeStreaming() {
       if (event.type === 'stdout') {
         buffer += event.text;
         outputElement.textContent = buffer;
-        // Speak chunks as they arrive — but only meaningful ones
         const chunk = event.text.trim();
         if (chunk) speak(chunk);
       } else if (event.type === 'stderr') {
@@ -2210,7 +2054,6 @@ async function sendStreamingInput(value) {
   }
 }
 
-// ---------- ANALYZE ----------
 async function analyzeCode() {
   if (!ensurePythonEditorContent('analyze')) return;
   cueSuccess(); out('Analyzing...'); showAI('Analyzing code with AI...'); speak('Analyzing code.');
@@ -2222,7 +2065,6 @@ async function analyzeCode() {
     });
     const data = await res.json();
     out(data.analysis || 'No analysis.');
-    // Check for AI-unavailable messaging before speaking
     maybePromptForApiKey(data.analysis);
     if (data.analysis) {
       const spoken = data.analysis
@@ -2246,8 +2088,6 @@ async function analyzeDeep() {
     speak('Please run analyze first, then say analyze deeper.');
     return;
   }
-  // Use the SAME code that was analyzed briefly. If the user edited since then,
-  // the deep analysis should match the brief one — not silently re-analyze new code.
   const codeForDeep = window._lastAnalyzeContext.code;
   if (looksLikeNonPythonCode(codeForDeep)) {
     rejectNonPythonCode('deep analysis');
@@ -2276,13 +2116,11 @@ async function analyzeDeep() {
   }
 }
 
-// ---------- DEMO PRESETS ----------
 let _demoPresetsCache = null;
 let _demoPresetsCacheAt = 0;
 const _DEMO_CACHE_TTL_MS = 5 * 60 * 1000;  // 5 minutes
 
 async function fetchDemoPresets() {
-  // Cache with TTL — if presets ever change at runtime we don't get stuck on stale data.
   if (_demoPresetsCache && (Date.now() - _demoPresetsCacheAt) < _DEMO_CACHE_TTL_MS) {
     return _demoPresetsCache;
   }
@@ -2311,8 +2149,6 @@ async function listDemos() {
     display += `${i + 1}. ${p.title} — ${p.description}\n   Say: "demo ${p.id}"\n\n`;
   });
   out(display);
-  // Use srAnnounce only — speak() will be heard by the user; double-announcing
-  // via screen reader live region causes "5 demos available" to be read twice.
   speak(`There are ${presets.length} demos available.`);
   presets.forEach(p => speak(`${p.title}. ${p.description}. Say "demo ${p.id}" to load it.`));
   speak('Or just say "demo" followed by the name.');
@@ -2325,7 +2161,6 @@ async function runDemo(presetId) {
     return;
   }
 
-  // No preset specified — pick the first one as a default guided experience
   if (!presetId || !presetId.trim()) {
     const first = presets[0];
     speak(`Loading the ${first.title} demo. ${first.description}`);
@@ -2333,13 +2168,8 @@ async function runDemo(presetId) {
     return;
   }
 
-  // Try to match by id first
   let match = presets.find(p => p.id === presetId.toLowerCase().trim());
 
-  // Then by title (fuzzy: contains). We deliberately don't do
-  // needle.includes(p.id) — that over-matches when preset ids are short
-  // (e.g. saying "demo show me primes" would match anything whose id is a
-  // substring of "show me primes").
   if (!match) {
     const needle = presetId.toLowerCase().trim();
     match = presets.find(p =>
@@ -2379,11 +2209,7 @@ async function loadDemoById(id) {
   }
 }
 
-// ---------- NARRATE FULL FILE ----------
-// Deterministic, local read-back of the whole editor — line by line, with
 // indentation announced. No AI/network, so "read my code" works even when the
-// cloud AI is busy. (narrateFile() below is the richer LLM narration of
-// "read the code".)
 function readMyCodeAloud() {
   SpeechManager.cancelAll();
   const trimmed = String(getCode() || '').replace(/\s+$/, '');
@@ -2454,7 +2280,6 @@ async function narrateFile() {
   }
 }
 
-// ---------- SUMMARIZE ----------
 async function summarizeFile() {
   if (!ensurePythonEditorContent('summarize')) return;
   cueSuccess(); out('Summarizing file...'); showAI('Summarizing this file...'); speak('Summarizing this file.');
@@ -2474,7 +2299,6 @@ async function summarizeFile() {
   }
 }
 
-// ---------- ADVISE ----------
 async function adviseCode() {
   if (!ensurePythonEditorContent('advise')) return;
   cueSuccess(); out('Advising on your code...'); showAI('Generating improvement suggestions...'); speak('Advising on your code.');
@@ -2494,7 +2318,6 @@ async function adviseCode() {
   }
 }
 
-// ---------- FIX ----------
 async function fixCode() {
   const before = getCode();
   if (!ensurePythonEditorContent('fix')) return;
@@ -2527,7 +2350,6 @@ async function fixCode() {
   }
 }
 
-// ---------- DESCRIBE LINE ----------
 async function describeLine(line) {
   if (!ensurePythonEditorContent('describe line')) return;
   showAI('Describing line ' + line); speak('Describing line ' + line);
@@ -2547,7 +2369,6 @@ async function describeLine(line) {
   }
 }
 
-// ---------- GENERATE CODE ----------
 async function generateCode(prompt, context = {}) {
   if (!prompt) {
     SpeechManager.cancelAll();
@@ -2555,11 +2376,8 @@ async function generateCode(prompt, context = {}) {
     return;
   }
 
-  // Cancel any prior speech so the "generating" announcement is heard immediately.
   SpeechManager.cancelAll();
 
-  // Audio cue + visible status + screen reader announcement + spoken status.
-  // All four channels so sighted, blind, and screen-reader users each get feedback.
   cueSuccess();
   out('Generating code for: ' + prompt);
   showAI('Generating code for: ' + prompt);
@@ -2580,10 +2398,6 @@ async function generateCode(prompt, context = {}) {
     }
     if (data.success && data.code) {
       window.executionTrace = []; window.traceIndex = 0;
-      // CRITICAL: setCode() calls SpeechManager.cancelAll() internally, which
-      // would kill our pending "generating..." utterance AND any follow-up
-      // speak() we queue in the same tick. Pass preserveSpeech:true so the
-      // user actually hears the success announcement.
       setCode(data.code, { preserveSpeech: true });
       suggestPreflightInputsFromCode(data.code);
       cueSuccess();
@@ -2627,7 +2441,6 @@ async function generateCode(prompt, context = {}) {
   }
 }
 
-// ---------- NAVIGATION ----------
 function gotoLine(line, record = true) {
   if (!ensureNotExecuting(() => gotoLine(line, record), 'go to line')) return;
   const model = getModel();
@@ -2696,9 +2509,7 @@ function prevLine() {
   speak(`Line ${line}: ${text || 'Empty line.'}`);
 }
 
-// ---------- EDITING ----------
 function clearEditor() {
-  // Full reset including navigation history on explicit user clear
   navigationHistory = [];
   historyIndex = -1;
   ProjectState.active = false;
@@ -2712,9 +2523,6 @@ function clearEditor() {
   _autosaveLastCode = '';
   setCode('');
   out('Editor cleared.');
-  // Spoken confirmation + screen-reader status. setCode('') cancels prior
-  // narration; the VoiceEngine cancel-generation guard lets this line still be
-  // heard from the start (it is not killed by the deferred cancels).
   speak('Editor cleared.');
   srAnnounce('Editor cleared.');
 }
@@ -2726,7 +2534,6 @@ function deleteLine(line) {
   if (line < 1 || line > maxLine) { const msg = `Line ${line} is out of range.`; out(msg); speak(msg); return; }
   const text = model.getLineContent(line);
 
-  // Handle last line correctly: delete from end of previous line to end of last line
   let range;
   if (line === maxLine && maxLine > 1) {
     const prevLen = model.getLineContent(maxLine - 1).length;
@@ -2883,17 +2690,14 @@ function applyConversationalEdit(aiAction) {
   srAnnounce('Conversational edit applied');
 }
 
-// ---------- SNIPPETS ----------
 function srAnnounce(msg) {
   const el = document.getElementById('srAnnouncer');
   if (!el) return;
-  // Clear then set forces screen readers to re-announce even if text is same
   el.textContent = '';
   setTimeout(function () { el.textContent = msg; }, 50);
 }
 
 async function saveSnippet() {
-  // Keep old function as fallback but redirect to accessible version
   await saveSnippetAccessible();
 }
 
@@ -2973,7 +2777,6 @@ async function saveSnippetWithName(name) {
 let _loadSnippetsQueued = false;
 async function loadSnippets() {
   if (_loadingSnippets) {
-    // Mark a refresh as needed; the in-flight call will pick it up when it finishes.
     _loadSnippetsQueued = true;
     return;
   }
@@ -3008,7 +2811,6 @@ async function loadSnippets() {
     _loadingSnippets = false;
     if (_loadSnippetsQueued) {
       _loadSnippetsQueued = false;
-      // Recurse to handle the queued refresh
       loadSnippets();
     }
   }
@@ -3107,8 +2909,6 @@ async function renameSnippetById(id, newName) {
 }
 
 async function previewSnippetById(id) {
-  // Read first 5 lines aloud WITHOUT loading the snippet into the editor.
-  // Lets the user audit a snippet before destroying their current work.
   if (!id) { speak('Please specify which snippet to preview.'); return; }
   const sn = snippetsCache.find(s => String(s.id) === String(id) ||
                                       (s.name && s.name.toLowerCase() === String(id).toLowerCase()));
@@ -3124,7 +2924,6 @@ async function previewSnippetById(id) {
   srAnnounce('Snippet previewed');
 }
 
-// ---------- COMMAND HANDLER ----------
 async function executeActionSequence(payload) {
   const actions = Array.isArray(payload && payload.actions) ? payload.actions : [];
   if (!actions.length) {
@@ -3153,8 +2952,6 @@ async function executeActionSequence(payload) {
 }
 
 async function handleConfirmedAction(action, payload) {
-  // Most actions should interrupt previous narration, but some need it to finish first.
-  // Generate, analyze, walk: they speak feedback BEFORE the long async wait, don't kill it.
   const _noCancelActions = new Set(['action_sequence', 'generate_code', 'analyze', 'analyze_deep', 'fix', 'summarize', 'narrate_file', 'walk_through', 'advise', 'story_mode', 'mentor_chat', 'mentor_progress', 'mentor_code_map', 'code_map', 'step_narration', 'compare_before_after', 'replay_mistake', 'why_fixed_works', 'read_project_files', 'explain_project_structure', 'explain_requirements']);
   if (!_noCancelActions.has(action)) {
     SpeechManager.cancelAll();
@@ -3162,13 +2959,9 @@ async function handleConfirmedAction(action, payload) {
   if (action === 'run')              await runCode();
   else if (action === 'action_sequence') await executeActionSequence(payload || {});
   else if (action === 'mentor_stop') { SpeechManager.cancelAll(); speak('Mentor stopped.'); srAnnounce('Mentor stopped'); }
-  // Speech-only cancel: silence narration without touching the mic or the app.
   else if (action === 'stop_speaking') { SpeechManager.cancelAll(); srAnnounce('Speech stopped'); }
   else if (action === 'mentor_chat') {
     const _mentorMode = payload && payload.mode ? payload.mode : 'general';
-    // Conceptual questions use the non-streaming path so the backend's
-    // deterministic concept fallback is used when AI is unavailable. Other
-    // mentor modes stream for real-time narration when VoiceEngine is present.
     if (_mentorMode !== 'concept' && typeof VoiceEngine !== 'undefined' && typeof talkToMentorStreaming === 'function') {
       await talkToMentorStreaming(payload && payload.message, _mentorMode);
     } else {
@@ -3183,15 +2976,12 @@ async function handleConfirmedAction(action, payload) {
   else if (action === 'analyze_deep') await analyzeDeep();
   else if (action === 'fix')         await fixCode();
   else if (action === 'stop_everything') {
-    // "Stop everything" silences speech AND stops the microphone (issue: a bare
-    // "stop everything" used to leave the mic listening).
     if (typeof _stepNarrationJob !== 'undefined' && _stepNarrationJob) { _stepNarrationJob.cancelled = true; }
     stopListeningNow();
     SpeechManager.cancelAll();
     SonificationManager.clearAll();
     ErrorBeaconManager.stop();
     // Preserve the last program output/error in the output box — only announce
-    // the stop via the status/ARIA region so the visible result is never lost.
     srAnnounce('Stopped listening and speech.');
     SonificationManager.playTone(400, 0.08, 0.08);
   }
@@ -3209,7 +2999,6 @@ async function handleConfirmedAction(action, payload) {
     srAnnounce('Guidance shown');
     speak((payload && payload.speech) || message);
   }
-  // ----- Sprint 1: learner handoff + accessibility controls -----
   else if (action === 'set_speech_rate') {
     applySpeechRate(payload && payload.rate ? payload.rate : 1.0);
     const msg = (payload && payload.speech) || 'Speed changed.';
@@ -3228,14 +3017,11 @@ async function handleConfirmedAction(action, payload) {
   }
   else if (action === 'project_report') {
     // requestProjectReport() owns the speech (concise summary + "say more"
-    // continuation); speaking payload.speech here too would double-speak it.
     await requestProjectReport();
   }
   else if (action === 'say_more') sayMore();
-  // ----- Sprint 2: navigate-by-meaning + code landmarks (read-only) -----
   else if (action === 'navigate_code' || action === 'bookmark_read') {
     const message = (payload && (payload.message || payload.speech)) || 'Here is the block.';
-    // Move the cursor/highlight to the target line if we have one. Never edits code.
     if (payload && payload.line && typeof gotoLine === 'function') gotoLine(payload.line);
     const excerpt = (payload && payload.code_excerpt) ? '\n\n' + payload.code_excerpt : '';
     out(message + excerpt);
@@ -3317,7 +3103,6 @@ async function handleConfirmedAction(action, payload) {
     const s = document.getElementById('colorVisionMode');
     if (!s) { speak('Color mode selector not found.'); return; }
     const mode = (payload && payload.mode) || 'default';
-    // Find the option whose value matches the requested mode
     let found = false;
     for (let i = 0; i < s.options.length; i++) {
       if (s.options[i].value === mode) {
@@ -3369,32 +3154,24 @@ async function handleConfirmedAction(action, payload) {
   else if (action === 'quiz_me')            await quizMe(payload && payload.topic);
   else if (action === 'explain_concept')    await explainConcept(payload && payload.concept);
   else if (action === 'bug_challenge')      await bugChallenge();
-  // Pre-flight inputs
   else if (action === 'set_inputs')         setPreflightInputs(payload && payload.values);
   else if (action === 'clear_inputs')       clearPreflightInputs();
   else if (action === 'list_inputs')        listPreflightInputs();
   else if (action === 'live_input_mode')    enableLiveInputMode();
   else if (action === 'preflight_input_mode') enablePreflightInputMode();
-  // Voice macros
   else if (action === 'save_macro')         await saveMacro(payload && payload.name);
   else if (action === 'use_macro')          await useMacro(payload && payload.name);
   else if (action === 'list_macros')        await listMacrosVoice();
   else if (action === 'share_macro')        await shareCurrentMacro(payload && payload.name);
   else if (action === 'use_shared_macro')   await useSharedMacro(payload && payload.share_code);
-  // Output bookmarks
   else if (action === 'bookmark_output')    await bookmarkOutput(payload && payload.label);
   else if (action === 'read_bookmark')      await readBookmark(payload && payload.label);
   else if (action === 'list_bookmarks')     await listBookmarks();
-  // Live execution position
   else if (action === 'where_am_i')         await reportPosition();
-  // Beginner-mode error explanation
   else if (action === 'explain_simply')     await explainErrorSimply();
-  // Output diff narration
   else if (action === 'narrate_diff')       narrateOutputDiff();
   else if (action === 'explain_diff')       await explainOutputDiff();
-  // Audio Code Map
   else if (action === 'code_map')           await requestCodeMap(payload && payload.query);
-  // Variable Watch / Step Narration
   else if (action === 'watch_var')          await requestWatchVariable(payload && payload.variable, 'add');
   else if (action === 'stop_watching')      await requestWatchVariable(payload && payload.variable, 'remove');
   else if (action === 'clear_watched')      await requestWatchVariable('', 'clear');
@@ -3405,16 +3182,11 @@ async function handleConfirmedAction(action, payload) {
     out(text); speak(text);
   }
   else if (action === 'only_announce_changes') { speak('I will only announce variable changes during step narration.'); }
-  // Mistake Replay
   else if (action === 'compare_before_after') await requestMistakeReplay('compare');
   else if (action === 'replay_mistake')       await requestMistakeReplay('replay');
   else if (action === 'why_fixed_works')      await requestMistakeReplay('why');
   else if (action === 'show_changed_lines')   await requestMistakeReplay('changed lines');
 
-  // Guided tutorial OBSERVES real editor insertions made through the normal
-  // voice/typed pipeline (it never intercepts them). This runs AFTER the insert
-  // helper above has spoken its own read-back, so the tutorial's follow-up
-  // guidance is queued after it — never overlapping. See TutorialController.onInsert.
   if (_TUTORIAL_EDIT_ACTIONS.has(action) &&
       window.TutorialController && window.TutorialController.active &&
       typeof window.TutorialController.onInsert === 'function') {
@@ -3422,13 +3194,11 @@ async function handleConfirmedAction(action, payload) {
   }
 }
 
-// Editor-mutating voice actions the guided tutorial watches for step progress.
 const _TUTORIAL_EDIT_ACTIONS = new Set([
   'insert_variable', 'insert_while', 'insert_if', 'insert_loop',
   'insert_function', 'insert_class', 'append_line', 'insert_line', 'replace_line',
 ]);
 
-// ---------- PRE-FLIGHT INPUTS ----------
 function setPreflightInputs(values) {
   if (!Array.isArray(values) || values.length === 0) {
     speak('No values heard. Try saying "set inputs to" followed by your values separated by "and" or commas.');
@@ -3527,7 +3297,6 @@ function suggestPreflightInputsFromCode(code) {
   }
 }
 
-// ---------- VOICE MACROS ----------
 async function saveMacro(name) {
   if (!name) { speak('Please give the macro a name. Say "remember this as" followed by a name.'); return; }
   const code = getCode();
@@ -3626,7 +3395,6 @@ async function useSharedMacro(shareCode) {
   }
 }
 
-// ---------- OUTPUT BOOKMARKS ----------
 async function bookmarkOutput(label) {
   const outputEl = document.getElementById('output');
   const position = outputEl ? (outputEl.textContent || '').length : 0;
@@ -3649,7 +3417,6 @@ async function bookmarkOutput(label) {
 
 async function readBookmark(label) {
   if (!label) {
-    // Read from most recent
     const res = await fetch('/bookmarks');
     const data = await res.json();
     if (!data.success || !data.bookmarks.length) {
@@ -3696,7 +3463,6 @@ async function listBookmarks() {
   }
 }
 
-// ---------- LIVE EXECUTION POSITION ----------
 async function reportPosition() {
   if (_activeStreamRun && _activeStreamRun.runId) {
     try {
@@ -3713,7 +3479,6 @@ async function reportPosition() {
       }
     } catch (e) {}
   }
-  // Fall back to breadcrumb at cursor
   await readBreadcrumb();
 }
 
@@ -3740,7 +3505,6 @@ async function readBreadcrumb() {
   }
 }
 
-// ---------- BEGINNER ERROR EXPLANATION ----------
 async function explainErrorSimply() {
   if (!_lastErrorContext) {
     speak('There is no recent error to explain. Run your code first.');
@@ -3774,7 +3538,6 @@ async function explainErrorSimply() {
   }
 }
 
-// ---------- OUTPUT DIFF NARRATION ----------
 function narrateOutputDiff() {
   if (!_lastOutputDiff) {
     speak('No diff available. Run your code at least twice to compare outputs.');
@@ -3825,7 +3588,6 @@ async function explainOutputDiff() {
   }
 }
 
-// ---------- CONVERSATIONAL MENTOR ----------
 function getMentorContext() {
   return {
     code: getCode(),
@@ -3994,7 +3756,6 @@ async function speakCodeMap() {
   }
 }
 
-// ---------- AUDIO CODE MAP ----------
 async function requestCodeMap(query) {
   if (!ensurePythonEditorContent('code map')) return;
   showAI('Mapping your code...');
@@ -4018,7 +3779,6 @@ async function requestCodeMap(query) {
   }
 }
 
-// ---------- VARIABLE WATCH ----------
 async function requestWatchVariable(variable, action) {
   try {
     const res = await fetch('/watch-variable', {
@@ -4037,7 +3797,6 @@ async function requestWatchVariable(variable, action) {
   }
 }
 
-// ---------- CONDITIONAL AUDIO BREAKPOINTS ----------
 async function requestAudioBreakpoint(action, condition, options) {
   const opts = options || {};
   try {
@@ -4064,7 +3823,6 @@ async function requestAudioBreakpoint(action, condition, options) {
   }
 }
 
-// ---------- STEP NARRATION ----------
 let _stepNarrationJob = null;
 
 function _playDepthCue(depth) {
@@ -4082,8 +3840,6 @@ async function requestStepNarration() {
   }
   const job = { cancelled: false };
   _stepNarrationJob = job;
-  // If speech is cancelled (stop speaking / stop everything) the epoch changes
-  // and the narration loop below stops re-enqueuing steps.
   const _narrEpoch = currentSpeechEpoch();
 
   showAI('Running with step narration...');
@@ -4176,13 +3932,12 @@ function tryResolveConfirmation(txt) {
   if (!pendingConfirm) return false;
   if (pendingConfirm.expiresAt && Date.now() > pendingConfirm.expiresAt) {
     pendingConfirm = null;
-    return false;  // let the new command flow through normally
+    return false;
   }
   const options = pendingConfirm.options || [];
   const context = pendingConfirm.context || {};
   const lower   = txt.toLowerCase().trim();
 
-  // 1. Explicit cancel — user wants out
   const cancelWords = ['cancel', 'no', 'neither', 'nope', 'none', 'forget it',
                        'never mind', 'nevermind', 'skip',
                        'नहीं', 'रद्द करो', 'छोड़ो'];
@@ -4201,7 +3956,6 @@ function tryResolveConfirmation(txt) {
     return true;
   }
 
-  // 2. Exact match on one of the offered options — clear yes
   for (const opt of options) {
     if (lower === opt || lower === opt.replace(/_/g, ' ')) {
       pendingConfirm = null;
@@ -4211,7 +3965,6 @@ function tryResolveConfirmation(txt) {
     }
   }
 
-  // 3. "First" / "second" / "1" / "2" — positional choice
   const positionalMap = {
     'first': 0, '1': 0, 'one': 0, 'option one': 0, 'option 1': 0,
     'second': 1, '2': 1, 'two': 1, 'option two': 1, 'option 2': 1,
@@ -4225,13 +3978,10 @@ function tryResolveConfirmation(txt) {
     return true;
   }
 
-  // 4. The user said something NEW that doesn't match the options or cancel.
-  //    Don't trap them — clear the pending confirm and let the new utterance
-  //    flow through as a fresh command. This is the bug fix: previously the
   //    user was stuck repeating themselves until timeout.
   pendingConfirm = null;
   speak('Okay, listening for a new command.');
-  return false;  // signal that the caller should re-route this text
+  return false;
 }
 
 async function handleCommandText(txt) {
@@ -4239,8 +3989,6 @@ async function handleCommandText(txt) {
   if (field) field.value = txt;
   updateCommandUnderstanding({ heard: txt, understood: '', nextAction: 'Interpreting command.' });
 
-  // GUIDED TUTORIAL intercept (mirrors handleVoiceCommand) — consume tutorial
-  // navigation words while active; everything else falls through unchanged.
   if (window.TutorialController && window.TutorialController.active &&
       typeof window.TutorialController.handleUtterance === 'function') {
     try {
@@ -4248,7 +3996,6 @@ async function handleCommandText(txt) {
     } catch (e) { console.error('Tutorial utterance error:', e); }
   }
 
-  // Quiz answer intercept (mirrors handleVoiceCommand) — per-tab state
   const _ts = tabState();
   if (_ts._pendingQuizAnswer && document.hidden) return false;
   if (_ts._pendingQuizAnswer) {
@@ -4279,7 +4026,6 @@ async function handleCommandText(txt) {
     }
   }
 
-  // Bug challenge intercept (mirrors handleVoiceCommand) — per-tab state
   if (_ts._pendingBugChallenge) {
     if (_ts._pendingBugChallenge.expiresAt && Date.now() > _ts._pendingBugChallenge.expiresAt) {
       _ts._pendingBugChallenge = null;
@@ -4301,8 +4047,6 @@ async function handleCommandText(txt) {
   if (pendingConfirm) {
     const handled = tryResolveConfirmation(txt);
     if (handled) return;
-    // Confirm was abandoned because the user said something unrelated.
-    // Fall through and process txt as a fresh command.
   }
 
   try {
@@ -4388,9 +4132,6 @@ function markVoiceListeningOff() {
   setVoiceButtonOff();
 }
 
-// Stop microphone recognition immediately (both the VoiceEngine recognizer and
-// the legacy one) WITHOUT speaking and WITHOUT touching the editor or output.
-// Shared by the Key 2 recovery key and the "stop everything" command.
 function stopListeningNow() {
   try {
     if (typeof VoiceEngine !== 'undefined' && VoiceEngine.VoiceInput &&
@@ -4403,7 +4144,6 @@ function stopListeningNow() {
 }
 
 function toggleVoice() {
-  // Use VoiceEngine if available
   if (typeof VoiceEngine !== 'undefined' && VoiceEngine.VoiceInput) {
     if (VoiceEngine.VoiceInput.isActive() || VoiceEngine.VoiceInput.isPaused()) {
       VoiceEngine.VoiceInput.stop();
@@ -4432,7 +4172,6 @@ function toggleVoice() {
           markVoiceListeningOff();
         }
       }, 1500);
-      // Provide audio feedback
       if (typeof cueSuccess === 'function') cueSuccess();
       const code = getCode();
       const hasCode = code.trim().length > 0;
@@ -4444,7 +4183,6 @@ function toggleVoice() {
     }
     return;
   }
-  // Legacy fallback
   if (isListening) stopListening(); else startListening();
 }
 
@@ -4461,7 +4199,6 @@ function startListening() {
   if (isListening) { speak('Already listening.'); return; }
   if (_recognitionStarting) { _debugLog('Voice: start already in flight'); return; }
 
-  // Tear down any previous recognizer so we never run two at once.
   if (recognition) {
     try {
       recognition.onend = null;
@@ -4495,7 +4232,6 @@ function startListening() {
     _lastRecognitionActivity = Date.now();
     _startRecognitionWatchdog();
 
-    // If paused, keep paused UI on session restart and stay silent
     if (_voicePaused) {
       const btn = document.getElementById('voiceButton');
       if (btn) {
@@ -4563,15 +4299,10 @@ function startListening() {
     if (!transcript) return;
     updateCommandUnderstanding({ heard: transcript, nextAction: 'Interpreting voice command.' });
     _debugLog('Voice heard:', transcript);
-    _lastRecognitionActivity = Date.now();  // any input proves recognition is alive
+    _lastRecognitionActivity = Date.now();
 
-    // When paused, only listen for the resume keyword. Drop everything else
-    // so the user can keep talking (e.g. during a pitch) without triggering
-    // commands or appearing in the UI.
     if (_voicePaused) {
       const lower = transcript.toLowerCase().trim();
-      // Whitelist of resume phrases. EXACT match only — substring match would
-      // resume on "go back to line 5" or "continue running the tests".
       const resumePhrases = new Set([
         'resume', 'resume please',
         'resume voice', 'resume voice recognition', 'resume voice control',
@@ -4585,7 +4316,6 @@ function startListening() {
       if (resumePhrases.has(lower)) {
         resumeVoiceRecognition();
       } else {
-        // Silently drop. Do NOT clear voiceText or output — we want zero UI noise.
         _debugLog('Voice paused — dropped:', transcript);
       }
       return;
@@ -4623,10 +4353,6 @@ function startListening() {
     isListening = false;
     AppState.isListening = false;
     _recognitionStarting = false;
-    // Only auto-restart an UNEXPECTED end. If the user turned voice off
-    // (markVoiceListeningOff clears _voiceEnabledByUser) we stay off. The
-    // scheduler debounces, backs off, skips hidden tabs, and gives up after a
-    // burst of rapid failures so we never get a restart storm or two recognizers.
     if (!_voiceEnabledByUser) return;
     _scheduleRecognitionRestart();
   };
@@ -4655,8 +4381,6 @@ function stopListening() {
   _debugLog('Voice: Listening stopped');
 }
 
-// Pause/off is a true manual stop. Recognition must not auto-resume until the
-// user explicitly turns voice on again.
 function pauseVoiceRecognition() {
   const voiceEngineActive = typeof VoiceEngine !== 'undefined'
     && VoiceEngine.VoiceInput
@@ -4684,19 +4408,11 @@ function pauseVoiceRecognition() {
   if (_voicePaused) { speak('Voice is already paused.'); return; }
   _voicePaused = true;
 
-  // Reconcile state: if Chrome's recognition silently died, kick it back to
-  // life. The pause flag will gate everything until resume.
   if (recognition) {
     try {
-      // If recognition is in an indeterminate state, restart it. The onend
-      // auto-restart logic will rebuild the session within ~200ms.
-      // We do NOT call recognition.stop() here — that would set isListening
-      // false and break the user model.
-    } catch (e) { /* ignore */ }
+    } catch (e) {  }
   }
 
-  // Visual + ARIA state — the button gets a distinct paused look so a sighted
-  // helper can see at a glance that the mic is open but ignoring input.
   const btn = document.getElementById('voiceButton');
   if (btn) {
     btn.textContent = 'Voice (Paused)';
@@ -4705,8 +4421,6 @@ function pauseVoiceRecognition() {
     btn.classList.add('cu-button-voice--paused');
   }
 
-  // Two-tone descending cue so the user gets non-verbal confirmation
-  // even if their TTS is interrupted or muted.
   SonificationManager.playTone(700, 0.08, 0.1);
   setTimeout(() => SonificationManager.playTone(500, 0.12, 0.1), 100);
 
@@ -4722,8 +4436,6 @@ function pauseVoiceRecognition() {
 
 function resumeVoiceRecognition() {
   if (!isListening) {
-    // If voice was off entirely, just turn it on instead of refusing.
-    // Better UX than telling a presenter "voice control is not active".
     _voiceEnabledByUser = true;
     _voicePaused = false;
     toggleVoice();
@@ -4741,13 +4453,8 @@ function resumeVoiceRecognition() {
     btn.classList.add('cu-button-voice--active');
   }
 
-  // Force a fresh recognition session. If the session silently died during
-  // pause (common after >30s of silence), this brings it back. If the session
-  // is still alive, stop() just triggers a clean restart via onend.
   try {
     recognition.stop();
-    // onend will fire and auto-restart within 400ms. Reset activity timer
-    // so the watchdog doesn't immediately kick again.
     _lastRecognitionActivity = Date.now();
   } catch (e) {
     _debugLog('Resume: stop failed, trying direct restart', e.message);
@@ -4755,7 +4462,6 @@ function resumeVoiceRecognition() {
     catch (e2) { _debugLog('Resume: direct restart also failed', e2.message); }
   }
 
-  // Ascending tones — mirror of the pause cue
   SonificationManager.playTone(500, 0.08, 0.1);
   setTimeout(() => SonificationManager.playTone(700, 0.12, 0.1), 100);
 
@@ -4769,15 +4475,7 @@ function resumeVoiceRecognition() {
   _debugLog('Voice: Resumed');
 }
 
-// ---------- VOICE COMMAND HANDLER ----------
 async function handleVoiceCommand(rawText) {
-  // SELF-ECHO GUARD: while Step Narration is speaking, the microphone can pick
-  // up the narration's own audio and re-submit it as a command. This is handled
-  // BEFORE the barge-in cancel below so narrated speech is never cancelled or
-  // interrupted by an "I didn't understand that command" reply. A stop-class
-  // word interrupts narration; any other input while narrating is ignored as
-  // echo. (_stepNarrationJob is cleared when narration finishes, so normal
-  // commands resume immediately afterwards.)
   if (_stepNarrationJob && !_stepNarrationJob.cancelled) {
     const t = rawText.toLowerCase().trim();
     const stopWords = ['stop', 'stop it', 'shut up', 'be quiet', 'silence',
@@ -4797,9 +4495,6 @@ async function handleVoiceCommand(rawText) {
 
   updateCommandUnderstanding({ heard: rawText, understood: '', nextAction: 'Interpreting voice command.' });
 
-  // GUIDED TUTORIAL: while the tutorial is active, let it consume its own
-  // navigation words (continue, repeat, recap, hint, give me an example, try
-  // again, exit tutorial). handleUtterance returns false for anything else, so
   // normal IDE commands like "run" or "read line 2" still flow through.
   if (window.TutorialController && window.TutorialController.active &&
       typeof window.TutorialController.handleUtterance === 'function') {
@@ -4809,14 +4504,11 @@ async function handleVoiceCommand(rawText) {
   }
 
   // BARGE-IN: cancel any ongoing legacy speech (VoiceEngine handles its own
-  // barge-in in _handleInput before calling this function, so we only need
-  // to cancel the legacy SpeechManager here)
   if (typeof VoiceEngine !== 'undefined') {
     SpeechManager.cancelAll();
   }
 
   const _ts = tabState();
-  // Quiz answer intercept — per-tab state
   if (_ts._pendingQuizAnswer) {
     if (_ts._pendingQuizAnswer.expiresAt && Date.now() > _ts._pendingQuizAnswer.expiresAt) {
       _ts._pendingQuizAnswer = null;
@@ -4844,7 +4536,6 @@ async function handleVoiceCommand(rawText) {
     }
   }
 
-  // Bug challenge reveal intercept — per-tab state
   if (_ts._pendingBugChallenge) {
     if (_ts._pendingBugChallenge.expiresAt && Date.now() > _ts._pendingBugChallenge.expiresAt) {
       _ts._pendingBugChallenge = null;
@@ -4866,8 +4557,6 @@ async function handleVoiceCommand(rawText) {
   if (pendingConfirm) {
     const handled = tryResolveConfirmation(rawText);
     if (handled) return;
-    // Confirm was abandoned. The user said something that wasn't a yes/no
-    // to our question — treat it as a fresh command and fall through.
   }
 
   const cleaned = String(rawText || '').trim()
@@ -4886,8 +4575,6 @@ async function handleVoiceCommand(rawText) {
     const data = await res.json();
     applyCommandUnderstanding(data, cleaned);
 
-    // Handle confirm intent before the general success branch so it isn't
-    // swallowed by handleConfirmedAction (which has no 'confirm' case)
     if (data.action === 'confirm') {
       const opts = data.options || [];
       pendingConfirm = {
@@ -4915,9 +4602,7 @@ async function handleVoiceCommand(rawText) {
   }
 }
 
-// ---------- KEYBOARD SHORTCUTS ----------
 window.addEventListener('DOMContentLoaded', () => {
-  // Restore the learner's saved speech rate + verbosity before any speech.
   try { restoreAccessibilityPreferences(); } catch (e) {}
 
   const resumeAudio = () => {
@@ -4933,23 +4618,17 @@ window.addEventListener('DOMContentLoaded', () => {
     );
     if (!editableTarget && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey && e.key === '2') {
       e.preventDefault();
-      // Key 2 is the recovery / panic key. It stops active listening and speech,
-      // clears any queued speech, and leaves the editor content untouched. This
-      // is the reliable escape hatch when ASR mishears a stop command such as
-      // "top listening" — the user can always press 2.
       if (typeof _stepNarrationJob !== 'undefined' && _stepNarrationJob) _stepNarrationJob.cancelled = true;
       stopListeningNow();
-      SpeechManager.cancelAll();   // stops current speech AND clears the queue
+      SpeechManager.cancelAll();
       SonificationManager.clearAll();
       ErrorBeaconManager.stop();
       const msg = 'Stopped listening and speech. Editor unchanged.';
       srAnnounce(msg);             // silent screen-reader status (always)
-      speak(msg);                  // short spoken confirmation (survives the cancel)
+      speak(msg);
       return;
     }
     if (e.ctrlKey && e.shiftKey && e.key === 'M') { e.preventDefault(); toggleVoice(); }
-    // Escape stops speech immediately. Ignored when command palette or input
-    // dialog is open — those have their own Escape handlers.
     if (e.key === 'Escape') {
       const paletteOverlay = document.getElementById('commandPaletteOverlay');
       const paletteOpen = paletteOverlay && !paletteOverlay.hasAttribute('hidden');
@@ -4968,14 +4647,12 @@ window.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Command palette input — registered once here only (removed the duplicate at bottom of file)
   const paletteInput = document.getElementById('commandPaletteInput');
   if (paletteInput) {
     paletteInput.addEventListener('input', e => {
       commandPaletteSelectedIndex = 0;
       renderCommandPalette(e.target.value);
     });
-    // Escape must be caught on the INPUT itself so Monaco never sees it
     paletteInput.addEventListener('keydown', e => {
       if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeCommandPalette(); }
       else if (e.key === 'ArrowDown') { e.preventDefault(); commandPaletteSelectedIndex++; renderCommandPalette(paletteInput.value); }
@@ -4984,7 +4661,6 @@ window.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Ctrl+Shift+P opens the palette — document-level is fine for this one
   document.addEventListener('keydown', e => {
     if (e.ctrlKey && e.shiftKey && e.key === 'P') { e.preventDefault(); openCommandPalette(); }
   });
@@ -5003,14 +4679,8 @@ function registerEditorShortcuts() {
   if (!editor) return;
   window._editorShortcutsRegistered = true;
 
-  // Ctrl+Enter: run code. Registered as a Monaco editor command only —
-  // Monaco swallows the event before the document-level handler sees it,
-  // which is fine because this is the only path we need.
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => { runCode(); });
 
-  // Escape inside Monaco — stop speech immediately. Monaco normally swallows
-  // Escape (its suggestion widget and command palette consume it first), so
-  // we also listen on the editor's DOM node in capture phase to beat them.
   editor.addCommand(monaco.KeyCode.Escape, () => {
     if (AppState.isSpeaking || (window.speechSynthesis && window.speechSynthesis.speaking)) {
       SpeechManager.cancelAll();
@@ -5019,10 +4689,6 @@ function registerEditorShortcuts() {
       SonificationManager.playTone(600, 0.05, 0.06);
     }
   });
-  // Capture-phase listener on the editor's DOM container. Fires BEFORE
-  // Monaco's suggestion widget / IntelliSense popup can swallow Escape,
-  // so speech still stops even when those popups are open. We don't
-  // preventDefault — the popup can still close after we cancel speech.
   const editorDom = editor.getDomNode();
   if (editorDom) {
     editorDom.addEventListener('keydown', (e) => {
@@ -5033,11 +4699,9 @@ function registerEditorShortcuts() {
         srAnnounce('Speech stopped');
         SonificationManager.playTone(600, 0.05, 0.06);
       }
-    }, true);  // capture phase — beats Monaco's internal handlers
+    }, true);
   }
 
-  // All Alt-shortcut entry points cancel pending speech first so a new
-  // user action immediately interrupts whatever's currently being said.
   editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.KeyS, () => { SpeechManager.cancelAll(); sonifyCurrentBlock(); });
   editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.KeyL, () => { SpeechManager.cancelAll(); const pos = editor.getPosition() || { lineNumber: 1 }; readLineEnhanced(pos.lineNumber); });
   editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.KeyV, () => { SpeechManager.cancelAll(); listVariables(); });
@@ -5061,9 +4725,6 @@ function registerEditorShortcuts() {
   _debugLog('All accessibility features loaded.');
 }
 
-// ---------- AUTOSAVE ----------
-// Periodically writes the editor contents to localStorage so a refresh
-// or accidental tab-close doesn't lose work. Recovery prompts on next load.
 function startAutosave() {
   if (_autosaveTimer) return;
   _autosaveTimer = setInterval(() => {
@@ -5099,11 +4760,9 @@ function recoverAutosaveDraft() {
       srAnnounce('Stale non-Python draft removed');
       return;
     }
-    // Only restore if the editor is empty/default — don't clobber an active session
     const current = getCode().trim();
     const isDefault = !current || current === DEFAULT_PYTHON_STARTER;
     if (!isDefault) return;
-    // Only restore drafts from within the last 7 days — older is probably stale
     const ageMs = Date.now() - (draft.timestamp || 0);
     if (ageMs > 7 * 24 * 60 * 60 * 1000) {
       localStorage.removeItem(AUTOSAVE_KEY);
@@ -5119,7 +4778,6 @@ async function speakNextStep() {
   await handleCommandText('next step');
 }
 
-// ---------- STRUCTURE PANEL ----------
 let lastStructureData = null;
 
 async function updateStructurePanel() {
@@ -5209,7 +4867,6 @@ async function updateStructurePanel() {
     content.innerHTML = html;
     showEl(panel);
 
-    // Use event delegation — line numbers come from data attributes, not inline JS strings
     content.querySelectorAll('.structure-item').forEach(item => {
       const go = () => {
         const line = parseInt(item.dataset.line, 10);
@@ -5232,7 +4889,6 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
-// ---------- AUTOCOMPLETE ----------
 const PYTHON_KEYWORDS = [
   'False','None','True','and','as','assert','async','await','break','class',
   'continue','def','del','elif','else','except','finally','for','from','global',
@@ -5294,12 +4950,10 @@ function registerPythonAutocomplete() {
   });
 }
 
-// ---------- FUNCTION / CLASS SONIFICATION ----------
 async function sonifyFunction(functionName) {
   if (!functionName) { speak('Please specify a function name.'); return; }
   if (!ensurePythonEditorContent('sonify function')) return;
   const lines = getCode().split('\n');
-  // Escape regex metacharacters in the function name before building the pattern
   const pattern = new RegExp(`^\\s*def\\s+${escapeRegex(functionName)}\\s*\\(`, 'i');
 
   let startLine = -1, endLine = -1;
@@ -5353,7 +5007,6 @@ async function sonifyRange(startLine, endLine, context = 'block', delayMs = 100)
 
   for (let i = startLine - 1; i < Math.min(endLine, lines.length); i++) {
     const indent = lines[i].search(/\S/);
-    // Normalized volume consistent with all other sonification (0.08 not 0.3)
     SonificationManager.playTone(baseFreq + 50 * Math.min(indent / 2, 5), 0.05, 0.08);
     await sleep(delayMs);
   }
@@ -5430,7 +5083,6 @@ function readFunction(functionName) {
   body.split('\n').slice(0, 12).forEach((line, idx) => speak(`Line ${startLine + idx}: ${line || 'empty line'}`));
 }
 
-// ---------- ERROR SONIFICATION ----------
 const ERROR_SONIFICATION_MAP = {
   SyntaxError:       { freq: 200, duration: 300, label: 'syntax error' },
   IndentationError:  { freq: 250, duration: 250, label: 'indentation error' },
@@ -5470,11 +5122,9 @@ async function sonifyCodeIssues() {
 
   lines.forEach((line, idx) => {
     const indent = line.search(/\S/);
-    // Inconsistent indentation check
     if (indent !== -1 && indent % 4 !== 0 && indent % 2 !== 0) {
       issues.push({ line: idx + 1, type: 'Style', message: 'Inconsistent indentation' });
     }
-    // Detect bare assignment (=) inside if/while condition — heuristic
     const trimmed = line.trim();
     if (/^(if|elif|while)\s+/.test(trimmed) && /[^=!<>]=(?!=)/.test(trimmed)) {
       issues.push({ line: idx + 1, type: 'Warning', message: 'Possible assignment in condition' });
@@ -5486,7 +5136,6 @@ async function sonifyCodeIssues() {
   for (const issue of issues) { sonifyError(issue.message, issue.line); await sleep(300); }
 }
 
-// ---------- DEBUG SUGGESTIONS ----------
 async function getDebugSuggestions() {
   const code = getCode();
   if (!code.trim()) { speak('Code is empty.'); return; }
@@ -5506,13 +5155,11 @@ async function getDebugSuggestions() {
     let speech = `Found ${data.suggestions.length} suggestion${data.suggestions.length !== 1 ? 's' : ''}. `;
     data.suggestions.forEach((sugg, idx) => { output += `${sugg.type === 'warning' ? 'Warning' : 'Suggestion'}: ${sugg.text}\n\n`; speech += `Item ${idx + 1}: ${sugg.text}. `; });
     out(output); speak(speech);
-    // Glyph decorations require a line number from the backend — skipping until backend provides it
   } catch (e) {
     console.error('Debug suggestions error:', e); speak('Error getting suggestions.');
   }
 }
 
-// ---------- COMMAND PALETTE ----------
 const COMMAND_PALETTE_COMMANDS = [
   { id: 'run',              title: 'Run Code',           desc: 'Execute Python code',                icon: '',  keys: 'Ctrl+Enter',   action: () => runCode() },
   { id: 'analyze',          title: 'Analyze Code',        desc: 'AI analysis of code',               icon: '', keys: 'Ctrl+Alt+A',   action: () => analyzeCode() },
@@ -5551,7 +5198,6 @@ function openCommandPalette() {
   showEl(overlay);
   commandPaletteSelectedIndex = 0;
   renderCommandPalette('');
-  // Focus after a tick so Monaco doesn't reclaim focus immediately
   requestAnimationFrame(() => { if (input) { input.focus(); speak('Command palette open. Type to search, arrow keys to navigate, Enter to select, Escape to close.'); } });
 }
 
@@ -5610,7 +5256,6 @@ function executeCommandPaletteItem(index) {
 function toggleStructurePanel() {
   const panel = document.getElementById('structurePanel');
   if (!panel) return;
-  // Use hidden attribute consistently (not style.display)
   if (panel.hasAttribute('hidden')) {
     showEl(panel);
     speak('Structure panel shown.');
@@ -5642,7 +5287,6 @@ async function readStructureOutline() {
   }
 }
 
-// ---------- VOICE CODE EDITING ----------
 
 // ==== SPOKEN-CODE-NORMALIZERS-START (pure; mirrored by tests/spoken_code.test.js) ====
 const SPOKEN_CODE_NUMBERS = Object.freeze({
@@ -5712,16 +5356,11 @@ function normalizeSpokenCodeText(text) {
 
   let indent = '';
   // Strip a leading "indented" / "four spaces" / "tab" cue, tolerating an
-  // article in front ("an indented print ...") so spoken structure works.
   while (/^(?:an?\s+|the\s+)?(?:indent|indented|four\s+spaces|tab)\s+/i.test(raw)) {
     indent += '    ';
     raw = raw.replace(/^(?:an?\s+|the\s+)?(?:indent|indented|four\s+spaces|tab)\s+/i, '').trim();
   }
 
-  // Forgive a common mis-heard "print" keyword at the start of an insert
-  // ("prent hello world" -> "print hello world") so a slightly imperfect spoken
-  // command still becomes valid Python. Only the leading word is corrected, and
-  // only for a clear near-miss of "print" — never an arbitrary word.
   raw = raw.replace(/^(?:prent|prnt|preent|pirnt|printt|brint|prind|prinr)\b/i, 'print');
 
   if (/^[A-Za-z_]\w*\s*=/.test(raw) || /^\s*(?:print|range)\s*\(/i.test(raw) || /:\s*$/.test(raw)) {
@@ -5734,13 +5373,10 @@ function normalizeSpokenCodeText(text) {
     return `${indent}for ${forMatch[1]} in range(${count}):`;
   }
 
-  // "print saying ready" / "print statement that says ready": the word "saying"
-  // marks a literal message, so always quote it (even a single word like ready).
   const printSayingMatch = raw.match(/^print(?:\s+statement)?\s+(?:saying|that\s+says)\s+(.+)$/i);
   if (printSayingMatch) {
     return `${indent}print(${quotePythonString(printSayingMatch[1].trim())})`;
   }
-  // "print hello world" (quoted) / "print name" (a variable, left bare).
   const printMatch = raw.match(/^print(?:\s+statement)?\s+(.+)$/i);
   if (printMatch) {
     return `${indent}print(${normalizeSpokenPrintArgument(printMatch[1])})`;
@@ -5754,11 +5390,8 @@ function normalizeSpokenCodeText(text) {
   return indent + normalizeSpokenCodeExpression(raw);
 }
 
-// ---- Spoken value / condition normalizers (shared by voice insert actions) ----
 
-// Turn a spoken variable value into Python. Numbers and booleans stay literal;
 // a bare word like "Taknoor" becomes a quoted string (it is almost always a
-// name or label, not a variable reference); simple arithmetic stays an
 // expression. Keeps assignment inserts valid both inside and outside the tutorial.
 function normalizeSpokenValue(value) {
   const raw = String(value || '').trim();
@@ -5774,28 +5407,20 @@ function normalizeSpokenValue(value) {
   return quotePythonString(raw);                              // text literal
 }
 
-// Turn a spoken comparison into a Python condition: strip lead-ins
-// ("whether"/"that"), fold "is greater than" -> "greater than", map equality
-// words to ==, then reuse the operator/number normalizer.
 function normalizeSpokenCondition(text) {
   let c = String(text || '').trim();
   if (!c) return 'True';
   c = c.replace(/^(?:whether|that|if)\s+/i, '');
-  // Drop the beginner connective "is" before a comparison word ("age is greater
-  // than" -> "age greater than"), keeping "or equal to" intact so <= / >= still
-  // resolve. The operator words themselves are mapped by normalizeSpokenCodeExpression.
   c = c.replace(/\bis\s+(greater|less|more|bigger|smaller|not|equal)\b/gi, '$1');
   c = c.replace(/\bbigger\s+than\b/gi, 'greater than');
   c = c.replace(/\bsmaller\s+than\b/gi, 'less than');
   c = c.replace(/\bmore\s+than\b/gi, 'greater than');
   let expr = normalizeSpokenCodeExpression(c);
-  // In a condition a lone "=" (from "equals"/"equal to") must become "==".
   expr = expr.replace(/(^|[^<>=!])=(?!=)/g, '$1==');
   expr = expr.replace(/={3,}/g, '==').replace(/\s+/g, ' ').trim();
   return expr || 'True';
 }
 
-// Read a Python condition back in words, for clear spoken confirmation.
 function spokenConditionPhrase(cond) {
   return String(cond || '')
     .replace(/>=/g, ' is greater than or equal to ')
@@ -5807,16 +5432,7 @@ function spokenConditionPhrase(cond) {
     .replace(/\s+/g, ' ').trim();
 }
 
-// Build ONE clean spoken string for a program's run output. A blind learner
-// cannot read the visible output box, so the output must be spoken — reliably
-// and in one well-formed utterance (two separate speak() calls can collide or
-// be cut off). Multi-line output is read as a comma-separated list; long output
-// is summarized with an offer to hear it all via "read full output". Empty
-// output is stated plainly instead of a dangling "Program output:". Pure
-// (string in, string out); the visible output box always keeps the exact text.
 function _outputPeriod(s) { return /[.!?:]$/.test(String(s || '')) ? '' : '.'; }
-// The backend substitutes this exact text for a program that printed nothing
-// (app.py /run). The visible panel keeps it; speech states success plainly.
 const _NO_OUTPUT_PLACEHOLDER = 'Program finished with no output.';
 function formatRunOutputSpeech(output) {
   const raw = String(output == null ? '' : output);
@@ -5835,8 +5451,6 @@ function formatRunOutputSpeech(output) {
     label + ': ' + preview + '. Say read full output to hear everything.';
 }
 
-// Read the FULL output back, exactly and in order (no summarizing), for the
-// explicit "read output" / "read full output" commands.
 function formatFullOutputSpeech(output) {
   const raw = String(output == null ? '' : output);
   if (raw.trim() === _NO_OUTPUT_PLACEHOLDER) return 'The program finished with no printed output.';
@@ -5847,10 +5461,7 @@ function formatFullOutputSpeech(output) {
 }
 // ==== SPOKEN-CODE-NORMALIZERS-END ====
 
-// True while the guided tutorial is mid-activity. Structural inserts (if / for /
-// while) then drop the "pass" placeholder, because the tutorial guides the
 // learner to add the indented body next; outside the tutorial the placeholder
-// keeps the snippet runnable.
 function tutorialBuildingActivity() {
   return !!(window.TutorialController && window.TutorialController.active &&
             window.TutorialController.model &&
@@ -5860,8 +5471,6 @@ function tutorialBuildingActivity() {
 function insertAtCursor(text) {
   const model = getModel();
   if (!model) { speak('Editor not ready.'); return; }
-  // First line into an empty editor goes at the very top — no leading blank
-  // line — so line numbers and read-back stay clean for screen-reader users.
   if (!model.getValue().trim()) {
     model.setValue(text);
     const last = model.getLineCount();
@@ -5955,9 +5564,6 @@ function appendLineVoice(text) {
   srAnnounce('Line inserted');
 }
 
-// Read a generated line of code back in a screen-reader-friendly way: announce
-// indentation explicitly, and describe brackets/operators only lightly so the
-// learner hears structure without a flood of symbol names.
 function spokenCodeReadback(code) {
   const raw = String(code || '');
   const indentMatch = raw.match(/^(\s*)/);
@@ -6004,7 +5610,6 @@ function addParameterVoice(paramName, functionName) {
   const code  = getCode();
   const lines = code.split('\n');
 
-  // Find the target function
   let targetLine = -1;
   const pattern = functionName
     ? new RegExp(`^\\s*def\\s+${escapeRegex(functionName)}\\s*\\(`)
@@ -6038,7 +5643,6 @@ function addParameterVoice(paramName, functionName) {
   srAnnounce(`Parameter ${paramName} added`);
 }
 
-// ---------- SEMANTIC AUTOCOMPLETE ----------
 
 let _lastSuggestions = [];
 let _suggestionsLang = 'en';
@@ -6111,7 +5715,6 @@ function chooseSuggestion(choice) {
   srAnnounce('Suggestion inserted');
 }
 
-// ---------- EXECUTION STORY MODE ----------
 
 async function tellExecutionStory() {
   SpeechManager.cancelAll();
@@ -6141,7 +5744,6 @@ async function tellExecutionStory() {
   }
 }
 
-// ---------- AUDIO BREAKPOINT DEBUGGER ----------
 
 let _breakpoints = new Set();
 let _watchedVars = new Set();
@@ -6156,7 +5758,6 @@ function setBreakpoint(lineNum) {
 
   _breakpoints.add(lineNum);
 
-  // Visual decoration — red dot in gutter
   _breakpointDecorations = editor.deltaDecorations(_breakpointDecorations, [
     ...Array.from(_breakpoints).map(l => ({
       range: new monaco.Range(l, 1, l, 1),
@@ -6202,12 +5803,9 @@ async function continueDebugging() {
 }
 
 function debugContinue() {
-  // Walk the trace forward until we hit a breakpoint line
   const trace = window.executionTrace || [];
   if (!trace.length) { speak('No trace available. Run your code first.'); return; }
 
-  // If the trace was truncated by the 5000-event cap AND we have unhit breakpoints,
-  // warn the user that breakpoints past the truncation point are unreachable.
   const truncated = trace.some(e => e.type === 'overflow');
   if (truncated && _breakpoints.size > 0) {
     const bpLines = Array.from(_breakpoints).sort((a, b) => a - b);
@@ -6230,7 +5828,6 @@ function debugContinue() {
       hitBreakpoint = true;
       window.traceIndex = idx;
 
-      // Report watched variables at this breakpoint
       const stateEvents = trace.slice(0, idx).filter(e => e.type === 'state_change' && e.line === event.line);
       let varReport = '';
       if (_watchedVars.size > 0 && stateEvents.length > 0) {
@@ -6256,7 +5853,6 @@ function debugContinue() {
   }
 }
 
-// ---------- MENTOR / LEARNING MODE ----------
 
 let _mentorActive = false;
 let _currentQuiz  = null;
@@ -6297,8 +5893,6 @@ async function quizMe(topic) {
     q.options.forEach(o => speak(o));
     speak('Say answer A, answer B, or answer C.');
 
-    // Store expected answer in per-tab state so other tabs don't intercept.
-    // Expires after 5 minutes so a stale quiz doesn't catch later voice input.
     tabState()._pendingQuizAnswer = {
       answer: q.answer,
       explanation: q.explanation,
@@ -6359,8 +5953,6 @@ async function bugChallenge() {
     srAnnounce('Bug challenge loaded');
     speak(`Bug challenge loaded into editor. ${ch.hint}. Say show answer when you are ready.`);
 
-    // Store pending bug challenge in per-tab state so other tabs don't intercept.
-    // Expires after 10 minutes so a stale challenge doesn't catch later voice input.
     tabState()._pendingBugChallenge = {
       bug: ch.bug,
       fixed: ch.fixed,
@@ -6376,15 +5968,12 @@ async function bugChallenge() {
 }
 
 function restartTutorial() {
-  // open() always (re)starts from the first module and speaks the welcome, so
-  // it already conveys "restarted"; no extra speak() that would queue oddly.
   if (window.TutorialController) {
     window.TutorialController.open();
   }
 }
 
 function showInputDialog(promptText, callback) {
-  // window.prompt is inaccessible to screen readers; use the template modal.
   const overlay = document.getElementById('_cuInputDialog');
   const label = document.getElementById('_cuDialogLabel');
   const input = document.getElementById('_cuDialogInput');
@@ -6448,12 +6037,10 @@ async function listVariablesWithValues() {
     out('No execution trace available. Run your code first.');
     return;
   }
-  // Walk trace forward, building current variable values from state_change events
   const vars = {};
   for (const event of trace) {
     if (event.type === 'state_change' && event.changes) {
       for (const change of event.changes) {
-        // Match: "x changed from 0 to 5" or "x initialized to 5"
         const initMatch = change.match(/^(\w+) initialized to (.+)$/);
         const changeMatch = change.match(/^(\w+) changed from .+ to (.+)$/);
         if (initMatch) vars[initMatch[1]] = initMatch[2];
@@ -6477,14 +6064,12 @@ async function listVariablesWithValues() {
   speak(speech);
 }
 
-// Lightweight phonetic helper for single letters (NATO-style for screen readers)
 function pronounceVariableJS(name) {
   if (!name || name.length !== 1) return name;
   const map = {a:'a',b:'bee',c:'see',d:'dee',e:'ee',f:'eff',g:'gee',h:'aitch',i:'eye',j:'jay',k:'kay',l:'ell',m:'em',n:'en',o:'oh',p:'pee',q:'cue',r:'arr',s:'ess',t:'tee',u:'you',v:'vee',w:'double-you',x:'ex',y:'why',z:'zee'};
   return map[name.toLowerCase()] || name;
 }
 
-// ---------- WALK THROUGH CODE (AI-powered beginner explanation) ----------
 
 async function walkThroughCode() {
   if (!ensurePythonEditorContent('walk through')) return;
@@ -6493,8 +6078,6 @@ async function walkThroughCode() {
 
   showAI('Walking through your code...');
   speak('Let me walk through your code.');
-  // Capture the speech epoch: if the user says "stop" while we await the
-  // network, the epoch changes and the explanation below is not spoken.
   const _walkEpoch = currentSpeechEpoch();
   try {
     const res = await fetch('/walkthrough', {
@@ -6515,17 +6098,13 @@ async function walkThroughCode() {
   }
 }
 
-// ─── VOICE ENGINE INTEGRATION ──────────────────────────────────────────────
-// Wire VoiceEngine into the existing app flow when available
 (function _initVoiceEngineIntegration() {
   if (typeof VoiceEngine === 'undefined') return;
 
-  // Set command handler: when VoiceEngine receives voice input, route to handleVoiceCommand
   VoiceEngine.setCommandHandler(async function (transcript) {
     await handleVoiceCommand(transcript);
   });
 
-  // Set streaming UI callback: update output panel as chunks arrive
   VoiceEngine.setStreamUICallback(function (fullText, chunk) {
     const outputEl = document.getElementById('output');
     if (outputEl) {
@@ -6533,10 +6112,8 @@ async function walkThroughCode() {
     }
   });
 
-  // Voice language selector handler
   const voiceLangSelect = document.getElementById('voiceLangSelector');
   if (voiceLangSelect) {
-    // Restore saved preference
     const saved = VoiceEngine.Config.language || 'auto';
     voiceLangSelect.value = saved;
 
@@ -6547,7 +6124,6 @@ async function walkThroughCode() {
     });
   }
 
-  // Sync language selector with VoiceEngine
   const langSelector = document.getElementById('languageSelector');
   if (langSelector) {
     langSelector.addEventListener('change', function () {
@@ -6561,13 +6137,11 @@ async function walkThroughCode() {
   _debugLog('VoiceEngine integration initialized');
 })();
 
-// Streaming mentor chat — used when VoiceEngine is present
 async function talkToMentorStreaming(message, mode) {
   if (typeof VoiceEngine === 'undefined') {
     return talkToMentor(message, mode);
   }
 
-  // Handle special modes that don't need a server round-trip
   if (mode === 'repeat') {
     if (window.lastMentorReply) {
       showMentorReply('repeat that', window.lastMentorReply);
@@ -6613,7 +6187,6 @@ async function talkToMentorStreaming(message, mode) {
     out('Mentor error: ' + result.error);
     speak('Sorry, I could not reach the mentor right now.');
   } else if (result.fullText) {
-    // Store in mentor history
     window.mentorHistory.push({ role: 'assistant', content: result.fullText });
     if (window.mentorHistory.length > 20) window.mentorHistory.shift();
     window.lastMentorReply = result.fullText;

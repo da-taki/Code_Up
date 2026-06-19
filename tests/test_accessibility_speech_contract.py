@@ -1,13 +1,3 @@
-"""
-Cross-cutting accessibility speech contract.
-
-The core rule for a blind beginner: every meaningful system response must be
-understandable through speech, not only through visible text. This module guards
-that contract across the major learning actions — each must return a spoken
-payload (a `speech` field, or a `message` the frontend speaks), and the teaching
-actions must carry the *core* explanation in speech, not just a tiny final
-sentence. Deterministic only; no cloud AI.
-"""
 import os
 
 import pytest
@@ -37,9 +27,6 @@ def _vc(client, text, code="", error=""):
     return client.post("/voice-command", json={"text": text, "code": code, "error": error}).get_json()
 
 
-# Every major action that returns visible text, with the minimum spoken length we
-# expect. Teaching actions must speak the substance; control/navigation actions
-# may be short but must still speak *something* meaningful.
 SUBSTANTIAL = [
     ("what can I do here", "", "", 80),
     ("summarize structure", LOOP, "", 60),
@@ -50,14 +37,10 @@ SUBSTANTIAL = [
     ("what did I learn today", "", "", 40),
 ]
 
-# Actions that carry a short-but-meaningful backend spoken payload.
 SHORT_OK = [
     ("go to the loop", LOOP, ""),
 ]
 
-# Actions whose speech is produced entirely on the frontend (the browser reads
-# the editor / output box aloud). The backend intentionally returns no payload;
-# the contract is that the dispatcher wires them to a speaking function.
 FRONTEND_SPEECH = [
     ("teach me this code", "analyze", "analyzeCode()"),
     ("teach me this scored", "analyze", "analyzeCode()"),
@@ -72,12 +55,9 @@ def test_teaching_actions_speak_the_substance(client, text, code, error, min_len
     speech = (d.get("speech") or "").strip()
     message = (d.get("message") or "").strip()
     action_speech = ((d.get("ai_action") or {}).get("spoken_confirmation") or "").strip()
-    # A spoken payload must exist (speech, or a message the frontend speaks).
     assert speech or message or action_speech, (text, d.get("action"))
-    # And it must carry the core explanation, not a one-line stub.
     spoken = speech or message or action_speech
     assert len(spoken) >= min_len, (text, len(spoken))
-    # When a `speech` field is present it must itself be meaningful.
     if speech:
         assert len(speech) >= 40, (text, speech)
 
@@ -92,9 +72,7 @@ def test_every_action_returns_some_spoken_payload(client, text, code, error):
 
 @pytest.mark.parametrize("text,action,fn", FRONTEND_SPEECH)
 def test_frontend_speech_actions_route_and_are_wired_to_speak(client, text, action, fn):
-    # The backend routes the command...
     assert _vc(client, text, LOOP, "")["action"] == action
-    # ...and the frontend dispatcher hands it to a speaking function.
     with open(os.path.join(_STATIC, "app.js"), encoding="utf-8") as fh:
         src = fh.read()
     assert f"action === '{action}'" in src
@@ -106,14 +84,11 @@ def test_project_report_route_has_meaningful_speech():
     session_memory.record_run(mem, output="0\n1\n2\n", ran_ok=True)
     rep = report_support.build_project_report({"is_project": False, "code": LOOP}, mem)
     assert rep["speech"] and len(rep["speech"]) >= 120
-    # The spoken report explains behaviour + the last output, not just file type.
     low = rep["speech"].lower()
     assert "for loop" in low and "last successful output" in low
 
 
 def test_deterministic_message_dispatch_speaks(app_js_text=None):
-    # Structural guard: the frontend's deterministic_message handler speaks the
-    # payload (so no learning response updates only the visible UI).
     with open(os.path.join(_STATIC, "app.js"), encoding="utf-8") as fh:
         src = fh.read()
     idx = src.index("action === 'deterministic_message'")
@@ -124,7 +99,6 @@ def test_deterministic_message_dispatch_speaks(app_js_text=None):
 def test_run_and_report_dispatch_speak():
     with open(os.path.join(_STATIC, "app.js"), encoding="utf-8") as fh:
         src = fh.read()
-    # Run speaks the formatted output; project report speaks its speech field.
     assert "speak(formatRunOutputSpeech(data.output))" in src
     start = src.index("async function requestProjectReport(")
     assert "speak(" in src[start:start + 1200]

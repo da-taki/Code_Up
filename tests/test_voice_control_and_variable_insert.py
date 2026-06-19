@@ -1,7 +1,3 @@
-"""Speech-control semantics (speech-cancel vs mic-pause vs stop-everything are
-distinct) and natural variable-assignment inserts with pending clarification.
-AI disabled, so these assert the deterministic path.
-"""
 import pytest
 
 import app as app_module
@@ -22,14 +18,10 @@ def _vc(client, text, **kw):
     return client.post("/voice-command", json={"text": text, **kw}).get_json()
 
 
-# ---------------------------------------------------------------------------
-# Speech-control semantics
-# ---------------------------------------------------------------------------
 class TestSpeechControl:
     @pytest.mark.parametrize("text", ["stop speaking", "stop talking", "be quiet",
                                       "pause speech", "stop narration", "alright stop speaking"])
     def test_speech_cancel_only(self, client, text):
-        # Cancels narration, never the microphone or the app.
         assert _vc(client, text)["action"] == "stop_speaking"
 
     @pytest.mark.parametrize("text", ["stop listening", "turn off microphone",
@@ -50,9 +42,6 @@ class TestSpeechControl:
         assert _vc(client, "stop everything")["action"] != "pause_voice"
 
 
-# ---------------------------------------------------------------------------
-# Natural variable assignments
-# ---------------------------------------------------------------------------
 class TestVariableInsert:
     def _code(self, client, text, code=""):
         d = _vc(client, text, code=code)
@@ -73,9 +62,6 @@ class TestVariableInsert:
         assert self._code(client, "insert a variable named age with value sixteen") == "age = 16"
 
 
-# ---------------------------------------------------------------------------
-# Pending clarification for variable assignment
-# ---------------------------------------------------------------------------
 class TestVariablePending:
     def test_missing_name_asks_then_completes(self, client):
         first = _vc(client, "insert a variable with the value Taki")
@@ -105,15 +91,11 @@ class TestVariablePending:
         assert d.get("needs_clarification") is True
 
     def test_keyword_name_is_clarified_not_inserted(self, client):
-        # "class" is a Python keyword -> ask for a real name instead of breaking.
         d = _vc(client, "insert a variable named class with value 5")
         assert d["action"] == "clarify"
         assert "name the variable" in d["message"].lower()
 
 
-# ---------------------------------------------------------------------------
-# Previous hotfix behavior preserved
-# ---------------------------------------------------------------------------
 class TestRegressions:
     def test_print_insert_still_quotes(self, client):
         d = _vc(client, "insert print hello")

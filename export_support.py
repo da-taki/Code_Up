@@ -74,18 +74,6 @@ def safe_file_map(files: Dict[str, str]) -> Tuple[Dict[str, str], List[Dict[str,
     return kept, excluded
 
 
-def scan_export_safety(files: Dict[str, str]) -> Dict[str, object]:
-    kept, excluded = safe_file_map(files)
-    total = sum(len(c.encode("utf-8", "replace")) for c in kept.values())
-    return {
-        "ok": bool(kept),
-        "included": sorted(kept.keys()),
-        "excluded": excluded,
-        "file_count": len(kept),
-        "total_bytes": total,
-    }
-
-
 def build_zip_bytes(files: Dict[str, str]) -> bytes:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:

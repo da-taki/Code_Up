@@ -99,7 +99,3 @@ def classify_local_intent(text: str) -> Dict[str, object]:
         "confidence": confidence,
         "note": note,
     }
-
-
-def openvino_available() -> bool:
-    return ov is not None

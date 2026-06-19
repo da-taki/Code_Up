@@ -119,11 +119,6 @@ def escalate_hint(mem: Dict[str, Any]) -> str:
     return mem["hint_level"]
 
 
-def reset_hint(mem: Dict[str, Any]) -> str:
-    mem["hint_level"] = "small"
-    return "small"
-
-
 def get_landmarks(mem: Dict[str, Any]) -> Dict[str, Any]:
     landmarks = mem.get("landmarks")
     if not isinstance(landmarks, dict):
@@ -272,10 +267,6 @@ def record_tutorial(mem: Dict[str, Any], module: str) -> None:
     module = _clip(module, 40)
     if module:
         mem["tutorial_module"] = module
-
-
-def record_code_map(mem: Dict[str, Any], summary: str) -> None:
-    mem["code_map_summary"] = _clip(summary, 400)
 
 
 def set_pending(mem: Dict[str, Any], pending: Optional[Dict[str, Any]]) -> None:

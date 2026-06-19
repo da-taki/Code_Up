@@ -1,17 +1,9 @@
-"""Concept-Aware Code Tutor — turn the current program into a short, spoken
-lesson built from deterministic AST facts (not a long lecture).
-
-A lesson covers: what the program does, the concepts it uses and where each
-appears, one prediction question, and one practice suggestion. Length respects
-the verbosity preference. Pure and Flask-free; never edits or runs code.
-"""
 
 import ast
 from typing import Any, Dict, List, Optional
 
 import structure_tools
 
-# Map structure concept tokens to lesson-friendly words.
 _CONCEPT_WORD = {
     "imports": "imports", "variables": "variables", "loops": "loops",
     "conditions": "if statements", "functions": "functions", "classes": "classes",
@@ -38,7 +30,6 @@ def _assign_name(node: ast.AST) -> str:
 
 
 def _facts(code: str) -> Dict[str, Any]:
-    """Deterministic facts used to build the lesson."""
     facts: Dict[str, Any] = {"loops": [], "prints": [], "assigns": [],
                              "functions": [], "conditions": [], "ranges": []}
     try:
@@ -81,7 +72,6 @@ def _facts(code: str) -> Dict[str, Any]:
 
 
 def _oxford(items: List[str]) -> str:
-    """Join values with an Oxford 'and': [0,1,2] -> '0, 1, and 2'."""
     items = [str(i) for i in items]
     if not items:
         return ""
@@ -94,7 +84,6 @@ def _oxford(items: List[str]) -> str:
 
 def _concepts_phrase(concepts: List[str]) -> str:
     words = [_CONCEPT_WORD.get(c, c) for c in concepts]
-    # de-dupe preserving order
     seen, ordered = set(), []
     for w in words:
         if w not in seen:
@@ -110,8 +99,6 @@ def _concepts_phrase(concepts: List[str]) -> str:
 
 
 def _intro(concepts: List[str], facts: Dict[str, Any]) -> str:
-    """Open with what the program actually uses, grounded in the AST facts, so a
-    loop program starts the lesson with 'This program uses a for loop.'"""
     loops = facts.get("loops") or []
     if loops:
         return f"This program uses a {loops[0]['kind']} loop."
@@ -186,7 +173,6 @@ def _flatten_output(out: str, limit: int = 160) -> str:
 
 
 def _last_output_sentence(mem: Optional[Dict[str, Any]]) -> str:
-    """Make the program's most recent result accessible before any practice idea."""
     mem = mem or {}
     ok = mem.get("last_run_ok")
     out = (mem.get("last_run_output") or "").strip()
@@ -203,7 +189,6 @@ def _last_output_sentence(mem: Optional[Dict[str, Any]]) -> str:
 
 
 def _readback_suggestion(code: str) -> str:
-    """Suggest line-by-line readback when there is more than one line to hear."""
     if len([ln for ln in (code or "").splitlines() if ln.strip()]) > 1:
         return 'You can say "read my code" to hear it line by line.'
     return ""
@@ -225,7 +210,6 @@ def _primary_line(facts: Dict[str, Any]) -> Optional[int]:
 
 def build_concept_lesson(code: str, session_memory: Optional[Dict[str, Any]] = None,
                          verbosity: str = "normal") -> Dict[str, Any]:
-    """Turn ``code`` into a short lesson. Returns a deterministic_message action."""
     code = code or ""
     verbosity = (verbosity or "normal").strip().lower()
 
@@ -250,8 +234,6 @@ def build_concept_lesson(code: str, session_memory: Optional[Dict[str, Any]] = N
     prediction = _prediction(facts)
     practice = _practice(facts)
 
-    # Always teach the code first (what it is -> important lines -> last output),
-    # then offer a way to explore it, and only then a prediction + practice idea.
     if verbosity == "concise":
         parts = [intro] + where[:1] + [last_output, prediction]
     elif verbosity in ("beginner", "detailed"):

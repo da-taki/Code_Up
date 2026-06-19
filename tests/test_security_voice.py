@@ -1,10 +1,3 @@
-"""
-CodeUp — Full Test Suite
-Covers: sandbox security, voice intent parsing, trace playback,
-        snippet CRUD, size limits, repeat command, dotenv loading,
-        pending quiz/bug intercepts, syntax checking, variable tracking,
-        structure parsing, and execution story mode.
-"""
 
 import os
 import sys
@@ -24,13 +17,9 @@ import sandboxed_fs as sandboxed_fs_module
 from sandboxed_fs import SandboxedFileSystem
 
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
 
 @pytest.fixture
 def tmp_snippets(tmp_path, monkeypatch):
-    """Redirect snippet storage to a temp file — never touches real snippets.json."""
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     tmp_file = tmp_path / "snippets.json"
@@ -64,12 +53,8 @@ def _app_import_without_dotenv(extra=""):
 
 @pytest.fixture
 def client(tmp_snippets, monkeypatch):
-    """Flask test client with isolated snippet storage and AI disabled."""
     monkeypatch.setenv("GEMINI_ENABLED", "0")
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
-    # Key 2 (the conversation/intent orchestrator) reads GROQ_API_KEY_2, not
-    # GROQ_API_KEY. Unset it too so "AI disabled" is real and these deterministic
-    # routing assertions never depend on a live network call.
     monkeypatch.delenv("GROQ_API_KEY_2", raising=False)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("CODEUP_AI_ENABLED", raising=False)
@@ -79,12 +64,8 @@ def client(tmp_snippets, monkeypatch):
         yield c
 
 
-# ===========================================================================
-# 1. ENVIRONMENT / CONFIG
-# ===========================================================================
 
 def test_gemini_disabled_returns_message(client):
-    """When GEMINI_ENABLED=0, AI endpoints return a clear message not a crash."""
     res = client.post("/analyze", json={"code": "print(1)", "language": "en"})
     assert res.status_code == 200
     data = res.get_json()
@@ -382,7 +363,6 @@ def test_production_session_cookie_secure_by_default():
 
 
 def test_gemini_key_not_configured_returns_message(client, monkeypatch):
-    """Missing API key returns a human-readable message not a 500."""
     monkeypatch.setenv("GEMINI_ENABLED", "1")
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     res = client.post("/summarize", json={"code": "x = 1", "language": "en"})
@@ -393,7 +373,6 @@ def test_gemini_key_not_configured_returns_message(client, monkeypatch):
 
 
 def test_call_gemini_uses_session_api_config_key(monkeypatch):
-    """Keys entered through /api-config must be honored by AI calls."""
     monkeypatch.setenv("GEMINI_ENABLED", "1")
     monkeypatch.delenv("CODEUP_AI_ENABLED", raising=False)
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
@@ -425,7 +404,6 @@ def test_call_gemini_uses_session_api_config_key(monkeypatch):
 
 
 def test_legacy_gemini_disabled_does_not_block_configured_key(monkeypatch):
-    """A stale GEMINI_ENABLED=0 must not kill Groq when a key is configured."""
     monkeypatch.setenv("GEMINI_ENABLED", "0")
     monkeypatch.delenv("CODEUP_AI_ENABLED", raising=False)
     monkeypatch.delenv("AI_ENABLED", raising=False)
@@ -461,7 +439,6 @@ def test_legacy_gemini_disabled_does_not_block_configured_key(monkeypatch):
 
 
 def test_codeup_ai_enabled_zero_is_hard_disable(monkeypatch):
-    """Use CODEUP_AI_ENABLED=0 for an intentional full AI disable."""
     monkeypatch.setenv("CODEUP_AI_ENABLED", "0")
     monkeypatch.setenv("GEMINI_ENABLED", "1")
     monkeypatch.setattr(app_module, "_call_ollama", lambda *a, **k: None)
@@ -504,7 +481,6 @@ def test_call_gemini_whitespace_response_is_not_empty_string(monkeypatch):
 
 
 def test_api_config_key_persists_to_generate_code(client, monkeypatch):
-    """A key entered through the UI must work on the next request too."""
     monkeypatch.setenv("GEMINI_ENABLED", "1")
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
@@ -582,9 +558,6 @@ def test_fix_code_surfaces_ai_service_error(client, monkeypatch):
     assert data["code"] == ""
     
 
-# ===========================================================================
-# 2. SANDBOX SECURITY
-# ===========================================================================
 
 @pytest.mark.parametrize("code, expected_fragments", [
     (
@@ -641,7 +614,6 @@ def test_fix_code_surfaces_ai_service_error(client, monkeypatch):
     ),
 ])
 def test_sandbox_blocks_escape_attempts(client, code, expected_fragments):
-    """Sandbox must block all common escape patterns."""
     res = client.post("/run", json={"code": code})
     assert res.status_code == 200
     data = res.get_json()
@@ -653,7 +625,6 @@ def test_sandbox_blocks_escape_attempts(client, code, expected_fragments):
 
 
 def test_sandbox_input_blocked(client):
-    """input() must be blocked with a clear explanation."""
     res = client.post("/run", json={"code": "x = input('name: ')\nprint(x)"})
     assert res.status_code == 200
     data = res.get_json()
@@ -664,7 +635,6 @@ def test_sandbox_input_blocked(client):
 
 
 def test_sandbox_allowed_modules(client):
-    """math and random must be importable and usable."""
     res = client.post("/run", json={"code": "import math\nprint(int(math.pi))"})
     assert res.status_code == 200
     data = res.get_json()
@@ -784,7 +754,6 @@ def test_sandbox_bad_inputs_file_reports_clear_failure(tmp_path):
 
 
 def test_sandbox_normal_execution(client):
-    """Basic arithmetic and print work correctly."""
     res = client.post("/run", json={"code": "print(2 + 2)"})
     assert res.status_code == 200
     data = res.get_json()
@@ -793,7 +762,6 @@ def test_sandbox_normal_execution(client):
 
 
 def test_sandbox_loop_output(client):
-    """For loops produce correct sequential output."""
     res = client.post("/run", json={"code": "for i in range(3):\n    print(i)"})
     assert res.status_code == 200
     data = res.get_json()
@@ -803,7 +771,6 @@ def test_sandbox_loop_output(client):
 
 
 def test_broken_loop_error_is_safe_and_beginner_friendly(client):
-    """The external-demo indentation failure must not expose host paths."""
     code = "for i in range(3):\nprint(i)"
     res = client.post("/run", json={"code": code, "language": "en"})
     assert res.status_code == 200
@@ -838,7 +805,6 @@ def test_traceback_sanitizer_redacts_paths_and_api_keys():
 
 
 def test_corrected_loop_demo_flow_returns_expected_trace_and_structure(client):
-    """The documented corrected loop prints the running total and exposes loop structure."""
     code = "total = 0\nfor i in range(3):\n    total = total + i\n    print(total)"
     run = client.post("/run", json={"code": code, "language": "en"})
     assert run.status_code == 200
@@ -852,26 +818,20 @@ def test_corrected_loop_demo_flow_returns_expected_trace_and_structure(client):
     assert structure["structure"]["loops"] == [{"type": "for", "line": 2}]
 
 
-# ===========================================================================
-# 3. REQUEST SIZE LIMITS
-# ===========================================================================
 
 def test_max_code_size_rejected_run(client):
-    """Code over MAX_CODE_SIZE must return 413 from /run."""
     big = "x = 1\n" * 20_000
     res = client.post("/run", json={"code": big})
     assert res.status_code == 413
 
 
 def test_max_code_size_rejected_analyze(client):
-    """Code over MAX_CODE_SIZE must return 413 from /analyze."""
     big = "x = 1\n" * 20_000
     res = client.post("/analyze", json={"code": big, "language": "en"})
     assert res.status_code == 413
 
 
 def test_empty_code_rejected(client):
-    """Empty code must return 400 from /run."""
     res = client.post("/run", json={"code": "   "})
     assert res.status_code == 400
 
@@ -897,7 +857,6 @@ HTML_DOCUMENT = """<!doctype html>
     ("/diff-explain", {"before": "print('ok')", "after": HTML_DOCUMENT, "language": "en"}),
 ])
 def test_non_python_documents_rejected_by_python_endpoints(client, path, payload):
-    """The Python IDE must reject whole-document HTML/CSS/JS before processing."""
     res = client.post(path, json=payload)
     assert res.status_code == 400
     data = res.get_json()
@@ -905,7 +864,6 @@ def test_non_python_documents_rejected_by_python_endpoints(client, path, payload
 
 
 def test_stale_mixed_html_autosave_shape_rejected(client):
-    """Regression test for a Python line accidentally prepended to an HTML draft."""
     code = "print('browser smoke ok')<!doctype html>\n<html>\n<body>bad</body>\n</html>"
     res = client.post("/check-syntax", json={"code": code})
     assert res.status_code == 400
@@ -913,7 +871,6 @@ def test_stale_mixed_html_autosave_shape_rejected(client):
 
 
 def test_python_string_containing_html_is_allowed(client):
-    """Python code can still contain HTML-looking text inside ordinary strings."""
     code = "page = '<html><body>ok</body></html>'\nprint(page)"
     syntax = client.post("/check-syntax", json={"code": code})
     assert syntax.status_code == 200
@@ -987,9 +944,6 @@ def test_command_input_enter_and_live_input_contracts_are_wired():
 
 
 def test_start_gate_is_removed_so_ide_opens_directly():
-    # The blocking start gate was removed entirely: /ide opens straight into the
-    # usable IDE, so there is no hidden modal left in the keyboard/focus order at
-    # all (a strictly stronger guarantee than hiding it after a language choice).
     with open(os.path.join("templates", "index.html"), encoding="utf-8") as handle:
         html = handle.read()
     assert 'id="startGate"' not in html
@@ -1017,14 +971,10 @@ def test_repeat_preserves_fuzzy_fallback_actions(client):
 
 
 def test_missing_body_handled(client):
-    """Completely missing JSON body must not crash the server."""
     res = client.post("/run", data="not json", content_type="text/plain")
-    assert res.status_code in (400, 413, 200)  # any of these is acceptable, not 500
+    assert res.status_code in (400, 413, 200)
 
 
-# ===========================================================================
-# 4. VOICE INTENT PARSING
-# ===========================================================================
 
 @pytest.mark.parametrize("voice_input, expected_action, check", [
     ("go to line fifteen",          "goto_line",    lambda d: d.get("line") == 15),
@@ -1071,8 +1021,6 @@ def test_missing_body_handled(client):
     ("insert function called greet","insert_function",lambda d: d.get("function_name") == "greet"),
     ("insert a for loop",           "conversational_edit",
      lambda d: d.get("ai_action", {}).get("code") == "for i in range(3):\n    print(i)"),
-    # Spoken print inserts are now built into valid Python (quoted text) and applied
-    # via conversational_edit, instead of the old raw append_line passthrough.
     ("insert print hello world",    "conversational_edit",
      lambda d: d.get("ai_action", {}).get("code") == 'print("hello world")'),
 ])
@@ -1088,7 +1036,6 @@ def test_voice_intent_parsing(client, voice_input, expected_action, check):
 
 
 def test_voice_unknown_command(client):
-    """Completely nonsense input clarifies or confirms, never crashes."""
     res = client.post("/voice-command", json={"text": "xyzzy blort flibble"})
     assert res.status_code == 200
     data = res.get_json()
@@ -1229,7 +1176,6 @@ def test_hinglish_loop_and_indentation_fallbacks_when_ai_unavailable(client, mon
 
 
 def test_voice_ambiguous_triggers_confirm(client):
-    """Input that fuzzy-matches multiple commands should trigger confirm."""
     res = client.post("/voice-command", json={"text": "analyse"})
     assert res.status_code == 200
     data = res.get_json()
@@ -1240,7 +1186,6 @@ def test_voice_ambiguous_triggers_confirm(client):
 
 
 def test_voice_repeat_replays_last_action(client):
-    """Repeat must return the same action as the previous command."""
     seed = client.post("/voice-command", json={"text": "execute code"})
     assert seed.get_json()["action"] == "run", f"Seed failed: {seed.get_json()}"
 
@@ -1249,20 +1194,15 @@ def test_voice_repeat_replays_last_action(client):
     assert repeat_res.get_json()["action"] == "run"
 
 def test_voice_empty_text(client):
-    """Empty voice input must not crash."""
     res = client.post("/voice-command", json={"text": ""})
     assert res.status_code == 200
     data = res.get_json()
     assert "action" in data
 
 
-# ===========================================================================
-# 5. EXECUTION TRACE PLAYBACK
-# ===========================================================================
 
 @pytest.mark.timeout(15)
 def test_trace_populated_after_run(client):
-    """Running code must populate a non-empty trace."""
     res = client.post("/run", json={"code": "x = 5\ny = 10\nprint(x + y)"})
     assert res.status_code == 200
     data = res.get_json()
@@ -1272,7 +1212,6 @@ def test_trace_populated_after_run(client):
 
 @pytest.mark.timeout(15)
 def test_trace_next_step_returns_speech(client):
-    """next step voice command must return non-empty speech after a run."""
     run = client.post("/run", json={"code": "a = 1\nb = 2\nc = a + b"})
     assert run.get_json()["success"] is True
     assert len(run.get_json().get("trace", [])) > 0
@@ -1286,7 +1225,6 @@ def test_trace_next_step_returns_speech(client):
 
 @pytest.mark.timeout(15)
 def test_trace_step_counter_in_speech(client):
-    """Speech output must contain 'Step X of Y' format."""
     run = client.post("/run", json={"code": "a = 1\nb = 2\nc = a + b"})
     run_data = run.get_json()
     assert run_data["success"] is True
@@ -1298,9 +1236,7 @@ def test_trace_step_counter_in_speech(client):
 
 @pytest.mark.timeout(15)
 def test_trace_what_changed(client):
-    """what changed must return speech after a run."""
     client.post("/run", json={"code": "x = 42\nprint(x)"})
-    # advance to first step first
     client.post("/voice-command", json={"text": "next step"})
     res = client.post("/voice-command", json={"text": "what changed here"})
     assert res.status_code == 200
@@ -1311,7 +1247,6 @@ def test_trace_what_changed(client):
 
 @pytest.mark.timeout(15)
 def test_trace_endpoint_returns_structure(client):
-    """GET /execution-trace must return expected keys."""
     client.post("/run", json={"code": "x = 1"})
     res = client.get("/execution-trace")
     assert res.status_code == 200
@@ -1323,7 +1258,6 @@ def test_trace_endpoint_returns_structure(client):
 
 @pytest.mark.timeout(15)
 def test_execution_story_has_local_fallback_when_ai_disabled(client):
-    """Story mode must remain useful when no AI key is configured."""
     code = "total = 0\nfor i in range(3):\n    total = total + i\n    print(total)"
     run = client.post("/run", json={"code": code})
     assert run.get_json()["success"] is True
@@ -1373,8 +1307,6 @@ def test_testing_session_cookie_is_local_workable(client):
 
 
 def test_run_stream_input_rejects_when_not_awaiting_without_opening_fifo(client, tmp_path):
-    # Windows cannot exercise the POSIX FIFO end-to-end path; this validates
-    # the non-blocking state gate before any FIFO open is attempted.
     client.get("/execution-trace")
     session_id = _client_session_id(client)
     run_id = "notwaiting"
@@ -1437,8 +1369,6 @@ def test_cleanup_run_reaps_child_process(monkeypatch):
 
 
 def test_interactive_wait_unit_reports_concrete_exit_code_after_timeout(monkeypatch):
-    # Unit-level coverage for Windows: the true POSIX FIFO/SSE E2E path cannot
-    # run here, but final exit-code stabilization is still deterministic.
     monkeypatch.setattr(app_module.sys, "platform", "win32")
 
     class FakeProc:
@@ -1468,12 +1398,8 @@ def test_interactive_wait_unit_reports_concrete_exit_code_after_timeout(monkeypa
     assert proc.returncode == -9
 
 
-# ===========================================================================
-# 6. SYNTAX CHECKING
-# ===========================================================================
 
 def test_syntax_check_clean_code(client):
-    """Valid code returns has_errors=False."""
     res = client.post("/check-syntax", json={"code": "x = 1\nprint(x)"})
     assert res.status_code == 200
     data = res.get_json()
@@ -1482,7 +1408,6 @@ def test_syntax_check_clean_code(client):
 
 
 def test_syntax_check_broken_code(client):
-    """Broken code returns has_errors=True with error details."""
     res = client.post("/check-syntax", json={"code": "def foo(\n    print('oops')"})
     assert res.status_code == 200
     data = res.get_json()
@@ -1495,19 +1420,14 @@ def test_syntax_check_broken_code(client):
 
 
 def test_syntax_check_empty_code(client):
-    """Empty code returns has_errors=False cleanly."""
     res = client.post("/check-syntax", json={"code": ""})
     assert res.status_code == 200
     data = res.get_json()
     assert data["has_errors"] is False
 
 
-# ===========================================================================
-# 7. VARIABLE TRACKING
-# ===========================================================================
 
 def test_track_variables_basic(client):
-    """Variable tracker finds assignments correctly."""
     code = "x = 5\ny = 10\nz = x + y"
     res = client.post("/track-variables", json={"code": code, "line": 1})
     assert res.status_code == 200
@@ -1519,13 +1439,11 @@ def test_track_variables_basic(client):
 
 
 def test_track_variables_invalid_line(client):
-    """Non-numeric line number returns 400."""
     res = client.post("/track-variables", json={"code": "x = 1", "line": "abc"})
     assert res.status_code == 400
 
 
 def test_find_variable_usage(client):
-    """Variable usage finder returns correct line numbers."""
     code = "x = 5\nprint(x)\ny = x + 1"
     res = client.post("/find-variable-usage", json={"code": code, "variable": "x"})
     assert res.status_code == 200
@@ -1537,7 +1455,6 @@ def test_find_variable_usage(client):
 
 
 def test_find_variable_usage_not_found(client):
-    """Variable not in code returns success=False with message."""
     res = client.post("/find-variable-usage", json={"code": "x = 1", "variable": "z"})
     assert res.status_code == 200
     data = res.get_json()
@@ -1545,12 +1462,8 @@ def test_find_variable_usage_not_found(client):
     assert "message" in data
 
 
-# ===========================================================================
-# 8. STRUCTURE PARSING
-# ===========================================================================
 
 def test_structure_functions(client):
-    """Structure parser finds function definitions."""
     code = "def greet(name):\n    print(name)\n\ndef add(a, b):\n    return a + b"
     res = client.post("/structure", json={"code": code})
     assert res.status_code == 200
@@ -1562,7 +1475,6 @@ def test_structure_functions(client):
 
 
 def test_structure_classes(client):
-    """Structure parser finds class definitions."""
     code = "class Dog:\n    def bark(self):\n        print('woof')"
     res = client.post("/structure", json={"code": code})
     assert res.status_code == 200
@@ -1573,7 +1485,6 @@ def test_structure_classes(client):
 
 
 def test_structure_empty_code(client):
-    """Empty code returns empty structure without error."""
     res = client.post("/structure", json={"code": ""})
     assert res.status_code == 200
     data = res.get_json()
@@ -1582,12 +1493,8 @@ def test_structure_empty_code(client):
     assert data["structure"]["classes"] == []
 
 
-# ===========================================================================
-# 9. SNIPPET CRUD
-# ===========================================================================
 
 def test_snippet_save_and_list(client):
-    """Save a snippet and confirm it appears in the list."""
     save = client.post("/snippets", json={"name": "test_snip", "code": "print('hi')"})
     assert save.status_code == 200
     data = save.get_json()
@@ -1605,7 +1512,6 @@ def test_snippet_save_and_list(client):
 
 
 def test_snippet_delete(client):
-    """Delete a snippet and confirm it no longer appears."""
     save = client.post("/snippets", json={"name": "to_delete", "code": "x = 1"})
     sid = save.get_json()["id"]
 
@@ -1619,7 +1525,6 @@ def test_snippet_delete(client):
 
 
 def test_snippet_update(client):
-    """Update a snippet name via PUT."""
     save = client.post("/snippets", json={"name": "original", "code": "x = 1"})
     sid = save.get_json()["id"]
 
@@ -1634,25 +1539,21 @@ def test_snippet_update(client):
 
 
 def test_snippet_delete_nonexistent(client):
-    """Deleting a nonexistent snippet returns success=True gracefully."""
     res = client.delete("/snippets/nonexistent-id-xyz")
     assert res.status_code == 200
 
 
 def test_snippet_name_too_long(client):
-    """Snippet name over 256 chars must return 400."""
     res = client.post("/snippets", json={"name": "x" * 300, "code": "print(1)"})
     assert res.status_code == 400
 
 
 def test_snippet_code_too_large(client):
-    """Snippet code over MAX_CODE_SIZE must return 413."""
     res = client.post("/snippets", json={"name": "big", "code": "x = 1\n" * 20_000})
     assert res.status_code == 413
 
 
 def test_snippet_speech_single(client):
-    """Single snippet produces grammatically correct speech."""
     client.post("/snippets", json={"name": "only_one", "code": "print(1)"})
     lst = client.get("/snippets")
     speech = lst.get_json()["speech"]
@@ -1660,7 +1561,6 @@ def test_snippet_speech_single(client):
 
 
 def test_snippet_speech_multiple(client):
-    """Multiple snippets produce correct count in speech."""
     client.post("/snippets", json={"name": "first", "code": "print(1)"})
     client.post("/snippets", json={"name": "second", "code": "print(2)"})
     lst = client.get("/snippets")
@@ -1696,12 +1596,8 @@ def test_concurrent_snippet_saves_do_not_lose_updates(client):
     assert {f"s{i}" for i in range(8)} <= names
 
 
-# ===========================================================================
-# 10. LINE READING & DESCRIBE
-# ===========================================================================
 
 def test_read_line_context_valid(client):
-    """Read line context returns correct line content."""
     code = "x = 5\ny = 10\nprint(x + y)"
     res = client.post("/read-line-context", json={"code": code, "line": 2})
     assert res.status_code == 200
@@ -1713,24 +1609,18 @@ def test_read_line_context_valid(client):
 
 
 def test_read_line_context_invalid_line(client):
-    """Non-numeric line returns 400."""
     res = client.post("/read-line-context", json={"code": "x = 1", "line": "bad"})
     assert res.status_code == 400
 
 
 def test_read_line_context_out_of_range(client):
-    """Line number beyond file length returns success=False."""
     res = client.post("/read-line-context", json={"code": "x = 1", "line": 999})
     assert res.status_code == 200
     assert res.get_json()["success"] is False
 
 
-# ===========================================================================
-# 11. SANDBOXED FILESYSTEM
-# ===========================================================================
 
 def test_fs_write_and_read(client):
-    """Write then read a file in the sandbox."""
     write = client.post("/fs/write", json={"path": "test.txt", "content": "hello"})
     assert write.status_code == 200
     assert write.get_json()["success"] is True
@@ -1743,7 +1633,6 @@ def test_fs_write_and_read(client):
 
 
 def test_fs_path_traversal_blocked(client):
-    """Path traversal attempts must be blocked."""
     res = client.post("/fs/read", json={"path": "../../etc/passwd"})
     assert res.status_code == 200
     data = res.get_json()
@@ -1752,13 +1641,11 @@ def test_fs_path_traversal_blocked(client):
 
 
 def test_fs_missing_path(client):
-    """Missing path field returns 400."""
     res = client.post("/fs/read", json={})
     assert res.status_code == 400
 
 
 def test_fs_delete(client):
-    """Write then delete a file."""
     client.post("/fs/write", json={"path": "bye.txt", "content": "bye"})
     res = client.post("/fs/delete", json={"path": "bye.txt"})
     assert res.status_code == 200
@@ -1766,7 +1653,6 @@ def test_fs_delete(client):
 
 
 def test_fs_info(client):
-    """Workspace info endpoint returns expected keys."""
     res = client.get("/fs/info")
     assert res.status_code == 200
     data = res.get_json()
@@ -1814,12 +1700,8 @@ def test_stale_sandbox_cleanup_removes_workspace(tmp_path):
     assert not workspace.exists()
 
 
-# ===========================================================================
-# 12. SESSION ISOLATION
-# ===========================================================================
 
 def test_two_sessions_have_separate_traces():
-    """Two clients with different session cookies get separate trace storage."""
     with app.test_client() as c1:
         r1 = c1.post("/run", json={"code": "x = 100\nprint(x)"})
         assert r1.get_json()["success"] is True
@@ -1833,12 +1715,8 @@ def test_two_sessions_have_separate_traces():
         assert isinstance(t2["trace"], list)
         assert len(t2["trace"]) == 0, "Fresh session must have empty trace"
 
-# ===========================================================================
-# 13. SEMANTIC ERROR CLASSIFICATION
-# ===========================================================================
 
 def test_semantic_issues_in_response(client):
-    """Semantic issues key is always present in successful run response."""
     res = client.post("/run", json={"code": "x = 1\nprint(x)"})
     assert res.status_code == 200
     data = res.get_json()
@@ -1847,9 +1725,6 @@ def test_semantic_issues_in_response(client):
         assert isinstance(data["semantic_issues"], list)
 
 
-# ===========================================================================
-# 14. INTENT PARSER UNIT TESTS (direct, no HTTP)
-# ===========================================================================
 
 @pytest.mark.parametrize("text, expected_intent, slot_check", [
     ("go to line twenty five",      "goto_line",    lambda s: s.get("line_number") == 25),
@@ -1886,67 +1761,52 @@ def test_intent_parser_empty_string():
 
 
 def test_intent_parser_compound_numbers():
-    """Spoken compound numbers like 'thirty seven' must parse correctly."""
     result = parse_intent("go to line thirty seven")
     assert result["intent"] == "goto_line"
     assert result["slots"]["line_number"] == 37
 
 
 def test_intent_parser_no_false_goto_line():
-    """Generic sentences mentioning 'line' must not trigger goto_line."""
     result = parse_intent("this is a single line program")
     assert result["intent"] != "goto_line"
 
-# ===========================================================================
-# 15. HINDI INTENT PARSING
-# ===========================================================================
 
 @pytest.mark.parametrize("hindi_text, expected_intent, slot_check", [
-    # Numbers
     ("लाइन बीस पर जाओ",        "goto_line",    lambda s: s.get("line_number") == 20),
     ("लाइन पंद्रह पर जाओ",      "goto_line",    lambda s: s.get("line_number") == 15),
     ("लाइन पांच पढ़ो",          "read_line",    lambda s: s.get("line_number") == 5),
     ("line 10 पर जाओ",          "goto_line",    lambda s: s.get("line_number") == 10),
 
-    # Execution
     ("चलाओ",                    "run",          lambda s: True),
     ("कोड चलाओ",                "run",          lambda s: True),
     ("रन करो",                  "run",          lambda s: True),
 
-    # Analysis
     ("कोड का विश्लेषण करो",     "analyze",      lambda s: True),
     ("कोड समझाओ",               "analyze",      lambda s: True),
 
-    # Fix
     ("कोड ठीक करो",             "fix",          lambda s: True),
     ("गलती ठीक करो",            "fix",          lambda s: True),
     ("सही करो",                 "fix",          lambda s: True),
 
-    # Summarize
     ("सारांश दो",               "summarize",    lambda s: True),
     ("कोड का सारांश",           "summarize",    lambda s: True),
 
-    # Suggest next
     ("अगली लाइन सुझाओ",         "suggest_next", lambda s: True),
     ("क्या लिखूं",              "suggest_next", lambda s: True),
 
-    # Steps
     ("अगला कदम",                "next_step",    lambda s: True),
     ("पिछला कदम",               "previous_step",lambda s: True),
     ("आगे बढ़ो",                "next_step",    lambda s: True),
     ("पीछे जाओ",                "previous_step",lambda s: True),
 
-    # Help
     ("मदद",                     "help",         lambda s: True),
     ("सहायता",                  "help",         lambda s: True),
     ("क्या कर सकते हो",         "help",         lambda s: True),
 
-    # Clear
     ("एडिटर साफ करो",           "clear_editor", lambda s: True),
     ("कोड हटाओ",                "clear_editor", lambda s: True),
 ])
 def test_hindi_intent_parsing(hindi_text, expected_intent, slot_check):
-    """Hindi voice commands must parse to the correct intent."""
     result = parse_intent(hindi_text)
     assert result["intent"] == expected_intent, (
         f"Hindi input {hindi_text!r}: expected {expected_intent!r}, got {result['intent']!r}"
@@ -1957,7 +1817,6 @@ def test_hindi_intent_parsing(hindi_text, expected_intent, slot_check):
 
 
 def test_hindi_number_parser_direct():
-    """Hindi number words must convert to integers correctly."""
     from intent_parser import get_parser
     parser = get_parser()
     assert parser._word_to_number("बीस") == 20
@@ -1967,7 +1826,6 @@ def test_hindi_number_parser_direct():
 
 
 def test_hindi_voice_command_via_http(client):
-    """End-to-end: Hindi voice command through the /voice-command endpoint."""
     res = client.post("/voice-command", json={"text": "लाइन बीस पर जाओ"})
     assert res.status_code == 200
     data = res.get_json()
@@ -1976,7 +1834,6 @@ def test_hindi_voice_command_via_http(client):
 
 
 def test_hindi_run_via_http(client):
-    """End-to-end: Hindi run command."""
     res = client.post("/voice-command", json={"text": "कोड चलाओ"})
     assert res.status_code == 200
     data = res.get_json()
@@ -1984,7 +1841,6 @@ def test_hindi_run_via_http(client):
 
 
 def test_hindi_help_via_http(client):
-    """Hindi help should not fall through to English-only fuzzy matching."""
     hindi_help = "".join(chr(cp) for cp in (0x092e, 0x0926, 0x0926))
     res = client.post("/voice-command", json={"text": hindi_help})
     assert res.status_code == 200
@@ -1994,7 +1850,6 @@ def test_hindi_help_via_http(client):
 class TestPerSessionSandbox:
 
     def test_separate_sessions_get_different_workspaces(self):
-        """Different session IDs must produce different sandbox instances."""
         from sandboxed_fs import get_sandbox
         sb1 = get_sandbox("test-session-aaa")
         sb2 = get_sandbox("test-session-bbb")
@@ -2004,7 +1859,6 @@ class TestPerSessionSandbox:
         )
 
     def test_delete_in_one_session_does_not_affect_other(self):
-        """Files written in one sandbox must not appear in another."""
         from sandboxed_fs import get_sandbox
         sb1 = get_sandbox("test-session-ccc")
         sb2 = get_sandbox("test-session-ddd")
@@ -2304,7 +2158,6 @@ class TestRegressionAfterFixes:
 
 class TestSnippetSessionIsolation:
     def test_snippets_are_per_session(self, tmp_snippets):
-        """Two sessions must not see each other's snippets."""
         os.environ["GEMINI_ENABLED"] = "0"
         try:
             c1 = app.test_client()
@@ -2327,9 +2180,6 @@ class TestSnippetSessionIsolation:
             os.environ["GEMINI_ENABLED"] = "1"
 
 
-# ===========================================================================
-# 16. PRE-FLIGHT INPUTS (Mechanism A)
-# ===========================================================================
 
 class TestPreflightInputs:
 
@@ -2421,9 +2271,6 @@ class TestVoiceSetInputs:
         assert data["action"] == "live_input_mode"
 
 
-# ===========================================================================
-# 17. VOICE MACROS
-# ===========================================================================
 
 class TestVoiceMacros:
 
@@ -2620,9 +2467,6 @@ class TestVoiceMacros:
         assert "not found" in missing.get_json()["error"].lower()
 
 
-# ===========================================================================
-# 18. OUTPUT BOOKMARKS
-# ===========================================================================
 
 class TestOutputBookmarks:
 
@@ -2667,9 +2511,6 @@ class TestOutputBookmarks:
         assert res.status_code == 413
 
 
-# ===========================================================================
-# 19. BREADCRUMBS
-# ===========================================================================
 
 class TestBreadcrumbs:
 
@@ -2696,9 +2537,6 @@ class TestBreadcrumbs:
         assert "for loop" in data["breadcrumb"].lower()
 
 
-# ===========================================================================
-# 20. OUTPUT DIFF NARRATION
-# ===========================================================================
 
 class TestOutputDiff:
 
@@ -2707,7 +2545,6 @@ class TestOutputDiff:
         res = client.post("/run", json={"code": "print('hi')"})
         data = res.get_json()
         assert data["success"] is True
-        # First run: diff present but identical=False with empty changed_lines
         assert "diff" in data
 
     @pytest.mark.timeout(15)
@@ -2744,9 +2581,6 @@ class TestOutputDiff:
         assert "mostly different" in diff["summary"].lower()
 
 
-# ===========================================================================
-# 21. BEGINNER ERROR EXPLANATION
-# ===========================================================================
 
 class TestBeginnerErrorExplanation:
 
@@ -2756,8 +2590,6 @@ class TestBeginnerErrorExplanation:
             "error": "NameError: name 'y' is not defined",
             "language": "en"
         })
-        # AI is disabled in tests so we get a "service disabled" response
-        # but the endpoint should respond 200, not crash.
         assert res.status_code == 200
         data = res.get_json()
         assert data["success"] is True
@@ -2873,11 +2705,6 @@ class TestConversationalMentor:
             assert data["mode"] == expected_mode
 
     def test_say_that_simpler_is_handled(self, client):
-        # "say that simpler" parses as mentor_chat/"simpler"; but in a fresh client
-        # with no prior code or mentor answer, the session-memory follow-up resolver
-        # claims it first and asks what to simplify. Both are valid, non-broken
-        # responses — it must never be unrecognized. (The mentor-vs-follow-up
-        # precedence is a pre-existing concern outside the voice-control hotfix.)
         data = client.post("/voice-command", json={"text": "say that simpler"}).get_json()
         assert data["success"] is True
         assert data["action"] in ("mentor_chat", "deterministic_message")
@@ -2970,9 +2797,6 @@ class TestMentorNormalization:
         assert res.status_code == 413
 
 
-# ===========================================================================
-# 22. INTENT PARSER — NEW INTENTS
-# ===========================================================================
 
 class TestNewIntents:
 

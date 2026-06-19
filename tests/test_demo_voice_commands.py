@@ -1,16 +1,3 @@
-"""
-Tests for the final demo-readiness repairs:
-
-  1. Step Narration self-echo guard — while narration is speaking, the mic can
-     hear the narration; non-stop voice input must be ignored BEFORE the
-     barge-in cancel so narrated speech is never cancelled by hearing itself.
-     (Structural assertion over app.js, matching the repo's frontend test
-     style; the audible behavior was verified in a real browser.)
-  2. Narrow Hinglish mirror of the core beginner-loop demo flow.
-  3. Robust Code Map command synonyms.
-
-AI is forced off so conversational edits use the deterministic local path.
-"""
 import os
 
 import pytest
@@ -37,9 +24,6 @@ def _action(client, text, code=LOOP):
     return client.post("/voice-command", json={"text": text, "code": code}).get_json()
 
 
-# =====================================================================
-# 1. STEP NARRATION SELF-ECHO GUARD (frontend source guarantee)
-# =====================================================================
 
 class TestStepNarrationSelfEchoGuard:
 
@@ -49,28 +33,22 @@ class TestStepNarrationSelfEchoGuard:
         with open(path, encoding="utf-8") as fh:
             app_js = fh.read()
         start = app_js.index("async function handleVoiceCommand(")
-        # Window covering the function's guard + barge-in section.
         return app_js[start:start + 2500]
 
     def test_guard_runs_before_barge_in_cancel(self, handle_voice_src):
         src = handle_voice_src
         guard = src.index("_stepNarrationJob")
         barge = src.index("BARGE-IN")
-        # The self-echo guard must be evaluated before the barge-in cancelAll,
-        # otherwise the narration is cancelled before we can ignore the echo.
         assert guard < barge
 
     def test_non_stop_input_is_ignored_during_narration(self, handle_voice_src):
         src = handle_voice_src
         block = src[src.index("_stepNarrationJob"):src.index("BARGE-IN")]
-        # Stop words still interrupt; everything else returns early (ignored).
         assert "stopWords" in block
         assert "_stepNarrationJob.cancelled = true" in block
         assert "return;" in block
 
     def test_speech_path_is_shared_voice_engine(self):
-        # Step Narration still speaks via the shared manager (delegates to the
-        # one resolved preferred voice).
         path = os.path.join(os.path.dirname(__file__), "..", "static", "app.js")
         with open(path, encoding="utf-8") as fh:
             app_js = fh.read()
@@ -81,9 +59,6 @@ class TestStepNarrationSelfEchoGuard:
         assert "new SpeechSynthesisUtterance" not in block
 
 
-# =====================================================================
-# 2. HINGLISH CORE-FLOW ROUTING
-# =====================================================================
 
 class TestHinglishCoreFlow:
 
@@ -159,21 +134,15 @@ class TestHinglishCoreFlow:
         d = _action(client, text)
         assert d["action"] == "mentor_chat"
         assert d["mode"] == "concept"
-        # Concept questions must never become an editing/run action.
         assert d["action"] not in {"conversational_edit", "run", "walk_through"}
 
     def test_english_flow_unchanged(self, client):
         assert _action(client, "clear editor", code="")["action"] == "clear_editor"
         assert _action(client, "run")["action"] == "run"
         assert _action(client, "walk me through this program")["action"] == "walk_through"
-        # Fix 5: with a loop in the editor, range questions now get a grounded
-        # deterministic answer; without code they still route to the concept mentor.
         assert _action(client, "What does range three mean?")["action"] in ("mentor_chat", "deterministic_message")
 
 
-# =====================================================================
-# 3. CODE MAP SYNONYMS
-# =====================================================================
 
 class TestCodeMapSynonyms:
 
@@ -191,8 +160,6 @@ class TestCodeMapSynonyms:
         assert _action(client, text)["action"] == "code_map"
 
     def test_give_me_a_map_remains_an_equivalent_code_map(self, client):
-        # Pinned by an existing test to the mentor code-map (an equivalent code
-        # map feature); it must still produce a structure map, not walkthrough.
         assert _action(client, "give me a map of my code")["action"] == "mentor_code_map"
 
     @pytest.mark.parametrize("text,not_action", [
@@ -205,7 +172,6 @@ class TestCodeMapSynonyms:
         assert _action(client, text)["action"] != not_action
 
     def test_code_map_does_not_mutate_or_run(self, client):
-        # code_map is a read-only structural summary action — never an edit/run.
         d = _action(client, "map my code")
         assert d["action"] == "code_map"
         assert "ai_action" not in d

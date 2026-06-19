@@ -1,19 +1,3 @@
-"""Confidence-aware clarification for risky or ambiguous voice commands.
-
-Speech recognition can mishear exact prompts, and some commands are destructive.
-Before CodeUp blindly executes a risky action it should ask ONE short
-clarification — and it always remembers a structured ``pending`` object so it can
-understand the user's answer (see clarification_flow + the /voice-command route).
-
-Scope is deliberately narrow so it never blocks clean commands:
-  * a destructive file op with a vague referent ("delete that file") -> ask which
-    file (or confirm the remembered one);
-  * a sized symbol-pattern request that does not parse cleanly -> ask only for the
-    missing slot(s) (symbol and/or the special row's count).
-
-Everything is deterministic; Key 2 may only *rephrase* the question with bounded
-context and never weaken/invent facts (enforced by grounded_ai).
-"""
 
 import re
 from typing import Any, Callable, Dict, List, Optional
@@ -21,7 +5,6 @@ from typing import Any, Callable, Dict, List, Optional
 import clarification_flow
 import grounded_ai
 
-# A destructive file op whose target is a vague referent (no concrete filename).
 _VAGUE_FILE_OP = re.compile(
     r"^(?:please\s+)?(delete|remove|trash|erase|rename)\s+"
     r"(?:the\s+|that\s+|this\s+|current\s+|it\b\s*)?"
@@ -44,9 +27,6 @@ def _need(message: str, reason: str, pending: Optional[Dict[str, Any]] = None) -
 def _ai_refine_question(deterministic_question: str, text: str,
                         ai_fn: Optional[Callable[[str, str], str]],
                         required_facts: List[str]) -> str:
-    """Optionally let Key 2 rephrase the clarifying question. Returns "" unless
-    the rephrase is grounded (keeps the size/line facts, invents nothing), so a
-    weaker/generic question can never replace the specific deterministic one."""
     if not ai_fn:
         return ""
     system = (
@@ -79,18 +59,11 @@ def _ai_refine_question(deterministic_question: str, text: str,
 def assess(text: str, *, intent: str = "", confidence: float = 0.0, code: str = "",
            mem: Optional[Dict[str, Any]] = None, exact_result: Optional[Dict[str, Any]] = None,
            ai_fn: Optional[Callable[[str, str], str]] = None) -> Optional[Dict[str, Any]]:
-    """Decide whether a risky/ambiguous command needs clarification.
-
-    Returns ``{"needs_clarification", "message", "reason", "pending"?}`` or None
-    when the command is safe/clear and should run normally. ``pending`` is the
-    structured state the route stores so the user's next utterance is understood.
-    """
     mem = mem or {}
     t = _norm(text)
     if not t:
         return None
 
-    # 1. Destructive file op with a vague referent.
     file_op = _VAGUE_FILE_OP.match(t)
     if file_op:
         verb = "rename" if file_op.group(1).lower() == "rename" else "delete"
@@ -104,11 +77,6 @@ def assess(text: str, *, intent: str = "", confidence: float = 0.0, code: str = 
             pending={"type": "file", "verb": verb, "file": recent, "destructive": True},
         )
 
-    # 2. A sized symbol pattern that is missing a needed slot (no symbol, or a
-    #    "third line is different" with no count). We ask even when the exact
-    #    parser would otherwise succeed by ignoring the special-row request, so
-    #    the learner's intent is honoured. A fully specified request has no
-    #    missing slots and is never clarified.
     slots = clarification_flow.extract_pattern_slots(text)
     if (
         isinstance(exact_result, dict)

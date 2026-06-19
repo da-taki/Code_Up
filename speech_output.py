@@ -1,4 +1,3 @@
-"""Shared speech-output helpers for backend voice responses."""
 
 from __future__ import annotations
 
@@ -6,7 +5,6 @@ import re
 
 
 def sanitize_speech_text(text: str) -> str:
-    """Strip Markdown control syntax before text reaches TTS."""
     value = "" if text is None else str(text)
     value = re.sub(r"```[a-zA-Z0-9_-]*\s*", " ", value)
     value = value.replace("```", " ")
@@ -22,7 +20,6 @@ def sanitize_speech_text(text: str) -> str:
 
 
 def speech_response(display_text: str, *, speech_text: str = "", speak: bool = True) -> dict:
-    """Build a response carrying separate visible and spoken text."""
     speech = sanitize_speech_text(speech_text or display_text)
     return {
         "message": display_text,

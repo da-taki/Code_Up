@@ -1,15 +1,3 @@
-"""
-Tests for conversational conceptual Q&A.
-
-A learner can ask natural questions about Python or their current code (e.g.
-"what is a loop", "why is print indented") and get a short, beginner-friendly,
-context-aware explanation. These questions must be explanation-only: they route
-to the mentor in concept mode (which returns spoken text) and never edit, run,
-fix, or save code. Deterministic fallbacks keep the canonical demo concepts
-working when AI is unavailable.
-
-AI is forced off so the deterministic concept fallback is exercised.
-"""
 import pytest
 
 import app as app_module
@@ -43,8 +31,6 @@ CONCEPT_PHRASES = [
     "Show me a simple example of a print statement.",
 ]
 
-# Actions that change editor/program state. A conceptual question must never
-# produce one of these.
 _MUTATING = {
     "conversational_edit", "run", "fix", "generate_code", "save_snippet_named",
     "save_snippet_auto", "clear_editor", "insert_line", "replace_line",
@@ -59,18 +45,12 @@ def _ask(client, q, code, language="en"):
     ).get_json()
 
 
-# =====================================================================
-# ROUTING
-# =====================================================================
 
 class TestConceptRouting:
 
     @pytest.mark.parametrize("phrase", CONCEPT_PHRASES)
     def test_routes_to_concept_mentor(self, client, phrase):
         d = client.post("/voice-command", json={"text": phrase, "code": LOOP}).get_json()
-        # Fix 5: a few concrete concept questions (range, colon) now get a grounded
-        # deterministic answer; the rest still route to the concept mentor. Either
-        # way the answer is explanation-only (never a mutating action).
         if d["action"] == "deterministic_message":
             assert d.get("concept")
         else:
@@ -95,9 +75,6 @@ class TestConceptRouting:
         assert parse_intent("why is print indented")["confidence"] >= 0.75
 
 
-# =====================================================================
-# ACTION SEPARATION
-# =====================================================================
 
 class TestActionSeparation:
 
@@ -126,9 +103,6 @@ class TestActionSeparation:
         assert not (d["action"] == "mentor_chat" and d.get("mode") == "concept")
 
 
-# =====================================================================
-# DETERMINISTIC, CONTEXT-AWARE ANSWERS (AI unavailable)
-# =====================================================================
 
 class TestDeterministicAnswers:
 
@@ -146,7 +120,6 @@ class TestDeterministicAnswers:
     def test_indentation_valid_code(self, client):
         r = _ask(client, "Why is print indented?", LOOP)["reply"].lower()
         assert "inside the loop" in r
-        # Valid code: must not claim an error.
         assert "error" not in r
 
     def test_loop(self, client):
@@ -175,14 +148,10 @@ class TestDeterministicAnswers:
     def test_answers_are_short_enough_for_speech(self, client):
         for phrase in CONCEPT_PHRASES:
             reply = _ask(client, phrase, LOOP)["reply"]
-            # Beginner answers should stay brief (comfortably speakable).
             assert reply.count(".") <= 6
             assert "```" not in reply
 
 
-# =====================================================================
-# NO-CODE AND BROKEN-CODE STATES
-# =====================================================================
 
 class TestNoCodeState:
 
@@ -206,13 +175,9 @@ class TestBrokenCodeState:
     def test_what_is_wrong_with_spaces(self, client):
         r = _ask(client, "What is wrong with these spaces?", BROKEN)["reply"].lower()
         assert "indent" in r
-        # Must not claim the program runs fine.
         assert "displays zero, one, and two" not in r
 
 
-# =====================================================================
-# HINGLISH (bonus — only the concept path, no new localisation infra)
-# =====================================================================
 
 class TestHinglish:
 

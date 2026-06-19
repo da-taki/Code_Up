@@ -1,12 +1,3 @@
-"""
-Advanced / general concept Q&A (pre-NAB).
-
-"what is recursion", "explain inheritance", "what is big O", "what is a tuple",
-etc. must produce a safe, beginner-friendly spoken explanation — never run,
-edit, generate, navigate, or fall into a weird clarification. Deterministic, so
-the answers work even when AI is unavailable. These also must not steal
-code-specific (Ask My Code) or explicit generation commands.
-"""
 import pytest
 
 import app as app_module
@@ -23,7 +14,6 @@ _MUTATING = {
 
 @pytest.fixture
 def client(monkeypatch):
-    # AI forced OFF so the deterministic concept answers are exercised.
     monkeypatch.setenv("CODEUP_AI_ENABLED", "0")
     monkeypatch.setenv("GEMINI_ENABLED", "0")
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
@@ -38,13 +28,9 @@ def _vc(client, text, code=LOOP):
     return client.post("/voice-command", json={"text": text, "code": code}).get_json()
 
 
-# =====================================================================
-# Advanced concept answers — deterministic, grounded in the right concept
-# =====================================================================
 
 class TestAdvancedConceptAnswers:
 
-    # (command, expected concept kind, a keyword that must appear in the answer)
     CASES = [
         ("what is recursion", "recursion", "calls itself"),
         ("explain recursion", "recursion", "base case"),
@@ -82,13 +68,9 @@ class TestAdvancedConceptAnswers:
         d = _vc(client, text)
         spoken = (d.get("speech") or d.get("message") or "").strip()
         assert len(spoken) >= 60, (text, spoken)
-        # spoken-friendly: no markdown fences or emojis-as-bullets.
         assert "```" not in spoken and "|" not in spoken
 
 
-# =====================================================================
-# Beginner concepts still work
-# =====================================================================
 
 class TestBeginnerConceptsStillWork:
 
@@ -102,9 +84,6 @@ class TestBeginnerConceptsStillWork:
         assert d["action"] not in _MUTATING
 
 
-# =====================================================================
-# Routing safety — concept (and identity) questions never run
-# =====================================================================
 
 class TestNeverRuns:
 
@@ -117,17 +96,12 @@ class TestNeverRuns:
         assert _vc(client, text)["action"] != "run"
 
     def test_unknown_concept_gives_helpful_fallback(self, client):
-        # A clear concept-question form with an unknown topic offers a helpful
-        # pointer, not a weird "did you mean locate error" clarification.
         d = _vc(client, "what is a flux capacitor", code="")
         assert d["action"] == "deterministic_message"
         assert "explain" in d["message"].lower()
         assert "recursion" in d["message"].lower() or "loop" in d["message"].lower()
 
 
-# =====================================================================
-# Do not steal Ask My Code (code-specific questions)
-# =====================================================================
 
 class TestDoesNotStealAskMyCode:
 
@@ -153,9 +127,6 @@ class TestDoesNotStealAskMyCode:
         assert d["action"] in ("navigate_code", "deterministic_message")
 
 
-# =====================================================================
-# Do not steal generation / lesson commands
-# =====================================================================
 
 class TestDoesNotStealGeneration:
 
@@ -169,15 +140,10 @@ class TestDoesNotStealGeneration:
 
     def test_lesson_request_is_not_concept_qa(self, client):
         d = _vc(client, "make a beginner lesson on recursion", code="")
-        # Routes to the lesson builder (or a safe lesson response), not the
-        # generic concept Q&A path.
         assert d.get("concept") is None
         assert d["action"] == "deterministic_message"
 
 
-# =====================================================================
-# Unit: the classifier maps the listed concepts + aliases
-# =====================================================================
 
 class TestClassifierUnit:
 
@@ -202,7 +168,6 @@ class TestClassifierUnit:
         "what is a loop", "what is a list", "what is a function", "what is a string",
     ])
     def test_mentor_handled_concepts_defer(self, text):
-        # These return None so the richer concept-mentor path keeps them.
         assert concept_qa.classify_concept_question(text) is None
 
     @pytest.mark.parametrize("text", [
@@ -210,15 +175,10 @@ class TestClassifierUnit:
         "run the code", "what is total",
     ])
     def test_does_not_classify_code_or_command_text(self, text):
-        # Code-referential or command text must not be treated as a general
-        # concept (None, or deferred — never a concrete advanced concept).
         result = concept_qa.classify_concept_question(text)
         assert result in (None, concept_qa.UNKNOWN_CONCEPT) or result not in concept_qa._CONCEPTS
 
 
-# =====================================================================
-# Non-code / identity small talk -> safe, scoped responses (no fuzzy)
-# =====================================================================
 
 class TestNonCodeSafeResponses:
 
@@ -251,9 +211,6 @@ class TestNonCodeSafeResponses:
         assert "options" not in d
 
 
-# =====================================================================
-# Unsupported concepts via any form -> safe fallback (not fuzzy)
-# =====================================================================
 
 class TestUnsupportedConcepts:
 
@@ -280,9 +237,6 @@ class TestUnsupportedConcepts:
             assert junk not in msg, (text, junk)
 
 
-# =====================================================================
-# Known concept command forms ("explain X", "teach me X", ...)
-# =====================================================================
 
 class TestKnownConceptCommandForms:
 
@@ -299,9 +253,6 @@ class TestKnownConceptCommandForms:
         assert d.get("concept") == kind
 
 
-# =====================================================================
-# Existing commands must not be stolen by the new fallbacks
-# =====================================================================
 
 class TestDoesNotStealCommands:
 
@@ -341,16 +292,10 @@ class TestDoesNotStealCommands:
         assert d["action"] == "deterministic_message"
 
 
-# =====================================================================
-# Internal sentinels must never leak into the recap / trainer notes
-# =====================================================================
 
 class TestSentinelsDoNotLeak:
 
     def test_identity_and_unknown_not_recorded_as_concepts(self, client):
-        # Identity / non-code / unknown-concept responses carry an internal
-        # "__...__" marker in `concept`; it must not surface as something the
-        # learner "practised" in trainer notes or the session recap.
         for t in ["who are you", "what time is it", "what is flarbology",
                   "explain flarbology", "what is recursion"]:
             _vc(text=t, client=client)
@@ -358,19 +303,16 @@ class TestSentinelsDoNotLeak:
         recap = _vc(text="what did I learn today", client=client)["message"]
         assert "__" not in trainer, trainer
         assert "__" not in recap, recap
-        # A genuine concept the learner asked about is still recorded.
         assert "recursion" in (trainer + recap).lower()
 
     def test_snake_case_concept_kinds_are_spoken_friendly(self, client):
-        # Internal kinds like "big_o" / "oop" must be recorded as readable labels,
-        # never read aloud verbatim in trainer notes or the recap.
         for t in ["what is big O", "what is object oriented programming"]:
             _vc(text=t, client=client)
         trainer = _vc(text="make trainer notes", client=client)["message"]
         recap = _vc(text="what did I learn today", client=client)["message"]
         blob = (trainer + " " + recap).lower()
-        assert "big_o" not in blob              # the raw snake_case key never leaks
-        assert "time complexity" in blob        # the readable label is used instead
+        assert "big_o" not in blob
+        assert "time complexity" in blob
 
     def test_concept_label_maps_kinds(self):
         assert concept_qa.concept_label("big_o") == "time complexity"

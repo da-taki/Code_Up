@@ -1,13 +1,3 @@
-"""
-"What did I learn today?" session recap for CodeUp.
-
-Deterministic and Flask-free. Builds a short, honest recap of the current
-session purely from the working memory in ``session_memory`` (generation, run
-results, errors/fixes, features used, concepts practiced, tutorial/project
-activity) plus one suggested next step. It never invents activity: with little
-or no history it says so. The Flask layer may pass the result through Key 2 only
-for grounded wording polish.
-"""
 
 from __future__ import annotations
 
@@ -48,7 +38,6 @@ def _activity_sentences(mem: Dict[str, Any]) -> List[str]:
 
 def _features_clause(mem: Dict[str, Any]) -> str:
     feats = [f for f in (mem.get("features_used") or []) if f]
-    # Drop ones already implied by the activity sentences to avoid repetition.
     feats = [f for f in feats if f not in {"generated code", "ran code"}]
     if not feats:
         return ""
@@ -63,7 +52,6 @@ def _concepts_clause(mem: Dict[str, Any]) -> str:
 
 
 def suggest_next_step(mem: Dict[str, Any]) -> str:
-    """One concrete, encouraging next step grounded in what happened."""
     if mem.get("tutorial_module"):
         return "A good next step is to continue the tutorial, or try the next module."
     if mem.get("last_run_ok") is False:
@@ -78,7 +66,6 @@ def suggest_next_step(mem: Dict[str, Any]) -> str:
 
 
 def build_recap(mem: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """Return a recap dict: {has_history, recap, next_step, speech}."""
     mem = mem or {}
     if not _has_history(mem):
         return {"has_history": False, "recap": NOT_ENOUGH, "next_step": "", "speech": NOT_ENOUGH}

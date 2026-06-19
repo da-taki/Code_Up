@@ -1,13 +1,8 @@
-"""Unit tests for tutorial_engine: lesson pack, AST validators (accepting many
-valid beginner answers), while-loop safety, and validate_attempt verdicts."""
 import pytest
 
 import tutorial_engine as te
 
 
-# ---------------------------------------------------------------------------
-# Lesson pack & navigation
-# ---------------------------------------------------------------------------
 class TestModulePack:
     def test_order_is_print_first_while_last(self):
         assert te.MODULE_ORDER == ["print", "variables", "if", "for", "while"]
@@ -32,16 +27,12 @@ class TestModulePack:
         assert te.next_module_id("nope") is None
 
     def test_example_code_passes_its_own_validator(self):
-        # Every module's worked example must itself be a valid answer.
         for mid in te.MODULE_ORDER:
             code = te.MODULES[mid]["example_code"]
             res = te.validate_attempt(mid, code, ran_ok=True)
             assert res["passed"], f"{mid} example failed validation: {res}"
 
 
-# ---------------------------------------------------------------------------
-# print
-# ---------------------------------------------------------------------------
 class TestValidatePrint:
     @pytest.mark.parametrize("code", [
         'print("Hello world")',
@@ -58,9 +49,6 @@ class TestValidatePrint:
         assert te.validate_print(code) is False
 
 
-# ---------------------------------------------------------------------------
-# variables — many valid names/values must work
-# ---------------------------------------------------------------------------
 class TestValidateVariables:
     @pytest.mark.parametrize("code", [
         'name = "Aman"\nprint(name)',
@@ -76,16 +64,13 @@ class TestValidateVariables:
     @pytest.mark.parametrize("code", [
         'x = 5',                      # assigned but never printed
         'print("hello")',            # printed but no variable
-        'print(undefined_name)',     # printed a name that was never assigned
+        'print(undefined_name)',
         '',
     ])
     def test_rejects(self, code):
         assert te.validate_variables(code) is False
 
 
-# ---------------------------------------------------------------------------
-# if / for / while structural validators
-# ---------------------------------------------------------------------------
 class TestValidateIf:
     @pytest.mark.parametrize("code", [
         'x = 10\nif x > 5:\n    print("big")',
@@ -127,9 +112,6 @@ class TestValidateWhile:
         assert te.validate_while(code) is False
 
 
-# ---------------------------------------------------------------------------
-# while-loop safety (static heuristic)
-# ---------------------------------------------------------------------------
 class TestWhileSafety:
     def test_safe_counter_loop(self):
         safe, _ = te.check_while_safety('c = 1\nwhile c <= 3:\n    print(c)\n    c = c + 1')
@@ -156,15 +138,10 @@ class TestWhileSafety:
         assert safe is True
 
     def test_syntax_error_defers_to_run(self):
-        # Broken code returns "safe" so the normal run path surfaces the syntax
-        # error instead of a misleading infinite-loop warning.
         safe, _ = te.check_while_safety('while True\n    print(1)')
         assert safe is True
 
 
-# ---------------------------------------------------------------------------
-# validate_attempt — the route-facing verdict
-# ---------------------------------------------------------------------------
 class TestValidateAttempt:
     def test_print_pass(self):
         res = te.validate_attempt("print", 'print("hi")', ran_ok=True)
@@ -220,9 +197,6 @@ class TestValidateAttempt:
         assert res["passed"] is False
 
 
-# ---------------------------------------------------------------------------
-# AI tutor coach — deterministic knowledge base (the safe fallback)
-# ---------------------------------------------------------------------------
 class TestCoachClassify:
     @pytest.mark.parametrize("text,expected", [
         ("explain simpler", "explain_simpler"),
@@ -243,7 +217,6 @@ class TestCoachClassify:
         "recap", "repeat", "exit tutorial", "read my code", "say that again", "",
     ])
     def test_ignores_control_and_coding_commands(self, text):
-        # The coach must never swallow normal tutorial controls or coding commands.
         assert te.classify_coach_request(text) is None
 
 

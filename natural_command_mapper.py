@@ -1,9 +1,3 @@
-"""AI-assisted natural command mapping for CodeUp.
-
-This module never executes actions and never accepts generated code. It only
-validates a structured intent JSON object that the Flask route can map onto
-existing safe handlers.
-"""
 
 from __future__ import annotations
 
@@ -113,7 +107,6 @@ def mapper_messages(
     current_mode: str = "",
     memory_summary: str = "",
 ) -> Tuple[str, str]:
-    """Build the strict system/user prompt for the AI mapper."""
 
     allowed = ", ".join(sorted(ALLOWED_INTENTS))
     system = (
@@ -171,7 +164,6 @@ _CONVERSATIONAL_RE = re.compile(
 
 
 def should_consult_ai_for_command(raw_text: str, normalized_text: str = "", context: Optional[Dict[str, Any]] = None) -> bool:
-    """Policy gate for using AI understanding before vague fallback routing."""
 
     context = context or {}
     text = " ".join(str(normalized_text or raw_text or "").lower().strip().rstrip(".!?").split())
@@ -229,7 +221,6 @@ def _contains_blocked_payload(value: Any) -> bool:
 
 
 def validate_mapping(mapping: Any) -> Tuple[bool, str]:
-    """Validate the AI intent JSON against the allowlist and safe schema."""
 
     if not isinstance(mapping, dict):
         return False, "mapping_not_object"
@@ -337,11 +328,6 @@ def map_command(
     current_mode: str = "",
     memory_summary: str = "",
 ) -> Dict[str, Any]:
-    """Call the AI mapper and return a safe status object.
-
-    Status values are ``mapped``, ``invalid``, or ``failed``. Callers still make
-    the execution decision from the validated intent and confidence band.
-    """
 
     system, user = mapper_messages(
         command_text,
@@ -353,7 +339,7 @@ def map_command(
     )
     try:
         raw = ai_fn(system, user)
-    except Exception as exc:  # AI failures must not break command routing.
+    except Exception as exc:
         safe_reason = groq_key_manager.redact_known_keys(str(exc))[:160]
         return {"status": "failed", "reason": safe_reason}
 

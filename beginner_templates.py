@@ -1,9 +1,3 @@
-"""Deterministic beginner code templates for CodeUp voice commands.
-
-The functions in this module return safe, small Python examples only. They do
-not call AI and they do not execute code.
-"""
-
 from __future__ import annotations
 
 import ast
@@ -654,7 +648,6 @@ def _loop_from_slots(slots: Dict[str, Any], *, while_loop: bool) -> Optional[Tem
 
 
 def validate_template_code(code: str) -> bool:
-    """Small helper for tests and callers that need a final syntax check."""
     source = str(code or "")
     if not source.strip():
         return False

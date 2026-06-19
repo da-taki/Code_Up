@@ -1,9 +1,3 @@
-"""Concept-Aware Code Tutor (NAB value sprint, Feature 2).
-
-Turns the current program into a short, deterministic lesson from AST facts:
-what it does, concepts + where, one prediction question, one practice idea.
-No cloud AI is involved.
-"""
 import pytest
 
 import app as app_module
@@ -69,7 +63,6 @@ class TestTutor:
 
 
 class TestTutorTeachesBeforePractice:
-    """Problem 6 — make the code + output accessible before any practice idea."""
 
     def _mem_with_output(self, output="0\n1\n2\n"):
         import session_memory
@@ -81,14 +74,12 @@ class TestTutorTeachesBeforePractice:
         msg = concept_tutor.build_concept_lesson(LOOP_OK, {})["message"]
         low = msg.lower()
         assert "line 1" in low and "line 2" in low
-        # The line explanations must come before the practice idea.
         assert low.index("line 1") < low.index("practice idea")
         assert low.index("line 2") < low.index("practice idea")
 
     def test_mentions_last_output_when_available(self):
         msg = concept_tutor.build_concept_lesson(LOOP_OK, self._mem_with_output())["message"].lower()
         assert "last output was 0, 1, 2" in msg
-        # And it must be spoken before the practice idea.
         assert msg.index("last output") < msg.index("practice idea")
 
     def test_no_last_output_section_without_a_run(self):
@@ -101,12 +92,10 @@ class TestTutorTeachesBeforePractice:
 
     def test_practice_idea_is_after_the_explanation(self):
         msg = concept_tutor.build_concept_lesson(LOOP_OK, self._mem_with_output())["message"].lower()
-        # Practice is the final teaching move, not the opening line.
         assert msg.index("practice idea") > msg.index("for loop")
 
     def test_speech_carries_the_full_explanation_not_only_last_sentence(self):
         r = concept_tutor.build_concept_lesson(LOOP_OK, self._mem_with_output())
-        # speech == message, and it contains the line-level teaching, not just practice.
         assert r["speech"] == r["message"]
         assert "for loop" in r["speech"].lower()
 
@@ -122,5 +111,4 @@ class TestRoute:
         d = client.post("/voice-command", json={
             "text": "make a lesson from this program", "code": LOOP_OK}).get_json()
         assert d.get("concept_lesson") is True
-        # Must not be a generic concept answer.
         assert d.get("concept") is None

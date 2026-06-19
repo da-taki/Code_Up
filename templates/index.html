@@ -20,9 +20,6 @@
   <div id="srAnnouncer" role="status" aria-live="assertive" aria-atomic="true"
        style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;"></div>
 
-  <!-- Non-blocking onboarding banner. Replaces the old blocking start gate, so
-       the IDE is usable immediately. Dismissible; collapsed details hold the
-       fuller scope/help copy for screen-reader users without nagging. -->
   <div id="cuStartBanner" role="region" aria-label="Getting started"
        style="background:var(--accent-soft, rgba(0,0,0,0.04));border-bottom:1px solid var(--border-soft);color:var(--text-main);padding:10px 16px;font-size:0.9rem;line-height:1.5;display:flex;gap:12px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;">
     <div style="flex:1;min-width:260px;">
@@ -153,12 +150,6 @@
         <button class="cu-button" id="stepNarrationBtn" aria-label="Run with step narration">Step Narration</button>
         <button class="cu-button" id="mistakeReplayBtn" aria-label="Compare before and after mistake">Mistake Replay</button>
         <button class="cu-button cu-button-secondary" id="saveBtn" aria-label="Save current code as snippet">Save</button>
-        <!-- English-only for this external-testing release. Hindi mode is
-             temporarily hidden because browser Hindi text-to-speech quality is
-             inconsistent. The backend Hindi parsing is left untouched; to bring
-             the picker back, restore the Hindi <option>s here and the voice
-             language selector. getLanguage() reads this control, so keeping a
-             single English option makes English the default everywhere. -->
         <select id="languageSelector" class="cu-language-selector" aria-label="Response language: English" disabled title="CodeUp is English-only for now">
           <option value="en">English</option>
         </select>
@@ -304,11 +295,6 @@
     </div>
   </div>
 
-  <!-- The blocking start gate was removed: /ide now opens directly into the
-       usable IDE. The onboarding + Chrome-first guidance moved to the
-       non-blocking #cuStartBanner (top of <body>) and #cuFirstUseHint (next to
-       the command box). English mode and audio priming are initialised on load
-       / first gesture instead of on a "Start" click — see the script below. -->
   <aside id="tutorialOverlay" hidden
        role="complementary" aria-labelledby="tutorialTopic"
        class="cu-tutorial-panel">
@@ -333,11 +319,6 @@
     </div>
     <p class="cu-tutorial-help">Say or type the insert command I give you, then say <strong>run code</strong>. Other commands: repeat, hint, read my code, give me an example, continue, practise again, recap, or exit tutorial.</p>
   </aside>
-  <!-- React + pre-built landing bundle, vendored locally. No CDN, no Babel-in-browser.
-     To regenerate after editing any landing/*.jsx file:
-         npm install      (first time only)
-         npm run build
-     This produces static/vendor/react/* and static/landing/dist/bundle.js. -->
 
   <script>
     (function () {
@@ -349,22 +330,12 @@
 
       if (typeof speak !== 'function') { window.speak = function () {}; }
 
-      // ── Tutorial state machine ───────────────────────────────────────────
       var LANG_KEY = 'codeup_language';
 
-      // The guided tutorial (spoken, activity-based, opt-in) lives in
-      // static/tutorial.js. It defines window.TutorialController and the
       // window._tutorialOnRunSuccess / _tutorialOnRunError run hooks.
 
 
     
-      // ── Audio priming without a modal ───────────────────────────────────
-      // speechSynthesis needs a user gesture before it will play. The old start
-      // gate supplied that gesture on its "Start" click. With the gate gone we
-      // prime once on the first real interaction (pointer or key) anywhere on
-      // the page. This is invisible and never blocks the IDE; a typed or clicked
-      // command is itself a gesture, so speech for the very first command works
-      // regardless.
       function primeAudio() {
         try {
           if ('speechSynthesis' in window) {
@@ -386,27 +357,13 @@
       document.addEventListener('keydown', primeAudioOnce, true);
 
       window.addEventListener('DOMContentLoaded', function () {
-        // English-only is the default — no modal, no language prompt, the IDE is
-        // usable immediately. Set the language up front so anything that reads it
-        // sees English from load. (Hindi stays hidden in the UI; backend Hindi
-        // parsing is untouched.)
         safeStorage(function () { localStorage.setItem(LANG_KEY, 'en'); });
         var langSel = document.getElementById('languageSelector');
         if (langSel) langSel.value = 'en';
 
-        // Tutorial open/close/next + panel buttons are wired in
-        // static/tutorial.js (TutorialController._bind). Nothing to do here.
 
-        // Accessibility preferences. Restore them SILENTLY: restoring a saved
-        // colour mode must not auto-speak on page load. There is no automatic
-        // startup speech of any kind now — the IDE opens calmly, and the learner
-        // hears guidance only when they ask ("what can I do here", "start
-        // tutorial", "help").
         loadAccessibilityPreferences();
 
-        // Non-blocking onboarding banner: Dismiss hides it and remembers the
-        // choice. The same guidance also sits by the command box, so dismissing
-        // loses nothing.
         var banner  = document.getElementById('cuStartBanner');
         var dismiss = document.getElementById('cuStartBannerDismiss');
         if (banner && safeStorage(function () { return localStorage.getItem('cuStartBannerDismissed'); }) === 'true') {
@@ -420,16 +377,11 @@
         }
       });
 
-      // ── Accessibility preferences ────────────────────────────────────────
-      // `silent` suppresses the spoken confirmation. It is passed when restoring
-      // the saved preference on page load, so the IDE never auto-speaks on open;
-      // user-driven changes (the selector, Alt+A) still speak normally.
       function applyColorVisionMode(mode, silent) {
         document.body.classList.remove(
           'theme-protanopia','theme-deuteranopia',
           'theme-tritanopia','theme-high-contrast'
         );
-        // theme-default has no CSS rules — only add a real theme class when one is selected
         if (mode !== 'default') {
           document.body.classList.add('theme-' + mode);
         }
@@ -463,8 +415,6 @@
 
         var motionBtn = document.getElementById('motionToggle');
         var sysPrefReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-        // Use === null check so a stored value of 'false' is treated as "user explicitly disabled"
-        // not as "user has no preference, fall back to OS"
         var motionStored = safeStorage(function () { return localStorage.getItem('reducedMotion'); });
         var shouldReduce = reducedMotion || (sysPrefReduced && motionStored === null);
         if (shouldReduce && motionBtn) {
@@ -473,8 +423,6 @@
           motionBtn.setAttribute('aria-pressed', 'true');
         }
 
-        // Night mode — also auto-enable if OS prefers dark and user hasn't set a preference.
-        // Same === null pattern: a stored 'false' must override OS preference.
         var nightBtn = document.getElementById('nightToggle');
         var sysPrefDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
         var nightStored = safeStorage(function () { return localStorage.getItem('nightMode'); });
@@ -506,7 +454,6 @@
         this.classList.toggle('active', isActive);
         this.setAttribute('aria-pressed', String(isActive));
         safeStorage(function () { localStorage.setItem('nightMode', isActive); });
-        // Re-theme Monaco editor too
         try {
           if (typeof monaco !== 'undefined' && monaco.editor) {
             monaco.editor.setTheme(isActive ? 'vs-dark' : 'vs');
@@ -527,7 +474,6 @@
         if (e.key === 'Enter') { e.preventDefault(); if (typeof saveSnippetAccessible === 'function') saveSnippetAccessible(); }
       });
 
-      // Inputs panel — add button and Enter key on the input field
       var inputAddField = document.getElementById('inputAddField');
       var inputAddBtn   = document.getElementById('inputAddBtn');
       var clearInputsBtn = document.getElementById('clearInputsBtn');
@@ -538,8 +484,6 @@
         var v = inputAddField.value.trim();
         if (!v) return;
         if (typeof setPreflightInputs === 'function') {
-          // Read existing list via accessor (module-scoped `let` is not on window),
-          // append, set.
           var existing = (typeof window.getPreflightInputs === 'function')
             ? window.getPreflightInputs() : [];
           existing.push(v);
@@ -568,12 +512,7 @@
         if (typeof window.warnIfHindiUnavailable === 'function') {
           window.warnIfHindiUnavailable(e.target.value);
         }
-        // Reset the API-key-prompt flag so users get a fresh prompt after
-        // switching language (they may have dismissed it in the other lang
-        // before realizing they actually want AI).
         try { window._apiKeyPromptShown = false; } catch (err) {}
-        // Clear any pending interactive state so a stale quiz/challenge from
-        // the previous language doesn't intercept input in the new language.
         try {
           if (typeof tabState === 'function') {
             var s = tabState();

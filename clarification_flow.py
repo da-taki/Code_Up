@@ -1,16 +1,3 @@
-"""Multi-turn clarification for symbol-pattern requests.
-
-A blind beginner says a messy pattern request ("make a five by five thing with
-the third line different"). We extract the slots we can (rows, cols, symbol,
-special row/count), ask ONE specific question for what is missing, remember a
-structured pending object, and then parse the user's answer ("stars, six on the
-third line" / "it should have 6 rather than 5") back into those slots. When the
-slots are complete we hand a clean, canonical command to the deterministic
-exact-symbol generator — so Key 2 never has to invent the pattern.
-
-Pure/deterministic and reuses the exact-symbol parser's own slot helpers, so the
-answer always round-trips back through the same deterministic generator.
-"""
 
 import re
 from typing import Dict, List, Optional
@@ -33,8 +20,6 @@ _PATTERN_WORD_RE = re.compile(
 
 
 def has_pattern_intent(text: str) -> bool:
-    """True when the text reads like a symbol/shape pattern (not, say, a grid of
-    numbers) — used so we only clarify a missing symbol for real patterns."""
     return bool(_PATTERN_WORD_RE.search(text or ""))
 _LINE_NUM_RE = re.compile(r"\b(\d+)\s+(?:line|row)\b")
 _NUM_LINE_RE = re.compile(r"\b(?:line|row)\s+(\d+)\b")
@@ -54,8 +39,6 @@ def _symbol_word(symbol: Optional[str], plural: bool = False) -> str:
 
 
 def extract_pattern_slots(text: str) -> Dict[str, Optional[int]]:
-    """Best-effort slots from a raw utterance: rows, cols, symbol, special_row,
-    special_count (any may be None)."""
     norm = normalize_spoken_symbols(text)
     rows, cols = _dimensions(norm)
     symbol = _find_symbol(norm)
@@ -80,7 +63,6 @@ def missing_pattern_slots(slots: Dict) -> List[str]:
 
 
 def is_pattern_clarifiable(slots: Dict) -> bool:
-    """A real pattern (has a size) that is missing a needed slot."""
     return bool(slots.get("rows")) and bool(slots.get("cols")) and bool(missing_pattern_slots(slots))
 
 
@@ -105,8 +87,6 @@ def pattern_question(slots: Dict) -> str:
 
 
 def question_facts(question: str) -> List[str]:
-    """Concrete facts an AI rephrase of ``question`` must preserve (only what the
-    question actually states — a size and/or an ordinal line reference)."""
     facts: List[str] = []
     size = re.search(r"\b(\d+)\s+by\s+(\d+)\b", question or "")
     if size:
@@ -121,8 +101,6 @@ def question_facts(question: str) -> List[str]:
 
 
 def parse_pattern_answer(text: str, slots: Dict) -> Dict[str, Optional[int]]:
-    """Merge a user's answer ("stars, six on the third line", "6 rather than 5")
-    into the known slots."""
     norm = normalize_spoken_symbols(text)
     new = dict(slots)
 
@@ -134,7 +112,6 @@ def parse_pattern_answer(text: str, slots: Dict) -> Dict[str, Optional[int]]:
     if row:
         new["special_row"] = int(row.group(1))
 
-    # "6 rather than 5" / "six instead of five" -> the *new* value (6).
     swap = re.search(r"\b(\d+)\s+(?:rather than|instead of|not|over|in place of)\s+\d+", norm)
     if swap:
         new["special_count"] = int(swap.group(1))
@@ -148,7 +125,6 @@ def parse_pattern_answer(text: str, slots: Dict) -> Dict[str, Optional[int]]:
 
 
 def build_pattern_command(slots: Dict) -> str:
-    """Canonical command string for the deterministic exact-symbol generator."""
     rows, cols = slots["rows"], slots["cols"]
     word = _symbol_word(slots.get("symbol"))
     command = f"make a {rows} by {cols} {word} pattern"

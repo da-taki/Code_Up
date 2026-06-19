@@ -1,14 +1,6 @@
 /* global React */
 const { useEffect, useState, useRef } = React;
 
-// ────────────────────────────────────────────────────────────
-// EditorHero — the FUNCTIONAL surface. Lives at the top of the
-// page so a blind user can land, tab once, and start coding.
-// Real textarea (not Monaco — keeps page light), real Run that
-// evaluates a tiny safelist of Python-style ops via a mock
-// interpreter, real voice toggle that hooks into Web Speech API
-// when available, real Sonify that plays tones from indent.
-// ────────────────────────────────────────────────────────────
 
 const SAMPLE = `# Welcome to CodeUp
 # Press Ctrl+Enter to run · Alt+S to sonify
@@ -32,13 +24,10 @@ function speak(text, lang = "en-US") {
   } catch (e) {}
 }
 
-// Tiny mock runner so the editor actually executes basic prints
-// without pulling in a Python interpreter. Real backend is /run on the server.
 function mockRun(src) {
   const out = [];
   const env = {};
   const lines = src.split("\n");
-  // pass 1: collect def bodies
   const defs = {};
   for (let i = 0; i < lines.length; i++) {
     const m = lines[i].match(/^def\s+(\w+)\(([^)]*)\):/);
@@ -68,26 +57,20 @@ function mockRun(src) {
   }
   function evalExpr(expr, local = {}) {
     expr = expr.trim();
-    // f-string
     let m = expr.match(/^f"([^"]*)"$/);
     if (m) {
       return m[1].replace(/\{([^}]+)\}/g, (_, e) => String(evalExpr(e, local)));
     }
-    // double-quoted string
     m = expr.match(/^"([^"]*)"$/);
     if (m) return m[1];
-    // list literal of strings
     m = expr.match(/^\[([^\]]*)\]$/);
     if (m) return m[1].split(",").map((s) => evalExpr(s, local));
-    // number
     if (/^-?\d+(\.\d+)?$/.test(expr)) return Number(expr);
-    // function call
     m = expr.match(/^(\w+)\((.*)\)$/);
     if (m) {
       const args = splitArgs(m[2]).map((a) => evalExpr(a, local));
       return callFn(m[1], args);
     }
-    // identifier
     if (local[expr] !== undefined) return local[expr];
     if (env[expr] !== undefined) return env[expr];
     return expr;
@@ -105,7 +88,6 @@ function mockRun(src) {
     return out;
   }
 
-  // pass 2: execute top-level
   for (let i = 0; i < lines.length; i++) {
     const ln = lines[i];
     if (!ln.trim() || ln.trim().startsWith("#")) continue;
@@ -161,12 +143,10 @@ function EditorHero() {
       );
       setRunning(false);
       setStatus("preview · " + (r.split("\n").length) + " lines · /ide for real run");
-      // English-only for now (Hindi mode temporarily hidden).
       speak("This is a preview. For real Python execution, open the full IDE.", "en-US");
     }, 350);
   }
 
-  // Sonify — pitch from indent of each line
   const audioRef = useRef(null);
   function sonify() {
     const C = window.AudioContext || window.webkitAudioContext;
@@ -201,7 +181,6 @@ function EditorHero() {
     speak(next ? "Voice on" : "Voice off");
   }
 
-  // Hotkeys
   useEffect(() => {
     function onKey(e) {
       if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); run(); }
@@ -212,7 +191,6 @@ function EditorHero() {
     return () => window.removeEventListener("keydown", onKey);
   }, [src, lang]);
 
-  // Line numbers
   const lineCount = src.split("\n").length;
   const lineNums = Array.from({ length: Math.max(lineCount, 12) }, (_, i) => i + 1).join("\n");
 
@@ -261,7 +239,7 @@ function EditorHero() {
           </button>
           <div className="eh-divider" aria-hidden="true"></div>
           <div className="eh-lang" role="group" aria-label="Speech language: English">
-            {/* English-only for now — Hindi mode is temporarily hidden. */}
+            {}
             <button className="eh-pill is-on" aria-pressed="true" disabled>EN</button>
           </div>
           <div className="eh-divider" aria-hidden="true"></div>

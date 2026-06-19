@@ -1,8 +1,3 @@
-"""Tests for the Key 2 intent-repair layer: messy natural speech maps to existing
-actions, spoken inserts become valid beginner Python (text/variable/number from
-editor context), unknown Key 2 actions are rejected, and the deterministic path
-works when Key 2 is unavailable.
-"""
 import pytest
 
 import app as app_module
@@ -24,9 +19,6 @@ def _vc(client, text, **kw):
     return client.post("/voice-command", json={"text": text, **kw}).get_json()
 
 
-# ---------------------------------------------------------------------------
-# Natural command intent -> existing actions
-# ---------------------------------------------------------------------------
 class TestNaturalCommands:
     @pytest.mark.parametrize("text", ["alright stop listening", "can you stop listening please", "okay stop listening"])
     def test_stop_listening(self, client, text):
@@ -56,9 +48,6 @@ class TestNaturalCommands:
         assert _vc(client, "could you map my code", code="def f():\n    pass\n")["action"] == "code_map"
 
 
-# ---------------------------------------------------------------------------
-# Spoken insert -> valid beginner Python (via the route)
-# ---------------------------------------------------------------------------
 class TestSpokenInsert:
     def _code(self, client, text, code=""):
         d = _vc(client, text, code=code)
@@ -97,22 +86,15 @@ class TestSpokenInsert:
         compile(code, "<t>", "exec")  # syntactically valid
 
 
-# ---------------------------------------------------------------------------
-# Broken-code preservation
-# ---------------------------------------------------------------------------
 def test_broken_quote_stays_broken(client):
     d = _vc(client, "insert print hello world without closing quote")
     assert d["action"] == "conversational_edit"
     assert d["ai_action"]["code"] == 'print("hello world)'
 
 
-# ---------------------------------------------------------------------------
-# Repair + validation
-# ---------------------------------------------------------------------------
 class TestRepairValidation:
     def test_unknown_key2_action_is_rejected(self):
         assert ir.validate_decision({"action": "delete_everything", "confidence": 0.9}) is False
-        # An AI reply with an unknown action is dropped -> deterministic no_op.
         decision = ir.repair("frobnicate the doohickey", ai_fn=lambda s, u: '{"action":"delete_everything","confidence":0.95}')
         assert decision["action"] == "no_op"
 
@@ -136,14 +118,10 @@ class TestRepairValidation:
         assert ir.repair("hey there how are you", ai_fn=None)["action"] == "no_op"
 
 
-# ---------------------------------------------------------------------------
-# Context detection
-# ---------------------------------------------------------------------------
 class TestDefinedNames:
     def test_detects_assignment_and_loop_and_def(self):
         names = ir.defined_names("name = 'x'\nfor item in items:\n    pass\ndef greet(who):\n    pass\n")
         assert {"name", "item", "greet", "who"}.issubset(names)
 
     def test_detects_loop_var_in_incomplete_code(self):
-        # The tutorial builds line by line; a bare for-header has no body yet.
         assert "i" in ir.defined_names("for i in range(3):")

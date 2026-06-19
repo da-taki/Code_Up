@@ -1,11 +1,3 @@
-"""Screen Reader Bridge Mode — explain how to take the current code into
-standard tools (NVDA, JAWS, VS Code). It tells the learner what to listen for,
-which lines matter, keyboard-friendly steps, and common confusion points.
-
-Positioning-critical: CodeUp is a bridge, NOT a replacement for screen readers
-or editors. The wording always says so. Pure, deterministic, Flask-free.
-"""
-
 import ast
 from typing import Any, Dict, List, Optional
 
@@ -27,8 +19,6 @@ def _target_label(target: str) -> str:
 
 
 def _reader_phrase(label: str) -> str:
-    """How to name the reader in the opening line. Never implies CodeUp itself
-    configures NVDA/JAWS — it only makes the code easier to read with them."""
     if label == "NVDA":
         return "NVDA or another screen reader"
     if label == "JAWS":
@@ -46,7 +36,6 @@ def _call_name(node: ast.Call) -> str:
 
 
 def _key_lines(code: str) -> Dict[str, Optional[int]]:
-    """First loop / first indented print under it / first function / first if."""
     info: Dict[str, Optional[int]] = {"loop": None, "print_after_loop": None,
                                        "function": None, "condition": None}
     try:
@@ -108,7 +97,6 @@ def _indentation_point(keys: Dict[str, Optional[int]]) -> str:
 
 def build_screen_reader_bridge(code: str, project_state: Optional[Dict[str, Any]] = None,
                                target: str = "screen reader", verbosity: str = "normal") -> Dict[str, Any]:
-    """Return {message, speech, target} bridging the current code to NVDA / JAWS / VS Code."""
     code = code or ""
     verbosity = (verbosity or "normal").strip().lower()
     label = _target_label(target)
@@ -145,8 +133,6 @@ def build_screen_reader_bridge(code: str, project_state: Optional[Dict[str, Any]
         vscode = ("Moving to VS Code: open the file, turn on NVDA or JAWS, and use line-by-line "
                   "reading; the structure you learned here maps directly onto what you will hear there.")
 
-    # Opening makes the purpose unambiguous: these are handoff NOTES that make the
-    # code easier to read with a screen reader. CodeUp never configures NVDA/JAWS.
     opening = "Screen reader handoff notes ready."
     intent_sentence = (f"This explains the current code in a way that is easier to read with "
                        f"{_reader_phrase(label)}.")

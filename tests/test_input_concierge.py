@@ -1,10 +1,3 @@
-"""Focused tests for the input() concierge.
-
-Covers detection of input()/int(input())/float(input()), natural value-supplying
-commands, spoken-number normalisation, sample values, friendly type-mismatch
-clarification, the no-code / no-input guards, the Key 2 fallback seam, and the
-/voice-command + /run route integration.
-"""
 import pytest
 
 import app as app_module
@@ -26,9 +19,6 @@ def client(monkeypatch):
         yield flask_client
 
 
-# ---------------------------------------------------------------------------
-# Detection
-# ---------------------------------------------------------------------------
 
 def test_detects_input_with_prompt():
     assert ic.detect_inputs('name = input("Enter name")\n') == [
@@ -60,9 +50,6 @@ def test_bare_input_has_str_type_and_placeholder_name():
     assert detected[0]["label"] == "Input 1"
 
 
-# ---------------------------------------------------------------------------
-# Spoken numbers
-# ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize(
     "phrase,expected",
@@ -83,9 +70,6 @@ def test_a_name_is_not_a_number():
     assert ic.normalize_spoken_number("Taknoor") is None
 
 
-# ---------------------------------------------------------------------------
-# Value mapping
-# ---------------------------------------------------------------------------
 
 def test_run_with_named_values_maps_in_order():
     plan = ic.build_input_plan(NAME_AGE, "run with name Taknoor and age 16")
@@ -107,7 +91,7 @@ def test_use_sample_values_supplies_typed_values():
     plan = ic.build_input_plan(NAME_AGE, "use sample values")
     assert plan["status"] == "ready"
     assert len(plan["values"]) == 2
-    int(plan["values"][1])  # the int field's sample must be int-castable
+    int(plan["values"][1])
 
 
 def test_run_with_sample_values_phrasing():
@@ -121,9 +105,6 @@ def test_marks_are_positional_list():
     assert plan["values"] == ["90", "85", "95"]
 
 
-# ---------------------------------------------------------------------------
-# Guards and friendly errors
-# ---------------------------------------------------------------------------
 
 def test_wrong_type_gives_friendly_clarification():
     plan = ic.build_input_plan(NAME_AGE, "run with name Taknoor and age hello")
@@ -147,9 +128,6 @@ def test_non_value_commands_are_ignored(text):
     assert ic.build_input_plan(NAME_AGE, text) is None
 
 
-# ---------------------------------------------------------------------------
-# Key 2 fallback seam
-# ---------------------------------------------------------------------------
 
 def test_key2_missing_does_not_break_simple_typed_values():
     plan = ic.build_input_plan(NAME_AGE, "run with name Taknoor and age 16", ai_value_fn=None)
@@ -160,8 +138,6 @@ def test_key2_failure_falls_back_safely():
     def boom(code_inputs, text):
         raise RuntimeError("service busy")
 
-    # Deterministic mapping already fills every value, so the failing AI is
-    # never consulted and the simple typed form still works.
     plan = ic.build_input_plan(NAME_AGE, "run with name Taknoor and age 16", ai_value_fn=boom)
     assert plan["values"] == ["Taknoor", "16"]
 
@@ -179,9 +155,6 @@ def test_key2_fills_a_gap_only_when_needed():
     assert seen["called"] == 1
 
 
-# ---------------------------------------------------------------------------
-# Route integration
-# ---------------------------------------------------------------------------
 
 def test_voice_route_run_with_values_returns_set_then_run(client):
     data = client.post(

@@ -1,10 +1,3 @@
-"""Tests for per-session working memory and contextual follow-up commands.
-
-Unit tests exercise session_memory directly; route tests drive the real
-/voice-command, /run, /generate-code flow (one test client = one session, so
-cookies carry the memory across requests). AI is disabled, so these assert the
-deterministic memory path that runs whenever Key 2 is missing/busy.
-"""
 import pytest
 
 import app as app_module
@@ -30,9 +23,6 @@ def _vc(client, text, **kw):
     return client.post("/voice-command", json={"text": text, **kw}).get_json()
 
 
-# ---------------------------------------------------------------------------
-# Unit: classification
-# ---------------------------------------------------------------------------
 class TestClassify:
     @pytest.mark.parametrize("text,expected", [
         ("explain it again", "explain_again"),
@@ -68,9 +58,6 @@ class TestClassify:
         assert sm.classify_followup(text) is None
 
 
-# ---------------------------------------------------------------------------
-# Unit: resolution + bounded memory
-# ---------------------------------------------------------------------------
 class TestResolve:
     def test_why_failed_without_error_clarifies(self):
         d = sm.resolve_followup("why_failed", "why did it fail", sm.new_memory())
@@ -140,9 +127,6 @@ class TestResolve:
         assert "lines" in mem["last_gen_summary"]
 
 
-# ---------------------------------------------------------------------------
-# Route integration — the required follow-up behaviors
-# ---------------------------------------------------------------------------
 class TestRouteFollowups:
     def test_explain_it_again_after_generation_explains_code(self, client):
         client.post("/generate-code", json={"prompt": "print the first five even numbers"})
@@ -190,7 +174,7 @@ class TestRouteFollowups:
         assert "10" in d["prompt"]
 
     def test_low_confidence_referent_asks_one_clarification(self, client):
-        d = _vc(client, "explain it again")  # fresh session, no code, no memory
+        d = _vc(client, "explain it again")
         assert d["action"] == "deterministic_message"
         assert d.get("needs_clarification") is True
 
@@ -203,11 +187,9 @@ class TestRouteFollowups:
         assert _vc(client, "run", code="print(1)")["action"] == "run"
         assert _vc(client, "clear editor", code="x = 1")["action"] == "clear_editor"
         assert _vc(client, "open main")["action"] == "open_project_file"
-        # Spoken print inserts now build valid Python via conversational_edit.
         assert _vc(client, "insert print hello world")["action"] == "conversational_edit"
 
     def test_tutorial_coach_still_works(self, client):
-        # The tutorial coach route is unaffected by session memory.
         d = client.post("/tutorial/coach", json={"module": "print", "text": "why do we use quotes"}).get_json()
         assert d["handled"] is True
         assert "text" in d["text"].lower()

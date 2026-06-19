@@ -1,9 +1,3 @@
-"""
-Navigation by meaning (Sprint 2, Feature 2).
-
-Find the first function/loop/condition/print/error (or next/previous/current
-block) and variable usage by name — deterministic, AST-based, read-only.
-"""
 import pytest
 
 import app as app_module
@@ -63,13 +57,12 @@ class TestNavigation:
 
     def test_where_is_total_changed(self, client):
         d = _vc(client, "where is total changed")
-        # total is assigned on line 1 and updated on line 5.
         assert "1" in d["message"] and "5" in d["message"]
 
     def test_where_is_name_used(self, client):
         d = _vc(client, "where is name used")
         assert d["action"] == "navigate_code"
-        assert "3" in d["message"]  # name is used on line 3
+        assert "3" in d["message"]
 
     def test_no_match_message(self, client):
         d = client.post("/voice-command", json={"text": "go to the loop", "code": "x = 1\n"}).get_json()
@@ -79,7 +72,6 @@ class TestNavigation:
     def test_multiple_prints_mention_count(self, client):
         d = _vc(client, "go to the print statement")
         assert d["action"] == "navigate_code"
-        # Two prints in CODE -> first one, count mentioned.
         assert "two" in d["message"].lower() or "print" in d["message"].lower()
 
     def test_navigation_does_not_edit_code(self, client):
@@ -94,7 +86,6 @@ class TestBlockNavigation:
     def test_current_block(self, client):
         d = _vc(client, "read the current block", cursor_line=5)
         assert d["action"] == "navigate_code"
-        # Line 5 is inside the for loop (lines 4-6).
         assert d["line"] in (4,)
 
     def test_next_block(self, client):

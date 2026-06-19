@@ -1,13 +1,3 @@
-"""
-Speech rate + verbosity accessibility controls (Sprint 1, Feature 4).
-
-Backend: deterministic voice routing of rate/verbosity commands (and that they
-are never mistaken for code edits). Frontend (structural assertions over the
-shipped static/app.js, as this repo tests frontend wiring): rate + verbosity are
-persisted to localStorage, the SpeechManager fallback honours the stored rate,
-and the existing stop/voice-stability wiring is intact. Plus Sprint-1 regression
-guards for the core demo commands.
-"""
 import os
 
 import pytest
@@ -38,9 +28,6 @@ def _vc(client, text, **kw):
     return client.post("/voice-command", json={"text": text, **kw}).get_json()
 
 
-# =====================================================================
-# Speech rate routing
-# =====================================================================
 
 class TestSpeechRateRouting:
 
@@ -59,9 +46,6 @@ class TestSpeechRateRouting:
         assert d["speech"] and len(d["speech"]) < 60
 
 
-# =====================================================================
-# Verbosity routing
-# =====================================================================
 
 class TestVerbosityRouting:
 
@@ -90,9 +74,6 @@ class TestVerbosityRouting:
         assert app_module._verbosity_directive("concise")  # non-empty
 
 
-# =====================================================================
-# Frontend persistence + SpeechManager rate (structural)
-# =====================================================================
 
 class TestFrontendWiring:
 
@@ -121,9 +102,6 @@ class TestFrontendWiring:
             assert token in app_js, token
 
 
-# =====================================================================
-# Stop / voice stability still works
-# =====================================================================
 
 class TestStopStillWorks:
 
@@ -138,9 +116,6 @@ class TestStopStillWorks:
         assert "bumpSpeechEpoch()" in app_js[start:start + 400]
 
 
-# =====================================================================
-# Sprint-1 regression guards
-# =====================================================================
 
 class TestRegression:
 

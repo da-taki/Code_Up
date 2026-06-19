@@ -1,20 +1,3 @@
-"""
-Regression tests for the accessible code walkthrough and narrated structural
-cue audit.
-
-These lock in learner-visible behavior, not implementation details:
-
-  * "walk through" / "explain this code" phrases route to the holistic
-    /walkthrough explanation, while "read code" stays a literal narrate.
-  * /walkthrough explains what a program does (loop, values, output) and never
-    claims broken code ran.
-  * /step-narration cues each learner-visible executed line at the indentation
-    depth of the *source line a learner sees run* — output at the print line,
-    a nested assignment at its own depth — not the line where the tracer
-    happened to notice a variable change.
-
-All tests force the deterministic (AI-unavailable) path so they are hermetic.
-"""
 import pytest
 
 import app as app_module
@@ -35,9 +18,6 @@ def client(monkeypatch):
 LOOP = "for i in range(3):\n    print(i)\n"
 
 
-# =====================================================================
-# WALKTHROUGH ROUTING — walk-through vs literal read-code
-# =====================================================================
 
 class TestWalkthroughRouting:
 
@@ -63,13 +43,10 @@ class TestWalkthroughRouting:
         "read all my code", "read back my code", "read my code out loud",
     ])
     def test_read_my_code_is_a_deterministic_read_back(self, client, phrase):
-        # "read my code" must do a local, non-AI line-by-line read-back — never
-        # the AI fix/edit it previously misrouted to.
         data = client.post("/voice-command", json={"text": phrase}).get_json()
         assert data["action"] == "read_code", f"{phrase!r} -> {data['action']}"
 
     def test_read_my_code_does_not_steal_plain_read_code(self, client):
-        # Regression guard: broadening must not change "read code"/"read the code".
         assert client.post("/voice-command", json={"text": "read code"}).get_json()["action"] == "narrate_file"
         assert client.post("/voice-command", json={"text": "read the code"}).get_json()["action"] == "narrate_file"
 
@@ -84,15 +61,11 @@ class TestWalkthroughRouting:
         assert parsed["confidence"] >= 0.75
 
     def test_slow_walkthrough_still_routes_to_mentor(self, client):
-        # The narrower mentor phrase must NOT be captured by walk_through.
         data = client.post("/voice-command", json={"text": "walk me through this slowly"}).get_json()
         assert data["action"] == "mentor_chat"
         assert data.get("mode") == "slow_walkthrough"
 
 
-# =====================================================================
-# WALKTHROUGH ROUTE — meaningful explanation, never fake success
-# =====================================================================
 
 class TestWalkthroughRoute:
 
@@ -102,11 +75,9 @@ class TestWalkthroughRoute:
         expl = data["explanation"]
         low = expl.lower()
         assert "loop" in low
-        # Conveys the values the loop variable takes and what is printed.
         assert "0" in expl and "1" in expl and "2" in expl
-        # Not a bare recitation of the source.
         assert expl.strip() != LOOP.strip()
-        assert "```" not in expl  # no code blocks in spoken text
+        assert "```" not in expl
         assert data.get("auto_speak") is True
 
     def test_canonical_loop_does_not_call_ai(self, client, monkeypatch):
@@ -134,8 +105,6 @@ class TestWalkthroughRoute:
     def test_broken_indentation_does_not_claim_success(self, client):
         broken = "for i in range(3):\nprint(i)\n"
         data = client.post("/walkthrough", json={"code": broken}).get_json()
-        # The endpoint succeeds, but the explanation flags the defect and does
-        # not pretend the program produced output.
         low = data["explanation"].lower()
         assert ("problem" in low) or ("error" in low) or ("indent" in low)
         assert "0, then 1, then 2" not in data["explanation"]
@@ -149,7 +118,6 @@ class TestDeterministicWalkthrough:
         assert "loop" in low
         assert "0" in expl and "1" in expl and "2" in expl
         assert "print" in low
-        # Not raw-code recitation.
         assert expl.strip() != LOOP.strip()
 
     def test_canonical_helper_reports_values_and_output(self):
@@ -159,7 +127,6 @@ class TestDeterministicWalkthrough:
         assert "1, then 2, then 3" in expl
 
     def test_canonical_helper_rejects_non_literal_range(self):
-        # Cannot prove the values without running it -> fall back to generic.
         assert app_module._canonical_loop_walkthrough(
             "k = 3\nfor i in range(k):\n    print(i)\n"
         ) is None
@@ -174,12 +141,8 @@ class TestDeterministicWalkthrough:
         assert "problem" in expl.lower()
 
 
-# =====================================================================
-# STEP NARRATION — learner-visible cue semantics
-# =====================================================================
 
 def _output_steps(data):
-    """(text, depth) for narrated steps that report program output."""
     return [
         (n, d)
         for n, d in zip(data["narration"], data["indent_depths"])
@@ -190,7 +153,6 @@ def _output_steps(data):
 class TestStepNarrationCues:
 
     def test_schema_lengths_aligned(self, client):
-        # The frontend cue loop only fires when depths align 1:1 with narration.
         for code in [
             LOOP,
             "x = 1\nprint(x)\n",
@@ -212,7 +174,6 @@ class TestStepNarrationCues:
             "The program prints 2.",
         ]
         assert all(d == 1 for _, d in outs)
-        # The loop-induction variable is not narrated as a separate noisy step.
         assert not any("i becomes" in n.lower() for n in data["narration"])
 
     def test_flat_print_maps_to_depth_0(self, client):
@@ -227,7 +188,6 @@ class TestStepNarrationCues:
         outs = _output_steps(data)
         assert len(outs) == 1
         assert outs[0][0] == "The program prints 1."
-        # Depth of the print source line (8 spaces -> 2), NOT the if line (1).
         assert outs[0][1] == 2
 
     def test_nested_assignment_depth_1_final_print_depth_0(self, client):
@@ -252,8 +212,6 @@ class TestStepNarrationCues:
         assert not any("prints" in n.lower() for n in data.get("narration", []))
 
     def test_multiline_print_falls_back_to_collapsed_output(self, client):
-        # Output lines won't match print executions -> safe collapsed output,
-        # no per-line cue guesses.
         code = 'print("a\\nb")\n'
         data = client.post("/step-narration", json={"code": code}).get_json()
         assert data["success"] is True

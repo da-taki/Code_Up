@@ -1,10 +1,3 @@
-"""
-Audio structure snapshot (Sprint 2, Feature 1).
-
-Deterministic AST overview of a program. Covers structure_tools.build_structure_
-snapshot plus the /voice-command routing ("summarize structure", "what is in
-this program"). No cloud AI is involved.
-"""
 import pytest
 
 import app as app_module
@@ -80,7 +73,6 @@ class TestSnapshotRoute:
     def test_voice_what_is_in_this_program(self, client):
         d = client.post("/voice-command", json={"text": "what is in this program", "code": GREET}).get_json()
         assert d["action"] == "deterministic_message"
-        # Must be the structure summary, never a generic concept answer.
         assert d.get("concept") is None
 
     def test_empty_route(self, client):
@@ -96,9 +88,6 @@ class TestSnapshotRoute:
         assert d["action"] == "deterministic_message"
 
 
-# =====================================================================
-# Sprint-2 regression guards (existing demo flows unchanged)
-# =====================================================================
 
 class TestRegression:
 

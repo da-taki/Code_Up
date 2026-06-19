@@ -1,39 +1,39 @@
 # Security Model
 
-CodeUp is a learning sandbox, not a hardened multi-tenant code execution service. It is designed for classroom use, local demos, and supervised pilots.
+CodeUp is a learning sandbox. It is built for classroom use, local demos, and supervised pilots. It is not a hardened public code execution service.
 
 ## Execution Boundary
 
-- User Python runs in a separate subprocess for each `/run` request.
-- Each browser session receives its own signed-session workspace.
-- The runner applies an AST audit before execution.
-- Imports are limited to `math`, `random`, `string`, and `datetime`.
-- Dangerous builtins such as `eval`, `exec`, `compile`, `open`, and direct import access are blocked.
-- Runtime is capped with a wall-clock timeout.
-- Trace collection is capped to avoid unbounded event growth.
-- On POSIX systems, CPU time and address space limits are also applied through `setrlimit`.
+* User Python runs in a separate subprocess for each `/run` request.
+* Each browser session gets its own signed workspace.
+* Code is checked with an AST audit before execution.
+* Imports are limited to `math`, `random`, `string`, and `datetime`.
+* Builtins such as `eval`, `exec`, `compile`, `open`, and direct import access are blocked.
+* Runtime is capped with a wall clock timeout.
+* Trace collection is capped so one program cannot create unlimited events.
+* On POSIX systems, CPU time and memory are also limited with `setrlimit`.
 
 ## Web Boundary
 
-- State-changing routes enforce same-origin checks outside testing mode.
-- Snippets and sandbox files are scoped to the active signed session.
-- The app rate-limits execution requests per session.
-- AI calls are optional and can be disabled with `GEMINI_ENABLED=0`.
+* State changing routes enforce same origin checks outside testing mode.
+* Snippets and sandbox files are scoped to the active signed session.
+* Execution requests are rate limited per session.
+* AI calls are optional and can be disabled with `GEMINI_ENABLED=0`.
 
 ## Not Guaranteed
 
-- Do not expose this app as an unsupervised public code execution service.
-- Windows cannot enforce the same POSIX `setrlimit` CPU and memory caps.
-- Browser speech recognition availability depends on the browser; Chrome and Edge are best supported.
-- AI responses are not trusted as policy decisions.
-- The sandbox reduces risk but is not a replacement for container isolation, VM isolation, or a dedicated judge service.
+* Do not run CodeUp as an unsupervised public code execution service.
+* Windows cannot enforce the same `setrlimit` CPU and memory caps as POSIX systems.
+* Browser speech recognition depends on browser support. Chrome and Edge work best.
+* AI responses are not trusted as security decisions.
+* The sandbox lowers risk for demos and classroom use, but it does not replace containers, VMs, or a dedicated judge service.
 
 ## Reporting
 
 Please open an issue with:
 
-- The route or feature involved
-- Minimal code or steps to reproduce
-- Browser and OS
-- Whether AI features were enabled
-- Whether the issue requires authenticated or same-origin access
+* The route or feature involved
+* Minimal code or steps to reproduce
+* Browser and OS
+* Whether AI features were enabled
+* Whether the issue requires authenticated access or same origin access

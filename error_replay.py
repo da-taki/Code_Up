@@ -1,12 +1,3 @@
-"""
-Error replay: deterministic broken-vs-fixed code comparison.
-
-Pure / Flask-free. Given the most recent broken code + its error and the fixed
-code (the app reads these from its existing per-session run snapshots), explain
-what changed and why it fixed the error — preferring a few targeted, friendly
-explanations (indentation, added variable for a NameError, added colon) and
-falling back to a plain line diff. Nothing is invented; no cloud AI is involved.
-"""
 
 from __future__ import annotations
 
@@ -23,7 +14,6 @@ def _indent(line: str) -> int:
 
 
 def diff_lines(before: str, after: str) -> List[Dict[str, Any]]:
-    """Line-level diff with indentation info."""
     before_lines = (before or "").splitlines()
     after_lines = (after or "").splitlines()
     changes: List[Dict[str, Any]] = []
@@ -58,7 +48,6 @@ def _assigns_name(code: str, name: str) -> bool:
 
 
 def explain(before: str, after: str, error: str = "") -> Dict[str, Any]:
-    """Compare ``before`` and ``after`` and explain the fix."""
     before = before or ""
     after = after or ""
     if not before.strip() or not after.strip():
@@ -68,7 +57,6 @@ def explain(before: str, after: str, error: str = "") -> Dict[str, Any]:
     changes = diff_lines(before, after)
     changed_lines = [c["line"] for c in changes]
 
-    # 1) Indentation fix: a line kept its text but gained indentation.
     for c in changes:
         if (c["kind"] == "changed" and c["before"].strip() == c["after"].strip()
                 and c["after_indent"] > c["before_indent"] and c["before"].strip()):
@@ -79,7 +67,6 @@ def explain(before: str, after: str, error: str = "") -> Dict[str, Any]:
                     "That fixes the indentation error.")
             return _result(expl, changed_lines)
 
-    # 2) NameError fixed by adding the missing variable.
     missing = _nameerror_name(error)
     if missing and not _assigns_name(before, missing) and _assigns_name(after, missing):
         for c in changes:
@@ -91,7 +78,6 @@ def explain(before: str, after: str, error: str = "") -> Dict[str, Any]:
                 "That fixes the NameError for that name.")
         return _result(expl, changed_lines)
 
-    # 3) Added colon (common SyntaxError fix).
     for c in changes:
         if (c["kind"] == "changed" and c["before"].rstrip().rstrip(":") == c["after"].rstrip().rstrip(":")
                 and not c["before"].rstrip().endswith(":") and c["after"].rstrip().endswith(":")):
@@ -99,7 +85,6 @@ def explain(before: str, after: str, error: str = "") -> Dict[str, Any]:
                     "Adding the colon fixes the syntax error.")
             return _result(expl, changed_lines)
 
-    # 4) Fallback: plain line diff summary.
     if not changes:
         msg = "The two versions look the same to me; I see no changes to explain."
         return {"has_comparison": True, "summary": msg, "speech": msg,
@@ -126,7 +111,6 @@ def _result(explanation: str, changed_lines: List[int]) -> Dict[str, Any]:
 
 
 def from_snapshot(snapshot: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """Build an explanation from an app run-snapshot dict (error_code/success_code)."""
     snapshot = snapshot or {}
     before = snapshot.get("error_code") or ""
     after = snapshot.get("success_code") or ""

@@ -1,11 +1,3 @@
-"""
-"What did I learn today?" session recap.
-
-Covers the deterministic recap builder (learning_recap.py) over session_memory,
-plus the /learning-recap route and voice routing. It never invents activity: an
-empty session says there is not enough history; otherwise it summarises real
-recorded actions and gives one next step. No cloud AI is called.
-"""
 import pytest
 
 import app as app_module
@@ -24,9 +16,6 @@ def client(monkeypatch):
         yield c
 
 
-# =====================================================================
-# Builder
-# =====================================================================
 
 class TestRecapBuilder:
 
@@ -72,9 +61,6 @@ class TestRecapBuilder:
         assert r["recap"].count("A good next step") == 1
 
 
-# =====================================================================
-# Route + voice routing
-# =====================================================================
 
 class TestRecapRoute:
 
@@ -84,8 +70,6 @@ class TestRecapRoute:
         assert d["has_history"] is False
 
     def test_route_after_activity(self, client):
-        # Generate then ask for the recap — both via the real voice route so the
-        # session memory is populated the same way the app populates it.
         client.post("/voice-command", json={"text": "write a program for the first five even numbers"})
         d = client.post("/voice-command", json={"text": "what did i learn today"}).get_json()
         assert d["action"] == "deterministic_message"
@@ -94,7 +78,6 @@ class TestRecapRoute:
 
     def test_voice_routes_recap_not_concept(self, client):
         d = client.post("/voice-command", json={"text": "what did i learn today"}).get_json()
-        # Must be the recap path, never a concept answer or generation.
         assert d["action"] == "deterministic_message"
         assert d["action"] not in ("generate_code", "mentor_chat")
 

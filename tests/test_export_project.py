@@ -1,11 +1,3 @@
-"""
-Safe project export (ZIP).
-
-Covers the pure safety/zip helpers in export_support.py and the Flask routes
-(/export-project, /download-export/<id>). The export is read-only: it never runs
-code, never calls cloud AI, and writes no ZIP to disk (the bytes live only in a
-short-lived in-memory per-session store).
-"""
 import io
 import os
 import zipfile
@@ -31,9 +23,6 @@ def _names(zip_bytes):
     return set(zipfile.ZipFile(io.BytesIO(zip_bytes)).namelist())
 
 
-# =====================================================================
-# Pure safety helpers
-# =====================================================================
 
 class TestSafety:
 
@@ -72,9 +61,6 @@ class TestSafety:
         assert reasons["leak.py"] == "secret_content"
 
 
-# =====================================================================
-# Routes
-# =====================================================================
 
 class TestExportRoute:
 
@@ -133,9 +119,6 @@ class TestExportRoute:
         assert d["action"] == "export_project"
 
 
-# =====================================================================
-# No ZIP is written to a tracked path
-# =====================================================================
 
 class TestNoDiskWrites:
 
@@ -144,7 +127,6 @@ class TestNoDiskWrites:
         before = set(os.listdir(tmp_path))
         result = export_support.prepare_export({"main.py": "print(1)"})
         assert result["success"] and isinstance(result["bytes"], bytes)
-        # Nothing was written to disk; the bytes are in-memory only.
         assert set(os.listdir(tmp_path)) == before
 
     def test_repo_root_has_no_committed_zip(self):

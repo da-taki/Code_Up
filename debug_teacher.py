@@ -1,12 +1,3 @@
-"""Blind Debugger Mode — a guided, teacher-style debugging response.
-
-Built entirely from deterministic facts (current code, last run result, last
-error, detected problem, structure snapshot) plus the existing staged hint
-engine. Pure and Flask-free. It NEVER edits or runs code — it only explains.
-
-This module orchestrates existing Sprint-2 systems (hint_engine,
-structure_tools) rather than re-implementing them, per the sprint brief.
-"""
 
 import ast
 import re
@@ -15,10 +6,8 @@ from typing import Any, Dict, List, Optional
 import hint_engine
 import structure_tools
 
-# Offered as spoken follow-ups whenever there is a problem to work on.
 NEXT_COMMANDS = ["give me a bigger hint", "show me the answer", "replay the mistake"]
 
-# Map hint_engine's problem types to (spec problem_type, beginner concept word).
 _PROBLEM_META = {
     "indentation": ("indentation", "indentation"),
     "missing_colon": ("syntax", "syntax"),
@@ -33,11 +22,7 @@ _STRUCT_TO_WORD = {"loops": "loop", "conditions": "if statement",
 
 
 def _problem_line(code: str, error: str) -> Optional[int]:
-    """The most relevant 1-based line: from the error text, else from parsing."""
     err = str(error or "")
-    # Prefer the sandbox's reported failing line ("Line 2: IndentationError ...")
-    # over a trailing reference to the block header ("...after 'for' on line 1"),
-    # so the learner is pointed at the line they actually need to change.
     prefix = re.match(r"\s*line\s+(\d+)\s*:", err, re.IGNORECASE)
     if prefix:
         try:
@@ -67,8 +52,6 @@ def _structure_concepts(code: str) -> List[str]:
 
 
 def _constructs(code: str) -> List[str]:
-    """Constructs detected by regex — works even when the code does not parse
-    (e.g. an IndentationError), where the AST-based snapshot cannot help."""
     found = []
     if re.search(r"(?m)^\s*(?:for|while)\b", code or ""):
         found.append("loop")
@@ -80,7 +63,6 @@ def _constructs(code: str) -> List[str]:
 
 
 def _block_word(code: str, structure_concepts: List[str]) -> str:
-    """A beginner word for the construct a misplaced line most likely belongs to."""
     for key in ("loops", "conditions", "functions"):
         if key in structure_concepts:
             return _STRUCT_TO_WORD[key]
@@ -99,8 +81,6 @@ def _concepts_for(concept: str, code: str, structure_concepts: List[str]) -> Lis
         if word and word not in out:
             out.append(word)
             return out
-    # Fall back to regex constructs (so an unparseable indentation error still
-    # names the loop / if / function the line belongs to).
     for word in _constructs(code):
         norm = "loop" if word == "loop" else word
         if norm not in out:
@@ -134,7 +114,6 @@ def _debugging_habit(snap: Dict[str, Any]) -> str:
 
 
 def _explain(spec_type: str, problem: Dict[str, Any], line: Optional[int], block: str) -> str:
-    """State plainly whether the code ran or failed, and name the exact error."""
     if spec_type == "indentation":
         return (f"Your code failed with an indentation error{_on_line(line)}: the line that should run "
                 f"inside the {block} above it is not indented.")
@@ -147,7 +126,6 @@ def _explain(spec_type: str, problem: Dict[str, Any], line: Optional[int], block
             return (f"Your code failed with a syntax error{_on_line(line)}: a line that starts a block "
                     f"is missing its colon at the end.")
         return f"Your code failed with a syntax error{_on_line(line)}: Python could not read that line."
-    # logic / runtime
     if problem.get("type") == "zerodivision":
         return (f"Your code ran but failed with a division-by-zero error{_on_line(line)}: "
                 f"something is being divided by zero.")
@@ -159,7 +137,6 @@ def _explain(spec_type: str, problem: Dict[str, Any], line: Optional[int], block
 
 
 def _why_error(spec_type: str, problem: Dict[str, Any], block: str) -> str:
-    """Explain WHY this error happens, grounded in the relevant code structure."""
     if spec_type == "indentation":
         return ("In Python, indentation is what puts a line inside a block: the line after a colon "
                 f"belongs to the {block} only if it is indented, so right now Python does not know what to repeat.")
@@ -177,7 +154,6 @@ def _why_error(spec_type: str, problem: Dict[str, Any], block: str) -> str:
 
 
 def _likely_fix(spec_type: str, problem: Dict[str, Any], line: Optional[int], block: str) -> str:
-    """The concrete change most likely to fix the problem."""
     if spec_type == "indentation":
         return f"The likely fix is to indent that line by four spaces so it sits inside the {block} above it."
     if spec_type == "name_error":
@@ -195,7 +171,6 @@ def _likely_fix(spec_type: str, problem: Dict[str, Any], line: Optional[int], bl
 
 
 def _why_fix_works(spec_type: str, problem: Dict[str, Any], block: str) -> str:
-    """Explain why the suggested fix resolves the error."""
     if spec_type == "indentation":
         tail = ("the loop can run it once for each value" if block == "loop"
                 else f"Python knows the line belongs to the {block}")
@@ -242,9 +217,6 @@ def _problem_response(code: str, error: str, problem: Dict[str, Any],
     line = _problem_line(code, error)
     block = _block_word(code, structure_concepts)
 
-    # Teach first: name the error, explain why it happens, give the likely fix and
-    # why that fix works. The optional staged-hint commands are mentioned LAST, so
-    # a learner understands the problem without having to ask for more hints.
     explain = _explain(spec_type, problem, line, block)
     why = _why_error(spec_type, problem, block)
     classify = _classify_sentence(spec_type)
@@ -271,11 +243,6 @@ def _problem_response(code: str, error: str, problem: Dict[str, Any],
 def build_blind_debugger_response(code: str, session_memory: Optional[Dict[str, Any]] = None,
                                   last_run: Optional[Dict[str, Any]] = None,
                                   verbosity: str = "normal") -> Dict[str, Any]:
-    """Return a teacher-style debugging response. Never edits or runs code.
-
-    Returns: {message, speech, problem_type, line, concepts, next_commands}.
-    problem_type is one of: indentation | name_error | syntax | logic | none | empty.
-    """
     code = code or ""
     mem = session_memory or {}
     last_run = last_run or {}

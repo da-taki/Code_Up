@@ -1,10 +1,3 @@
-"""
-Project report / teacher handoff.
-
-Covers deterministic concept detection + file roles in report_support.py and the
-/project-report route. The report is grounded only in the actual files, real
-metadata, and the session's stored run result — it never invents files.
-"""
 import pytest
 
 import app as app_module
@@ -33,9 +26,6 @@ SAMPLE = (
 )
 
 
-# =====================================================================
-# Concept detection
-# =====================================================================
 
 class TestConcepts:
 
@@ -51,14 +41,10 @@ class TestConcepts:
         assert report_support.detect_python_concepts("") == []
 
     def test_broken_code_still_reports_something(self):
-        # Unparseable, but the regex fallback still finds print/loops.
         concepts = report_support.detect_python_concepts("for i in range(3)\n    print(i)")
         assert "loops" in concepts and "print output" in concepts
 
 
-# =====================================================================
-# File summaries / roles
-# =====================================================================
 
 class TestFileRoles:
 
@@ -79,9 +65,6 @@ class TestFileRoles:
         assert by_path["README.md"] == "documentation"
 
 
-# =====================================================================
-# Report builder + route
-# =====================================================================
 
 class TestReport:
 
@@ -109,8 +92,6 @@ class TestReport:
         assert "run" in d["run_instruction"].lower()
 
     def test_report_includes_last_run_result(self, client):
-        # Seed a run via /voice-command memory by hitting run? Simpler: drive the
-        # report builder directly with a memory dict carrying a last error.
         import session_memory
         mem = session_memory.new_memory()
         session_memory.record_run(mem, error="NameError: name 'x' is not defined", ran_ok=False)
@@ -120,7 +101,6 @@ class TestReport:
 
     def test_report_does_not_invent_files(self, client):
         d = client.post("/project-report", json={"code": "x = 1\n"}).get_json()
-        # Only the single main.py we provided — nothing else.
         assert [f["path"] for f in d["files"]] == ["main.py"]
 
     def test_empty_has_no_content(self, client):
@@ -137,9 +117,6 @@ class TestReport:
         assert d["action"] == "project_report"
 
 
-# =====================================================================
-# Code-aware behavioural explanation (Problem 2 — deeper report)
-# =====================================================================
 
 class TestBehaviorExplanation:
 
@@ -148,12 +125,10 @@ class TestBehaviorExplanation:
     def test_single_file_loop_report_explains_loop_behavior(self, client):
         d = client.post("/project-report", json={"code": self.LOOP}).get_json()
         speech = d["speech"].lower()
-        # Explains what the loop does, not only how to run it.
         assert "for loop" in speech
         assert "range(3)" in speech
         assert "0, 1, and 2" in speech
         assert "repeat" in speech
-        # The written report carries the same behavioural section.
         assert "What this program does" in d["report_md"]
         assert d["behavior"]
 
@@ -189,15 +164,12 @@ class TestBehaviorExplanation:
         }, "entry": "main.py"}
         d = client.post("/project-report", json={"project": project}).get_json()
         md = d["report_md"]
-        # Each file's role is described.
         assert "loader.py" in md and "main.py" in md
-        # How they work together: the entry point imports the helper module.
         speech_and_md = (d["speech"] + " " + md).lower()
         assert "entry point" in speech_and_md
-        assert "loader" in d["speech"].lower()  # local import surfaced in the behaviour
+        assert "loader" in d["speech"].lower()
 
     def test_behavior_does_not_invent_for_plain_statements(self):
-        # No loop/function present -> must not claim one.
         sents = " ".join(report_support.describe_program_behavior("x = 1\ny = 2\nprint(x + y)\n")).lower()
         assert "for loop" not in sents
         assert "function" not in sents

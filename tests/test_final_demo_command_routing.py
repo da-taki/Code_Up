@@ -110,12 +110,6 @@ def test_debug_this_like_a_teacher_repairs_indentation_without_clarifying(client
 
 
 def test_main_help_prioritizes_demo_commands_without_bookmarks(client):
-    # Onboarding hardening (NAB): "what can I do here" is now a SHORT beginner
-    # guide that leads with the tutorial and core commands and points to "more
-    # examples" for the rest. The full demo command list (read output, replay
-    # mistake, summarize structure, make project report, ...) lives behind
-    # "help" / "more examples" (frontend BEGINNER_COMMAND_GUIDE_SPEECH), so the
-    # first reply does not overwhelm a blind beginner.
     data = _vc(client, "what can I do here")
     assert data["action"] == "deterministic_message"
     assert data.get("onboarding") is True
@@ -129,8 +123,6 @@ def test_main_help_prioritizes_demo_commands_without_bookmarks(client):
         "more examples",
     ):
         assert expected in speech, expected
-    # Must stay short: the advanced feature dump and bookmark commands belong in
-    # the full help, not the first onboarding reply.
     for absent in (
         "replay mistake",
         "summarize structure",

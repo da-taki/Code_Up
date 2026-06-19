@@ -1,11 +1,3 @@
-"""Flask route + intent-routing tests for the guided tutorial:
-
-  * GET  /tutorial/modules    — lesson pack
-  * POST /tutorial/validate   — activity verdicts (incl. unsafe while loops)
-  * /voice-command            — start / practise / exit tutorial routing
-  * /run                      — the execution backstop actually stops a
-                                non-terminating while loop
-"""
 import pytest
 
 import app as app_module
@@ -33,9 +25,6 @@ def _action(client, text, code=""):
     return client.post("/voice-command", json={"text": text, "code": code}).get_json()
 
 
-# ---------------------------------------------------------------------------
-# /tutorial/modules
-# ---------------------------------------------------------------------------
 class TestModulesRoute:
     def test_returns_ordered_pack(self, client):
         data = client.get("/tutorial/modules").get_json()
@@ -49,9 +38,6 @@ class TestModulesRoute:
         assert isinstance(printm["hints"], list) and printm["hints"]
 
 
-# ---------------------------------------------------------------------------
-# /tutorial/validate
-# ---------------------------------------------------------------------------
 class TestValidateRoute:
     def test_print_correct_accepted(self, client):
         d = _validate(client, "print", 'print("hello")', ran_ok=True)
@@ -98,9 +84,6 @@ class TestValidateRoute:
         assert resp.status_code == 400
 
 
-# ---------------------------------------------------------------------------
-# Intent / command routing
-# ---------------------------------------------------------------------------
 class TestTutorialCommandRouting:
     def test_start_tutorial(self, client):
         assert _action(client, "start tutorial")["action"] == "start_tutorial"
@@ -117,12 +100,9 @@ class TestTutorialCommandRouting:
         "start tutorial please",
     ])
     def test_start_tutorial_natural_phrasings(self, client, text):
-        # The voice command must accept natural English, not only the exact
-        # words "start tutorial" — otherwise learners fall back to the button.
         assert _action(client, text)["action"] == "start_tutorial", text
 
     def test_start_tutorial_again_still_restarts(self, client):
-        # Broadening start-tutorial must not swallow "start tutorial again".
         assert _action(client, "start tutorial again")["action"] == "restart_tutorial"
 
     def test_restart_tutorial(self, client):
@@ -144,19 +124,10 @@ class TestTutorialCommandRouting:
         assert d["module"] == module
 
     def test_run_still_routes_to_run(self, client):
-        # The tutorial must not hijack core commands at the backend.
         assert _action(client, "run", code="print(1)")["action"] == "run"
 
 
-# ---------------------------------------------------------------------------
-# Execution backstop.
-# ---------------------------------------------------------------------------
 class TestTutorialCoachRoute:
-    """/tutorial/coach — AI-assisted phrasing with a deterministic fallback.
-
-    The client fixture disables AI (CODEUP_AI_ENABLED=0), so these assert the
-    deterministic coach path that runs whenever Key 2 is missing or busy.
-    """
 
     def _coach(self, client, **body):
         return client.post("/tutorial/coach", json=body).get_json()
@@ -191,7 +162,6 @@ class TestTutorialCoachRoute:
         assert "indent" in d["text"].lower()
 
     def test_non_coach_text_is_not_handled(self, client):
-        # "run code" must not be coached — it falls through to the normal pipeline.
         d = self._coach(client, module="print", text="run code")
         assert d["handled"] is False
 
@@ -203,10 +173,4 @@ class TestTutorialCoachRoute:
 
 class TestWhileExecutionBackstop:
     def test_sandbox_wall_clock_timeout_is_configured(self):
-        # The tutorial blocks obviously non-terminating while loops *before*
-        # running them (see test_while_unsafe_blocked / check_while_safety),
-        # giving a spoken safety hint instead. The runtime backstop for anything
-        # that slips past the static check is the sandbox's wall-clock timeout.
-        # We assert that backstop is present and bounded rather than actually
-        # spinning an infinite loop, which is flaky to kill cleanly on Windows.
         assert 0 < app_module.SUBPROCESS_WALL_TIMEOUT_SECONDS <= 10

@@ -1,16 +1,3 @@
-"""
-Guards for the narrated-execution speech + voice-consistency fix.
-
-The physical defect was: Step Narration spoke through a second speech manager
-(`SpeechManager`) that never set a voice (browser default, often male) and was
-invisible to VoiceEngine's listen/echo handling, so it went silent and switched
-voices. The fix routes every spoken line through the single VoiceEngine path
-(one resolved preferred English voice) and hardens the voice resolver.
-
-These are structural assertions over the shipped JS (the repo already tests
-frontend behavior this way) plus backend cue-semantics regressions. They avoid
-asserting any machine-specific voice name or subjective quality.
-"""
 import os
 
 import pytest
@@ -35,15 +22,10 @@ def voice_js():
     return _read("voice-engine.js")
 
 
-# =====================================================================
-# One canonical speech path (no per-feature voice divergence)
-# =====================================================================
 
 class TestSingleSpeechPath:
 
     def test_speech_manager_enqueue_delegates_to_voice_engine(self, app_js):
-        # enqueue must hand off to VoiceEngine.speak when present, so every
-        # caller (including Step Narration) shares one resolved voice.
         start = app_js.index("function enqueue(")
         block = app_js[start:start + 700]
         assert "VoiceEngine.speak(text, opts)" in block
@@ -63,17 +45,12 @@ class TestSingleSpeechPath:
         start = app_js.index("async function requestStepNarration()")
         end = app_js.index("// ---------- MISTAKE REPLAY ----------")
         block = app_js[start:end]
-        # Speaks via the shared manager...
         assert "SpeechManager.enqueue(steps[i])" in block
-        # ...and never creates its own utterance or picks its own voice.
         assert "new SpeechSynthesisUtterance" not in block
         assert "speechSynthesis.speak(" not in block
         assert ".voice =" not in block
 
 
-# =====================================================================
-# Voice resolver: one stable, female-preferred English voice
-# =====================================================================
 
 class TestVoiceResolution:
 
@@ -83,29 +60,20 @@ class TestVoiceResolution:
 
     def test_voiceschanged_is_handled(self, voice_js):
         assert "addEventListener('voiceschanged'" in voice_js
-        # Resolver is invoked at init and on the event (not only lazily).
         assert voice_js.count("_loadVoices") >= 3
 
     def test_female_preference_and_male_avoidance(self, voice_js):
         start = voice_js.index("function _loadVoices(")
         block = voice_js[start:start + 1600]
         assert "FEMALE" in block and "MALE" in block
-        # The deterministic fallback chain avoids a known-male default before
-        # blindly taking the first voice.
         assert "!MALE.test(v.name)" in block
-        # "Google US English" (the existing preferred female voice) preserved.
         assert "Google" in block
 
     def test_resolver_is_deterministic_single_cached_voice(self, voice_js):
-        # One cached English voice reused for every utterance (not reselected
-        # per step).
         assert "_englishVoice =" in voice_js
         assert "let _englishVoice" in voice_js
 
 
-# =====================================================================
-# Audio job coordination / cancellation
-# =====================================================================
 
 class TestAudioCoordination:
 
@@ -134,9 +102,6 @@ class TestAudioCoordination:
         assert "SonificationManager.clearAll()" in block
 
 
-# =====================================================================
-# Backend cue-semantics regressions (must remain truthful after the fix)
-# =====================================================================
 
 class TestCueSemanticsPreserved:
 
@@ -156,7 +121,6 @@ class TestCueSemanticsPreserved:
         assert data["success"] is True
         narr, depths = data["narration"], data["indent_depths"]
         assert len(narr) == len(depths)
-        # Every narrated step carries speakable text (not silent/empty).
         assert all(isinstance(s, str) and s.strip() for s in narr)
         outs = [(n, d) for n, d in zip(narr, depths) if "prints" in n.lower()]
         assert [t for t, _ in outs] == [

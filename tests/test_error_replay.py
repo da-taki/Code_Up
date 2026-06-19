@@ -1,10 +1,3 @@
-"""
-Error replay / broken-vs-fixed comparison (Sprint 2, Feature 3).
-
-Deterministic diff + explanation (error_replay.py), driven from the app's
-existing per-session run snapshots. Read-only: it never rewrites the editor or
-output.
-"""
 import pytest
 
 import app as app_module
@@ -71,8 +64,6 @@ class TestReplayRoute:
         assert "do not have" in d["message"].lower()
 
     def test_replay_after_run_explains_fix(self, client):
-        # Real flow: run broken (records error snapshot), run fixed (records
-        # success snapshot), then ask to compare.
         client.post("/run", json={"code": BROKEN_INDENT})
         client.post("/run", json={"code": FIXED_INDENT})
         d = client.post("/voice-command", json={"text": "compare broken and fixed code", "code": FIXED_INDENT}).get_json()
@@ -81,6 +72,5 @@ class TestReplayRoute:
 
     def test_replay_does_not_overwrite_editor_or_output(self, client):
         d = client.post("/voice-command", json={"text": "show me what went wrong", "code": FIXED_INDENT}).get_json()
-        # No code mutation fields — purely a spoken/visible explanation.
         assert d["action"] == "deterministic_message"
         assert "ai_action" not in d and "newCode" not in d and "code" not in d

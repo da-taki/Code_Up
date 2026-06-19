@@ -1,9 +1,3 @@
-"""
-Confidence-based staged hints (Sprint 2, Feature 4).
-
-Deterministic hints at small / bigger / answer levels (hint_engine.py), with the
-session escalating the level for "another hint" and "show me the answer".
-"""
 import pytest
 
 import app as app_module
@@ -89,6 +83,5 @@ class TestHintRoute:
         assert "ai_action" not in d
 
     def test_tiny_hint_still_goes_to_mentor(self, client):
-        # Regression: the existing mentor "tiny hint" command is not hijacked.
         d = client.post("/voice-command", json={"text": "give me a tiny hint"}).get_json()
         assert d["action"] == "mentor_chat"

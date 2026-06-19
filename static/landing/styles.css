@@ -1,25 +1,16 @@
-/* ==========================================================
-   CodeUp — landing / case study
-   Brand DNA pulled from the repo:
-   - Atkinson Hyperlegible (display) + JetBrains Mono (code)
-   - v0.8.0 "coffee theme" (cream / caramel / espresso)
-   - Teal kept as secondary accent (legacy palette)
-   ========================================================== */
 
 :root {
-  /* Paper — default. Warmer parchment, ink-black type, rust accent.
-     Tuned for high contrast: ink/paper ratio is 16.4:1 (well above WCAG AAA). */
-  --paper:        #ede1c8;   /* warm parchment */
-  --paper-2:      #e2d2b1;   /* aged parchment */
-  --paper-panel:  #f6ecd5;   /* paper-light */
-  --ink:          #150a02;   /* near-black, slightly warm */
-  --ink-2:        #2a1a0c;   /* dark sepia */
-  --dim:          #5a432a;   /* faded ink */
-  --foam:         #fbf3df;   /* highlight cream */
-  --rust:         #a93215;   /* signal rust — for emphasis */
+  --paper:        #ede1c8;
+  --paper-2:      #e2d2b1;
+  --paper-panel:  #f6ecd5;
+  --ink:          #150a02;
+  --ink-2:        #2a1a0c;
+  --dim:          #5a432a;
+  --foam:         #fbf3df;
+  --rust:         #a93215;
   --rust-deep:    #6e1f0a;
-  --inkblue:      #1d3a5f;   /* ledger blue secondary */
-  --moss:         #4a6321;   /* annotation green */
+  --inkblue:      #1d3a5f;
+  --moss:         #4a6321;
   --teal:         #0d6e7a;
 
   --bg:           var(--paper);
@@ -34,7 +25,6 @@
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
-/* Paper grain — SVG turbulence baked as data URI, hung as a subtle overlay. */
 body::before {
   content: "";
   position: fixed; inset: 0; pointer-events: none; z-index: 1;
@@ -44,7 +34,6 @@ body::before {
 }
 body.no-grain::before { display: none; }
 
-/* Paper is the default body class; the .theme-paper rule keeps it explicit. */
 body.theme-paper {
   --bg:          #ede1c8;
   --bg-2:        #e2d2b1;
@@ -108,15 +97,11 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 
 ::selection { background: var(--accent); color: var(--foam); }
 
-/* Reduced motion override */
 body.no-motion *, body.no-motion *::before, body.no-motion *::after {
   animation: none !important;
   transition: none !important;
 }
 
-/* ==========================================================
-   Skip link — first thing screen readers/keyboards reach
-   ========================================================== */
 .skip-link {
   position: absolute; left: -9999px; top: 0; z-index: 100;
   padding: 12px 18px; background: var(--ink); color: var(--bg);
@@ -125,9 +110,6 @@ body.no-motion *, body.no-motion *::before, body.no-motion *::after {
 }
 .skip-link:focus { left: 0; outline: 3px solid var(--accent); }
 
-/* ==========================================================
-   EditorHero — functional surface at the top
-   ========================================================== */
 .eh {
   position: relative;
   padding: 110px 40px 80px;
@@ -195,14 +177,11 @@ body.no-motion *, body.no-motion *::before, body.no-motion *::after {
   min-width: 220px;
 }
 .eh-meta-row { display: flex; justify-content: space-between; gap: 20px; }
-/* Bumped from 10px/var(--dim) to 11px/var(--ink-2) bold to clear WCAG AA
-   on small monospace text (~5.4:1 → ~12:1 effective contrast on paper bg). */
 .eh-meta .lbl { color: var(--ink-2); text-transform: uppercase; letter-spacing: 0.12em; font-size: 11px; font-weight: 600; }
 .eh-meta .val { color: var(--ink); font-weight: 700; }
 .eh-meta .val.ok { color: var(--moss, #4a6321); }
 .eh-meta .val.warn { color: var(--accent); }
 
-/* Toolbar */
 .eh-toolbar {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   padding: 10px 12px;
@@ -243,7 +222,6 @@ body.no-motion *, body.no-motion *::before, body.no-motion *::after {
 }
 .eh-pill.is-on { background: var(--ink); color: var(--bg); }
 .eh-spacer { flex: 1; }
-/* 11px → 12px and dim → ink-2 to clear WCAG AA on small monospace text. */
 .eh-shortcuts { font-family: var(--font-mono); font-size: 12px; color: var(--ink-2); }
 .eh-shortcuts kbd {
   font-family: var(--font-mono); font-size: 10px; padding: 1px 5px;
@@ -251,7 +229,6 @@ body.no-motion *, body.no-motion *::before, body.no-motion *::after {
   border-radius: 3px; margin: 0 2px; color: var(--ink);
 }
 
-/* Mic indicator */
 .mic {
   width: 14px; height: 14px; border-radius: 4px 4px 50% 50% / 4px 4px 60% 60%;
   background: currentColor; position: relative;
@@ -269,7 +246,6 @@ body.no-motion *, body.no-motion *::before, body.no-motion *::after {
 .bars i:nth-child(3) { height: 30%; }
 .bars i:nth-child(4) { height: 75%; }
 
-/* Editor + output stage */
 .eh-stage {
   display: grid;
   grid-template-columns: 1.5fr 1fr;
@@ -357,7 +333,6 @@ body.no-motion *, body.no-motion *::before, body.no-motion *::after {
 }
 .eh-output-foot .speak-hint { color: var(--accent); }
 
-/* Marquee under editor */
 .eh-marquee {
   margin-top: 24px;
   border-top: 1px dashed var(--rule-strong);
@@ -377,9 +352,6 @@ body.no-motion *, body.no-motion *::before, body.no-motion *::after {
 .eh-marquee-track span { display: inline-flex; gap: 14px; align-items: center; }
 .eh-marquee-track i { color: var(--accent); font-style: normal; }
 
-/* ==========================================================
-   Top nav
-   ========================================================== */
 .nav {
   position: fixed; top: 0; left: 0; right: 0; z-index: 50;
   display: flex; align-items: center; justify-content: space-between;
@@ -415,9 +387,6 @@ body.no-motion *, body.no-motion *::before, body.no-motion *::after {
 }
 .nav-cta:hover { background: var(--ink); color: var(--bg); }
 
-/* ==========================================================
-   Layout
-   ========================================================== */
 section { position: relative; padding: 120px 40px; }
 .wrap { max-width: 1280px; margin: 0 auto; }
 
@@ -432,9 +401,6 @@ section { position: relative; padding: 120px 40px; }
   background: var(--accent);
 }
 
-/* ==========================================================
-   HERO
-   ========================================================== */
 .hero {
   min-height: 100vh;
   padding-top: 140px;
@@ -536,7 +502,6 @@ section { position: relative; padding: 120px 40px; }
 .btn .arrow { display: inline-block; transition: transform .25s; }
 .btn:hover .arrow { transform: translateX(4px); }
 
-/* Hero waveform — drives a lot of "vibe" */
 .hero-wave {
   position: relative;
   height: 220px;
@@ -552,7 +517,6 @@ section { position: relative; padding: 120px 40px; }
 }
 .hero-wave .bar.accent { background: var(--accent); }
 
-/* Hero ticker — running marquee of voice commands */
 .ticker {
   border-top: 1px solid var(--rule);
   border-bottom: 1px solid var(--rule);
@@ -580,9 +544,6 @@ section { position: relative; padding: 120px 40px; }
   to   { transform: translateX(-50%); }
 }
 
-/* ==========================================================
-   Section title block
-   ========================================================== */
 .section-head {
   display: grid;
   grid-template-columns: 1fr 1.6fr;
@@ -605,9 +566,6 @@ section { position: relative; padding: 120px 40px; }
   .section-head { grid-template-columns: 1fr; gap: 24px; }
 }
 
-/* ==========================================================
-   Sonification demo
-   ========================================================== */
 .sonify {
   background: #0e0a06;
   color: var(--foam);
@@ -721,9 +679,6 @@ section { position: relative; padding: 120px 40px; }
 .play-btn svg { width: 16px; height: 16px; fill: currentColor; }
 .sonify-meta b { color: var(--foam); font-weight: 600; }
 
-/* ==========================================================
-   Voice — typewriter cycler
-   ========================================================== */
 .voice {
   background: var(--bg);
 }
@@ -796,7 +751,6 @@ section { position: relative; padding: 120px 40px; }
 }
 .voice-mic-wave::after { inset: 38px; }
 
-/* Right panel — command list */
 .voice-list {
   background: var(--bg-2);
   border-left: 1px solid var(--rule);
@@ -829,9 +783,6 @@ section { position: relative; padding: 120px 40px; }
 .voice-cmd .key { color: var(--accent-deep); font-size: 11px; }
 .voice-cmd.is-active { background: color-mix(in oklab, var(--accent) 14%, transparent); color: var(--ink); }
 
-/* ==========================================================
-   IDE preview
-   ========================================================== */
 .ide-section {
   background: var(--bg-2);
 }
@@ -948,7 +899,6 @@ section { position: relative; padding: 120px 40px; }
 .ide-foot .ok { color: #2f7a4d; }
 body.theme-night .ide-foot .ok { color: #5dd58a; }
 
-/* Tokens (light) */
 .tk-kw  { color: #a8602d; }
 .tk-fn  { color: #7a4413; font-weight: 600; }
 .tk-str { color: #4a7a3c; }
@@ -960,9 +910,6 @@ body.theme-night .tk-fn  { color: #f3c987; }
 body.theme-night .tk-str { color: #b9d39a; }
 body.theme-night .tk-num { color: #e7c773; }
 
-/* ==========================================================
-   Features grid
-   ========================================================== */
 .features {
   background: var(--bg);
 }
@@ -988,7 +935,6 @@ body.theme-night .tk-num { color: #e7c773; }
 @media (max-width: 1000px) {
   .feat, .feat.span6, .feat.span8 { grid-column: span 12; }
 }
-/* 11px small mono needs darker text to clear WCAG AA. */
 .feat-num {
   font-family: var(--font-mono); font-size: 12px;
   color: var(--ink-2); letter-spacing: 0.12em; font-weight: 600;
@@ -1014,7 +960,6 @@ body.theme-night .tk-num { color: #e7c773; }
   position: relative; overflow: hidden;
 }
 
-/* Equalizer art */
 .eq { display: flex; gap: 5px; align-items: end; height: 64px; }
 .eq span {
   width: 6px; background: var(--accent); border-radius: 2px;
@@ -1033,7 +978,6 @@ body.theme-night .tk-num { color: #e7c773; }
   50%      { height: 100%; }
 }
 
-/* Pulse circle art */
 .pulse-art { position: relative; width: 100px; height: 100px; }
 .pulse-art .core {
   position: absolute; inset: 38%;
@@ -1051,7 +995,6 @@ body.theme-night .tk-num { color: #e7c773; }
   to   { transform: scale(1.0); opacity: 0; }
 }
 
-/* Say / type input art */
 .bil-art {
   display: grid;
   grid-template-columns: 1fr auto 1fr;
@@ -1074,7 +1017,6 @@ body.theme-night .tk-num { color: #e7c773; }
   font-size: 11px; color: var(--accent);
 }
 
-/* Sandbox art */
 .sandbox-art { width: 100%; padding: 0 24px; }
 .sandbox-art .row {
   display: flex; justify-content: space-between; padding: 4px 0;
@@ -1093,7 +1035,6 @@ body.theme-night .tk-num { color: #e7c773; }
   100% { width: 0%; }
 }
 
-/* Indent pitch ladder */
 .ladder { display: flex; flex-direction: column; gap: 6px; padding: 0 30px; width: 100%; }
 .ladder .row {
   display: grid;
@@ -1108,9 +1049,6 @@ body.theme-night .tk-num { color: #e7c773; }
 }
 .ladder .row .lab { color: var(--dim); text-align: right; }
 
-/* ==========================================================
-   Stats strip
-   ========================================================== */
 .stats {
   background: var(--ink); color: var(--foam);
   padding: 60px 40px;
@@ -1139,14 +1077,10 @@ body.theme-night .tk-num { color: #e7c773; }
 .stat .lbl {
   font-family: var(--font-mono); font-size: 12px;
   text-transform: uppercase; letter-spacing: 0.16em;
-  /* Bumped from 60% foam to 78% — small caps mono needs higher contrast on dark bg. */
   color: color-mix(in oklab, var(--foam) 78%, transparent);
   font-weight: 600;
 }
 
-/* ==========================================================
-   Footer / CTA
-   ========================================================== */
 .cta {
   padding: 140px 40px;
   text-align: center;
@@ -1173,9 +1107,6 @@ footer {
 footer .meta { display: flex; gap: 24px; }
 footer a:hover { color: var(--ink); }
 
-/* ==========================================================
-   Reveal-on-scroll
-   ========================================================== */
 .reveal {
   opacity: 0;
   transform: translateY(24px);

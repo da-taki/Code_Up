@@ -1,6 +1,3 @@
-"""Tests for the grounded-AI quality layer (Key 2 may rephrase facts, never weaken
-or invent them) and its wiring into the clarifier and tutorial coach.
-"""
 import pytest
 
 import app as app_module
@@ -24,9 +21,6 @@ def client(monkeypatch):
         yield flask_client
 
 
-# ---------------------------------------------------------------------------
-# 1-10: the validator itself
-# ---------------------------------------------------------------------------
 def test_clarification_preserving_facts_is_accepted():
     ai = "Do you want a 5 by 5 pattern where the third line has a different number of symbols?"
     out = g.ground(ai, DET_Q, required_facts=["5 by 5", "third line"], context=DET_Q, single_sentence=True)
@@ -85,13 +79,11 @@ def test_multiline_response_is_rejected_when_single_sentence_required():
 
 
 def test_rejected_ai_returns_deterministic_fallback():
-    # Code-dumping reply is rejected -> deterministic text used.
     assert g.ground("print('hi')", "Say the command.", single_sentence=True) == "Say the command."
 
 
 def test_no_invented_number_even_when_facts_preserved():
     ai = "Do you want a 5 by 5 pattern with 9 stars on the third line?"
-    # "9" never appeared in the deterministic question/context -> reject.
     out = g.ground(ai, DET_Q, required_facts=["5 by 5", "third line"], context=DET_Q)
     assert out == DET_Q
 
@@ -102,12 +94,7 @@ def test_validate_reports_reason():
     assert reason.startswith("dropped_fact")
 
 
-# ---------------------------------------------------------------------------
-# Wiring: clarifier + coach reject weakening through the real call sites
-# ---------------------------------------------------------------------------
 class TestClarifierWiring:
-    # The deterministic question for this vague request asks only for the missing
-    # slots (symbol + the third line's count).
     PATTERN_Q = "What symbol should I use, and how many symbols should the third line have?"
 
     def _vague(self, client):
@@ -121,20 +108,20 @@ class TestClarifierWiring:
                             lambda system, user: "What type of thing are you trying to create?")
         data = self._vague(client)
         assert data["action"] == "clarify"
-        assert data["message"] == self.PATTERN_Q  # weak/generic AI dropped "third line" -> deterministic
+        assert data["message"] == self.PATTERN_Q
 
     def test_route_accepts_grounded_ai_rephrase(self, client, monkeypatch):
         better = "What symbol, and how many symbols should the third line have?"
         monkeypatch.setattr(app_module, "call_conversation_orchestrator_ai", lambda system, user: better)
         data = self._vague(client)
         assert data["action"] == "clarify"
-        assert data["message"] == better  # keeps "third line", invents nothing -> accepted
+        assert data["message"] == better
 
     def test_route_rejects_ai_that_invents_a_filename(self, client, monkeypatch):
         monkeypatch.setattr(app_module, "call_conversation_orchestrator_ai",
                             lambda system, user: "Do you want a 10 by 10 grid instead?")
         data = self._vague(client)
-        assert data["message"] == self.PATTERN_Q  # invented "10" + dropped facts -> deterministic
+        assert data["message"] == self.PATTERN_Q
 
 
 class TestCoachWiring:

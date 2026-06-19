@@ -1,6 +1,3 @@
-// Cross-platform vendor script. Copies React + ReactDOM UMD builds from
-// node_modules into static/vendor/react/ so the landing page can load
-// them as plain <script> tags without a CDN. Works on Windows, macOS,
 // and Linux without shell-syntax differences.
 
 const fs = require('fs');

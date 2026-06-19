@@ -1,9 +1,3 @@
-"""Ask My Code Mode (NAB value sprint, Feature 3).
-
-Answers code-grounded questions deterministically (loop control, repeat count,
-range what-ifs, function purpose, symbol location). Never answers general Python
-theory and never hallucinates. No cloud AI is involved.
-"""
 import pytest
 
 import app as app_module
@@ -85,7 +79,6 @@ class TestRouting:
         assert ask_code.looks_like_code_question("what does this function do") is True
 
     def test_looks_like_code_question_false_for_concept_qa(self):
-        # General concept questions belong to the concept Q&A path, not here.
         assert ask_code.looks_like_code_question("what is a loop") is False
         assert ask_code.looks_like_code_question("what does print do") is False
         assert ask_code.looks_like_code_question("why do we use quotes") is False
@@ -98,7 +91,5 @@ class TestRouting:
         assert d["line"] == 2
 
     def test_route_does_not_steal_concept_question(self, client):
-        # "what is a loop" must remain a concept answer (mentor concept mode),
-        # never an Ask My Code response.
         d = client.post("/voice-command", json={"text": "what is a loop", "code": CODE}).get_json()
         assert d.get("ask_my_code") is not True

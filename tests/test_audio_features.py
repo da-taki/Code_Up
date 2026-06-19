@@ -1,12 +1,3 @@
-"""
-Tests for the three audio-native features:
-  1. Audio Code Map
-  2. Variable Watch / Step Narration
-  3. Mistake Replay / Before-vs-After
-
-Tests cover deterministic analysis, intent parsing, API routes, edge cases,
-and command routing — all without requiring AI/Groq.
-"""
 import pytest
 
 import app as app_module
@@ -29,9 +20,6 @@ def parser():
     return IntentParser()
 
 
-# =====================================================================
-# AUDIO CODE MAP — Deterministic analysis
-# =====================================================================
 
 class TestEnhancedCodeMap:
 
@@ -171,9 +159,6 @@ class TestCodeMapRoute:
         assert "foo" in data["reply"]
 
 
-# =====================================================================
-# VARIABLE WATCH / STEP NARRATION
-# =====================================================================
 
 class TestWatchVariable:
 
@@ -227,7 +212,6 @@ class TestStepNarration:
         resp = client.post("/step-narration", json={"code": code})
         data = resp.get_json()
         assert data["success"] is True
-        # Should only show total-related changes
         narr = " ".join(data["narration"])
         assert "total" in narr.lower()
 
@@ -423,9 +407,6 @@ class TestConditionalAudioBreakpoints:
         assert overflow.status_code == 400
 
 
-# =====================================================================
-# MISTAKE REPLAY / BEFORE-VS-AFTER
-# =====================================================================
 
 class TestMistakeReplay:
 
@@ -442,7 +423,6 @@ class TestMistakeReplay:
         session_id = "mistake-test-indent"
         client.set_cookie(app_module.SESSION_COOKIE_NAME, session_id)
 
-        # Simulate error then success
         client.post("/run", json={"code": broken})
         client.post("/run", json={"code": fixed})
 
@@ -510,9 +490,6 @@ class TestMistakeReplay:
         assert "no differences" in explanation.lower()
 
 
-# =====================================================================
-# INTENT PARSER — New commands
-# =====================================================================
 
 class TestCodeMapIntents:
 
@@ -595,9 +572,6 @@ class TestMistakeReplayIntents:
         assert result["intent"] == expected_intent, f"'{text}' -> {result['intent']} (expected {expected_intent})"
 
 
-# =====================================================================
-# INTENT COLLISION — New intents must not break existing ones
-# =====================================================================
 
 class TestIntentNonCollision:
 
@@ -616,9 +590,6 @@ class TestIntentNonCollision:
         assert result["intent"] == expected_intent, f"'{text}' -> {result['intent']} (expected {expected_intent})"
 
 
-# =====================================================================
-# VOICE COMMAND ROUTING — New intents route correctly
-# =====================================================================
 
 class TestVoiceCommandRouting:
 
@@ -681,9 +652,6 @@ class TestVoiceCommandRouting:
         assert data["action"] == "why_audio_breakpoint"
 
 
-# =====================================================================
-# SANDBOX SAFETY — existing protections still intact
-# =====================================================================
 
 class TestSandboxSafety:
 
@@ -704,29 +672,22 @@ class TestSandboxSafety:
         assert resp.status_code == 400
 
 
-# =====================================================================
-# DEMO PROGRAMS — Feature correctness on spec examples
-# =====================================================================
 
 class TestDemoPrograms:
 
     def test_demo_indentation_scope(self, client):
-        """Demo case 1: indentation/scope correction."""
         broken = "total = 0\nfor i in range(3):\ntotal = total + i\nprint(total)\n"
         corrected = "total = 0\nfor i in range(3):\n    total = total + i\nprint(total)\n"
 
-        # Code map on broken code
         resp = client.post("/audio-code-map", json={"code": broken})
         data = resp.get_json()
         assert data["success"] is True
 
-        # Code map on corrected code
         resp = client.post("/audio-code-map", json={"code": corrected})
         data = resp.get_json()
         assert data["success"] is True
         assert "loop" in data["reply"].lower()
 
-        # Step narration on corrected code
         resp = client.post("/step-narration", json={"code": corrected})
         data = resp.get_json()
         assert data["success"] is True
@@ -734,7 +695,6 @@ class TestDemoPrograms:
         assert "total" in narr
 
     def test_demo_conditional_inside_loop(self, client):
-        """Demo case 2: conditional inside loop."""
         code = (
             "score = 0\n"
             "for number in range(5):\n"
@@ -742,20 +702,17 @@ class TestDemoPrograms:
             "        score = score + number\n"
             "print(score)\n"
         )
-        # Code map
         resp = client.post("/audio-code-map", json={"code": code})
         data = resp.get_json()
         assert data["success"] is True
         reply = data["reply"].lower()
         assert "loop" in reply
 
-        # Nesting depth
         resp = client.post("/audio-code-map", json={"code": code, "query": "nesting depth"})
         data = resp.get_json()
         assert "2" in data["reply"] or "two" in data["reply"].lower()
 
     def test_demo_function_call(self, client):
-        """Demo case 3: function call."""
         code = (
             "def double(value):\n"
             "    return value * 2\n"
@@ -763,13 +720,11 @@ class TestDemoPrograms:
             "result = double(4)\n"
             "print(result)\n"
         )
-        # Code map identifies function
         resp = client.post("/audio-code-map", json={"code": code})
         data = resp.get_json()
         assert data["success"] is True
         assert "double" in data["reply"].lower()
 
-        # Step narration
         resp = client.post("/step-narration", json={"code": code})
         data = resp.get_json()
         assert data["success"] is True

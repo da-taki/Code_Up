@@ -1,9 +1,3 @@
-"""Tests for confidence-aware clarification of risky/ambiguous voice commands.
-
-Unit tests exercise command_clarifier.assess directly; route tests drive
-/voice-command. AI is disabled, so these assert the deterministic clarification
-path that runs whenever Key 2 is missing/busy.
-"""
 import pytest
 
 import app as app_module
@@ -31,9 +25,6 @@ def _vc(client, text, **kw):
     return client.post("/voice-command", json={"text": text, **kw}).get_json()
 
 
-# ---------------------------------------------------------------------------
-# Unit: assess()
-# ---------------------------------------------------------------------------
 class TestAssess:
     def test_clean_exact_pattern_is_not_flagged(self):
         ex = build_exact_symbol_generation("make a 5 by 5 star pattern", source="voice")
@@ -42,7 +33,6 @@ class TestAssess:
     def test_vague_pattern_is_flagged_with_specific_question(self):
         d = cc.assess(VAGUE_PATTERN, exact_result=None)
         assert d["needs_clarification"] is True
-        # Asks only for the missing slots (symbol + the special row's count).
         assert "symbol" in d["message"].lower()
         assert "third line" in d["message"]
         assert d["reason"] == "ambiguous_pattern"
@@ -50,7 +40,6 @@ class TestAssess:
         assert d["pending"]["slots"]["rows"] == 5
 
     def test_sized_but_non_pattern_generation_is_not_flagged(self):
-        # A concrete non-pattern request with a size must still generate normally.
         assert cc.assess("make a 3 by 3 grid of random numbers", exact_result=None) is None
 
     def test_delete_vague_without_memory_asks_which_file(self):
@@ -96,15 +85,11 @@ class TestAssess:
         assert "third line" in d["message"] and "symbol" in d["message"].lower()
 
     def test_decision_holds_no_secrets(self, monkeypatch):
-        # A clarification decision must never embed keys/secrets.
         monkeypatch.setenv("GROQ_API_KEY_2", "super-secret-key-value")
         d = cc.assess("delete that file", mem=sm.new_memory())
         assert "super-secret-key-value" not in repr(d)
 
 
-# ---------------------------------------------------------------------------
-# Route integration — the required behaviors
-# ---------------------------------------------------------------------------
 class TestRoute:
     def test_clear_exact_symbol_not_blocked(self, client):
         d = _vc(client, "make a 5 by 5 star pattern", source="voice")
@@ -148,7 +133,6 @@ class TestRoute:
         assert "symbol" in d["message"].lower() and "third line" in d["message"]
 
     def test_vague_pattern_answer_completes_it(self, client):
-        # The remembered question is understood: the answer finishes the pattern.
         _vc(client, VAGUE_PATTERN, source="voice")
         d = _vc(client, "stars, six on the third line", source="voice")
         assert d["action"] == "generate_code"

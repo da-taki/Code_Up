@@ -1,41 +1,10 @@
-"""
-CodeUp guided tutorial engine.
-
-Single source of truth for the spoken, activity-based beginner tutorial:
-
-  * Ordered, opt-in lesson modules (print -> variables -> if -> for -> while),
-    each with short *spoken* content (concept, example, task, hints, recap,
-    success line). The frontend fetches this pack and narrates it through the
-    proven audible speech path; it never invents lesson text.
-
-  * Deterministic, AST-based validators for each module's hands-on activity.
-    Validation is structural ("did the learner actually use a print / variable /
-    if / for / while and run it?") rather than exact-string matching, so many
-    different correct beginner answers are accepted.
-
-  * A static safety check for the while-loop activity that flags obvious
-    non-terminating attempts (``while True`` with no break, or a condition whose
-    variables never change) *before* execution. The sandbox's wall-clock timeout
-    remains the real backstop; this just lets the tutorial give a kind spoken
-    hint instead of a scary timeout.
-
-This module is pure (no Flask, no I/O) so it can be unit-tested directly and
-imported by ``app.py`` for the ``/tutorial/*`` routes.
-"""
 from __future__ import annotations
 
 import ast
 from typing import Callable, Dict, List, Optional, Tuple
 
-# ---------------------------------------------------------------------------
-# Lesson content
-# ---------------------------------------------------------------------------
-# Order is meaningful and defines progression. Progression is ALWAYS opt-in:
-# the engine never assumes a learner who finished one module wants the next.
 MODULE_ORDER: List[str] = ["print", "variables", "if", "for", "while"]
 
-# Keep spoken text short and conversational. Long lectures are explicitly out of
-# scope; each concept is immediately followed by a hands-on activity.
 MODULES: Dict[str, Dict] = {
     "print": {
         "id": "print",
@@ -196,11 +165,7 @@ MODULES: Dict[str, Dict] = {
 }
 
 
-# ---------------------------------------------------------------------------
-# Module navigation helpers
-# ---------------------------------------------------------------------------
 def first_module_id() -> str:
-    """The module the tutorial always starts on."""
     return MODULE_ORDER[0]
 
 
@@ -209,7 +174,6 @@ def get_module(module_id: str) -> Optional[Dict]:
 
 
 def next_module_id(module_id: str) -> Optional[str]:
-    """The id of the module after ``module_id``, or None if it is the last."""
     try:
         idx = MODULE_ORDER.index(module_id)
     except ValueError:
@@ -220,7 +184,6 @@ def next_module_id(module_id: str) -> Optional[str]:
 
 
 def module_pack() -> Dict:
-    """Serializable lesson pack for the frontend (content + order)."""
     return {
         "order": list(MODULE_ORDER),
         "count": len(MODULE_ORDER),
@@ -228,9 +191,6 @@ def module_pack() -> Dict:
     }
 
 
-# ---------------------------------------------------------------------------
-# AST helpers
-# ---------------------------------------------------------------------------
 def _safe_parse(code: str) -> Optional[ast.AST]:
     try:
         return ast.parse(code or "")
@@ -266,10 +226,6 @@ def _has_print_inside(node: ast.AST) -> bool:
     return len(_print_calls(node)) > 0
 
 
-# ---------------------------------------------------------------------------
-# Per-module structural validators
-# Each returns True when the learner genuinely used the target construct.
-# ---------------------------------------------------------------------------
 def validate_print(code: str) -> bool:
     tree = _safe_parse(code)
     if tree is None:
@@ -284,8 +240,6 @@ def validate_variables(code: str) -> bool:
     assigned = _assigned_names(tree)
     if not assigned:
         return False
-    # Accept any assignment that is later referenced inside a print(), so any
-    # valid variable name / value works (not a hardcoded answer).
     for call in _print_calls(tree):
         for arg in call.args:
             for sub in ast.walk(arg):
@@ -330,17 +284,7 @@ _VALIDATORS: Dict[str, Callable[[str], bool]] = {
 }
 
 
-# ---------------------------------------------------------------------------
-# While-loop safety (static, best-effort; the sandbox timeout is the backstop)
-# ---------------------------------------------------------------------------
 def check_while_safety(code: str) -> Tuple[bool, str]:
-    """Flag obvious non-terminating while loops.
-
-    Returns ``(safe, reason)``. ``safe`` is True when no while loop looks
-    obviously infinite. The reason is a kind, spoken-style hint when unsafe.
-    Syntax errors are treated as "safe" here so the normal run path surfaces
-    the syntax message instead.
-    """
     tree = _safe_parse(code)
     if tree is None:
         return True, ""
@@ -351,11 +295,9 @@ def check_while_safety(code: str) -> Tuple[bool, str]:
 
         has_break = any(isinstance(n, ast.Break) for n in ast.walk(node))
         if has_break:
-            # A break gives the learner an explicit exit; trust it.
             continue
 
         test = node.test
-        # while True: / while 1: with no break -> runs forever.
         if isinstance(test, ast.Constant) and bool(test.value):
             return (
                 False,
@@ -364,7 +306,6 @@ def check_while_safety(code: str) -> Tuple[bool, str]:
                 "count is less than 3, and change the counter inside the loop.",
             )
 
-        # Condition references variables, but none of them change in the body.
         cond_names = {n.id for n in ast.walk(test) if isinstance(n, ast.Name)}
         if cond_names:
             modified: set = set()
@@ -386,9 +327,6 @@ def check_while_safety(code: str) -> Tuple[bool, str]:
     return True, ""
 
 
-# ---------------------------------------------------------------------------
-# Top-level attempt validation used by the /tutorial/validate route
-# ---------------------------------------------------------------------------
 def _miss_feedback(module_id: str) -> str:
     misses = {
         "print": "I do not see a finished print statement yet. A print needs the "
@@ -411,12 +349,6 @@ def first_hint(module_id: str) -> str:
     return hints[0] if hints else "Try saying: give me an example."
 
 
-# ---------------------------------------------------------------------------
-# AI tutor coach (deterministic knowledge base)
-# ---------------------------------------------------------------------------
-# These are short, friendly restatements of facts the lesson already teaches.
-# Key 2 may rephrase them more warmly at the route layer, but it must never add
-# new facts — so this stays the single source of truth and the safe fallback.
 _COACH_SIMPLE: Dict[str, str] = {
     "print": "A print statement tells Python to show a message on the screen.",
     "variables": "A variable is a labelled box that remembers a value so you can use it later.",
@@ -435,8 +367,6 @@ _COACH_ENCOURAGE = (
     "You are doing fine. This part trips up everyone at first. Let us take it one small step.",
 )
 
-# Recognised coach request types. Kept as a set so the route can validate an
-# explicit ``request`` field without re-classifying free text.
 COACH_REQUESTS = {
     "explain_simpler",
     "dont_understand",
@@ -447,8 +377,6 @@ COACH_REQUESTS = {
     "what_learning",
 }
 
-# Ordered (specific first) phrase triggers for free-text classification. The
-# frontend mirrors this list so it knows when to intercept and call the coach.
 _COACH_TRIGGERS: List[Tuple[str, List[str]]] = [
     ("why_quotes", ["why do we use quotes", "why use quotes", "why the quotes", "why quotes",
                     "what are quotes for", "what do quotes do", "purpose of quotes"]),
@@ -470,11 +398,6 @@ _COACH_TRIGGERS: List[Tuple[str, List[str]]] = [
 
 
 def classify_coach_request(text: str) -> Optional[str]:
-    """Classify free text into a coach request type, or None.
-
-    Specific topics (quotes, indentation) are matched before the generic
-    "simpler"/"confused" buckets so they win.
-    """
     t = " ".join(str(text or "").lower().strip().rstrip(".!?").split())
     if not t:
         return None
@@ -486,12 +409,6 @@ def classify_coach_request(text: str) -> Optional[str]:
 
 
 def coach_response(module_id: str, request: str, attempts: int = 0) -> Dict:
-    """Return a short, deterministic coach line for a request.
-
-    Only restates known lesson facts for ``module_id``; never invents code,
-    output, or validation results. ``attempts`` lets encouragement and the
-    next-hint pointer adapt without any per-session state on the server.
-    """
     module = MODULES.get(module_id or "")
     title = module["title"] if module else "this topic"
     simpler = _COACH_SIMPLE.get(module_id or "", "")
@@ -535,14 +452,6 @@ def validate_attempt(
     ran_ok: bool = True,
     output: str = "",
 ) -> Dict:
-    """Validate one activity attempt.
-
-    Returns a dict with:
-      passed (bool), safe (bool), feedback (str, spoken), hint (str|None).
-
-    ``ran_ok`` is whether the learner's most recent run executed without an
-    error (the frontend knows this); ``output`` is the captured program output.
-    """
     code = code or ""
     module = MODULES.get(module_id)
     if module is None:
@@ -553,7 +462,6 @@ def validate_attempt(
             "hint": None,
         }
 
-    # Syntax problems: kind nudge, keep them in the activity.
     if _safe_parse(code) is None:
         return {
             "passed": False,
@@ -563,7 +471,6 @@ def validate_attempt(
             "hint": first_hint(module_id),
         }
 
-    # While loop gets a safety pre-check so we can warn kindly before a timeout.
     if module_id == "while":
         safe, reason = check_while_safety(code)
         if not safe:

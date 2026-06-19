@@ -1,16 +1,3 @@
-"""Frontend guarantees for the guided tutorial.
-
-Two kinds of checks, both runnable under pytest:
-
-  1. Pure state-machine behaviour, executed by Node against the real
-     static/tutorial.js (TutorialModel). Skipped if node is unavailable.
-
-  2. Source-structural assertions (the repo's established frontend-test style)
-     proving the tutorial speaks through the PROVEN audible path, never builds
-     its own synthesizer, preserves narration when loading examples, never
-     auto-advances on success, and is wired into both command handlers with an
-     accessible, keyboard-reachable panel.
-"""
 import os
 import shutil
 import subprocess
@@ -25,9 +12,6 @@ def _read(rel):
         return fh.read()
 
 
-# ---------------------------------------------------------------------------
-# 1. Pure state machine via Node
-# ---------------------------------------------------------------------------
 class TestTutorialModelNode:
     def test_model_transitions_pass_in_node(self):
         node = shutil.which("node")
@@ -44,9 +28,6 @@ class TestTutorialModelNode:
         assert "groups passed" in result.stdout
 
     def test_spoken_code_normalizers_pass_in_node(self):
-        # Verifies static/app.js turns spoken "insert ..." commands into correct
-        # Python (string vs number quoting, conditions, indentation), and that
-        # the canonical tutorial commands build the example programs.
         node = shutil.which("node")
         if not node:
             pytest.skip("node not available in this environment")
@@ -61,34 +42,23 @@ class TestTutorialModelNode:
         assert "groups passed" in result.stdout
 
 
-# ---------------------------------------------------------------------------
-# 2a. tutorial.js speaks through the real path
-# ---------------------------------------------------------------------------
 class TestTutorialJsSpeechPath:
     @pytest.fixture(scope="class")
     def src(self):
         return _read("static/tutorial.js")
 
     def test_speaks_via_global_speak(self, src):
-        # Narration is routed through the app's proven speak() -> VoiceEngine,
-        # not merely written to the DOM.
         assert "function _speak(" in src
         assert "speak(text, opts" in src
         assert "_speak(" in src
 
     def test_never_creates_its_own_utterance(self, src):
-        # It must reuse the shared pipeline, never a private synthesizer that
-        # could drift from the one working voice path.
         assert "new SpeechSynthesisUtterance" not in src
 
     def test_setcode_preserves_speech(self, src):
-        # Loading example code must not silently cancel queued narration
-        # (the classic "shown but not spoken" failure).
         assert "preserveSpeech: true" in src
 
     def test_no_auto_advance_on_success(self, src):
-        # markSuccess moves to the DECISION stage; it must never jump to the
-        # next module on its own.
         assert "this.stage = 'decision'" in src
         start = src.index("_celebrateAndDecide: function")
         end = src.index("_continue: function")
@@ -106,22 +76,16 @@ class TestTutorialJsSpeechPath:
         assert "/tutorial/modules" in src
 
     def test_is_voice_first_not_typing_first(self, src):
-        # The orientation must teach that CodeUp is built by speaking commands,
-        # and the activity must not tell the learner to type Python into the editor.
         assert "build Python programs by speaking" in src
         assert "Type your code, then press Control and Enter" not in src
 
     def test_has_staged_voice_build_steps(self, src):
-        # Declarative per-module steps, each naming an exact insert command.
         assert "TUTORIAL_STEPS" in src
         assert "onInsert:" in src           # observes real insertions
         assert "_readMyCode" in src         # read-back of the learner's program
         assert "insert a variable named name and give it the value Taknoor" in src
 
 
-# ---------------------------------------------------------------------------
-# 2b. app.js integration
-# ---------------------------------------------------------------------------
 class TestAppJsIntegration:
     @pytest.fixture(scope="class")
     def src(self):
@@ -145,16 +109,12 @@ class TestAppJsIntegration:
         assert "action === 'tutorial_practice'" in src
 
     def test_new_insert_actions_routed(self, src):
-        # The new voice-insert actions reach the editor through the normal
-        # confirmed-action dispatch (same path as all other voice commands).
         assert "action === 'insert_variable'" in src
         assert "action === 'insert_while'" in src
         assert "insertVariableVoice(" in src
         assert "insertWhileVoice(" in src
 
     def test_tutorial_observes_inserts_without_intercepting(self, src):
-        # handleConfirmedAction notifies the tutorial AFTER performing the insert,
-        # so the command flows normally and the tutorial only watches the result.
         assert "_TUTORIAL_EDIT_ACTIONS" in src
         assert "TutorialController.onInsert" in src
 
@@ -166,9 +126,6 @@ class TestAppJsIntegration:
         assert "renderProjectFiles()" in block
 
 
-# ---------------------------------------------------------------------------
-# 2c. index.html accessible panel
-# ---------------------------------------------------------------------------
 class TestIndexHtmlPanel:
     @pytest.fixture(scope="class")
     def src(self):
@@ -192,6 +149,5 @@ class TestIndexHtmlPanel:
         assert "/static/tutorial.js" in src
 
     def test_old_static_slides_removed(self, src):
-        # The previous static-slide tutorial must be gone.
         assert "TUTORIAL_STEPS" not in src
         assert "tutorialNextBtn" not in src

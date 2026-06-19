@@ -36,10 +36,6 @@ NOISY_REPLACEMENTS = [
     (re.compile(r"\bcodup\b", re.IGNORECASE), "code up"),
 ]
 
-# A generation-like request asks CodeUp to build a program/snippet. Key 2 (the
-# conversation/tutor brain) rewrites these rough prompts into clearer beginner
-# prompts before the Key 1 coding model ever sees them. The patterns stay narrow
-# so simple fast commands (run, open main, map my code, ...) never match.
 _GEN_VERB = r"(?:generate|create|build|write|make)"
 _GEN_OBJECT = (
     r"(?:code|program|programme|script|function|app|application|game|project|tool|"
@@ -47,20 +43,15 @@ _GEN_OBJECT = (
     r"pattern|loop)"
 )
 GENERATION_REQUEST_RES = (
-    # "generate code", "write a program", "make a simple calculator app", ...
     re.compile(
         rf"\b{_GEN_VERB}\s+(?:me\s+|us\s+)?(?:a\s+|an\s+|some\s+)?"
         rf"(?:simple\s+|small\s+|basic\s+|little\s+|python\s+)*{_GEN_OBJECT}\b",
         re.IGNORECASE,
     ),
-    # vague "make a marks thing", "create a quiz game" -> verb + article + a noun
     re.compile(rf"\b{_GEN_VERB}\s+(?:me\s+|us\s+)?(?:a|an)\s+\w+", re.IGNORECASE),
-    # "code something", "code me a ...", "code up a ..."
     re.compile(r"\bcode\s+(?:me\s+|us\s+)?(?:a|an|some|something|up)\b", re.IGNORECASE),
 )
 
-# File/folder management ("create a new file main dot py") is a deterministic
-# project-file command, not a generation request — never route it to Key 2.
 _FILE_OP_RE = re.compile(
     r"\b(?:create|make|add|new|open|rename|delete|remove)\s+"
     r"(?:a\s+|an\s+|the\s+)?(?:new\s+|current\s+|this\s+)?(?:file|folder|directory)\b",
@@ -69,11 +60,6 @@ _FILE_OP_RE = re.compile(
 
 
 def looks_like_generation_request(text: str) -> bool:
-    """True when the (wake-stripped) text asks CodeUp to generate a program.
-
-    Used to route rough generation prompts through the Key 2 orchestrator while
-    leaving simple deterministic commands and project-file management untouched.
-    """
     cleaned = cleanup_transcript(text).strip()
     if not cleaned:
         return False
@@ -331,11 +317,6 @@ def orchestrate_command(
     if re.search(r"\bfix\s+it\b", lower) and re.search(r"\brun\s+it\b", lower) and not str(code or "").strip():
         return _clarification(stripped["text"], stripped["text"], "There is no code to fix yet. Do you want me to generate an example?")
 
-    # Key 2 is the AI-first generation/tutor brain: when the request looks like a
-    # generation ask, let it rewrite the rough prompt into a clearer beginner
-    # prompt (and split multi-step asks) BEFORE the deterministic parser — and
-    # before Key 1 ever receives it. Exact-symbol, cube, and fix/run safety
-    # checks above still win first, so deterministic pattern handling is intact.
     generation_like = looks_like_generation_request(stripped["text"])
     ai: Optional[Dict[str, Any]] = None
     ai_attempted = False
@@ -349,8 +330,6 @@ def orchestrate_command(
     if deterministic:
         return deterministic
 
-    # Catch-all AI only for forced or generation-like commands. Simple fast
-    # commands (run, clear editor, open main, ...) never reach Key 2.
     if force or generation_like:
         if not ai_attempted:
             ai = _ai_plan(stripped["text"], code, ai_plan_fn)

@@ -1,27 +1,9 @@
-"""
-Smart Intent Parser for Voice Commands
-
-Converts natural language voice input into structured intents and slots.
-This replaces simple string matching with a robust grammar-based system.
-
-Examples:
-    "go to line fifteen"      -> {intent: "goto_line",      slots: {line_number: 15}}
-    "read function analyze"   -> {intent: "read_function",  slots: {function_name: "analyze"}}
-    "find class Parser"       -> {intent: "find_class",     slots: {class_name: "Parser"}}
-    "jump to error"           -> {intent: "locate_error",   slots: {}}
-
-Supported spoken numbers: zero–nineteen, tens (twenty, thirty … ninety), and
-two-word compounds such as "twenty five" (→ 25), "forty two" (→ 42).
-"""
 
 import re
 import threading
 from typing import Dict, List, Optional
 
 
-# ---------------------------------------------------------------------------
-# Spoken-number vocabulary
-# ---------------------------------------------------------------------------
 
 _ONES: Dict[str, int] = {
     "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
@@ -34,10 +16,6 @@ _TENS: Dict[str, int] = {
     "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90,
 }
 
-# Hindi numbers 0-50. Hindi doesn't decompose into tens+ones the way English
-# does ("twenty five" → 20+5), each number is its own word, so we list them
-# directly. We cap at 50 because line numbers above that are rare in voice
-# commands and the vocabulary gets unwieldy fast.
 _HINDI_NUMBERS: Dict[str, int] = {
     "शून्य": 0, "एक": 1, "दो": 2, "तीन": 3, "चार": 4, "पांच": 5, "पाँच": 5,
     "छह": 6, "छः": 6, "सात": 7, "आठ": 8, "नौ": 9, "दस": 10,
@@ -61,31 +39,23 @@ _HINDI_NUMBERS: Dict[str, int] = {
     "छियानवे": 96, "सत्तानवे": 97, "अट्ठानवे": 98, "निन्यानवे": 99, "सौ": 100,
 }
 
-# "hundred" and "thousand" appear here as standalone tokens but are also
-# handled in compound parsing in IntentParser._word_to_number.
 WORD_TO_NUMBER: Dict[str, int] = {
     **_ONES, **_TENS, **_HINDI_NUMBERS,
     "hundred": 100, "thousand": 1000,
 }
 
 class IntentParser:
-    """Parse voice commands into structured intents and slots."""
 
-    # -----------------------------------------------------------------------
-    # Navigation patterns
-    # -----------------------------------------------------------------------
 
     GOTO_LINE_PATTERNS = [
         r"(?:go|jump|navigate|move)\s+to\s+line\s+([\w\s]+?)(?:\s*$|\s+(?:please|now))",
         r"(?:go|jump|navigate|move)\s+to\s+line\s+(\w+)",
-        # Hindi: "लाइन पंद्रह पर जाओ" / "line 15 पर जाओ"
         r"(?:लाइन|line)\s+(\S+)\s+(?:पर\s+)?(?:जाओ|जाइए|चलो)",
     ]
 
     READ_LINE_PATTERNS = [
         r"read\s+(?:the\s+)?line\s+([\w\s]+?)(?:\s*$|\s+(?:please|now))",
         r"read\s+(?:the\s+)?line\s+(\w+)",
-        # Hindi: "लाइन पांच पढ़ो"
         r"(?:लाइन|line)\s+(\S+)\s+(?:को\s+)?(?:पढ़ो|पढ़िए|बोलो|सुनाओ)",
     ]
 
@@ -103,10 +73,7 @@ class IntentParser:
         r"(?:go\s+)?to\s+function\s+(\w+)",
     ]
 
-    # -----------------------------------------------------------------------
-    # Execution patterns
     RUN_PATTERNS = [
-        # Core verbs
         r"^run\s*(?:code|program|it|this|that)?$",
         r"^execute\s*(?:code|program|it|this|that)?$",
         r"^start\s*(?:code|program|it|this|that)?$",
@@ -115,13 +82,11 @@ class IntentParser:
         r"^go\s*(?:now)?$",
         r"^(?:code|program)\s+run\s+karo$",
         r"^program\s+chalao$",
-        # Casual phrasings — explicit terminators so "do it yourself" doesn't fire
         r"^let'?s?\s+(?:run|go|try)\s*(?:it|this|that)?\.?$",
         r"^try\s+(?:it|this|that)\.?$",
         r"^do\s+it\.?$",
         r"^make\s+it\s+(?:go|run)\.?$",
         r"^see\s+(?:what|if)\s+(?:happens|it\s+does|it\s+works)\.?$",
-        # Hindi
         r"^(?:कोड\s+)?(?:चलाओ|चलाइए|चलाइये)$",
         r"^रन\s*(?:करो|कीजिए|कीजिये)?$",
         r"^शुरू\s+करो$",
@@ -143,7 +108,6 @@ class IntentParser:
         r"^analyze\s*(?:(?:the\s+)?code)?$",
         r"^analyse\s*(?:(?:the\s+)?code)?$",
         r"^(?:check|review|explain)\s+(?:the\s+)?code$",
-        # Hindi: "कोड का विश्लेषण करो" / "कोड समझाओ"
         r"^(?:कोड\s+)?(?:का\s+)?विश्लेषण\s*(?:करो|कीजिए)?$",
         r"^कोड\s+(?:को\s+)?(?:समझाओ|समझाइए|जांचो)$",
     ]
@@ -157,7 +121,6 @@ class IntentParser:
         r"^make\s+it\s+work$",
         r"^what'?s?\s+wrong$",
         r"^why\s+(?:doesn'?t|isn'?t)\s+(?:it|this)\s+work(?:ing)?$",
-        # Hindi
         r"^(?:कोड|गलती|error|bug)\s+(?:को\s+)?ठीक\s*(?:करो|कीजिए|कीजिये)?$",
         r"^सही\s+करो$",
         r"^क्या\s+गलत\s+है$",
@@ -182,9 +145,6 @@ class IntentParser:
         r"^structure\s+panel$",
     ]
 
-    # -----------------------------------------------------------------------
-    # Sonification patterns
-    # -----------------------------------------------------------------------
 
     SONIFY_FUNCTION_PATTERNS = [
         r"sonify\s+(?:the\s+)?function\s+(\w+)",
@@ -206,9 +166,6 @@ class IntentParser:
         r"^what\s+(?:does\s+)?this\s+line\s+(?:say|do)$",
     ]
 
-    # -----------------------------------------------------------------------
-    # Error patterns
-    # -----------------------------------------------------------------------
 
     ERROR_PATTERNS = [
         r"(?:find|locate|go\s+to|jump\s+to)\s+(?:the\s+)?error",
@@ -228,7 +185,6 @@ class IntentParser:
         r"^(?:editor|code)\s+clear\s+karo$",
         r"^code\s+hata\s+do$",
         r"^naya\s+code\s+shuru\s+karo$",
-        # Hindi: "एडिटर साफ करो" / "कोड हटाओ"
         r"^(?:एडिटर|editor|कोड|code)\s+(?:को\s+)?(?:साफ|खाली|reset)\s*(?:करो|कीजिए)?$",
         r"^(?:कोड|code)\s+(?:को\s+)?(?:हटाओ|मिटाओ)$",
     ]
@@ -248,19 +204,12 @@ class IntentParser:
     SUMMARIZE_PATTERNS = [
         r"^summarize(?:\s+(?:this\s+)?(?:file|code))?$",
         r"^summary\s+of\s+(?:this\s+)?(?:file|code)$",
-        # Hindi: "कोड का सारांश दो" / "सारांश बताओ"
         r"^(?:कोड\s+(?:का\s+)?)?सारांश\s*(?:दो|बताओ|दीजिए)?$",
     ]
-    # "read my code" / "read my program" / "read back my code": a deterministic,
-    # line-by-line read-back of the editor (no AI). Distinct from narrate_file
-    # ("read the code" -> LLM narration). Scoped to "my"/"back" so it never
-    # steals the tested "read code" / "read the code" -> narrate_file commands.
     READ_CODE_PATTERNS = [
         r"^read\s+(?:me\s+)?my\s+(?:whole\s+|entire\s+|full\s+|complete\s+)?(?:code|program|script)(?:\s+back)?(?:\s+to\s+me)?(?:\s+(?:out\s+loud|aloud))?$",
         r"^read\s+(?:all\s+(?:of\s+)?)?my\s+(?:code|program|script)$",
         r"^read\s+back\s+(?:my\s+|the\s+)?(?:code|program|script)$",
-        # "read line by line" / "read my code line by line": a minimal alias onto
-        # the same deterministic line-by-line read-back (Concept Tutor suggests it).
         r"^read\s+(?:me\s+)?(?:my\s+|the\s+)?(?:code|program|script)\s+line\s+by\s+line$",
         r"^read\s+line\s+by\s+line$",
     ]
@@ -273,19 +222,12 @@ class IntentParser:
         r"^(?:कोड|file)\s+(?:को\s+)?(?:शुरू\s+से\s+अंत\s+तक\s+)?(?:पढ़ो|सुनाओ)$",
     ]
 
-    # "Walk through" / "explain this code" route to the holistic /walkthrough
-    # explanation (what the program does and why), NOT the literal line-by-line
-    # read above. "read the code" stays a literal narrate. These patterns must
-    # require a code/program object so "walk me through this slowly" still falls
-    # to the mentor walkthrough and "explain the error" stays a mentor question.
     WALK_THROUGH_PATTERNS = [
         r"^(?:walk|talk|take)\s+(?:me\s+)?through\s+(?:this\s+|the\s+)?(?:code|program)$",
         r"^(?:walk|take)\s+(?:me\s+)?through\s+(?:this|it)$",
         r"^explain\s+what\s+(?:this\s+|the\s+)?(?:code|program)\s+does$",
         r"^explain\s+(?:this\s+|the\s+)?(?:code|program)(?:\s+step\s+by\s+step)?$",
         r"^step\s+by\s+step\s+explanation(?:\s+of\s+(?:this\s+|the\s+)?(?:code|program))?$",
-        # Hinglish: explain the whole program (kept specific to code/program so
-        # concept questions like "print function kya karta hai" stay concept Q&A).
         r"^(?:is|ye|yeh)\s+(?:program|code)\s+(?:ko\s+)?samjhao$",
         r"^(?:ye|yeh|is)\s+(?:code|program)\s+kya\s+karta\s+hai(?:\s+batao)?$",
         r"^(?:code|program)\s+(?:ko\s+)?step\s+by\s+step\s+samjhao$",
@@ -339,19 +281,14 @@ class IntentParser:
         r"^(?:फिर\s+से\s+)?सुनो$",
     ]
 
-    # Require an explicit code-generation verb at the start of the utterance so
-    # ambient speech ("code for that exam") cannot be misrouted to the LLM.
     GENERATE_CODE_PATTERNS = [
         r"^(?:please\s+)?(?:generate|write|create|make|build)\s+(?:a\s+|some\s+)?(?:python\s+)?code\s+(?:that|which|to|for)\s+(\S+(?:\s+\S+)*)",
         r"^(?:please\s+)?(?:generate|write|create|make|build)\s+(?:a\s+|an\s+|some\s+)?(?:python\s+)?(?:\w+\s+){0,2}(?:program|script|function|class|method)\s+(?:that|which|to|for)\s+(\S+(?:\s+\S+)*)",
         r"^(?:please\s+)?(?:generate|write|create|make|build)\s+(?:a\s+|some\s+)?(?:python\s+)?code\s+for\s+(\S+(?:\s+\S+)*)",
         r"^i\s+want\s+(?:python\s+)?code\s+(?:for|to|that)\s+(\S+(?:\s+\S+)*)",
         r"^(?:please\s+)?(?:generate|write|create|make|build)\s+(?:a\s+|an\s+|some\s+)?(.+\b(?:game|project|app|application|program|script|tool|tests?|pandas|numpy|multiple\s+files|multi-file|split\s+into|csv)\b.*)$",
-        # bare command — no prompt, will ask user
         r"^(?:generate|write|create|make)\s+(?:python\s+)?code$",
-        # Hindi: "X के लिए कोड बनाओ" — require at least 2 words before the trigger
         r"^(\S+(?:\s+\S+){1,})\s+(?:के\s+लिए|का|की)\s+(?:कोड|code)\s+(?:बनाओ|लिखो|बनाइए|बनाइये)$",
-        # Hindi: "code बनाओ X Y Z"
         r"^(?:कोड|code)\s+(?:बनाओ|लिखो)\s+(\S+(?:\s+\S+){2,})$",
     ]
 
@@ -373,7 +310,6 @@ class IntentParser:
         r"^is\s+code\s+ko\s+(.+?)\s+naam\s+se\s+save\s+karo$",
         r"save\s+(?:snippet|code)\s+(?:as\s+|named?\s+)(.+)",
         r"save\s+(?:this\s+)?(?:as\s+|named?\s+)(.+)",
-        # Hindi: "snippet नाम से सेव करो X"
         r"(?:snippet|कोड)\s+(?:को\s+)?(.+?)\s+(?:नाम\s+से\s+)?(?:सेव|save)\s*(?:करो|कीजिए)?",
     ]
 
@@ -443,15 +379,11 @@ class IntentParser:
         r"^what\s+requirements\s+(?:does\s+this\s+project\s+need|are\s+needed)\??$",
     ]
 
-    # -----------------------------------------------------------------------
-    # Voice code editing patterns
-    # -----------------------------------------------------------------------
 
     INSERT_FUNCTION_PATTERNS = [
         r"insert\s+(?:a\s+)?function\s+(?:called\s+|named\s+)?(\w+)",
         r"add\s+(?:a\s+)?function\s+(?:called\s+|named\s+)?(\w+)",
         r"create\s+(?:a\s+)?function\s+(?:called\s+|named\s+)?(\w+)",
-        # Hindi: "function जोड़ो जिसका नाम greet है"
         r"function\s+(\w+)\s+(?:जोड़ो|बनाओ|डालो)",
         r"(?:एक\s+)?function\s+(?:जोड़ो|बनाओ|डालो)\s+(?:नाम\s+)?(\w+)",
     ]
@@ -491,9 +423,6 @@ class IntentParser:
         r"add\s+(?:an?\s+)?if\s+(?:statement\s+)?(?:for\s+|checking\s+)?(.+)",
     ]
 
-    # "insert a while loop while count is less than or equal to 3"
-    # "add a while loop until count is greater than 5"
-    # "insert while count <= 3"
     INSERT_WHILE_PATTERNS = [
         r"(?:insert|add)\s+(?:a\s+)?while\s+loop\s+(?:that\s+runs\s+)?"
         r"(?:while\s+|until\s+|when\s+|for\s+(?:as\s+long\s+as\s+)?|"
@@ -501,10 +430,6 @@ class IntentParser:
         r"(?:insert|add)\s+(?:a\s+)?while\s+(.+)",
     ]
 
-    # "insert a variable named name and give it the value Taknoor"
-    # "insert a variable called score with value 7"
-    # "create a variable age set to 12" / "add variable city holding Patiala"
-    # The value is captured raw; the frontend decides quoting (text vs number).
     INSERT_VARIABLE_PATTERNS = [
         r"(?:insert|add|create|make|declare)\s+(?:a\s+|an\s+|new\s+)*variable\s+"
         r"(?:called\s+|named\s+)?([A-Za-z_]\w*)\s+(?:and\s+)?"
@@ -521,18 +446,9 @@ class IntentParser:
         r"add\s+(?:a\s+)?(?:new\s+)?line\s+[\"']?(.+?)[\"']?$",
         r"write\s+[\"']?(.+?)[\"']?$",
         r"type\s+[\"']?(.+?)[\"']?$",
-        # General fallback: "insert <spoken code>" appends a normalized line. This
-        # is intentionally last and only reached after the specific insert_*
-        # intents (function/class/line/loop/if/while/variable) have been tried,
-        # so it never hijacks them. It lets the guided tutorial — and any voice
-        # user — say "insert for i in range 3", "insert count equals 1", or
-        # "insert indented print count" and have it inserted line by line.
         r"insert\s+(.+)$",
     ]
 
-    # -----------------------------------------------------------------------
-    # Semantic autocomplete patterns
-    # -----------------------------------------------------------------------
 
     SUGGEST_NEXT_PATTERNS = [
         r"^suggest\s+(?:next\s+)?line$",
@@ -540,7 +456,6 @@ class IntentParser:
         r"^next\s+suggestion$",
         r"^complete\s+(?:this\s+)?line$",
         r"^what\s+should\s+i\s+(?:write|type)\s+next$",
-        # Hindi: "अगली लाइन सुझाओ" / "क्या लिखूं"
         r"^अगली\s+(?:लाइन|line)\s+(?:सुझाओ|बताओ|suggest\s*करो)$",
         r"^(?:आगे\s+)?क्या\s+लिखूं$",
     ]
@@ -554,7 +469,6 @@ class IntentParser:
     NEXT_STEP_PATTERNS = [
         r"^(?:next|forward)\s+step$",
         r"^step\s+(?:forward|next)$",
-        # Hindi: "अगला कदम" / "आगे बढ़ो"
         r"^अगला\s+(?:कदम|step)$",
         r"^आगे\s+(?:बढ़ो|जाओ)$",
     ]
@@ -562,7 +476,6 @@ class IntentParser:
     PREVIOUS_STEP_PATTERNS = [
         r"^(?:previous|back|prev)\s+step$",
         r"^step\s+(?:back|backward|previous)$",
-        # Hindi: "पिछला कदम" / "पीछे जाओ"
         r"^पिछला\s+(?:कदम|step)$",
         r"^पीछे\s+(?:जाओ|बढ़ो)$",
     ]
@@ -574,8 +487,6 @@ class IntentParser:
 
     READ_OUTPUT_PATTERNS = [
         r"^(?:speak|read|say)\s+(?:the\s+)?output$",
-        # "read full output" / "read last output" / "read all output" / variants:
-        # a blind learner asks to hear the program output again, in full.
         r"^(?:speak|read|say)\s+(?:the\s+)?(?:full|whole|entire|last|complete|all(?:\s+of)?(?:\s+the)?)\s+output$",
         r"^(?:speak|read|say)\s+(?:the\s+)?output\s+(?:again|in\s+full|out\s+loud|aloud)$",
         r"^read\s+(?:me\s+)?(?:the\s+)?output\s+again$",
@@ -603,7 +514,6 @@ class IntentParser:
         r"^what\s+now$",
         r"^(?:i\s+)?(?:don'?t|do\s+not)\s+know\s+what\s+to\s+(?:do|say)$",
         r"^(?:tell|show)\s+me\s+(?:the\s+)?commands$",
-        # Hindi
         r"^(?:मदद|सहायता|help)\s*(?:चाहिए|करो|दो|कीजिए)?$",
         r"^क्या\s+कर\s+सकते\s+हो$",
         r"^मैं\s+(?:क्या|कैसे)\s+करूं$",
@@ -624,9 +534,6 @@ class IntentParser:
         r"^कमांड\s+(?:की\s+)?सूची$",
     ]
 
-    # -----------------------------------------------------------------------
-    # Execution story mode
-    # -----------------------------------------------------------------------
 
     STORY_MODE_PATTERNS = [
         r"^(?:tell|narrate|explain|describe)\s+(?:the\s+)?(?:execution\s+)?story$",
@@ -636,9 +543,6 @@ class IntentParser:
         r"^(?:कहानी|narrate\s+करो|explain\s+करो)\s*(?:execution)?$",
     ]
 
-    # -----------------------------------------------------------------------
-    # Audio breakpoint debugger
-    # -----------------------------------------------------------------------
 
     SET_BREAKPOINT_PATTERNS = [
         r"set\s+(?:a\s+)?breakpoint\s+(?:at\s+)?(?:line\s+)?([\w\s]+?)(?:\s*$|\s+(?:please|now))",
@@ -688,9 +592,6 @@ class IntentParser:
         r"^(?:exit|leave)\s+(?:the\s+)?function$",
     ]
 
-    # -----------------------------------------------------------------------
-    # Learning / mentor mode
-    # -----------------------------------------------------------------------
 
     MENTOR_MODE_PATTERNS = [
         r"^(?:start\s+)?(?:learning|mentor|tutor)\s+mode$",
@@ -711,15 +612,6 @@ class IntentParser:
         r"(?:मुझे\s+)?(.+?)\s+(?:समझाओ|explain\s+करो)\s*(?:simply|simply\s+में)?",
     ]
 
-    # Natural conceptual questions about Python or the code currently in the
-    # editor — "what is a loop", "why is print indented", "what does range
-    # three mean". Registered LAST in the intent map so every specific command
-    # (walk_through, narrate_file, mentor_chat, explain_diff, code_map, the edit
-    # router, etc.) wins first; this only catches genuine question-shaped
-    # utterances that nothing else handled, and never imperatives like "add" or
-    # "fix" (those stay on the edit path). A leading filler ("hey,") is allowed.
-    # Hinglish equivalents (kya karta hai / ka matlab / kyun hai / kya hota hai)
-    # are included so concept questions work in the existing language modes.
     CONCEPT_QUESTION_PATTERNS = [
         r"^(?:hey|ok|okay|so|um|hmm)?[,\s]*what(?:'?s| is| are)\s+(?:a|an|the|this|that)?\s*[\w\s\-\"']*?\b(?:loop|print|range|colon|indent\w*|variable|function|string|list|dictionary|integer|float|boolean|for\s+line|while\s+line|space|line\s+\w+)\b",
         r"^(?:hey|ok|okay|so|um|hmm)?[,\s]*what\s+does\s+.+?\b(?:mean|do|doing|represent|stand\s+for)\b",
@@ -823,9 +715,6 @@ class IntentParser:
         r"^summarize\s+my\s+code\s+structure$",
     ]
 
-    # -----------------------------------------------------------------------
-    # Audio Code Map (enhanced structural queries)
-    # -----------------------------------------------------------------------
 
     CODE_MAP_PATTERNS = [
         r"^(?:give\s+me\s+)?(?:a\s+)?code\s+map$",
@@ -837,7 +726,6 @@ class IntentParser:
         r"^(?:show|describe)\s+(?:the\s+)?(?:code\s+)?structure$",
         r"^(?:audio\s+)?code\s+map$",
         r"^map\s+(?:the\s+|my\s+|this\s+)?code$",
-        # Robust spoken synonyms (speech recognition often mis-hears "code map").
         r"^show\s+(?:me\s+)?(?:the\s+)?code\s+map$",
         r"^give\s+me\s+(?:a\s+)?map\s+of\s+(?:the|this)\s+code$",
         r"^(?:explain|show|describe)\s+(?:me\s+)?(?:the\s+)?structure\s+of\s+(?:my|this|the)\s+(?:code|program)$",
@@ -873,9 +761,6 @@ class IntentParser:
         r"^what\s+part\s+(?:of\s+(?:the\s+)?program\s+)?am\s+i\s+(?:in|at)$",
     ]
 
-    # -----------------------------------------------------------------------
-    # Variable Watch / Step Narration
-    # -----------------------------------------------------------------------
 
     WATCH_VAR_PATTERNS = [
         r"^track\s+(\w+)$",
@@ -921,9 +806,6 @@ class IntentParser:
         r"^changes\s+only$",
     ]
 
-    # -----------------------------------------------------------------------
-    # Mistake Replay / Before-vs-After
-    # -----------------------------------------------------------------------
 
     COMPARE_BEFORE_AFTER_PATTERNS = [
         r"^compare\s+before\s+and\s+after$",
@@ -955,7 +837,6 @@ class IntentParser:
         r"^stop\s+mentor$",
     ]
 
-    # ----- Pre-flight input controls -----
     SET_INPUTS_PATTERNS = [
         r"^set\s+inputs?\s+to\s+(.+)$",
         r"^use\s+inputs?\s+(.+)$",
@@ -985,7 +866,6 @@ class IntentParser:
         r"^batch\s+(?:input\s+)?mode$",
     ]
 
-    # ----- Voice macros -----
     SAVE_MACRO_PATTERNS = [
         r"^remember\s+(?:this\s+)?as\s+(.+)$",
         r"^save\s+(?:this\s+)?(?:as\s+)?macro\s+(.+)$",
@@ -1015,7 +895,6 @@ class IntentParser:
         r"^load\s+shared\s+macro\s+([a-z0-9]{4})$",
     ]
 
-    # ----- Output bookmarks -----
     BOOKMARK_OUTPUT_PATTERNS = [
         r"^bookmark\s+(?:this|here)?(?:\s+as\s+(.+))?$",
         r"^mark\s+(?:this|here)?(?:\s+as\s+(.+))?$",
@@ -1033,7 +912,6 @@ class IntentParser:
         r"^bookmarks?\s+(?:बताओ|सूची)$",
     ]
 
-    # ----- Where am I (live execution position) -----
     WHERE_AM_I_PATTERNS = [
         r"^where\s+am\s+i(?:\s+in\s+execution)?$",
         r"^(?:current\s+)?(?:execution\s+)?position$",
@@ -1042,7 +920,6 @@ class IntentParser:
         r"^कौन\s+सी\s+line$",
     ]
 
-    # ----- Beginner explanation -----
     EXPLAIN_SIMPLY_PATTERNS = [
         r"^(?:debug|explain)\s+(?:this|the|my)\s+error$",
         r"^explain\s+(?:like\s+i'?m\s+(?:five|new|a\s+beginner)|simpler|simply|in\s+plain\s+(?:words|english))$",
@@ -1050,7 +927,6 @@ class IntentParser:
         r"^(?:और\s+आसान|simple\s+में|बच्चे\s+की\s+तरह)\s*(?:समझाओ)?$",
     ]
 
-    # ----- Diff narration -----
     NARRATE_DIFF_PATTERNS = [
         r"^(?:what'?s|whats)\s+different$",
         r"^(?:narrate|tell\s+me)\s+(?:the\s+)?diff(?:erence)?$",
@@ -1060,15 +936,10 @@ class IntentParser:
     ]
 
     START_TUTORIAL_PATTERNS = [
-        # Natural phrasings: an optional lead-in ("let's", "can you", "i want
-        # to", "please"), a start verb, an optional article, then "tutorial".
-        # Matches "start tutorial", "open the tutorial", "let's begin the
-        # tutorial", "can you start the tutorial", "i want to start a tutorial".
         r"^(?:(?:hey|ok|okay|please|let'?s|lets|can\s+you|could\s+you|"
         r"will\s+you|i\s+(?:want|would\s+like|wanna)\s+to|i'?d\s+like\s+to)\s+){0,3}"
         r"(?:start|open|begin|launch|take\s+me\s+to)\s+(?:the\s+|a\s+)?tutorial"
         r"(?:\s+please)?$",
-        # Bare / minimal: "tutorial", "the tutorial", "go to the tutorial".
         r"^(?:go\s+to\s+)?(?:the\s+)?tutorial$",
         r"^tutorial\s+(?:शुरू\s+करो|खोलो)$",
     ]
@@ -1085,17 +956,10 @@ class IntentParser:
         r"^tutorial\s+(?:बंद\s+करो|छोड़ो)$",
     ]
 
-    # Only the unambiguous "tutorial next". The bare Hindi "आगे बढ़ो" / "next करो"
-    # belong to next_step (execution playback) and must not be claimed here —
-    # in-tutorial advancement is handled by the panel buttons and the frontend
-    # utterance handler ("continue").
     TUTORIAL_NEXT_PATTERNS = [
         r"^tutorial\s+next$",
     ]
 
-    # "practise for loops", "let me practice variables again" — jump the guided
-    # tutorial straight to one topic. The captured group is normalised to a
-    # module id in _extract_slots.
     TUTORIAL_PRACTICE_PATTERNS = [
         r"^(?:let\s+me\s+|i\s+want\s+to\s+)?practi[sc]e\s+(?:the\s+)?"
         r"(print(?:ing)?(?:\s+statements?)?|variables?|if(?:\s+statements?)?|"
@@ -1105,42 +969,30 @@ class IntentParser:
         r"\s+(?:module|topic|lesson)$",
     ]
 
-    # -----------------------------------------------------------------------
-    # Intent map — order defines precedence (most specific first)
-    # -----------------------------------------------------------------------
 
     def __init__(self) -> None:
         self.intent_map = self._build_intent_map()
 
     def _build_intent_map(self) -> Dict[str, List[str]]:
-        """Return ordered intent → patterns mapping. More specific intents first."""
         return {
-            # Line-level operations (specific verbs before generic navigation)
             "read_line":      self.READ_LINE_PATTERNS,
             "describe_line":  self.DESCRIBE_LINE_PATTERNS,
             "delete_line":    self.DELETE_LINE_PATTERNS,
-            # General line navigation — tighter patterns, no bare \bline\b catch-all
             "goto_line":      self.GOTO_LINE_PATTERNS,
-            # Function / class navigation
             "read_function":  self.READ_FUNCTION_PATTERNS,
             "find_function":  self.FIND_FUNCTION_PATTERNS,
             "sonify_function": self.SONIFY_FUNCTION_PATTERNS,
             "find_class":     self.FIND_CLASS_PATTERNS,
             "sonify_class":   self.SONIFY_CLASS_PATTERNS,
-            # Execution and analysis
             "run":            self.RUN_PATTERNS,
-            # Conversational mentor commands must come before older analyze/fix
-            # phrases so questions route to the tutor layer.
             "mentor_stop":     self.MENTOR_STOP_PATTERNS,
             "mentor_code_map": self.MENTOR_CODE_MAP_PATTERNS,
-            # Audio code map queries
             "code_map":        self.CODE_MAP_PATTERNS,
             "inside_loop":     self.INSIDE_LOOP_PATTERNS,
             "after_loop":      self.AFTER_LOOP_PATTERNS,
             "nesting_depth":   self.NESTING_DEPTH_PATTERNS,
             "list_functions":  self.LIST_FUNCTIONS_PATTERNS,
             "where_in_program": self.WHERE_IN_PROGRAM_PATTERNS,
-            # Variable watch / step narration
             "watch_var":       self.WATCH_VAR_PATTERNS,
             "stop_watching":   self.STOP_WATCHING_PATTERNS,
             "clear_watched":   self.CLEAR_WATCHED_PATTERNS,
@@ -1148,7 +1000,6 @@ class IntentParser:
             "read_var_values": self.READ_VARIABLE_VALUES_PATTERNS,
             "what_changed_step": self.WHAT_CHANGED_STEP_PATTERNS,
             "only_announce_changes": self.ONLY_ANNOUNCE_CHANGES_PATTERNS,
-            # Mistake replay
             "compare_before_after": self.COMPARE_BEFORE_AFTER_PATTERNS,
             "replay_mistake":  self.REPLAY_MISTAKE_PATTERNS,
             "why_fixed_works": self.WHY_FIXED_WORKS_PATTERNS,
@@ -1166,17 +1017,11 @@ class IntentParser:
             "fix":            self.FIX_PATTERNS,
             "advise":         self.ADVISE_PATTERNS,
             "summarize":      self.SUMMARIZE_PATTERNS,
-            # Holistic walkthrough explanation — must precede narrate_file so a
-            # "walk through the code" request explains rather than literal-reads.
             "walk_through":   self.WALK_THROUGH_PATTERNS,
-            # read_code (literal line-by-line read-back) must precede narrate_file
-            # so "read my code" gets a deterministic read-back, not LLM narration.
             "read_code":      self.READ_CODE_PATTERNS,
             "narrate_file":   self.NARRATE_FILE_PATTERNS,
             "demo_run":       self.DEMO_RUN_PATTERNS,
             "demo_list":      self.DEMO_LIST_PATTERNS,
-            # Pause/resume must come BEFORE generate_code because "pause" is short
-            # enough that fuzzy matching could route it to other intents otherwise.
             "pause_voice":    self.PAUSE_VOICE_PATTERNS,
             "resume_voice":   self.RESUME_VOICE_PATTERNS,
             "read_project_files": self.READ_PROJECT_FILES_PATTERNS,
@@ -1194,7 +1039,6 @@ class IntentParser:
             "list_snippets":       self.LIST_SNIPPETS_PATTERNS,
             "load_snippet":        self.LOAD_SNIPPET_PATTERNS,
             "preview_snippet":     self.PREVIEW_SNIPPET_PATTERNS,
-            # Voice code editing
             "insert_function":     self.INSERT_FUNCTION_PATTERNS,
             "insert_class":        self.INSERT_CLASS_PATTERNS,
             "insert_line":         self.INSERT_LINE_PATTERNS,
@@ -1202,31 +1046,22 @@ class IntentParser:
             "add_parameter":       self.ADD_PARAMETER_PATTERNS,
             "insert_loop":         self.INSERT_LOOP_PATTERNS,
             "insert_if":           self.INSERT_IF_PATTERNS,
-            # insert_while / insert_variable must precede append_line so the
-            # general "insert <line>" fallback never swallows them.
             "insert_while":        self.INSERT_WHILE_PATTERNS,
             "insert_variable":     self.INSERT_VARIABLE_PATTERNS,
             "append_line":         self.APPEND_LINE_PATTERNS,
-            # Tutorial intents must come before choose_suggestion, whose
-            # ^(\w+)$ pattern would otherwise swallow the bare word "tutorial".
-            # tutorial_practice precedes start_tutorial so "practise print"
-            # routes to the specific module, not the generic opener.
             "tutorial_practice":   self.TUTORIAL_PRACTICE_PATTERNS,
             "restart_tutorial":    self.RESTART_TUTORIAL_PATTERNS,
             "start_tutorial":      self.START_TUTORIAL_PATTERNS,
             "skip_tutorial":       self.SKIP_TUTORIAL_PATTERNS,
             "tutorial_next":       self.TUTORIAL_NEXT_PATTERNS,
-            # repeat MUST come before choose_suggestion — ^(\w+)$ matches "repeat" too
             "repeat":              self.REPEAT_PATTERNS,
             "help":                self.HELP_PATTERNS,
             "more_help":           self.MORE_HELP_PATTERNS,
-            # Semantic autocomplete
             "suggest_next":        self.SUGGEST_NEXT_PATTERNS,
             "choose_suggestion":   self.CHOOSE_SUGGESTION_PATTERNS,
             "clear_editor":   self.CLEAR_EDITOR_PATTERNS,
             "set_color_mode": self.SET_COLOR_MODE_PATTERNS,
             "read_output":    self.READ_OUTPUT_PATTERNS,
-            # Structure and playback
             "show_structure": self.SHOW_STRUCTURE_PATTERNS,
             "read_outline":   self.READ_OUTLINE_PATTERNS,
             "sonify_block":   self.SONIFY_BLOCK_PATTERNS,
@@ -1235,9 +1070,7 @@ class IntentParser:
             "next_step":      self.NEXT_STEP_PATTERNS,
             "previous_step":  self.PREVIOUS_STEP_PATTERNS,
             "what_changed":   self.WHAT_CHANGED_PATTERNS,
-            # Story mode
             "story_mode":          self.STORY_MODE_PATTERNS,
-            # Breakpoint debugger
             "set_audio_breakpoint": self.SET_AUDIO_BREAKPOINT_PATTERNS,
             "list_audio_breakpoints": self.LIST_AUDIO_BREAKPOINT_PATTERNS,
             "why_audio_breakpoint": self.WHY_AUDIO_BREAKPOINT_PATTERNS,
@@ -1247,43 +1080,32 @@ class IntentParser:
             "debug_continue":      self.DEBUG_CONTINUE_PATTERNS,
             "debug_step_in":       self.DEBUG_STEP_IN_PATTERNS,
             "debug_step_out":      self.DEBUG_STEP_OUT_PATTERNS,
-            # Mentor mode
             "mentor_mode":         self.MENTOR_MODE_PATTERNS,
             "quiz_me":             self.QUIZ_ME_PATTERNS,
             "explain_concept":     self.EXPLAIN_CONCEPT_PATTERNS,
             "bug_challenge":       self.BUG_CHALLENGE_PATTERNS,
             "explain_diff":        self.EXPLAIN_DIFF_PATTERNS,
-            # Input mechanisms
             "set_inputs":          self.SET_INPUTS_PATTERNS,
             "clear_inputs":        self.CLEAR_INPUTS_PATTERNS,
             "list_inputs":         self.LIST_INPUTS_PATTERNS,
             "live_input_mode":     self.LIVE_INPUT_MODE_PATTERNS,
             "preflight_input_mode": self.PREFLIGHT_INPUT_MODE_PATTERNS,
-            # Voice macros
             "save_macro":          self.SAVE_MACRO_PATTERNS,
             "use_macro":           self.USE_MACRO_PATTERNS,
             "list_macros":         self.LIST_MACROS_PATTERNS,
             "share_macro":         self.SHARE_MACRO_PATTERNS,
             "use_shared_macro":    self.USE_SHARED_MACRO_PATTERNS,
-            # Output bookmarks
             "bookmark_output":     self.BOOKMARK_OUTPUT_PATTERNS,
             "read_bookmark":       self.READ_BOOKMARK_PATTERNS,
             "list_bookmarks":      self.LIST_BOOKMARKS_PATTERNS,
-            # Live execution position
             "where_am_i":          self.WHERE_AM_I_PATTERNS,
-            # Beginner explanation + diff narration
             "explain_simply":      self.EXPLAIN_SIMPLY_PATTERNS,
             "narrate_diff":        self.NARRATE_DIFF_PATTERNS,
-            # Conceptual Q&A — LAST so every specific command/intent wins first.
             "concept_question":    self.CONCEPT_QUESTION_PATTERNS,
         }
 
-    # -----------------------------------------------------------------------
-    # Number parsing
-    # -----------------------------------------------------------------------
 
     def _normalize_tutorial_module(self, raw: str) -> Optional[str]:
-        """Map a spoken topic ('for loops', 'variable') to a tutorial module id."""
         text = (raw or "").lower().strip()
         if text.startswith("print"):
             return "print"
@@ -1298,38 +1120,30 @@ class IntentParser:
         return None
 
     def _word_to_number(self, word: str) -> Optional[int]:
-        """Convert a spoken or written number into an integer.
-        Supports: digit strings, single words, two-word compounds (twenty five),
-        and three/four-word hundreds compounds (one hundred fifty, two hundred forty two)."""
         word = word.lower().strip()
 
-        # Digit string
         try:
             return int(word)
         except ValueError:
             pass
 
-        # Single word: "five", "twenty", "nineteen", or any Hindi number
         if word in WORD_TO_NUMBER:
             return WORD_TO_NUMBER[word]
 
         parts = word.split()
 
-        # Two-word compound: "twenty five", "forty two"
         if len(parts) == 2:
             tens_val = _TENS.get(parts[0])
             ones_val = _ONES.get(parts[1])
             if tens_val is not None and ones_val is not None and ones_val < 10:
                 return tens_val + ones_val
 
-        # Three-word compound: "one hundred fifty" / "two hundred ten"
         if len(parts) == 3 and parts[1] == "hundred":
             hundreds = _ONES.get(parts[0])
             rest = WORD_TO_NUMBER.get(parts[2])
             if hundreds is not None and 1 <= hundreds <= 9 and rest is not None and rest < 100:
                 return hundreds * 100 + rest
 
-        # Four-word compound: "two hundred forty two"
         if len(parts) == 4 and parts[1] == "hundred":
             hundreds = _ONES.get(parts[0])
             tens_val = _TENS.get(parts[2])
@@ -1337,7 +1151,6 @@ class IntentParser:
             if hundreds is not None and 1 <= hundreds <= 9 and tens_val is not None and ones_val is not None and ones_val < 10:
                 return hundreds * 100 + tens_val + ones_val
 
-        # "X hundred" exactly
         if len(parts) == 2 and parts[1] == "hundred":
             hundreds = _ONES.get(parts[0])
             if hundreds is not None and 1 <= hundreds <= 9:
@@ -1345,9 +1158,6 @@ class IntentParser:
 
         return None
 
-    # -----------------------------------------------------------------------
-    # Public interface
-    # -----------------------------------------------------------------------
 
     def parse(self, text: str) -> Dict:
         text = text.strip()
@@ -1363,8 +1173,6 @@ class IntentParser:
 
                 slots = self._extract_slots(intent, match, text)
 
-                # Slot-presence guards: if a required slot couldn't be parsed,
-                # skip this match and continue trying other patterns.
                 if intent in ("goto_line", "read_line") and "line_number" not in slots:
                     continue
                 if intent in ("read_function", "find_function", "sonify_function") \
@@ -1432,7 +1240,6 @@ class IntentParser:
         }
 
     def _extract_slots(self, intent: str, match: re.Match, text: str) -> Dict:
-        """Extract and validate slots from a regex match."""
         slots: Dict = {}
 
         if intent in ("goto_line", "read_line", "describe_line", "delete_line"):
@@ -1582,8 +1389,6 @@ class IntentParser:
                 slots["concept"] = match.group(1).strip()
 
         elif intent == "concept_question":
-            # Pass the learner's full question to the mentor; strip a leading
-            # filler word ("hey,", "ok") so the tutor prompt stays clean.
             cleaned = re.sub(r"^(?:hey|ok|okay|so|um|hmm)[,\s]+", "", text, flags=re.IGNORECASE).strip()
             slots["message"] = cleaned or text.strip()
 
@@ -1654,7 +1459,6 @@ class IntentParser:
         elif intent == "set_color_mode":
             if match.groups() and match.group(1):
                 raw = match.group(1).strip().lower().replace(' ', '')
-                # Map natural phrases to the actual mode names
                 aliases = {
                     'redblind': 'protanopia',
                     'greenblind': 'deuteranopia',
@@ -1670,8 +1474,6 @@ class IntentParser:
         elif intent == "set_inputs":
             if match.groups() and match.group(1):
                 raw = match.group(1).strip()
-                # Split on " and ", commas, semicolons. Keeps "Alice" and "17"
-                # together in 'Alice and 17'. Cap at 50 items, 1000 chars each.
                 parts = re.split(r'\s*(?:,|;|\band\b)\s*', raw, flags=re.IGNORECASE)
                 values = [p.strip() for p in parts if p.strip()]
                 if values:
@@ -1679,8 +1481,6 @@ class IntentParser:
 
         elif intent == "save_macro":
             if match.groups() and match.group(1):
-                # Sanitize: lowercase, strip, allow safe chars including
-                # Devanagari (U+0900–U+097F) so Hindi macro names work.
                 name = match.group(1).strip().lower()
                 name = re.sub(r'[^a-z0-9 _\u0900-\u097f-]', '', name)[:64].strip()
                 if name:
@@ -1717,7 +1517,6 @@ class IntentParser:
         return slots
 
     def get_confidence(self, text: str) -> float:
-        """Return confidence score (0.0–1.0) for the best-matching intent."""
         return self.parse(text).get("confidence", 0.0)
 
     def disambiguate(self, text: str, candidates: List[str]) -> Optional[str]:
@@ -1728,16 +1527,12 @@ class IntentParser:
         )
 
 
-# ---------------------------------------------------------------------------
-# Thread-safe lazy singleton
-# ---------------------------------------------------------------------------
 
 _parser: Optional[IntentParser] = None
 _parser_lock = threading.Lock()
 
 
 def get_parser() -> IntentParser:
-    """Get or create the global IntentParser instance (thread-safe)."""
     global _parser
     if _parser is None:
         with _parser_lock:
@@ -1747,5 +1542,4 @@ def get_parser() -> IntentParser:
 
 
 def parse_intent(text: str) -> Dict:
-    """Convenience function: parse a voice command string into intent + slots."""
     return get_parser().parse("" if text is None else str(text))

@@ -1,9 +1,3 @@
-"""Central server-side Groq API key failover.
-
-Loads ``GROQ_API_KEY`` followed by ``GROQ_API_KEY_2`` through
-``GROQ_API_KEY_15``. Keys are never exposed through status or exception text;
-callers receive only key indexes and friendly failure messages.
-"""
 
 from __future__ import annotations
 
@@ -45,7 +39,6 @@ class GroqKeyStatus:
 
 
 class GroqFailoverError(Exception):
-    """Sanitized user-facing failure for all-key Groq failures."""
 
     def __init__(self, user_message: str, *, failure_type: str = "", attempts: Optional[List[Dict[str, Any]]] = None):
         super().__init__(user_message)
@@ -67,7 +60,6 @@ def _is_usable_key(value: Any) -> bool:
 
 
 def load_groq_api_keys(env: Optional[Mapping[str, str]] = None) -> List[GroqKeyRecord]:
-    """Load configured Groq keys from environment in stable failover order."""
 
     source = env if env is not None else os.environ
     records: List[GroqKeyRecord] = []
@@ -103,7 +95,6 @@ def _status_code(exc: BaseException) -> Optional[int]:
 
 
 def classify_groq_failure(exc: BaseException) -> Tuple[str, bool]:
-    """Return ``(failure_type, retryable)`` for a Groq/API exception."""
 
     status = _status_code(exc)
     text = f"{type(exc).__name__}: {exc}".lower()
@@ -143,7 +134,6 @@ def _friendly_message(failure_type: str, *, all_on_cooldown: bool = False) -> st
 
 
 class GroqKeyManager:
-    """Stable first-healthy-key failover with bounded one-attempt-per-key retry."""
 
     def __init__(
         self,
@@ -242,7 +232,7 @@ class GroqKeyManager:
 
             try:
                 result = request_fn(record.key, record.index)
-            except Exception as exc:  # intentionally broad: API clients raise varied exception types
+            except Exception as exc:
                 failure_type, retryable = classify_groq_failure(exc)
                 last_failure_type = failure_type
                 attempts.append({"key_index": record.index, "failure_type": failure_type})

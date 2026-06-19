@@ -1,12 +1,3 @@
-"""
-Vague generate-code prompts ask ONE clarification instead of guessing.
-
-This is the deterministic, demo-safe fallback used when the Key 2 orchestrator is
-unavailable (AI disabled here). A request with no concrete "what should it do"
-content ("generate code", "make a marks thing") gets a short question and a
-pending follow-up; a good prompt (numbers, a named task, sample data, a project)
-always generates immediately and is never clarified.
-"""
 import pytest
 
 import app as app_module
@@ -31,9 +22,6 @@ def _is_clarify(d):
     return d.get("needs_clarification") is True and d.get("action") in ("clarify", "deterministic_message")
 
 
-# =====================================================================
-# Vague prompts -> clarification
-# =====================================================================
 
 class TestVagueAsksClarification:
 
@@ -58,9 +46,6 @@ class TestVagueAsksClarification:
         assert "project" in d["message"].lower()
 
 
-# =====================================================================
-# Clarification answer completes generation
-# =====================================================================
 
 class TestAnswerCompletesGeneration:
 
@@ -79,15 +64,11 @@ class TestAnswerCompletesGeneration:
         assert "marks" in d["prompt"].lower()
 
     def test_pivot_command_during_pending_is_not_swallowed(self, client):
-        # If the user answers with a real command instead, it must still work.
         assert _is_clarify(_vc(client, "generate code"))
         d = _vc(client, "run")
         assert d["action"] == "run"
 
 
-# =====================================================================
-# Good prompts still generate immediately (no over-clarifying)
-# =====================================================================
 
 class TestGoodPromptsGenerate:
 
@@ -108,16 +89,10 @@ class TestGoodPromptsGenerate:
         assert _vc(client, text)["action"] == "generate_code"
 
 
-# =====================================================================
-# Key 2 path is preserved (rough prompt routed to orchestrator when available)
-# =====================================================================
 
 class TestKey2StillUsedWhenAvailable:
 
     def test_rough_prompt_uses_orchestrator_when_key2_present(self, client, monkeypatch):
-        # With Key 2 available and returning a real plan, "make a marks thing" is
-        # rewritten and generated (not clarified) — the deterministic vague check
-        # only fires when the orchestrator declines.
         plan = (
             '{"confidence":0.9,"normalized_text":"marks",'
             '"needs_clarification":false,"clarification_question":"",'

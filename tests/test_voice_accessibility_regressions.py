@@ -137,7 +137,6 @@ def test_frontend_has_tts_sanitizer_and_key_2_binding():
     assert "function sanitizeSpeechText" in src
     assert "VoiceEngine.speak(spokenText" in src
     assert "e.key === '2'" in src
-    # Key 2 is now the recovery / panic key (stop listening + speech, keep editor).
     assert "Stopped listening and speech. Editor unchanged." in src
     assert "Key 2 repeats the current context" not in src
 

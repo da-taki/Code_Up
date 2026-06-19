@@ -1,19 +1,3 @@
-"""Regression tests for the browser-speech + command-routing accessibility hotfix.
-
-Covers the manual failures reported against the real /ide UI:
-
-  #2  code generation for "insert/put/add/make/generate a for loop ..."
-  #3  teach-code explanation (AST-grounded, Oxford "and", no hallucinated names)
-  #5  beginner lesson does not SPEAK the trainer note
-  #6  "prepare this for NVDA" == "make screen reader handoff notes" (clear wording)
-  #7  Key 2 recovery key + misheard-stop normalization (frontend wiring)
-  #8  stop listening / stop everything routing + normalization
-  #9  project report speaks a learner-safe summary from the beginning + "say more"
-
-The browser speech-chunking fix for #1 (and the clear-editor confirmation for #4)
-is proven separately by tests/test_voice_speech_frontend.py against the real
-voice-engine.js with a mocked speechSynthesis.
-"""
 import os
 
 import pytest
@@ -55,9 +39,6 @@ def _app_js():
         return fh.read()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# #2  Counting-loop generation is robust, not exact-command-only
-# ─────────────────────────────────────────────────────────────────────────────
 class TestCountingLoopGeneration:
     EXPLICIT = [
         "insert a for loop that prints the first 3 whole numbers",
@@ -86,7 +67,6 @@ class TestCountingLoopGeneration:
         d = _vc(client, text)
         assert d["action"] == "conversational_edit", text
         assert d["ai_action"]["code"] == "for i in range(3):\n    print(i)", text
-        # Never the old weak range(0)/pass stub.
         assert "range(0)" not in d["ai_action"]["code"]
         assert "pass" not in d["ai_action"]["code"]
 
@@ -122,22 +102,16 @@ class TestCountingLoopGeneration:
         assert "ai_action" not in d
 
     def test_loop_phrasings_do_not_shadow_lessons_or_reports(self, client):
-        # "make a beginner lesson on loops" must stay a lesson, not become a loop.
         assert _vc(client, "make a beginner lesson on loops", code=LOOP).get("lesson_builder") is True
         assert _vc(client, "make a project report", code=LOOP)["action"] == "project_report"
 
     def test_value_loop_is_not_hijacked(self, client):
-        # "prints hello 3 times" is a value loop handled elsewhere; the counting
-        # handler must defer (it must not turn into range(3)/print(i)).
         d = _vc(client, "insert a for loop that prints hello 3 times")
         code = (d.get("ai_action") or {}).get("code", "")
         if code:
-            assert "hello" in code  # printed the value, not the index
+            assert "hello" in code
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# #3  Teach-code explanation is AST-grounded and starts at the first sentence
-# ─────────────────────────────────────────────────────────────────────────────
 class TestTeachCode:
     def test_explanation_matches_actual_loop(self):
         speech = concept_tutor.build_concept_lesson(LOOP, {})["speech"]
@@ -148,7 +122,6 @@ class TestTeachCode:
         assert "Expected output is 0, 1, and 2 on separate lines." in speech
 
     def test_does_not_hallucinate_a_variable_name(self):
-        # The variable named in the lesson is the real one from the AST.
         speech = concept_tutor.build_concept_lesson("for count in range(2):\n    print(count)\n", {})["speech"]
         assert "count changes each time through the loop." in speech
         assert "range(2) gives 0 and 1." in speech
@@ -159,9 +132,6 @@ class TestTeachCode:
         assert speech.index("This program") < speech.index("Practice idea")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# #5  Beginner lesson must not SPEAK the trainer note
-# ─────────────────────────────────────────────────────────────────────────────
 class TestLessonTrainerNote:
     @pytest.mark.parametrize("verbosity", ["concise", "normal", "detailed", "beginner", "expert"])
     def test_trainer_note_never_spoken(self, verbosity):
@@ -178,9 +148,6 @@ class TestLessonTrainerNote:
         assert "Trainer note" not in speech
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# #6  NVDA / screen reader handoff wording is clear and not misleading
-# ─────────────────────────────────────────────────────────────────────────────
 class TestScreenReaderHandoff:
     OPENING = "Screen reader handoff notes ready."
 
@@ -204,13 +171,9 @@ class TestScreenReaderHandoff:
     def test_help_text_surfaces_the_clear_command_first(self):
         src = _app_js()
         assert "make screen reader handoff notes" in src
-        # The clearer command appears before the legacy "prepare this for NVDA".
         assert src.index("make screen reader handoff notes") < src.index("prepare this for NVDA")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# #7 / #8  Stop normalization + routing, Key 2 recovery (frontend wiring)
-# ─────────────────────────────────────────────────────────────────────────────
 class TestStopAndRecovery:
     @pytest.mark.parametrize("raw,expected", [
         ("top listening", "stop listening"),
@@ -222,7 +185,6 @@ class TestStopAndRecovery:
         assert normalize_command_transcript(raw)["normalized_text"] == expected
 
     def test_stop_listening_is_not_corrupted(self):
-        # The \btop boundary must never fire inside the word "stop".
         assert normalize_command_transcript("stop listening")["normalized_text"] == "stop listening"
         assert normalize_command_transcript("go to top")["normalized_text"] == "go to top"
 
@@ -247,7 +209,7 @@ class TestStopAndRecovery:
         block = src[start:start + 900]
         assert "stopListeningNow()" in block
         assert "SpeechManager.cancelAll()" in block
-        assert "setCode" not in block  # editor is never touched on recovery
+        assert "setCode" not in block
 
     def test_stop_everything_also_stops_listening(self):
         src = _app_js()
@@ -257,9 +219,6 @@ class TestStopAndRecovery:
         assert "SpeechManager.cancelAll()" in block
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# #9  Project report speaks a learner-safe summary from the beginning
-# ─────────────────────────────────────────────────────────────────────────────
 class TestProjectReportSpeech:
     def _mem(self):
         mem = session_memory.new_memory()
@@ -271,16 +230,13 @@ class TestProjectReportSpeech:
         rep = report_support.build_project_report({"is_project": False, "code": LOOP}, self._mem())
         speech = rep["speech"]
         assert speech.startswith("Project report ready.")
-        # Must not start on session history or next steps.
         assert not speech.lstrip().lower().startswith("session history")
         assert "Commands and session history" not in speech
-        # No raw markdown headings reach speech.
         assert "##" not in speech
 
     def test_summary_invites_say_more_and_defers_next_steps(self):
         rep = report_support.build_project_report({"is_project": False, "code": LOOP}, self._mem())
         assert rep["speech"].rstrip().endswith("Say more to hear next steps.")
-        # The continuation carries the next steps + session history, not the summary.
         assert "Next step:" in rep["speech_more"]
         assert "Session history" not in rep["speech"]
         assert "Session history" in rep["speech_more"]
@@ -295,7 +251,6 @@ class TestProjectReportSpeech:
         d = _vc(client, "make a project report", code=LOOP)
         assert d["action"] == "project_report"
         src = _app_js()
-        # requestProjectReport stores the continuation; say_more action consumes it.
         assert "setSayMoreContinuation(data.speech_more" in src
         assert "action === 'say_more'" in src
         assert "function sayMore(" in src

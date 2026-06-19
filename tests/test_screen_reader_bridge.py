@@ -1,9 +1,3 @@
-"""Screen Reader Bridge Mode (NAB value sprint, Feature 6).
-
-Explains how to take the current code into NVDA / JAWS / VS Code: what to listen
-for, key lines, keyboard steps, confusion points, and multi-file entry points.
-Positioning-critical: CodeUp is a bridge, never a replacement. No cloud AI.
-"""
 import pytest
 
 import app as app_module

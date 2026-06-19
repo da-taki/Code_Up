@@ -1,24 +1,3 @@
-"""Polish pass for NAB Delhi external testing: English-only UI, Chrome-first
-compatibility messaging, a short calm page-load welcome, and removal of the
-stray spoken "cycle…" phrase.
-
-These tests pin the *product-readiness* contract a first-time blind learner (or
-their trainer) meets before they touch any AI:
-
-  * English is the default and only visible language; Hindi is hidden from the
-    /ide gate, the command bar, the landing page, and TTS voice selection.
-    (Backend Hindi parsing is deliberately NOT removed — see
-    tests/test_voice_engine.py::TestVoiceCommands::test_voice_command_hindi.)
-  * Both the landing page and the /ide start gate say CodeUp works best on
-    Google Chrome and warn that Brave / privacy-heavy browsers may block the
-    mic or speech, with a typed-command fallback.
-  * The page-load welcome speech is one short line (Chrome + speak/type + start
-    tutorial) and never the old multi-paragraph feature dump.
-  * No spoken string contains "cycle" (the reported startup bug).
-
-AI is fully disabled (incl. GROQ_API_KEY_2, the conversation brain) so routing
-is deterministic — see the project memory note on Key 2.
-"""
 import os
 import re
 
@@ -28,17 +7,12 @@ import app as app_module
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
 
-# Advanced features that must stay behind "help" / "say more" / "more examples"
-# and never be spoken on page load or in the first onboarding reply.
 ADVANCED_DUMP = (
     "replay mistake", "summarize structure", "make project report",
     "project report", "code map", "step narration", "mistake replay",
 )
 
 
-# --------------------------------------------------------------------------- #
-# Fixtures / helpers
-# --------------------------------------------------------------------------- #
 @pytest.fixture
 def client(monkeypatch):
     monkeypatch.setenv("CODEUP_AI_ENABLED", "0")
@@ -83,18 +57,10 @@ def _index_html():
 
 
 def _spoken_literals(html):
-    """Every simple string literal passed as the first arg to speak('…')/speak(\"…\").
-
-    speak() is the only audible path (out()/srAnnounce() are silent), so this is
-    the set of strings the learner can actually hear from the page shell.
-    """
     return re.findall(r"speak\(\s*'((?:[^'\\]|\\.)*)'", html) + \
            re.findall(r'speak\(\s*"((?:[^"\\]|\\.)*)"', html)
 
 
-# --------------------------------------------------------------------------- #
-# 1. English-only / Hindi hidden
-# --------------------------------------------------------------------------- #
 class TestEnglishOnly:
     def test_ide_language_selector_is_english_only_and_disabled(self):
         html = _index_html()
@@ -112,21 +78,15 @@ class TestEnglishOnly:
         assert 'id="voiceLangSelector"' not in html
 
     def test_ide_page_has_no_devanagari_text(self):
-        # The /ide shell must not render any Hindi script for this release.
         assert not DEVANAGARI.search(_index_html())
 
     def test_default_response_language_is_english(self):
-        # getLanguage() falls back to 'en' and reads the English-only selector.
         app_js = _read("static/app.js")
-        # getLanguage() is a one-liner; the body contains a `|| {}` brace, so
-        # match the whole line rather than up to the first '}'.
         m = re.search(r"function getLanguage\(\)[^\n]*", app_js)
         assert m, "getLanguage() not found"
         assert "|| 'en'" in m.group(0)
 
     def test_tts_never_resolves_a_hindi_voice(self):
-        # _getVoiceForLang must return the resolved English voice (Hindi TTS is
-        # inconsistent across browsers), never _hindiVoice, while Hindi is hidden.
         voice_js = _read("static/voice-engine.js")
         start = voice_js.index("function _getVoiceForLang(")
         block = voice_js[start:start + 600]
@@ -141,9 +101,6 @@ class TestEnglishOnly:
         assert not DEVANAGARI.search(bundle)
 
 
-# --------------------------------------------------------------------------- #
-# 2. Chrome-first compatibility messaging (now in the non-blocking banner/hint)
-# --------------------------------------------------------------------------- #
 class TestChromeMessaging:
     def test_ide_banner_recommends_chrome_and_warns_about_brave(self):
         low = _index_html().lower()
@@ -161,18 +118,12 @@ class TestChromeMessaging:
         assert "works best on Google Chrome" in bundle
         assert "Brave" in bundle
         assert "privacy-heavy" in bundle
-        # Typed fallback stays first-class because voice support varies.
         assert "command box" in bundle
 
 
-# --------------------------------------------------------------------------- #
-# 3. Open directly to the IDE — no blocking gate, no automatic startup speech
-# --------------------------------------------------------------------------- #
 class TestDirectToIdeNoGate:
     def test_no_blocking_start_gate_in_dom(self):
         html = _index_html()
-        # The whole modal gate is gone (id, the "Start in English" button, and
-        # the returning-user shortcut).
         assert 'id="startGate"' not in html
         assert "Start in English" not in html
         assert 'id="startEnglish"' not in html
@@ -180,7 +131,6 @@ class TestDirectToIdeNoGate:
 
     def test_command_box_is_present_immediately(self):
         html = _index_html()
-        # The typed-command fallback is usable the moment the page loads.
         assert 'id="voiceText"' in html
         assert 'id="sendCommandBtn"' in html
 
@@ -188,7 +138,6 @@ class TestDirectToIdeNoGate:
         html = _index_html()
         assert 'id="cuStartBanner"' in html
         assert 'id="cuFirstUseHint"' in html
-        # The banner is a region, not a modal dialog/overlay.
         m = re.search(r'<div id="cuStartBanner"[^>]*>', html)
         assert m and 'role="region"' in m.group(0)
         assert 'aria-modal' not in m.group(0)
@@ -196,14 +145,11 @@ class TestDirectToIdeNoGate:
 
 class TestNoStartupSpeech:
     def test_no_auto_welcome_speech_on_load(self):
-        # The old multi-line / one-line welcome auto-speech is gone entirely.
         lits = _spoken_literals(_index_html())
         for lit in lits:
             assert "welcome to codeup" not in lit.lower(), lit
 
     def test_no_auto_firefox_speech_on_load(self):
-        # The Firefox notice no longer auto-speaks on load (app.js still surfaces
-        # it when the user actually tries to use voice).
         for lit in _spoken_literals(_index_html()):
             assert "not supported in firefox" not in lit.lower(), lit
 
@@ -214,16 +160,11 @@ class TestNoStartupSpeech:
                 assert adv not in low, (adv, lit)
 
     def test_saved_color_mode_restore_is_silent_on_load(self):
-        # loadAccessibilityPreferences() restores the colour mode with the silent
-        # flag so the IDE never auto-speaks "… activated." on page load.
         html = _index_html()
         assert re.search(r"applyColorVisionMode\(colorMode,\s*true\)", html)
         assert re.search(r"function applyColorVisionMode\(mode,\s*silent\)", html)
 
 
-# --------------------------------------------------------------------------- #
-# 4. The reported "cycle through…" spoken bug is gone
-# --------------------------------------------------------------------------- #
 class TestCycleBugRemoved:
     def test_old_accessibility_announcement_is_not_spoken(self):
         html = _index_html()
@@ -236,17 +177,11 @@ class TestCycleBugRemoved:
 
     def test_no_autofocus_traps_a_control_on_load(self):
         html = _index_html()
-        # With the gate gone there is no autofocus stealing focus into a button
-        # or dropdown on load — the page opens with the IDE ready, nothing grabs
-        # the screen reader into a control that announces navigation hints.
         assert "autofocus" not in html
         assert not re.search(r"<select[^>]*autofocus", html)
         assert not re.search(r"<select[^>]*autofocus", html)
 
 
-# --------------------------------------------------------------------------- #
-# 5. "what can I do here" stays useful but short (now names a loop + "say more")
-# --------------------------------------------------------------------------- #
 class TestWhatCanIDoHere:
     def test_message_constant_covers_the_beginner_contract(self):
         msg = app_module._ONBOARDING_MESSAGE.lower()
@@ -254,9 +189,7 @@ class TestWhatCanIDoHere:
                    "insert a loop", "run", "explain", "fix this code",
                    "say more"):
             assert kw in msg, kw
-        # Typed-command fallback is explicit (voice support varies by browser).
         assert "type the command" in msg
-        # Still short: the advanced dump stays behind help / say more.
         for adv in ADVANCED_DUMP:
             assert adv not in msg, adv
 
@@ -273,9 +206,6 @@ class TestWhatCanIDoHere:
         assert _vc(client, "more examples")["action"] == "more_help"
 
 
-# --------------------------------------------------------------------------- #
-# 6. Regression: the core NAB demo commands still route after the polish
-# --------------------------------------------------------------------------- #
 class TestDemoCommandsStillRoute:
     @pytest.mark.parametrize("text,expected", [
         ("what can I do here", "deterministic_message"),

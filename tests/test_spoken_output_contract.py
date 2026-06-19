@@ -1,15 +1,3 @@
-"""
-Final spoken-output accessibility contract.
-
-For a blind learner, every action that matters must put the CORE information into
-speech — a `speech` field, a `message` the frontend speaks, or an
-`ai_action.spoken_confirmation` — never just a generic confirmation ("Done.",
-"Here you go.", "Report generated.").
-
-Backend content is asserted directly; the run-output / error / read-back speech
-that lives in the browser is asserted structurally over static/app.js (the way
-this repo tests frontend wiring). Deterministic — AI is forced off.
-"""
 import os
 
 import pytest
@@ -22,7 +10,6 @@ INDENT_ERR = "IndentationError: expected an indented block on line 2"
 
 _STATIC = os.path.join(os.path.dirname(__file__), "..", "static")
 
-# Vague confirmations that are NOT acceptable as the whole spoken payload.
 GENERIC = {
     "done.", "done", "here you go.", "here you go", "output ready.", "output ready",
     "report generated.", "lesson created.", "you can say another command.",
@@ -52,7 +39,6 @@ def _vc(client, text, **kw):
 
 
 def _spoken(d):
-    """The text a blind learner actually hears for a response."""
     ai = d.get("ai_action") or {}
     return (d.get("speech") or d.get("message") or ai.get("spoken_confirmation") or "").strip()
 
@@ -65,13 +51,9 @@ def _assert_meaningful(spoken, keyword=None):
         assert keyword.lower() in spoken.lower(), (keyword, spoken)
 
 
-# =====================================================================
-# Direct-content learning/tool actions carry the core info in speech
-# =====================================================================
 
 class TestDirectContentActions:
 
-    # (command, kwargs, keyword that must appear in the spoken text)
     CASES = [
         ("what can I do here", {}, "python"),
         ("what is recursion", {}, "recursion"),
@@ -99,8 +81,6 @@ class TestDirectContentActions:
         ("set age to 16", "age"),
     ])
     def test_insert_confirmation_names_what_changed(self, client, text, keyword):
-        # A blind learner must hear WHAT was inserted, not just "I applied that
-        # edit." The frontend speaks ai_action.spoken_confirmation.
         d = _vc(client, text, code="")
         ai = d.get("ai_action") or {}
         spoken = (ai.get("spoken_confirmation") or "").strip()
@@ -108,14 +88,10 @@ class TestDirectContentActions:
         assert "added" in spoken.lower()
 
 
-# =====================================================================
-# Stateful actions: replay, trainer notes, recap (after real activity)
-# =====================================================================
 
 class TestStatefulActionsSpeak:
 
     def _seed(self, client):
-        # A broken run then a fixed run gives replay/trainer/recap real material.
         _vc(client, "run", code=BAD, error=INDENT_ERR)
         client.post("/run", json={"code": BAD})
         client.post("/run", json={"code": LOOP})
@@ -139,10 +115,6 @@ class TestStatefulActionsSpeak:
         assert "__" not in spoken
 
 
-# =====================================================================
-# Multi-step content endpoints (the "doing it" action is short; the real
-# spoken content comes from the follow-up endpoint the frontend speaks)
-# =====================================================================
 
 class TestMultiStepContentEndpoints:
 
@@ -150,7 +122,6 @@ class TestMultiStepContentEndpoints:
         d = client.post("/project-report", json={"code": LOOP}).get_json()
         spoken = (d.get("speech") or "").strip()
         _assert_meaningful(spoken, "for loop")
-        # explains behaviour + run, not just file type
         assert "range(3)" in spoken or "0, 1, and 2" in spoken
 
     def test_voice_report_routes_and_frontend_speaks_followup(self, client, app_js):
@@ -165,20 +136,15 @@ class TestMultiStepContentEndpoints:
 
     def test_voice_export_routes_and_frontend_speaks(self, client, app_js):
         assert _vc(client, "export this project")["action"] == "export_project"
-        # exportProject speaks the success speech from the export response.
         start = app_js.index("async function exportProject(")
         assert "speak(" in app_js[start:start + 1500]
 
 
-# =====================================================================
-# Run output / error / read-back speech wiring (structural over app.js)
-# =====================================================================
 
 class TestRunAndReadbackSpeechWiring:
 
     def test_run_output_is_spoken_via_formatter(self, app_js):
         assert "speak(formatRunOutputSpeech(data.output))" in app_js
-        # the fragile two-call pattern must be gone
         assert "speak('Program output:');" not in app_js
 
     def test_run_error_speaks_kind_and_line_not_just_error(self, app_js):
@@ -206,5 +172,4 @@ class TestRunAndReadbackSpeechWiring:
         assert "speak(" in app_js[idx:idx + 400]
 
     def test_empty_output_message_states_success_no_output(self, app_js):
-        # The exact spoken-contract phrasing for an empty run.
         assert "Program ran successfully with no printed output." in app_js

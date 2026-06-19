@@ -386,3 +386,166 @@ def find_symbol(code: str, name: str, mode: str = "used") -> Dict[str, Any]:
     return {"found": True, "name": name, "mode": label, "lines": lines, "line": first,
             "action": "navigate_code", "end_line": first,
             "message": f"{name} is {label} on {where}."}
+
+
+def _clamp_line(code_lines: List[str], line: Optional[int]) -> int:
+    n = line if isinstance(line, int) and line >= 1 else 1
+    return min(n, len(code_lines)) if code_lines else 1
+
+
+def _speak_expr(expr: str) -> str:
+    return re.sub(r"\s+", " ", str(expr or "").strip())[:80]
+
+
+def _range_times(iterable: str) -> Optional[str]:
+    match = re.fullmatch(r"range\s*\(\s*([^)]*)\)", iterable.strip())
+    if not match:
+        return None
+    args = [a.strip() for a in match.group(1).split(",") if a.strip()]
+    if not args or not all(re.fullmatch(r"-?\d+", a) for a in args):
+        return "a number of times"
+    nums = [int(a) for a in args]
+    if len(args) == 1:
+        count = max(0, nums[0])
+    elif len(args) == 2:
+        count = max(0, nums[1] - nums[0])
+    else:
+        return "a number of times"
+    return "one time" if count == 1 else f"{_count_word(count)} times"
+
+
+def explain_line(code: str, line: Optional[int]) -> str:
+    """One short, spoken, deterministic explanation of a single source line."""
+    code_lines = (code or "").splitlines()
+    if not code_lines:
+        return "There is no code to explain yet."
+    n = _clamp_line(code_lines, line)
+    raw = code_lines[n - 1]
+    s = raw.strip()
+    if not s:
+        return "This line is blank."
+    if s.startswith("#"):
+        return "This line is a comment, so Python ignores it when the code runs."
+
+    m = re.match(r"^for\s+(\w+)\s+in\s+(.+?):$", s)
+    if m:
+        times = _range_times(m.group(2))
+        if times:
+            return f"This starts a for loop. The indented lines after it run {times}."
+        return ("This starts a for loop. The indented lines after it run once for each item in "
+                f"{_speak_expr(m.group(2))}.")
+    if re.match(r"^while\s+.+:$", s):
+        return "This starts a while loop. The indented lines repeat while the condition is true."
+    if re.match(r"^if\s+.+:$", s):
+        return "This starts an if statement. The indented lines run only if the condition is true."
+    if re.match(r"^elif\s+.+:$", s):
+        return "This is an elif branch. Its lines run if the earlier conditions were false and this one is true."
+    if re.match(r"^else\s*:$", s):
+        return "This is an else branch. Its lines run when the earlier conditions were false."
+
+    m = re.match(r"^def\s+(\w+)\s*\(", s)
+    if m:
+        return f"This defines a function named {m.group(1)}."
+    m = re.match(r"^class\s+(\w+)", s)
+    if m:
+        return f"This defines a class named {m.group(1)}."
+    if re.match(r"^return\b", s):
+        return "This returns a value from the function."
+    if re.match(r"^(?:import|from)\s+\w", s):
+        return "This imports code from another module."
+
+    m = re.match(r"^print\s*\((.*)\)$", s)
+    if m:
+        arg = m.group(1).strip()
+        if not arg:
+            return "This prints a blank line."
+        if re.fullmatch(r"[A-Za-z_]\w*", arg):
+            return f"This prints the value of {arg}."
+        if re.fullmatch(r"""(['"]).*\1""", arg):
+            return "This prints a fixed message."
+        return "This prints a value to the screen."
+
+    m = re.match(r"^([A-Za-z_]\w*)\s*\+=\s*(.+)$", s)
+    if m:
+        return f"This updates {m.group(1)} using its old value plus {_speak_expr(m.group(2))}."
+    m = re.match(r"^([A-Za-z_]\w*)\s*=\s*(.+)$", s)
+    if m:
+        name, rhs = m.group(1), m.group(2).strip()
+        plus = re.match(rf"^{re.escape(name)}\s*\+\s*(.+)$", rhs)
+        if plus:
+            return f"This updates {name} using its old value plus {_speak_expr(plus.group(1))}."
+        if re.search(rf"\b{re.escape(name)}\b", rhs):
+            return f"This updates {name} using its old value."
+        return f"This sets {name} to {_speak_expr(rhs)}."
+
+    return f"This line runs: {_speak_expr(s)}."
+
+
+def _spoken_source_line(raw: str) -> str:
+    s = raw.strip()
+    if not s:
+        return "blank"
+    indent = "indented " if raw[:1] in (" ", "\t") else ""
+    body = re.sub(r"\s+", " ", s.replace("(", " ").replace(")", " ")).strip()
+    if body.endswith(":"):
+        body = body[:-1].strip() + ", colon"
+    return indent + body
+
+
+def read_around(code: str, line: Optional[int], radius: int = 2) -> str:
+    """Read a couple of lines above and below the cursor, with line numbers."""
+    code_lines = (code or "").splitlines()
+    if not code_lines:
+        return "There is no code to read yet."
+    n = _clamp_line(code_lines, line)
+    start = max(1, n - radius)
+    end = min(len(code_lines), n + radius)
+    parts = [f"Line {i}: {_spoken_source_line(code_lines[i - 1])}." for i in range(start, end + 1)]
+    return " ".join(parts)
+
+
+def assigned_variable_names(code: str) -> List[str]:
+    """AST names assigned anywhere in the code, including loop targets, in source order."""
+    tree = _safe_parse(code)
+    if tree is None:
+        return []
+    first_line: Dict[str, int] = {}
+
+    def note(name: str, lineno: int) -> None:
+        if name and name != "_":
+            ln = lineno or 0
+            if name not in first_line or ln < first_line[name]:
+                first_line[name] = ln
+
+    def add_target(target: ast.AST) -> None:
+        if isinstance(target, ast.Name):
+            note(target.id, getattr(target, "lineno", 0))
+        elif isinstance(target, (ast.Tuple, ast.List)):
+            for elt in target.elts:
+                add_target(elt)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                add_target(target)
+        elif isinstance(node, (ast.AnnAssign, ast.AugAssign)) and isinstance(node.target, ast.Name):
+            note(node.target.id, getattr(node, "lineno", 0))
+        elif isinstance(node, (ast.For, ast.AsyncFor)):
+            add_target(node.target)
+        elif isinstance(node, ast.comprehension):
+            add_target(node.target)
+
+    return [name for name, _ln in sorted(first_line.items(), key=lambda kv: (kv[1], kv[0]))]
+
+
+def list_variables_speech(code: str) -> str:
+    names = assigned_variable_names(code)
+    if not names:
+        return "I do not see any variables yet."
+    if len(names) == 1:
+        return f"You have 1 variable: {names[0]}."
+    if len(names) == 2:
+        listed = f"{names[0]} and {names[1]}"
+    else:
+        listed = ", ".join(names[:-1]) + ", and " + names[-1]
+    return f"You have {len(names)} variables: {listed}."

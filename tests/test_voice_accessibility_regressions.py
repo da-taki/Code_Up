@@ -140,3 +140,88 @@ def test_frontend_has_tts_sanitizer_and_key_2_binding():
     assert "Stopped listening and speech. Editor unchanged." in src
     assert "Key 2 repeats the current context" not in src
 
+
+# --- Deterministic accessibility commands (explain line, read errors, where am I,
+#     read around, list variables). All run with cloud AI disabled by the fixture. ---
+
+ACCESS_CODE = "total = 0\nfor i in range(3):\n    total = total + i\nprint(total)\n"
+
+
+@pytest.mark.parametrize("phrase", ["explain this line", "explain current line", "what does this line do"])
+def test_explain_current_line_speaks_deterministic_explanation(client, phrase):
+    data = _vc(client, phrase, code=ACCESS_CODE, cursor_line=2)
+    assert data["action"] == "deterministic_message"
+    assert _spoken(data) == "This starts a for loop. The indented lines after it run three times."
+
+
+def test_explain_current_line_follows_the_cursor(client):
+    data = _vc(client, "explain this line", code=ACCESS_CODE, cursor_line=4)
+    assert _spoken(data) == "This prints the value of total."
+
+
+@pytest.mark.parametrize("phrase,error,expected", [
+    ("read errors only", "NameError: name 'total' is not defined",
+     "Name total is used before it has a value."),
+    ("just tell me the error", "IndentationError: expected an indented block on line 3",
+     "Line 3 needs indentation because it belongs inside the block above it."),
+    ("summarize the error", '  File "<user>", line 2\n    x =\n       ^\nSyntaxError: invalid syntax',
+     "There is a syntax error near line 2."),
+])
+def test_read_errors_only_speaks_short_summary(client, phrase, error, expected):
+    data = _vc(client, phrase, code="x = 1\n", error=error)
+    assert data["action"] == "deterministic_message"
+    assert _spoken(data) == expected
+    assert "Traceback" not in _spoken(data)
+
+
+def test_read_errors_only_without_error_is_graceful(client):
+    data = _vc(client, "read errors only", code="x = 1\n")
+    assert data["action"] == "deterministic_message"
+    assert "no error" in _spoken(data).lower()
+
+
+@pytest.mark.parametrize("phrase", ["where am i", "what block am i in", "where is my cursor"])
+def test_where_am_i_aliases_reuse_existing_position_command(client, phrase):
+    data = _vc(client, phrase, code=ACCESS_CODE, cursor_line=3)
+    assert data["action"] == "where_am_i"
+
+
+@pytest.mark.parametrize("phrase", ["read around me", "read nearby lines", "give me context"])
+def test_read_around_cursor_reads_neighbours(client, phrase):
+    data = _vc(client, phrase, code=ACCESS_CODE, cursor_line=2)
+    assert data["action"] == "deterministic_message"
+    speech = _spoken(data)
+    # cursor on line 2 -> two lines above (only line 1 exists) and two below (lines 3, 4)
+    assert speech == ("Line 1: total = 0. Line 2: for i in range 3, colon. "
+                      "Line 3: indented total = total + i. Line 4: print total.")
+
+
+@pytest.mark.parametrize("phrase", ["list variables", "what variables do i have", "show my variables"])
+def test_list_variables_speaks_assigned_names(client, phrase):
+    data = _vc(client, phrase, code=ACCESS_CODE)
+    assert data["action"] == "deterministic_message"
+    assert _spoken(data) == "You have 2 variables: total and i."
+
+
+def test_list_variables_when_none(client):
+    data = _vc(client, "list variables", code="print('hi')\n")
+    assert _spoken(data) == "I do not see any variables yet."
+
+
+def test_accessibility_commands_do_not_call_cloud_ai(client, monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("deterministic accessibility command must not call cloud AI")
+    monkeypatch.setattr(app_module, "call_gemini", boom)
+    monkeypatch.setattr(app_module, "call_conversation_orchestrator_ai", boom)
+    for phrase in ("explain this line", "read errors only", "read around me", "list variables"):
+        data = _vc(client, phrase, code=ACCESS_CODE, cursor_line=2,
+                   error="NameError: name 'total' is not defined")
+        assert data["action"] == "deterministic_message"
+
+
+def test_beginner_error_summary_helper_is_deterministic():
+    assert app_module._beginner_error_summary("") == ""
+    assert app_module._beginner_error_summary("ZeroDivisionError: division by zero") == (
+        "Your code tries to divide by zero."
+    )
+

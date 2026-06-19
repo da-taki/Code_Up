@@ -114,3 +114,73 @@ class TestRegression:
     def test_existing_mistake_replay_unchanged(self, client):
         d = client.post("/voice-command", json={"text": "replay my mistake"}).get_json()
         assert d["action"] == "replay_mistake"
+
+
+class TestExplainLine:
+
+    def test_for_loop_counts_range(self):
+        text = structure_tools.explain_line("for i in range(3):\n    print(i)\n", 1)
+        assert text == "This starts a for loop. The indented lines after it run three times."
+
+    def test_if_statement(self):
+        assert structure_tools.explain_line("if score > 5:\n    pass\n", 1) == (
+            "This starts an if statement. The indented lines run only if the condition is true."
+        )
+
+    def test_print_variable(self):
+        assert structure_tools.explain_line("print(name)\n", 1) == "This prints the value of name."
+
+    def test_self_referential_update(self):
+        assert structure_tools.explain_line("total = total + i\n", 1) == (
+            "This updates total using its old value plus i."
+        )
+
+    def test_plain_assignment(self):
+        assert structure_tools.explain_line("total = 0\n", 1) == "This sets total to 0."
+
+    def test_blank_line(self):
+        assert structure_tools.explain_line("x = 1\n\ny = 2\n", 2) == "This line is blank."
+
+    def test_def_and_while(self):
+        assert structure_tools.explain_line("def greet(name):\n", 1) == "This defines a function named greet."
+        assert "while loop" in structure_tools.explain_line("while x < 5:\n", 1)
+
+    def test_no_code(self):
+        assert "no code" in structure_tools.explain_line("", 1).lower()
+
+
+class TestReadAround:
+
+    def test_reads_neighbours_with_line_numbers(self):
+        code = "x = 1\nfor i in range(3):\n    print(i)\n"
+        text = structure_tools.read_around(code, 2)
+        assert text == "Line 1: x = 1. Line 2: for i in range 3, colon. Line 3: indented print i."
+
+    def test_blank_neighbour_is_announced(self):
+        code = "print(1)\n\nprint(2)\n"
+        assert "Line 2: blank." in structure_tools.read_around(code, 2)
+
+    def test_clamps_to_file_and_does_not_dump_everything(self):
+        code = "\n".join(f"x{i} = {i}" for i in range(1, 21)) + "\n"
+        text = structure_tools.read_around(code, 10)
+        assert "Line 8:" in text and "Line 12:" in text
+        assert "Line 1:" not in text and "Line 20:" not in text
+
+
+class TestListVariables:
+
+    def test_collects_assignments_and_loop_vars_in_order(self):
+        code = "total = 0\nfor i in range(3):\n    total = total + i\nscore = 5\n"
+        assert structure_tools.assigned_variable_names(code) == ["total", "i", "score"]
+        assert structure_tools.list_variables_speech(code) == (
+            "You have 3 variables: total, i, and score."
+        )
+
+    def test_no_variables(self):
+        assert structure_tools.list_variables_speech("print('hi')\n") == "I do not see any variables yet."
+
+    def test_two_variables_reads_naturally(self):
+        assert structure_tools.list_variables_speech("a = 1\nb = 2\n") == "You have 2 variables: a and b."
+
+    def test_syntax_error_yields_no_variables(self):
+        assert structure_tools.assigned_variable_names("for i in(:\n") == []

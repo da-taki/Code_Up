@@ -1582,6 +1582,32 @@ def user_facing_error(error_text: str) -> str:
     return f"{prefix}{err_type}: {message}"
 
 
+def _beginner_error_summary(error_text: str) -> str:
+    """Short, beginner-friendly summary of the latest run error. No traceback, no AI."""
+    cleaned = sanitize_traceback(error_text or "").strip()
+    if not cleaned:
+        return ""
+    line_no, _file_label, err_type, message = _extract_error_summary(error_text)
+    haystack = f"{err_type}: {message}".lower()
+    where = f"line {line_no}" if line_no else "that line"
+    if "indentation" in haystack or "expected an indented block" in haystack or "unexpected indent" in haystack:
+        if line_no:
+            return f"Line {line_no} needs indentation because it belongs inside the block above it."
+        return "A line needs indentation because it belongs inside the block above it."
+    if err_type == "NameError":
+        m = re.search(r"name '([^']+)'", message)
+        return f"Name {m.group(1) if m else 'a value'} is used before it has a value."
+    if err_type == "SyntaxError" or "invalid syntax" in haystack or "expected ':'" in haystack:
+        return f"There is a syntax error near {where}."
+    if err_type == "ZeroDivisionError":
+        return "Your code tries to divide by zero."
+    if err_type == "TypeError":
+        short = message.strip().rstrip(".")
+        return f"There is a type error: {short}." if short else "There is a type error."
+    # Fall back to the existing one-line summary (still no raw traceback).
+    return user_facing_error(error_text)
+
+
 def _subprocess_exit_error(returncode: Optional[int]) -> str:
     if returncode in (None, 0):
         return ""
@@ -8380,6 +8406,24 @@ def voice():
             "success": True, "action": "deterministic_message",
             "message": _FIRST_STEP_MESSAGE, "speech": _FIRST_STEP_MESSAGE,
             "heard": text, "onboarding": True,
+        })
+
+    if confidence >= 0.75 and intent in (
+        "explain_current_line", "read_around_cursor", "list_variables", "read_error_summary"
+    ):
+        if intent == "explain_current_line":
+            speech = structure_tools.explain_line(current_code, cursor_line)
+        elif intent == "read_around_cursor":
+            speech = structure_tools.read_around(current_code, cursor_line)
+        elif intent == "list_variables":
+            speech = structure_tools.list_variables_speech(current_code)
+        else:
+            speech = (_beginner_error_summary(error_context or str(mem.get("last_run_error") or ""))
+                      or "There is no error to read yet. Run your code first.")
+        return _store_and_return({
+            "success": True, "action": "deterministic_message",
+            "speech": speech, "message": speech, "heard": text,
+            "intent": intent, "confidence": confidence,
         })
 
     sparse_response = _sparse_command_response(

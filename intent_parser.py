@@ -176,6 +176,31 @@ class IntentParser:
         r"what\s+is\s+on\s+line\s+(\w+)",
     ]
 
+    # Deterministic accessibility commands that act on the current cursor line.
+    EXPLAIN_CURRENT_LINE_PATTERNS = [
+        r"^explain\s+(?:this|the\s+current|current)\s+line$",
+        r"^what\s+does\s+(?:this|the\s+current|current)\s+line\s+do$",
+    ]
+
+    READ_AROUND_PATTERNS = [
+        r"^read\s+around\s+(?:me|here|the\s+cursor)$",
+        r"^read\s+nearby\s+lines$",
+        r"^read\s+the\s+lines\s+around\s+me$",
+        r"^give\s+me\s+context$",
+    ]
+
+    LIST_VARIABLES_PATTERNS = [
+        r"^list\s+(?:my\s+)?variables$",
+        r"^what\s+variables\s+do\s+i\s+have$",
+        r"^show\s+(?:my\s+)?variables$",
+    ]
+
+    READ_ERROR_SUMMARY_PATTERNS = [
+        r"^read\s+(?:the\s+)?errors?\s+only$",
+        r"^just\s+tell\s+me\s+the\s+error$",
+        r"^summari[sz]e\s+(?:the\s+)?error$",
+    ]
+
     CLEAR_EDITOR_PATTERNS = [
         r"^(?:clear|reset)\s+(?:editor|code|file|the\s+editor)$",
         r"^(?:editor|code)\s+clear\s+karo$",
@@ -910,6 +935,8 @@ class IntentParser:
 
     WHERE_AM_I_PATTERNS = [
         r"^where\s+am\s+i(?:\s+in\s+execution)?$",
+        r"^what\s+block\s+am\s+i\s+in$",
+        r"^where\s+is\s+my\s+cursor$",
         r"^(?:current\s+)?(?:execution\s+)?position$",
         r"^what\s+line\s+(?:is\s+running|am\s+i\s+on)$",
         r"^(?:मैं\s+)?कहां\s+हूं$",
@@ -973,6 +1000,10 @@ class IntentParser:
         return {
             "read_line":      self.READ_LINE_PATTERNS,
             "describe_line":  self.DESCRIBE_LINE_PATTERNS,
+            "explain_current_line": self.EXPLAIN_CURRENT_LINE_PATTERNS,
+            "read_around_cursor":   self.READ_AROUND_PATTERNS,
+            "list_variables":       self.LIST_VARIABLES_PATTERNS,
+            "read_error_summary":   self.READ_ERROR_SUMMARY_PATTERNS,
             "delete_line":    self.DELETE_LINE_PATTERNS,
             "goto_line":      self.GOTO_LINE_PATTERNS,
             "read_function":  self.READ_FUNCTION_PATTERNS,

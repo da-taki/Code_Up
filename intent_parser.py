@@ -135,10 +135,6 @@ class IntentParser:
         r"^improve\s+(?:my\s+)?code$",
     ]
 
-    SPEAK_OUTPUT_PATTERNS = [
-        r"^(?:speak|read|say)\s+(?:the\s+)?output$",
-    ]
-
     SHOW_STRUCTURE_PATTERNS = [
         r"^(?:show|display|list)\s+(?:code\s+)?structure$",
         r"^show\s+(?:code\s+)?map$",
@@ -1515,17 +1511,6 @@ class IntentParser:
                 slots["label"] = match.group(1).strip().lower()[:64]
 
         return slots
-
-    def get_confidence(self, text: str) -> float:
-        return self.parse(text).get("confidence", 0.0)
-
-    def disambiguate(self, text: str, candidates: List[str]) -> Optional[str]:
-       
-        raise NotImplementedError(
-            "disambiguate() is not yet implemented. "
-            "Use parse() directly and inspect the confidence score."
-        )
-
 
 
 _parser: Optional[IntentParser] = None

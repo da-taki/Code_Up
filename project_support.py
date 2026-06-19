@@ -29,7 +29,6 @@ THIRD_PARTY_MODULES = {
     "pandas": "pandas",
     "matplotlib": "matplotlib",
 }
-SUPPORTED_IMPORTS = SAFE_STDLIB_MODULES | set(THIRD_PARTY_MODULES)
 
 
 class ProjectPathError(ValueError):

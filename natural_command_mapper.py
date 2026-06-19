@@ -293,19 +293,6 @@ def validate_mapping(mapping: Any) -> Tuple[bool, str]:
     return True, ""
 
 
-def parse_mapping_response(raw: Any) -> Optional[Dict[str, Any]]:
-    parsed = _extract_json_object(raw)
-    ok, _reason = validate_mapping(parsed)
-    if not ok:
-        return None
-    return {
-        "intent": str(parsed.get("intent") or ""),
-        "confidence": float(parsed.get("confidence", 0.0) or 0.0),
-        "slots": parsed.get("slots") or {},
-        "reason": str(parsed.get("reason", "") or "")[:180],
-    }
-
-
 def confidence_band(confidence: float) -> str:
     try:
         value = float(confidence)

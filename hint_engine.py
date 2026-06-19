@@ -5,8 +5,6 @@ import ast
 import re
 from typing import Any, Dict, Optional
 
-LEVELS = ("small", "bigger", "answer")
-
 NO_PROBLEM = ("Tell me what you are trying to solve, or run your code first so I can see the issue.")
 
 

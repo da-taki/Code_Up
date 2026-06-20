@@ -1,6 +1,8 @@
 import ast
+import csv
 import io
 import keyword
+import re
 import tokenize
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
@@ -471,3 +473,322 @@ def name_conflicts(code: str) -> str:
         line, name = shadows[0]
         return f"Variable {name} shadows a Python builtin on line {line}."
     return "I do not see obvious name conflicts."
+
+
+_CONTAINING_BLOCKS = (
+    ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.For, ast.AsyncFor,
+    ast.While, ast.If, ast.With, ast.AsyncWith, ast.Try,
+)
+
+
+def current_block(code: str, cursor_line: Optional[int]) -> Dict[str, Any]:
+    tree, error = _parse(code)
+    if error:
+        return {"found": False, "line": None, "message": _syntax_message(error)}
+    if not isinstance(cursor_line, int) or cursor_line < 1:
+        return {"found": False, "line": None,
+                "message": "Place the cursor in a block, then ask again."}
+    assert tree is not None
+    candidates = []
+    for node in ast.walk(tree):
+        if isinstance(node, _CONTAINING_BLOCKS):
+            end = getattr(node, "end_lineno", node.lineno)
+            if node.lineno <= cursor_line <= end:
+                candidates.append((end - node.lineno, -node.lineno, node, end))
+    if not candidates:
+        return {"found": False, "line": None,
+                "message": f"Line {cursor_line} is not inside a Python block."}
+    _, _, node, end = min(candidates, key=lambda item: (item[0], item[1]))
+    if isinstance(node, (ast.For, ast.AsyncFor)):
+        kind = "for loop"
+    elif isinstance(node, ast.While):
+        kind = "while loop"
+    elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        kind = f"function {node.name}"
+    elif isinstance(node, ast.ClassDef):
+        kind = f"class {node.name}"
+    elif isinstance(node, ast.If):
+        kind = "conditional block"
+    elif isinstance(node, ast.Try):
+        kind = "try block"
+    else:
+        kind = "with block"
+    indented = max(0, end - node.lineno)
+    message = (f"Current block starts on line {node.lineno} and ends on line {end}. "
+               f"It is a {kind} with {indented} indented "
+               f"line{'s' if indented != 1 else ''}.")
+    return {"found": True, "line": node.lineno, "end_line": end,
+            "message": message, "kind": kind}
+
+
+def adjacent_symbol(code: str, cursor_line: Optional[int], kind: str, direction: str) -> Dict[str, Any]:
+    tree, error = _parse(code)
+    if error:
+        return {"found": False, "line": None, "message": _syntax_message(error)}
+    assert tree is not None
+    ref_line = cursor_line if isinstance(cursor_line, int) and cursor_line >= 1 else 1
+    node_type = (ast.FunctionDef, ast.AsyncFunctionDef) if kind == "function" else (ast.ClassDef,)
+    symbols = sorted((node.lineno, node.name) for node in ast.walk(tree) if isinstance(node, node_type))
+    if direction == "next":
+        matches = [(line, name) for line, name in symbols if line > ref_line]
+        target = matches[0] if matches else None
+    else:
+        matches = [(line, name) for line, name in symbols if line < ref_line]
+        target = matches[-1] if matches else None
+    if target is None:
+        return {"found": False, "line": None,
+                "message": f"There is no {direction} {kind}."}
+    line, name = target
+    message = f"{direction.title()} {kind} is {name} on line {line}."
+    return {"found": True, "line": line, "end_line": line,
+            "message": message, "name": name, "kind": kind}
+
+
+def check_brackets(code: str) -> str:
+    opening = {"(": ")", "[": "]", "{": "}"}
+    closing = {value: key for key, value in opening.items()}
+    names = {"(": "parenthesis", "[": "square bracket", "{": "brace"}
+    stack = []
+    try:
+        tokens = tokenize.generate_tokens(io.StringIO(code or "").readline)
+        for token in tokens:
+            if token.type != tokenize.OP:
+                continue
+            if token.string in opening:
+                stack.append((token.string, token.start[0]))
+            elif token.string in closing:
+                if not stack or stack[-1][0] != closing[token.string]:
+                    return f"There is an unmatched closing {names[closing[token.string]]} on line {token.start[0]}."
+                stack.pop()
+    except (IndentationError, tokenize.TokenError):
+        pass
+    if stack:
+        bracket, line = stack[-1]
+        return f"There is an unmatched opening {names[bracket]} on line {line}."
+    return "Brackets look balanced."
+
+
+def check_strings(code: str) -> str:
+    try:
+        for token in tokenize.generate_tokens(io.StringIO(code or "").readline):
+            if token.type == tokenize.ERRORTOKEN and token.string in {"'", '"'}:
+                return f"There may be an unclosed string near line {token.start[0]}."
+    except (IndentationError, tokenize.TokenError) as exc:
+        match = re.search(r"\((\d+),\s*\d+\)", str(exc))
+        line = int(match.group(1)) if match else 1
+        if "string" in str(exc).lower() or "eof" in str(exc).lower():
+            return f"There may be an unclosed string near line {line}."
+    return "Strings look closed."
+
+
+def check_long_lines(code: str, threshold: int = 100) -> str:
+    long_lines = [(index, len(line)) for index, line in enumerate((code or "").splitlines(), 1)
+                  if len(line) > threshold]
+    if not long_lines:
+        return "No long lines found."
+    line, length = long_lines[0]
+    more = f" There are {len(long_lines) - 1} more long lines." if len(long_lines) > 1 else ""
+    return f"Line {line} is long at {length} characters.{more}"
+
+
+def _line_edit(code: str, cursor_line: Optional[int], operation: str) -> Dict[str, Any]:
+    lines = (code or "").splitlines(keepends=True)
+    if not isinstance(cursor_line, int) or cursor_line < 1 or cursor_line > len(lines):
+        return {"success": False, "message": "Place the cursor on a code line, then ask again."}
+    index = cursor_line - 1
+    line = lines[index]
+    content = line.rstrip("\r\n")
+    ending = line[len(content):]
+    if operation == "comment":
+        if not content.strip():
+            return {"success": False, "message": f"Line {cursor_line} is blank, so I did not comment it."}
+        indent = content[:len(content) - len(content.lstrip())]
+        remainder = content[len(indent):]
+        if remainder.startswith("#"):
+            return {"success": False, "message": f"Line {cursor_line} is already commented."}
+        lines[index] = f"{indent}# {remainder}{ending}"
+        message = f"Commented line {cursor_line}."
+    elif operation == "uncomment":
+        match = re.match(r"^(\s*)# ?(.*)$", content)
+        if not match:
+            return {"success": False, "message": f"Line {cursor_line} is not commented."}
+        lines[index] = f"{match.group(1)}{match.group(2)}{ending}"
+        message = f"Uncommented line {cursor_line}."
+    else:
+        lines.insert(index + 1, line)
+        message = f"Duplicated line {cursor_line}."
+    return {"success": True, "code": "".join(lines), "message": message}
+
+
+def comment_line(code: str, cursor_line: Optional[int]) -> Dict[str, Any]:
+    return _line_edit(code, cursor_line, "comment")
+
+
+def uncomment_line(code: str, cursor_line: Optional[int]) -> Dict[str, Any]:
+    return _line_edit(code, cursor_line, "uncomment")
+
+
+def duplicate_line(code: str, cursor_line: Optional[int]) -> Dict[str, Any]:
+    return _line_edit(code, cursor_line, "duplicate")
+
+
+def delete_extra_blank_lines(code: str) -> Dict[str, Any]:
+    lines = (code or "").splitlines(keepends=True)
+    result = []
+    previous_blank = False
+    removed = 0
+    for line in lines:
+        blank = not line.strip()
+        if blank and previous_blank:
+            removed += 1
+            continue
+        result.append(line)
+        previous_blank = blank
+    if not removed:
+        return {"success": False, "message": "No extra blank lines found."}
+    return {"success": True, "code": "".join(result),
+            "message": f"Removed {removed} extra blank line{'s' if removed != 1 else ''}."}
+
+
+def code_stats(code: str) -> str:
+    tree, error = _parse(code)
+    if error:
+        return _syntax_message(error)
+    assert tree is not None
+    lines = (code or "").splitlines()
+    functions = sum(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) for node in ast.walk(tree))
+    classes = sum(isinstance(node, ast.ClassDef) for node in ast.walk(tree))
+    imports = sum(isinstance(node, (ast.Import, ast.ImportFrom)) for node in ast.walk(tree))
+    loops = sum(isinstance(node, (ast.For, ast.AsyncFor, ast.While)) for node in ast.walk(tree))
+    variables = {node.id for node in ast.walk(tree)
+                 if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)}
+    def count_label(count: int, singular: str, plural: str = "") -> str:
+        return f"{count} {singular if count == 1 else (plural or singular + 's')}"
+
+    return (f"This file has {len(lines)} lines, {sum(bool(line.strip()) for line in lines)} nonblank lines, "
+            f"{count_label(functions, 'function')}, {count_label(classes, 'class', 'classes')}, "
+            f"{count_label(imports, 'import')}, {count_label(loops, 'loop')}, "
+            f"and {count_label(len(variables), 'variable')}.")
+
+
+def nesting_depth(code: str) -> str:
+    tree, error = _parse(code)
+    if error:
+        return _syntax_message(error)
+    assert tree is not None
+    nesting_nodes = _CONTAINING_BLOCKS
+
+    def visit(node: ast.AST, depth: int = 0) -> int:
+        current = depth + 1 if isinstance(node, nesting_nodes) else depth
+        return max([current, *(visit(child, current) for child in ast.iter_child_nodes(node))])
+
+    return f"Maximum nesting depth is {visit(tree)}."
+
+
+def todo_comments(code: str) -> str:
+    notes = []
+    try:
+        for token in tokenize.generate_tokens(io.StringIO(code or "").readline):
+            if token.type != tokenize.COMMENT:
+                continue
+            match = re.search(r"\b(TODO|FIXME|NOTE)\b[:\s-]*(.*)", token.string, re.IGNORECASE)
+            if match:
+                text = f"{match.group(1).upper()} {match.group(2).strip()}".strip()
+                notes.append((token.start[0], text[:100]))
+    except (IndentationError, tokenize.TokenError):
+        pass
+    if not notes:
+        return "I found no TODO, FIXME, or NOTE comments."
+    details = " ".join(f"Line {line}: {text}." for line, text in notes[:4])
+    more = f" There are {len(notes) - 4} more notes." if len(notes) > 4 else ""
+    return f"I found {len(notes)} note{'s' if len(notes) != 1 else ''}. {details}{more}"
+
+
+def requirements_summary(project_state: Dict[str, Any]) -> str:
+    files = project_state.get("files") or {}
+    requirements = []
+    req_path = next((path for path in files if path.lower().endswith("requirements.txt")), None)
+    if req_path:
+        requirements = [re.split(r"[<>=!~]", line.strip(), maxsplit=1)[0]
+                        for line in str(files[req_path]).splitlines()
+                        if line.strip() and not line.lstrip().startswith("#")]
+        if requirements:
+            return f"requirements.txt lists {', '.join(requirements)}."
+        return "requirements.txt does not list any packages."
+    manifest_requirements = project_state.get("requirements") or []
+    if manifest_requirements:
+        return f"The project requires {', '.join(str(item) for item in manifest_requirements)}."
+    code = project_state.get("code") or ""
+    tree, _ = _parse(code)
+    inferred = []
+    if tree is not None:
+        for name, _ in _imports(tree):
+            top = name.split(".", 1)[0]
+            if top in THIRD_PARTY_MODULES and top not in inferred:
+                inferred.append(top)
+    if inferred:
+        return f"This file appears to require {', '.join(inferred)}."
+    return "No requirements file found."
+
+
+def missing_project_files(project_state: Dict[str, Any]) -> str:
+    if not project_state.get("is_project"):
+        return "No multi-file project is active."
+    files = project_state.get("files") or {}
+    local = {path[:-3].replace("/", ".").split(".", 1)[0]
+             for path in files if path.endswith(".py")}
+    declared = {str(item).split(".", 1)[0] for item in project_state.get("requirements") or []}
+    for path, content in files.items():
+        if not path.endswith(".py"):
+            continue
+        tree, _ = _parse(str(content or ""))
+        if tree is None:
+            continue
+        for name, _ in _imports(tree):
+            top = name.split(".", 1)[0]
+            if top not in SAFE_STDLIB_MODULES and top not in THIRD_PARTY_MODULES \
+                    and top not in declared and top not in local:
+                return f"{path} imports {top}.py, but {top}.py is missing."
+    return "No missing local project files found."
+
+
+def csv_preview(project_state: Dict[str, Any], requested_path: str = "") -> str:
+    if not project_state.get("is_project"):
+        return "No multi-file project is active."
+    files = project_state.get("files") or {}
+    csv_paths = sorted(path for path in files if path.lower().endswith(".csv"))
+    if requested_path:
+        requested = requested_path.lower().replace("\\", "/")
+        path = next((item for item in csv_paths
+                     if item.lower() == requested or item.lower().endswith("/" + requested)), None)
+    else:
+        path = csv_paths[0] if csv_paths else None
+    if not path:
+        return "I could not find a CSV file in this project."
+    stream = io.StringIO(str(files[path] or ""))
+    sample = "".join(stream.readline() for _ in range(4))
+    try:
+        rows = list(csv.reader(io.StringIO(sample)))
+    except csv.Error:
+        return f"I could not read a safe preview of {path}."
+    if not rows:
+        return f"{path} is empty."
+    columns = ", ".join(rows[0]) or "none"
+    message = f"{path} has columns {columns}."
+    if len(rows) > 1:
+        message += f" First row: {', '.join(rows[1])}."
+    return message
+
+
+def import_policy_summary(module: str = "", explain_blocked: bool = False) -> str:
+    module = str(module or "").strip().lower()
+    allowed = "math, random, statistics, datetime, json, csv, pathlib, typing, collections, and itertools"
+    if not module and explain_blocked:
+        return "Imports outside the safe list are blocked to protect the lesson sandbox and project files."
+    if not module:
+        return f"Allowed beginner imports include {allowed}."
+    if module in ALLOWED_MODULES:
+        return f"{module} is allowed in the lesson sandbox."
+    if module == "os":
+        return "os is blocked because it can access the operating system and files outside the lesson sandbox."
+    return f"{module} is blocked because it is not on the lesson sandbox's safe import list."

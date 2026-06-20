@@ -40,6 +40,7 @@ def new_memory() -> Dict[str, Any]:
         "last_run_error": "",
         "last_run_ok": None,
         "last_run_inputs": [],
+        "run_count": 0,
         "last_explain_target": "",
         "last_active_file": "",
         "last_opened_file": "",
@@ -183,12 +184,21 @@ def record_generation(mem: Dict[str, Any], prompt: str, code: Optional[str] = No
 
 def record_run(mem: Dict[str, Any], *, output: str = "", error: str = "",
                inputs: Optional[List[str]] = None, ran_ok: Optional[bool] = None) -> None:
+    mem["run_count"] = max(0, int(mem.get("run_count") or 0)) + 1
     mem["last_run_output"] = _clip(output, _MAX_OUTPUT)
     mem["last_run_error"] = _clip(error, _MAX_ERROR)
     if ran_ok is not None:
         mem["last_run_ok"] = bool(ran_ok)
     if inputs is not None:
         mem["last_run_inputs"] = [_clip(v, 200) for v in inputs][:_MAX_VALUES]
+
+
+def clear_run_state(mem: Dict[str, Any]) -> None:
+    mem["last_run_output"] = ""
+    mem["last_run_error"] = ""
+    mem["last_run_ok"] = None
+    mem["last_run_inputs"] = []
+    mem["run_count"] = 0
 
 
 def record_input_values(mem: Dict[str, Any], values: List[str],

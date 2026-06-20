@@ -773,8 +773,37 @@ class IntentParser:
 
     LIST_FUNCTIONS_PATTERNS = [
         r"^list\s+(?:my\s+)?functions$",
-        r"^what\s+functions\s+(?:do\s+i\s+have|are\s+(?:there|defined))$",
+        r"^what\s+functions\s+(?:do\s+i\s+have|are\s+(?:there|defined|here))$",
         r"^show\s+(?:my\s+)?functions$",
+    ]
+
+    PREFLIGHT_CHECK_PATTERNS = [
+        r"^check\s+my\s+code\s+before\s+running$", r"^preflight\s+check$", r"^will\s+this\s+run$",
+    ]
+    CHECK_INDENTATION_PATTERNS = [
+        r"^explain\s+indentation$", r"^check\s+indentation$", r"^where\s+is\s+indentation\s+wrong$",
+    ]
+    LIST_IMPORTS_PATTERNS = [
+        r"^list\s+imports$", r"^what\s+imports\s+am\s+i\s+using$", r"^check\s+imports$",
+    ]
+    SANDBOX_CHECK_PATTERNS = [
+        r"^find\s+risky\s+code$", r"^check\s+for\s+unsafe\s+code$", r"^sandbox\s+check$",
+    ]
+    REPEAT_LAST_OUTPUT_PATTERNS = [
+        r"^read\s+last\s+output$", r"^repeat\s+output$", r"^what\s+did\s+it\s+print$",
+    ]
+    REPEAT_LAST_ERROR_PATTERNS = [
+        r"^read\s+last\s+error$", r"^repeat\s+error$", r"^what\s+was\s+the\s+error$",
+    ]
+    PROJECT_HEALTH_PATTERNS = [
+        r"^check\s+project$", r"^project\s+health\s+check$", r"^is\s+my\s+project\s+ready$",
+    ]
+    PROJECT_FILE_TREE_PATTERNS = [
+        r"^read\s+file\s+tree$", r"^summarize\s+project\s+files$",
+        r"^what\s+files\s+are\s+in\s+this\s+project$",
+    ]
+    LOOP_SUMMARY_PATTERNS = [
+        r"^explain\s+loops$", r"^how\s+many\s+times\s+does\s+this\s+loop\s+run$", r"^check\s+loops$",
     ]
 
     WHERE_IN_PROGRAM_PATTERNS = [
@@ -1019,6 +1048,15 @@ class IntentParser:
             "after_loop":      self.AFTER_LOOP_PATTERNS,
             "nesting_depth":   self.NESTING_DEPTH_PATTERNS,
             "list_functions":  self.LIST_FUNCTIONS_PATTERNS,
+            "preflight_check": self.PREFLIGHT_CHECK_PATTERNS,
+            "check_indentation": self.CHECK_INDENTATION_PATTERNS,
+            "list_imports": self.LIST_IMPORTS_PATTERNS,
+            "sandbox_check": self.SANDBOX_CHECK_PATTERNS,
+            "repeat_last_output": self.REPEAT_LAST_OUTPUT_PATTERNS,
+            "repeat_last_error": self.REPEAT_LAST_ERROR_PATTERNS,
+            "project_health": self.PROJECT_HEALTH_PATTERNS,
+            "project_file_tree": self.PROJECT_FILE_TREE_PATTERNS,
+            "loop_summary": self.LOOP_SUMMARY_PATTERNS,
             "where_in_program": self.WHERE_IN_PROGRAM_PATTERNS,
             "watch_var":       self.WATCH_VAR_PATTERNS,
             "stop_watching":   self.STOP_WATCHING_PATTERNS,

@@ -59,6 +59,7 @@ import report_support
 import learning_recap
 import structure_tools
 import error_replay
+import deterministic_code_tools
 import hint_engine
 import landmarks
 import debug_teacher
@@ -8359,6 +8360,33 @@ def voice():
         if local_edit is not None:
             return _store_and_return(local_edit)
         return None
+
+    deterministic_code_intents = {
+        "preflight_check", "check_indentation", "list_functions", "list_imports",
+        "sandbox_check", "repeat_last_output", "repeat_last_error", "project_health",
+        "project_file_tree", "loop_summary",
+    }
+    if confidence >= 0.75 and intent in deterministic_code_intents:
+        project_state = _project_state_from_voice_body(body, current_code)
+        local_modules = local_module_names((project_state.get("files") or {}).keys())
+        handlers = {
+            "preflight_check": lambda: deterministic_code_tools.preflight_check(current_code, local_modules),
+            "check_indentation": lambda: deterministic_code_tools.indentation_check(current_code),
+            "list_functions": lambda: deterministic_code_tools.list_functions(current_code),
+            "list_imports": lambda: deterministic_code_tools.import_summary(current_code, local_modules),
+            "sandbox_check": lambda: deterministic_code_tools.sandbox_safety_check(current_code, local_modules),
+            "repeat_last_output": lambda: str(mem.get("last_run_output") or "").strip() or "There is no previous output yet.",
+            "repeat_last_error": lambda: (_beginner_error_summary(error_context or str(mem.get("last_run_error") or ""))
+                                            or "There is no previous error yet."),
+            "project_health": lambda: deterministic_code_tools.project_health_check(project_state),
+            "project_file_tree": lambda: deterministic_code_tools.project_file_tree(project_state),
+            "loop_summary": lambda: deterministic_code_tools.loop_summary(current_code),
+        }
+        speech = handlers[intent]()
+        return _store_and_return({
+            "success": True, "action": "deterministic_message", "intent": intent,
+            "message": speech, "speech": speech, "heard": text, "confidence": confidence,
+        })
 
     early_text = " ".join(text.lower().strip().rstrip(".!?").split())
     if early_text == "stop":

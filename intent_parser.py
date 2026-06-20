@@ -73,6 +73,33 @@ class IntentParser:
         r"(?:go\s+)?to\s+function\s+(\w+)",
     ]
 
+    GOTO_DEFINITION_PATTERNS = [
+        r"^go\s+to\s+definition\s+of\s+([A-Za-z_]\w*)$",
+        r"^go\s+to\s+(?:the\s+)?(?:function|class)\s+([A-Za-z_]\w*)$",
+        r"^find\s+definition\s+of\s+([A-Za-z_]\w*)$",
+        r"^where\s+is\s+([A-Za-z_]\w*)\s+defined$",
+    ]
+
+    FIND_REFERENCES_PATTERNS = [
+        r"^where\s+is\s+([A-Za-z_]\w*)\s+used$",
+        r"^find\s+uses\s+of\s+([A-Za-z_]\w*)$",
+        r"^find\s+references\s+to\s+([A-Za-z_]\w*)$",
+        r"^where\s+do\s+i\s+use\s+([A-Za-z_]\w*)$",
+    ]
+
+    FILE_OUTLINE_PATTERNS = [
+        r"^outline\s+this\s+file$", r"^summarize\s+file\s+structure$", r"^read\s+file\s+outline$",
+    ]
+
+    SAFE_RENAME_PATTERNS = [
+        r"^rename\s+(?:variable\s+)?([A-Za-z_]\w*)\s+to\s+([A-Za-z_]\w*)$",
+        r"^change\s+name\s+from\s+([A-Za-z_]\w*)\s+to\s+([A-Za-z_]\w*)$",
+    ]
+
+    NAME_CONFLICT_PATTERNS = [
+        r"^check\s+names$", r"^find\s+name\s+problems$", r"^check\s+for\s+shadowing$",
+    ]
+
     RUN_PATTERNS = [
         r"^run\s*(?:code|program|it|this|that)?$",
         r"^execute\s*(?:code|program|it|this|that)?$",
@@ -591,6 +618,15 @@ class IntentParser:
         r"^(?:breakpoints?\s+)?(?:clear|remove|delete)\s+(?:all\s+)?breakpoints?$",
     ]
 
+    REMOVE_BREAKPOINT_PATTERNS = [
+        r"^remove\s+(?:the\s+)?breakpoint\s+(?:on\s+)?line\s+([\w\s]+)$",
+    ]
+    DISABLE_BREAKPOINTS_PATTERNS = [r"^disable\s+breakpoints$"]
+    ENABLE_BREAKPOINTS_PATTERNS = [r"^enable\s+breakpoints$"]
+    REPEAT_STEP_PATTERNS = [r"^repeat\s+step$"]
+    FIRST_STEP_PATTERNS = [r"^go\s+to\s+(?:the\s+)?first\s+step$"]
+    LAST_STEP_PATTERNS = [r"^go\s+to\s+(?:the\s+)?last\s+step$"]
+
     WATCH_VARIABLE_PATTERNS = [
         r"watch\s+(?:variable\s+)?(\w+)",
         r"monitor\s+(?:variable\s+)?(\w+)",
@@ -1036,6 +1072,11 @@ class IntentParser:
             "delete_line":    self.DELETE_LINE_PATTERNS,
             "goto_line":      self.GOTO_LINE_PATTERNS,
             "read_function":  self.READ_FUNCTION_PATTERNS,
+            "goto_definition": self.GOTO_DEFINITION_PATTERNS,
+            "find_references": self.FIND_REFERENCES_PATTERNS,
+            "file_outline": self.FILE_OUTLINE_PATTERNS,
+            "safe_rename": self.SAFE_RENAME_PATTERNS,
+            "name_conflicts": self.NAME_CONFLICT_PATTERNS,
             "find_function":  self.FIND_FUNCTION_PATTERNS,
             "sonify_function": self.SONIFY_FUNCTION_PATTERNS,
             "find_class":     self.FIND_CLASS_PATTERNS,
@@ -1134,6 +1175,9 @@ class IntentParser:
             "locate_error":   self.ERROR_PATTERNS,
             "next_step":      self.NEXT_STEP_PATTERNS,
             "previous_step":  self.PREVIOUS_STEP_PATTERNS,
+            "repeat_step": self.REPEAT_STEP_PATTERNS,
+            "first_step": self.FIRST_STEP_PATTERNS,
+            "last_step": self.LAST_STEP_PATTERNS,
             "what_changed":   self.WHAT_CHANGED_PATTERNS,
             "story_mode":          self.STORY_MODE_PATTERNS,
             "set_audio_breakpoint": self.SET_AUDIO_BREAKPOINT_PATTERNS,
@@ -1141,6 +1185,9 @@ class IntentParser:
             "why_audio_breakpoint": self.WHY_AUDIO_BREAKPOINT_PATTERNS,
             "set_breakpoint":      self.SET_BREAKPOINT_PATTERNS,
             "clear_breakpoints":   self.CLEAR_BREAKPOINT_PATTERNS,
+            "remove_breakpoint": self.REMOVE_BREAKPOINT_PATTERNS,
+            "disable_breakpoints": self.DISABLE_BREAKPOINTS_PATTERNS,
+            "enable_breakpoints": self.ENABLE_BREAKPOINTS_PATTERNS,
             "watch_variable":      self.WATCH_VARIABLE_PATTERNS,
             "debug_continue":      self.DEBUG_CONTINUE_PATTERNS,
             "debug_step_in":       self.DEBUG_STEP_IN_PATTERNS,
@@ -1271,7 +1318,7 @@ class IntentParser:
                     continue
                 if intent == "insert_variable" and ("name" not in slots or "value" not in slots):
                     continue
-                if intent == "set_breakpoint" and "line_number" not in slots:
+                if intent in ("set_breakpoint", "remove_breakpoint") and "line_number" not in slots:
                     continue
                 if intent == "set_audio_breakpoint" and "condition" not in slots:
                     continue
@@ -1317,6 +1364,15 @@ class IntentParser:
         elif intent in ("read_function", "find_function", "sonify_function"):
             if match.groups():
                 slots["function_name"] = match.group(1).strip()
+
+        elif intent in ("goto_definition", "find_references"):
+            if match.groups() and match.group(1):
+                slots["name"] = match.group(1).strip()
+
+        elif intent == "safe_rename":
+            if len(match.groups()) >= 2 and match.group(1) and match.group(2):
+                slots["old_name"] = match.group(1).strip()
+                slots["new_name"] = match.group(2).strip()
 
         elif intent in ("find_class", "sonify_class"):
             if match.groups():
@@ -1419,6 +1475,13 @@ class IntentParser:
                 slots["choice"] = num if num is not None else raw
 
         elif intent == "set_breakpoint":
+            if match.groups() and match.group(1):
+                raw = match.group(1).strip()
+                num = self._word_to_number(raw)
+                if num is not None:
+                    slots["line_number"] = num
+
+        elif intent == "remove_breakpoint":
             if match.groups() and match.group(1):
                 raw = match.group(1).strip()
                 num = self._word_to_number(raw)

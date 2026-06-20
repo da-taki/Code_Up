@@ -6551,17 +6551,32 @@ def _trace_playback(direction):
     with _session_traces_lock:
         storage = _session_traces.get(session_id)
         if storage is None:
-            return "No execution trace available."
+            return "No execution trace is available yet. Run with step narration first."
         storage['last_accessed'] = time.time()
         trace = list(storage.get('last_trace', []) or [])
         if not trace:
-            return "No execution trace available."
+            return "No execution trace is available yet. Run with step narration first."
 
         idx = storage.get('current_trace_index', -1)
         if direction == 'next':
+            if idx >= len(trace) - 1:
+                return "You are already at the last step."
             idx = min(len(trace) - 1, idx + 1)
         elif direction == 'prev':
+            if idx == 0:
+                return "You are already at the first step."
             idx = max(0, idx - 1)
+        elif direction == 'repeat':
+            if idx < 0:
+                return "No current trace step is selected. Say next step to begin."
+        elif direction == 'first':
+            if idx == 0:
+                return "You are already at the first step."
+            idx = 0
+        elif direction == 'last':
+            if idx == len(trace) - 1:
+                return "You are already at the last step."
+            idx = len(trace) - 1
         elif direction == 'current_change':
             if idx < 0:
                 return "No current trace step selected. Say 'next step' to begin."
@@ -8388,6 +8403,66 @@ def voice():
             "message": speech, "speech": speech, "heard": text, "confidence": confidence,
         })
 
+    if confidence >= 0.75 and intent in {"goto_definition", "find_references"}:
+        name = slots.get("name", "")
+        result = (deterministic_code_tools.find_definition(current_code, name)
+                  if intent == "goto_definition"
+                  else deterministic_code_tools.find_references(current_code, name))
+        message = result.get("message") or "I could not find that name."
+        return _store_and_return({
+            "success": True, "action": "navigate_code", "intent": intent,
+            "line": result.get("line"), "end_line": result.get("end_line"),
+            "message": message, "speech": message, "heard": text,
+            "confidence": confidence,
+        })
+
+    if confidence >= 0.75 and intent in {"file_outline", "name_conflicts"}:
+        speech = (deterministic_code_tools.file_outline(current_code)
+                  if intent == "file_outline"
+                  else deterministic_code_tools.name_conflicts(current_code))
+        return _store_and_return({
+            "success": True, "action": "deterministic_message", "intent": intent,
+            "message": speech, "speech": speech, "heard": text, "confidence": confidence,
+        })
+
+    if confidence >= 0.75 and intent == "safe_rename":
+        result = deterministic_code_tools.rename_variable(
+            current_code, slots.get("old_name", ""), slots.get("new_name", ""),
+        )
+        if not result.get("success"):
+            speech = result.get("message") or "I could not safely rename that variable."
+            return _store_and_return({
+                "success": True, "action": "deterministic_message", "intent": intent,
+                "message": speech, "speech": speech, "heard": text, "confidence": confidence,
+            })
+        response = _natural_code_edit_response(
+            text=text,
+            current_code=current_code,
+            updated_code=result["code"],
+            summary=result["message"],
+            confidence=confidence,
+            mem=mem,
+            source="deterministic_safe_rename",
+            mapped_intent="safe_rename",
+        )
+        response["intent"] = intent
+        return _store_and_return(response)
+
+    if confidence >= 0.75 and intent in {"remove_breakpoint", "disable_breakpoints", "enable_breakpoints"}:
+        response = {"success": True, "action": intent, "intent": intent,
+                    "heard": text, "confidence": confidence}
+        if intent == "remove_breakpoint":
+            response["line_number"] = slots.get("line_number", 1)
+        return _store_and_return(response)
+
+    if confidence >= 0.75 and intent in {"repeat_step", "first_step", "last_step"}:
+        direction = {"repeat_step": "repeat", "first_step": "first", "last_step": "last"}[intent]
+        speech = _trace_playback(direction)
+        return _store_and_return({
+            "success": True, "action": "deterministic_message", "intent": intent,
+            "message": speech, "speech": speech, "heard": text, "confidence": confidence,
+        })
+
     early_text = " ".join(text.lower().strip().rstrip(".!?").split())
     if early_text == "stop":
         return _store_and_return({"success": True, "action": "stop_everything", "heard": text, "confidence": 0.96})
@@ -8901,7 +8976,8 @@ def voice():
         if intent == "set_audio_breakpoint":
             return _store_and_return({"success": True, "action": "set_audio_breakpoint", "condition": slots.get("condition", ""), "confidence": confidence})
         if intent == "list_audio_breakpoints":
-            return _store_and_return({"success": True, "action": "list_audio_breakpoints", "confidence": confidence})
+            scope = "line" if re.fullmatch(r"list\s+breakpoints?", text, re.IGNORECASE) else "audio"
+            return _store_and_return({"success": True, "action": "list_audio_breakpoints", "breakpoint_scope": scope, "confidence": confidence})
         if intent == "why_audio_breakpoint":
             return _store_and_return({"success": True, "action": "why_audio_breakpoint", "confidence": confidence})
         if intent == "set_breakpoint":

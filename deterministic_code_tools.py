@@ -1,4 +1,7 @@
 import ast
+import io
+import keyword
+import tokenize
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from project_support import SAFE_STDLIB_MODULES, THIRD_PARTY_MODULES
@@ -239,3 +242,232 @@ def project_health_check(project_state: Dict[str, Any]) -> str:
     if third_party and "requirements.txt" not in files:
         return "Project issue: third-party imports were found, but requirements.txt is missing."
     return "The project looks ready. The entry file and Python files are present, and local imports resolve."
+
+
+def find_definition(code: str, name: str) -> Dict[str, Any]:
+    name = str(name or "").strip()
+    tree, error = _parse(code)
+    if error:
+        return {"found": False, "line": None, "message": _syntax_message(error)}
+    if not name:
+        return {"found": False, "line": None, "message": "Tell me which name to find."}
+    assert tree is not None
+    candidates = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+            candidates.append((node.lineno, "function"))
+        elif isinstance(node, ast.ClassDef) and node.name == name:
+            candidates.append((node.lineno, "class"))
+        elif isinstance(node, ast.Name) and node.id == name and isinstance(node.ctx, ast.Store):
+            candidates.append((node.lineno, "variable"))
+        elif isinstance(node, ast.arg) and node.arg == name:
+            candidates.append((node.lineno, "parameter"))
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                bound = alias.asname or alias.name.split(".", 1)[0]
+                if bound == name:
+                    candidates.append((node.lineno, "import"))
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if (alias.asname or alias.name) == name:
+                    candidates.append((node.lineno, "import"))
+    if not candidates:
+        return {"found": False, "line": None,
+                "message": f"I could not find a definition for {name}."}
+    line, kind = min(candidates, key=lambda item: item[0])
+    if kind == "function":
+        message = f"Function {name} starts on line {line}."
+    elif kind == "class":
+        message = f"Class {name} starts on line {line}."
+    elif kind == "import":
+        message = f"{name} is imported on line {line}."
+    elif kind == "parameter":
+        message = f"Parameter {name} is defined on line {line}."
+    else:
+        message = f"{name} is first assigned on line {line}."
+    return {"found": True, "line": line, "end_line": line, "message": message,
+            "action": "navigate_code", "name": name, "kind": kind}
+
+
+def find_references(code: str, name: str) -> Dict[str, Any]:
+    name = str(name or "").strip()
+    tree, error = _parse(code)
+    if error:
+        return {"found": False, "line": None, "message": _syntax_message(error)}
+    if not name:
+        return {"found": False, "line": None, "message": "Tell me which name to search for."}
+    assert tree is not None
+    assigned = set()
+    used = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id == name:
+            (assigned if isinstance(node.ctx, ast.Store) else used).add(node.lineno)
+        elif isinstance(node, ast.arg) and node.arg == name:
+            assigned.add(node.lineno)
+        elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name) and node.target.id == name:
+            used.add(node.lineno)
+    assigned_lines = sorted(assigned)
+    used_lines = sorted(used)
+    if not assigned_lines and not used_lines:
+        return {"found": False, "line": None, "assigned_lines": [], "used_lines": [],
+                "message": f"I could not find any references to {name}."}
+
+    def line_words(lines: List[int]) -> str:
+        label = "line" if len(lines) == 1 else "lines"
+        return f"{label} {', '.join(str(line) for line in lines[:6])}"
+
+    if assigned_lines and used_lines:
+        message = (f"{name} is assigned on {line_words(assigned_lines)} and used on "
+                   f"{line_words(used_lines)}.")
+    elif assigned_lines:
+        message = f"{name} is assigned on {line_words(assigned_lines)}."
+    else:
+        message = f"{name} is used on {line_words(used_lines)}."
+    first = min(assigned_lines + used_lines)
+    return {"found": True, "line": first, "end_line": first,
+            "assigned_lines": assigned_lines, "used_lines": used_lines,
+            "message": message, "action": "navigate_code", "name": name}
+
+
+def file_outline(code: str) -> str:
+    tree, error = _parse(code)
+    if error:
+        return _syntax_message(error)
+    assert tree is not None
+    imports = [node for node in tree.body if isinstance(node, (ast.Import, ast.ImportFrom))]
+    variables = set()
+    functions = []
+    classes = []
+    loops = []
+    for node in tree.body:
+        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            variables.update(target.id for target in targets if isinstance(target, ast.Name))
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            functions.append((node.name, node.lineno))
+        elif isinstance(node, ast.ClassDef):
+            classes.append((node.name, node.lineno))
+        elif isinstance(node, (ast.For, ast.AsyncFor, ast.While)):
+            loops.append(node.lineno)
+    parts = [
+        f"{len(imports)} import{'s' if len(imports) != 1 else ''}",
+        f"{len(variables)} top-level variable{'s' if len(variables) != 1 else ''}",
+        f"{len(functions)} function{'s' if len(functions) != 1 else ''}",
+        f"{len(classes)} class{'es' if len(classes) != 1 else ''}",
+    ]
+    message = "This file has " + ", ".join(parts[:-1]) + f", and {parts[-1]}."
+    symbols = [("Function", name, line) for name, line in functions]
+    symbols.extend(("Class", name, line) for name, line in classes)
+    symbols.sort(key=lambda item: item[2])
+    details = [f"{kind} {name} starts on line {line}." for kind, name, line in symbols[:3]]
+    if len(symbols) > 3:
+        details.append(f"There are {len(symbols) - 3} more definitions.")
+    elif loops:
+        details.append(f"A top-level loop starts on line {loops[0]}.")
+    return " ".join([message, *details])
+
+
+def _imported_bindings(tree: ast.AST) -> Set[str]:
+    names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names.update(alias.asname or alias.name.split(".", 1)[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            names.update(alias.asname or alias.name for alias in node.names)
+    return names
+
+
+def _local_bindings(tree: ast.AST) -> Set[str]:
+    names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            names.add(node.id)
+        elif isinstance(node, ast.arg):
+            names.add(node.arg)
+    return names
+
+
+def rename_variable(code: str, old_name: str, new_name: str) -> Dict[str, Any]:
+    old_name = str(old_name or "").strip()
+    new_name = str(new_name or "").strip()
+    if not old_name.isidentifier() or keyword.iskeyword(old_name):
+        return {"success": False, "message": f"{old_name or 'That name'} is not a valid Python identifier."}
+    if not new_name.isidentifier() or keyword.iskeyword(new_name):
+        return {"success": False, "message": f"{new_name or 'That name'} is not a valid Python identifier."}
+    if old_name == new_name:
+        return {"success": False, "message": f"{old_name} already has that name."}
+    if new_name in _SHADOWED_BUILTINS:
+        return {"success": False,
+                "message": f"I cannot rename {old_name} to {new_name} because it would shadow a Python builtin."}
+    tree, error = _parse(code)
+    if error:
+        return {"success": False, "message": _syntax_message(error)}
+    assert tree is not None
+    local_bindings = _local_bindings(tree)
+    imported = _imported_bindings(tree)
+    if old_name not in local_bindings:
+        return {"success": False, "message": f"I could not find a local variable named {old_name}."}
+    if old_name in imported:
+        return {"success": False,
+                "message": f"I cannot safely rename {old_name} because it is also an imported name."}
+    defined_symbols = {
+        node.name for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    }
+    if new_name in local_bindings or new_name in imported or new_name in defined_symbols:
+        return {"success": False,
+                "message": f"I cannot rename {old_name} to {new_name} because {new_name} already exists."}
+    positions = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id == old_name:
+            positions.add((node.lineno, node.col_offset))
+        elif isinstance(node, ast.arg) and node.arg == old_name:
+            positions.add((node.lineno, node.col_offset))
+    tokens = []
+    changed = 0
+    try:
+        for token in tokenize.generate_tokens(io.StringIO(code).readline):
+            if token.type == tokenize.NAME and token.string == old_name and token.start in positions:
+                token = tokenize.TokenInfo(token.type, new_name, token.start, token.end, token.line)
+                changed += 1
+            tokens.append(token)
+    except (IndentationError, tokenize.TokenError) as exc:
+        return {"success": False, "message": f"I could not safely tokenize this code: {exc}."}
+    if not changed:
+        return {"success": False, "message": f"I could not find a local variable named {old_name}."}
+    updated_code = tokenize.untokenize(tokens)
+    return {"success": True, "code": updated_code, "count": changed,
+            "message": f"Renamed {old_name} to {new_name} in {changed} places."}
+
+
+_SHADOWED_BUILTINS = frozenset({"list", "dict", "str", "int", "sum", "input", "print"})
+
+
+def name_conflicts(code: str) -> str:
+    tree, error = _parse(code)
+    if error:
+        return _syntax_message(error)
+    assert tree is not None
+    definitions: Dict[Tuple[str, str], List[int]] = {}
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            definitions.setdefault(("Function", node.name), []).append(node.lineno)
+        elif isinstance(node, ast.ClassDef):
+            definitions.setdefault(("Class", node.name), []).append(node.lineno)
+    for (kind, name), lines in definitions.items():
+        if len(lines) > 1:
+            return f"{kind} {name} is defined twice, on lines {lines[0]} and {lines[1]}."
+    shadows = sorted(
+        [
+            *[(node.lineno, node.id) for node in ast.walk(tree)
+              if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)
+              and node.id in _SHADOWED_BUILTINS],
+            *[(node.lineno, node.arg) for node in ast.walk(tree)
+              if isinstance(node, ast.arg) and node.arg in _SHADOWED_BUILTINS],
+        ],
+        key=lambda item: item[0],
+    )
+    if shadows:
+        line, name = shadows[0]
+        return f"Variable {name} shadows a Python builtin on line {line}."
+    return "I do not see obvious name conflicts."

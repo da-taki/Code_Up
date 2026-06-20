@@ -3142,10 +3142,22 @@ async function handleConfirmedAction(action, payload) {
   else if (action === 'choose_suggestion')  chooseSuggestion(payload && payload.choice);
   else if (action === 'story_mode')         await tellExecutionStory();
   else if (action === 'set_audio_breakpoint') await requestAudioBreakpoint('add', payload && payload.condition);
-  else if (action === 'list_audio_breakpoints') await requestAudioBreakpoint('list');
+  else if (action === 'list_audio_breakpoints') {
+    if (payload && payload.breakpoint_scope === 'line') listBreakpoints();
+    else await requestAudioBreakpoint('list');
+  }
   else if (action === 'why_audio_breakpoint') await requestAudioBreakpoint('why');
   else if (action === 'set_breakpoint')     setBreakpoint(payload && payload.line_number);
-  else if (action === 'clear_breakpoints')  { clearBreakpoints(); await requestAudioBreakpoint('clear'); }
+  else if (action === 'clear_breakpoints')  {
+    clearBreakpoints();
+    await requestAudioBreakpoint('clear', null, { silent: true });
+    out('Cleared all breakpoints.');
+    speak('Cleared all breakpoints.');
+    srAnnounce('Breakpoints cleared');
+  }
+  else if (action === 'remove_breakpoint')  removeBreakpoint(payload && payload.line_number);
+  else if (action === 'disable_breakpoints') disableBreakpoints();
+  else if (action === 'enable_breakpoints') enableBreakpoints();
   else if (action === 'watch_variable')     await requestWatchVariable(payload && payload.variable, 'add');
   else if (action === 'debug_continue')     await continueDebugging();
   else if (action === 'debug_step_in')      speak('Step in is not yet supported in sandbox mode.');
@@ -3810,7 +3822,7 @@ async function requestAudioBreakpoint(action, condition, options) {
     const data = await res.json();
     const msg = data.speech || data.error || 'Done.';
     const inactive = data.active === false && data.success === false;
-    if (!(opts.silentInactive && inactive)) {
+    if (!opts.silent && !(opts.silentInactive && inactive)) {
       out(msg);
       speak(msg);
       srAnnounce(msg);
@@ -5748,6 +5760,22 @@ async function tellExecutionStory() {
 let _breakpoints = new Set();
 let _watchedVars = new Set();
 let _breakpointDecorations = [];
+let _breakpointsEnabled = true;
+
+function refreshBreakpointDecorations() {
+  if (!editor) return;
+  _breakpointDecorations = editor.deltaDecorations(_breakpointDecorations, [
+    ...Array.from(_breakpoints).map(line => ({
+      range: new monaco.Range(line, 1, line, 1),
+      options: {
+        isWholeLine: true,
+        className: 'bp-line',
+        glyphMarginClassName: 'bp-glyph',
+        glyphMarginHoverMessage: { value: `Breakpoint at line ${line}` },
+      }
+    }))
+  ]);
+}
 
 function setBreakpoint(lineNum) {
   if (!lineNum) { speak('Please specify a line number for the breakpoint.'); return; }
@@ -5757,18 +5785,7 @@ function setBreakpoint(lineNum) {
   if (lineNum < 1 || lineNum > maxLine) { speak(`Line ${lineNum} is out of range.`); return; }
 
   _breakpoints.add(lineNum);
-
-  _breakpointDecorations = editor.deltaDecorations(_breakpointDecorations, [
-    ...Array.from(_breakpoints).map(l => ({
-      range: new monaco.Range(l, 1, l, 1),
-      options: {
-        isWholeLine: true,
-        className:   'bp-line',
-        glyphMarginClassName: 'bp-glyph',
-        glyphMarginHoverMessage: { value: `Breakpoint at line ${l}` },
-      }
-    }))
-  ]);
+  refreshBreakpointDecorations();
 
   SonificationManager.playTone(600, 0.1, 0.1);
   speak(`Breakpoint set at line ${lineNum}.`);
@@ -5780,9 +5797,44 @@ function clearBreakpoints() {
   _breakpoints.clear();
   _watchedVars.clear();
   _breakpointDecorations = editor.deltaDecorations(_breakpointDecorations, []);
-  speak('All breakpoints cleared.');
-  srAnnounce('Breakpoints cleared');
-  out('All breakpoints removed.');
+}
+
+function listBreakpoints() {
+  const lines = Array.from(_breakpoints).sort((a, b) => a - b);
+  let message = 'You have no line breakpoints.';
+  if (lines.length) {
+    message = `You have breakpoints on lines ${lines.join(' and ')}.`;
+    if (!_breakpointsEnabled) message += ' Breakpoints are disabled.';
+  }
+  out(message);
+  speak(message);
+  srAnnounce(message);
+}
+
+function removeBreakpoint(lineNum) {
+  if (!_breakpoints.has(lineNum)) {
+    const message = `There is no breakpoint on line ${lineNum}.`;
+    out(message); speak(message); srAnnounce(message);
+    return;
+  }
+  _breakpoints.delete(lineNum);
+  refreshBreakpointDecorations();
+  const message = `Removed the breakpoint on line ${lineNum}.`;
+  out(message); speak(message); srAnnounce(message);
+}
+
+function disableBreakpoints() {
+  _breakpointsEnabled = false;
+  out('Breakpoints disabled.');
+  speak('Breakpoints disabled.');
+  srAnnounce('Breakpoints disabled');
+}
+
+function enableBreakpoints() {
+  _breakpointsEnabled = true;
+  out('Breakpoints enabled.');
+  speak('Breakpoints enabled.');
+  srAnnounce('Breakpoints enabled');
 }
 
 function watchVariable(varName) {
@@ -5803,6 +5855,7 @@ async function continueDebugging() {
 }
 
 function debugContinue() {
+  if (!_breakpointsEnabled) { speak('Breakpoints are disabled.'); return; }
   const trace = window.executionTrace || [];
   if (!trace.length) { speak('No trace available. Run your code first.'); return; }
 

@@ -100,6 +100,67 @@ class IntentParser:
         r"^check\s+names$", r"^find\s+name\s+problems$", r"^check\s+for\s+shadowing$",
     ]
 
+    CURRENT_BLOCK_PATTERNS = [
+        r"^read\s+current\s+block$", r"^read\s+this\s+block$", r"^what\s+block\s+am\s+i\s+in$",
+    ]
+    ADJACENT_SYMBOL_PATTERNS = [
+        r"^(?:go\s+to\s+)?(next|previous)\s+(function|class)$",
+    ]
+    NEXT_ERROR_PATTERNS = [
+        r"^go\s+to\s+next\s+error$", r"^jump\s+to\s+error$", r"^where\s+is\s+the\s+error$",
+    ]
+    CHECK_BRACKETS_PATTERNS = [
+        r"^check\s+brackets$", r"^check\s+parentheses$", r"^are\s+my\s+brackets\s+balanced$",
+    ]
+    CHECK_STRINGS_PATTERNS = [
+        r"^check\s+strings$", r"^check\s+quotes$", r"^are\s+my\s+strings\s+closed$",
+    ]
+    CHECK_LONG_LINES_PATTERNS = [
+        r"^check\s+long\s+lines$", r"^find\s+long\s+lines$", r"^readability\s+check$",
+    ]
+    COMMENT_LINE_PATTERNS = [r"^comment\s+(?:this|current)\s+line$"]
+    UNCOMMENT_LINE_PATTERNS = [r"^uncomment\s+(?:this|current)\s+line$"]
+    DUPLICATE_LINE_PATTERNS = [
+        r"^duplicate\s+(?:this|current)\s+line$", r"^copy\s+this\s+line\s+below$",
+    ]
+    DELETE_BLANK_LINES_PATTERNS = [
+        r"^delete\s+blank\s+lines$", r"^remove\s+blank\s+lines$", r"^clean\s+blank\s+lines$",
+    ]
+    EXPECTED_OUTPUT_PATTERNS = [
+        r"^expect(?:ed)?\s+output\s+(.+)$", r"^compare\s+output\s+to\s+(.+)$",
+        r"^should\s+print\s+(.+)$",
+    ]
+    RUN_HISTORY_PATTERNS = [
+        r"^show\s+run\s+history$", r"^what\s+have\s+i\s+run$", r"^run\s+summary$",
+    ]
+    RESET_RUN_STATE_PATTERNS = [
+        r"^reset\s+run\s+state$", r"^clear\s+last\s+output$", r"^clear\s+run\s+history$",
+    ]
+    CODE_STATS_PATTERNS = [
+        r"^show\s+code\s+stats$", r"^code\s+statistics$", r"^summarize\s+code\s+numbers$",
+    ]
+    CODE_NESTING_PATTERNS = [
+        r"^show\s+nesting\s+depth$", r"^how\s+nested\s+is\s+this\s+code$", r"^check\s+nesting$",
+    ]
+    SHOW_TODOS_PATTERNS = [
+        r"^show\s+todos$", r"^list\s+todos$", r"^find\s+todo\s+comments$",
+    ]
+    SHOW_REQUIREMENTS_PATTERNS = [
+        r"^show\s+requirements$", r"^list\s+requirements$",
+        r"^what\s+packages\s+does\s+this\s+project\s+need$",
+    ]
+    MISSING_PROJECT_FILES_PATTERNS = [
+        r"^check\s+missing\s+files$", r"^check\s+project\s+imports$", r"^find\s+missing\s+files$",
+    ]
+    CSV_PREVIEW_PATTERNS = [
+        r"^preview\s+csv(?:\s+file)?(?:\s+([A-Za-z0-9_./-]+\.csv))?$",
+        r"^read\s+csv\s+preview(?:\s+([A-Za-z0-9_./-]+\.csv))?$",
+    ]
+    IMPORT_POLICY_PATTERNS = [
+        r"^explain\s+blocked\s+import$", r"^why\s+is\s+([A-Za-z_]\w*)\s+blocked$",
+        r"^show\s+safe\s+imports$", r"^what\s+imports\s+are\s+allowed$",
+    ]
+
     RUN_PATTERNS = [
         r"^run\s*(?:code|program|it|this|that)?$",
         r"^execute\s*(?:code|program|it|this|that)?$",
@@ -1077,6 +1138,26 @@ class IntentParser:
             "file_outline": self.FILE_OUTLINE_PATTERNS,
             "safe_rename": self.SAFE_RENAME_PATTERNS,
             "name_conflicts": self.NAME_CONFLICT_PATTERNS,
+            "current_block": self.CURRENT_BLOCK_PATTERNS,
+            "adjacent_symbol": self.ADJACENT_SYMBOL_PATTERNS,
+            "next_error": self.NEXT_ERROR_PATTERNS,
+            "check_brackets": self.CHECK_BRACKETS_PATTERNS,
+            "check_strings": self.CHECK_STRINGS_PATTERNS,
+            "check_long_lines": self.CHECK_LONG_LINES_PATTERNS,
+            "comment_line": self.COMMENT_LINE_PATTERNS,
+            "uncomment_line": self.UNCOMMENT_LINE_PATTERNS,
+            "duplicate_line": self.DUPLICATE_LINE_PATTERNS,
+            "delete_blank_lines": self.DELETE_BLANK_LINES_PATTERNS,
+            "expected_output": self.EXPECTED_OUTPUT_PATTERNS,
+            "run_history": self.RUN_HISTORY_PATTERNS,
+            "reset_run_state": self.RESET_RUN_STATE_PATTERNS,
+            "code_stats": self.CODE_STATS_PATTERNS,
+            "code_nesting": self.CODE_NESTING_PATTERNS,
+            "show_todos": self.SHOW_TODOS_PATTERNS,
+            "show_requirements": self.SHOW_REQUIREMENTS_PATTERNS,
+            "missing_project_files": self.MISSING_PROJECT_FILES_PATTERNS,
+            "csv_preview": self.CSV_PREVIEW_PATTERNS,
+            "import_policy": self.IMPORT_POLICY_PATTERNS,
             "find_function":  self.FIND_FUNCTION_PATTERNS,
             "sonify_function": self.SONIFY_FUNCTION_PATTERNS,
             "find_class":     self.FIND_CLASS_PATTERNS,
@@ -1373,6 +1454,23 @@ class IntentParser:
             if len(match.groups()) >= 2 and match.group(1) and match.group(2):
                 slots["old_name"] = match.group(1).strip()
                 slots["new_name"] = match.group(2).strip()
+
+        elif intent == "adjacent_symbol":
+            if len(match.groups()) >= 2:
+                slots["direction"] = match.group(1).strip().lower()
+                slots["kind"] = match.group(2).strip().lower()
+
+        elif intent == "expected_output":
+            if match.groups() and match.group(1):
+                slots["expected"] = match.group(1).strip()
+
+        elif intent == "csv_preview":
+            if match.groups() and match.group(1):
+                slots["path"] = match.group(1).strip()
+
+        elif intent == "import_policy":
+            if match.groups() and match.group(1):
+                slots["module"] = match.group(1).strip()
 
         elif intent in ("find_class", "sonify_class"):
             if match.groups():

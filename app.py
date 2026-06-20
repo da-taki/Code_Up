@@ -8448,6 +8448,144 @@ def voice():
         response["intent"] = intent
         return _store_and_return(response)
 
+    if confidence >= 0.75 and intent in {"current_block", "adjacent_symbol"}:
+        if intent == "current_block":
+            result = deterministic_code_tools.current_block(current_code, cursor_line)
+        else:
+            result = deterministic_code_tools.adjacent_symbol(
+                current_code, cursor_line, slots.get("kind", "function"),
+                slots.get("direction", "next"),
+            )
+        message = result.get("message") or "I could not find that block."
+        return _store_and_return({
+            "success": True, "action": "navigate_code", "intent": intent,
+            "line": result.get("line"), "end_line": result.get("end_line"),
+            "message": message, "speech": message, "heard": text,
+            "confidence": confidence,
+        })
+
+    if confidence >= 0.75 and intent == "next_error":
+        error_line = _extract_error_line(error_context or str(mem.get("last_run_error") or ""))
+        message = (f"The last error is on line {error_line}." if error_line
+                   else "I do not have a recent error line. Run your code first.")
+        return _store_and_return({
+            "success": True, "action": "navigate_code", "intent": intent,
+            "line": error_line, "end_line": error_line, "message": message,
+            "speech": message, "heard": text, "confidence": confidence,
+        })
+
+    simple_tool_handlers = {
+        "check_brackets": lambda: deterministic_code_tools.check_brackets(current_code),
+        "check_strings": lambda: deterministic_code_tools.check_strings(current_code),
+        "check_long_lines": lambda: deterministic_code_tools.check_long_lines(current_code),
+        "code_stats": lambda: deterministic_code_tools.code_stats(current_code),
+        "code_nesting": lambda: deterministic_code_tools.nesting_depth(current_code),
+        "show_todos": lambda: deterministic_code_tools.todo_comments(current_code),
+        "import_policy": lambda: deterministic_code_tools.import_policy_summary(
+            slots.get("module", ""), explain_blocked=text.lower().startswith("explain blocked")
+        ),
+    }
+    if confidence >= 0.75 and intent in simple_tool_handlers:
+        speech = simple_tool_handlers[intent]()
+        return _store_and_return({
+            "success": True, "action": "deterministic_message", "intent": intent,
+            "message": speech, "speech": speech, "heard": text, "confidence": confidence,
+        })
+
+    if confidence >= 0.75 and intent in {"show_requirements", "missing_project_files", "csv_preview"}:
+        project_state = _project_state_from_voice_body(body, current_code)
+        project_handlers = {
+            "show_requirements": lambda: deterministic_code_tools.requirements_summary(project_state),
+            "missing_project_files": lambda: deterministic_code_tools.missing_project_files(project_state),
+            "csv_preview": lambda: deterministic_code_tools.csv_preview(project_state, slots.get("path", "")),
+        }
+        speech = project_handlers[intent]()
+        return _store_and_return({
+            "success": True, "action": "deterministic_message", "intent": intent,
+            "message": speech, "speech": speech, "heard": text, "confidence": confidence,
+        })
+
+    if confidence >= 0.75 and intent in {"comment_line", "uncomment_line", "duplicate_line", "delete_blank_lines"}:
+        edit_helpers = {
+            "comment_line": lambda: deterministic_code_tools.comment_line(current_code, cursor_line),
+            "uncomment_line": lambda: deterministic_code_tools.uncomment_line(current_code, cursor_line),
+            "duplicate_line": lambda: deterministic_code_tools.duplicate_line(current_code, cursor_line),
+            "delete_blank_lines": lambda: deterministic_code_tools.delete_extra_blank_lines(current_code),
+        }
+        result = edit_helpers[intent]()
+        if not result.get("success"):
+            speech = result.get("message") or "I did not change the code."
+            return _store_and_return({
+                "success": True, "action": "deterministic_message", "intent": intent,
+                "message": speech, "speech": speech, "heard": text, "confidence": confidence,
+            })
+        response = _natural_code_edit_response(
+            text=text,
+            current_code=current_code,
+            updated_code=result["code"],
+            summary=result["message"],
+            confidence=confidence,
+            mem=mem,
+            source="deterministic_line_edit",
+            mapped_intent=intent,
+        )
+        response["intent"] = intent
+        return _store_and_return(response)
+
+    if confidence >= 0.75 and intent == "expected_output":
+        expected = " ".join(str(slots.get("expected") or "").split())
+        actual_raw = str(mem.get("last_run_output") or "")
+        actual = " ".join(actual_raw.split())
+        if not mem.get("run_count") and not actual_raw:
+            speech = "There is no previous output yet."
+        elif actual == expected:
+            speech = f"Output matches expected value {expected}."
+        else:
+            speech = f"Expected {expected}, but the last output was {actual or 'empty'}."
+        return _store_and_return({
+            "success": True, "action": "deterministic_message", "intent": intent,
+            "message": speech, "speech": speech, "heard": text, "confidence": confidence,
+        })
+
+    if confidence >= 0.75 and intent == "run_history":
+        run_count = max(0, int(mem.get("run_count") or 0))
+        if not run_count:
+            speech = "There is no run history yet."
+        else:
+            output = " ".join(str(mem.get("last_run_output") or "").split())
+            error = bool(str(mem.get("last_run_error") or "").strip())
+            speech = f"You have run code {run_count} time{'s' if run_count != 1 else ''}. "
+            speech += f"The last run printed {output[:100]}. " if output else "The last run had no output. "
+            speech += "It had an error." if error else "It had no error."
+            with _watched_vars_lock:
+                watched = sorted(_watched_vars.get(get_session_id(), set()))
+            if watched:
+                speech += f" Watched variables: {', '.join(watched)}."
+        return _store_and_return({
+            "success": True, "action": "deterministic_message", "intent": intent,
+            "message": speech, "speech": speech, "heard": text, "confidence": confidence,
+        })
+
+    if confidence >= 0.75 and intent == "reset_run_state":
+        session_id = get_session_id()
+        session_memory.clear_run_state(mem)
+        with _session_traces_lock:
+            storage["last_trace"] = []
+            storage["current_trace_index"] = -1
+            storage["trace_duration_ms"] = 0
+            storage["audio_breakpoint_pause"] = None
+        with _watched_vars_lock:
+            _watched_vars.pop(session_id, None)
+        with _last_outputs_lock:
+            _last_outputs.pop(session_id, None)
+        with _mistake_snapshots_lock:
+            _mistake_snapshots.pop(session_id, None)
+        speech = "Cleared last output, last error, trace state, run history, and watched variables."
+        return _store_and_return({
+            "success": True, "action": "deterministic_message", "intent": intent,
+            "message": speech, "speech": speech, "heard": text, "confidence": confidence,
+        })
+
     if confidence >= 0.75 and intent in {"remove_breakpoint", "disable_breakpoints", "enable_breakpoints"}:
         response = {"success": True, "action": intent, "intent": intent,
                     "heard": text, "confidence": confidence}

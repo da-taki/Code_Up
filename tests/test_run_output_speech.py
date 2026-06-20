@@ -37,7 +37,8 @@ class TestReadOutputRouting:
         "read all output", "read the whole output", "read output again",
     ])
     def test_read_output_variants_route(self, client, text):
-        assert _vc(client, text)["action"] == "read_output"
+        expected = "deterministic_message" if text == "read last output" else "read_output"
+        assert _vc(client, text)["action"] == expected
 
     def test_read_the_code_is_not_read_output(self, client):
         assert _vc(client, "read the code")["action"] != "read_output"

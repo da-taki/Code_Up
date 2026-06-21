@@ -1000,6 +1000,86 @@ function setSayMoreContinuation(text) {
   _sayMoreContinuation = text ? sanitizeSpeechText(text) : '';
 }
 
+function audioBlocksCommand(command) {
+  if (command) handleCommandText(command);
+}
+
+function currentAudioBlockCommand(action) {
+  const state = window._audioBlocksState || {};
+  if (!state.cursor_id) {
+    const message = 'There is no current block.';
+    out(message); srAnnounce(message); speak(message);
+    return;
+  }
+  audioBlocksCommand(`${action} block ${state.cursor_id}`);
+}
+
+function renderAudioBlocks(state) {
+  if (!state || typeof state !== 'object') return;
+  window._audioBlocksState = state;
+  const isBlocks = state.mode === 'audio_blocks';
+  const panel = document.getElementById('audioBlocksPanel');
+  const codeRegion = document.getElementById('codeModeRegion');
+  const blockButton = document.getElementById('audioBlocksModeBtn');
+  const codeButton = document.getElementById('codeModeBtn');
+  if (panel) panel.hidden = !isBlocks;
+  if (codeRegion) codeRegion.hidden = isBlocks;
+  if (blockButton) blockButton.setAttribute('aria-pressed', String(isBlocks));
+  if (codeButton) codeButton.setAttribute('aria-pressed', String(!isBlocks));
+  try { localStorage.setItem('codeupProgrammingMode', isBlocks ? 'audio_blocks' : 'code'); } catch (e) {}
+
+  const blocks = Array.isArray(state.blocks) ? state.blocks : [];
+  const list = document.getElementById('audioBlocksList');
+  if (list) {
+    list.textContent = '';
+    blocks.forEach(block => {
+      const item = document.createElement('li');
+      item.className = 'audio-blocks-list-item';
+      item.tabIndex = block.id === state.cursor_id ? 0 : -1;
+      item.setAttribute('aria-current', block.id === state.cursor_id ? 'true' : 'false');
+      item.setAttribute('aria-label', `Block ${block.id}, ${block.label}, nesting level ${block.indent}`);
+      item.style.marginLeft = `${Math.min(Number(block.indent) || 0, 6) * 1.25}rem`;
+      item.textContent = `Block ${block.id}: ${block.label}`;
+      item.addEventListener('click', () => audioBlocksCommand(`read block ${block.id}`));
+      item.addEventListener('keydown', event => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault(); audioBlocksCommand(`read block ${block.id}`);
+        }
+      });
+      list.appendChild(item);
+    });
+  }
+  const status = document.getElementById('audioBlocksStatus');
+  if (status) {
+    status.textContent = blocks.length
+      ? `${blocks.length} block${blocks.length === 1 ? '' : 's'}. Current block ${state.cursor_id || 'none'}. ${state.dirty ? 'Changes are not compiled.' : 'Workspace is compiled.'}`
+      : 'The block workspace is empty.';
+  }
+  const preview = document.getElementById('audioBlocksCodePreview');
+  if (preview) preview.textContent = state.code_preview || 'No generated code yet.';
+}
+
+async function exportAudioBlocksProject() {
+  try {
+    const response = await fetch('/export-audio-blocks', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+    });
+    const data = await response.json();
+    if (!response.ok || !data.success) {
+      const message = data.message || data.error || 'Audio Blocks export failed.';
+      out(message); srAnnounce(message); speak(message); return;
+    }
+    const link = document.createElement('a');
+    link.href = data.download_url;
+    link.download = data.filename || 'codeup_audio_blocks.zip';
+    document.body.appendChild(link); link.click(); link.remove();
+    out(data.message); srAnnounce(data.message); speak(data.speech || data.message);
+  } catch (error) {
+    console.error('Audio Blocks export failed:', error);
+    speak('Audio Blocks export failed.');
+  }
+}
+
 function sayMore() {
   if (_sayMoreContinuation) {
     const more = _sayMoreContinuation;
@@ -3067,11 +3147,16 @@ async function executeActionSequence(payload) {
 }
 
 async function handleConfirmedAction(action, payload) {
+  if (payload && payload.audio_blocks) renderAudioBlocks(payload.audio_blocks);
   const _noCancelActions = new Set(['action_sequence', 'generate_code', 'analyze', 'analyze_deep', 'fix', 'summarize', 'narrate_file', 'walk_through', 'advise', 'story_mode', 'mentor_chat', 'mentor_progress', 'mentor_code_map', 'code_map', 'step_narration', 'compare_before_after', 'replay_mistake', 'why_fixed_works', 'read_project_files', 'explain_project_structure', 'explain_requirements']);
   if (!_noCancelActions.has(action)) {
     SpeechManager.cancelAll();
   }
   if (action === 'run')              await runCode();
+  else if (action === 'audio_blocks_run') {
+    setCode((payload && payload.code) || '');
+    await runCode();
+  }
   else if (action === 'action_sequence') await executeActionSequence(payload || {});
   else if (action === 'mentor_stop') { SpeechManager.cancelAll(); speak('Mentor stopped.'); srAnnounce('Mentor stopped'); }
   else if (action === 'stop_speaking') { SpeechManager.cancelAll(); srAnnounce('Speech stopped'); }
@@ -3136,6 +3221,7 @@ async function handleConfirmedAction(action, payload) {
     if (payload && payload.speech) speak(payload.speech);
     await exportProject();
   }
+  else if (action === 'export_audio_blocks') await exportAudioBlocksProject();
   else if (action === 'project_report') {
     // requestProjectReport() owns the speech (concise summary + "say more"
     await requestProjectReport();
@@ -4771,6 +4857,50 @@ async function handleVoiceCommand(rawText) {
 
 window.addEventListener('DOMContentLoaded', () => {
   try { restoreAccessibilityPreferences(); } catch (e) {}
+
+  const codeModeBtn = document.getElementById('codeModeBtn');
+  const audioBlocksModeBtn = document.getElementById('audioBlocksModeBtn');
+  if (codeModeBtn) codeModeBtn.addEventListener('click', () => audioBlocksCommand('switch to code mode'));
+  if (audioBlocksModeBtn) audioBlocksModeBtn.addEventListener('click', () => audioBlocksCommand('enter block mode'));
+  try {
+    if (localStorage.getItem('codeupProgrammingMode') === 'audio_blocks') {
+      setTimeout(() => audioBlocksCommand('enter block mode'), 0);
+    }
+  } catch (e) {}
+  document.querySelectorAll('[data-block-command]').forEach(button => {
+    button.addEventListener('click', () => audioBlocksCommand(button.getAttribute('data-block-command')));
+  });
+  const moveUp = document.getElementById('audioBlockMoveUpBtn');
+  const moveDown = document.getElementById('audioBlockMoveDownBtn');
+  const indent = document.getElementById('audioBlockIndentBtn');
+  const outdent = document.getElementById('audioBlockOutdentBtn');
+  const remove = document.getElementById('audioBlockDeleteBtn');
+  if (moveUp) moveUp.addEventListener('click', () => {
+    const state = window._audioBlocksState || {};
+    if (state.cursor_id) audioBlocksCommand(`move block ${state.cursor_id} up`);
+  });
+  if (moveDown) moveDown.addEventListener('click', () => {
+    const state = window._audioBlocksState || {};
+    if (state.cursor_id) audioBlocksCommand(`move block ${state.cursor_id} down`);
+  });
+  if (indent) indent.addEventListener('click', () => currentAudioBlockCommand('indent'));
+  if (outdent) outdent.addEventListener('click', () => currentAudioBlockCommand('outdent'));
+  if (remove) remove.addEventListener('click', () => currentAudioBlockCommand('delete'));
+  const blockWorkspace = document.querySelector('.audio-blocks-workspace');
+  if (blockWorkspace) blockWorkspace.addEventListener('keydown', event => {
+    const state = window._audioBlocksState || {};
+    let command = '';
+    if (event.key === 'ArrowDown' && event.ctrlKey && state.cursor_id) command = `move block ${state.cursor_id} down`;
+    else if (event.key === 'ArrowUp' && event.ctrlKey && state.cursor_id) command = `move block ${state.cursor_id} up`;
+    else if (event.key === 'ArrowDown') command = 'next block';
+    else if (event.key === 'ArrowUp') command = 'previous block';
+    else if (event.key === ']' && state.cursor_id) command = `indent block ${state.cursor_id}`;
+    else if (event.key === '[' && state.cursor_id) command = `outdent block ${state.cursor_id}`;
+    else if (event.key === 'Delete' && state.cursor_id) command = `delete block ${state.cursor_id}`;
+    else if (event.key === 'Enter' && event.ctrlKey && event.shiftKey) command = 'run blocks';
+    else if (event.key === 'Enter' && event.ctrlKey) command = 'compile blocks to Python';
+    if (command) { event.preventDefault(); audioBlocksCommand(command); }
+  });
 
   const resumeAudio = () => {
     if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});

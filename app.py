@@ -72,6 +72,7 @@ import natural_command_mapper
 import natural_code_editor
 import beginner_templates
 import accessible_learning
+import audio_blocks
 from command_normalization import normalize_command_transcript
 from speech_output import sanitize_speech_text
 
@@ -8471,6 +8472,12 @@ def voice():
         accessibility_response.setdefault("confidence", 0.99)
         return _store_and_return(accessibility_response)
 
+    audio_blocks_response = audio_blocks.route_command(text, current_code, mem)
+    if audio_blocks_response is not None:
+        audio_blocks_response.setdefault("heard", text)
+        audio_blocks_response.setdefault("confidence", 1.0)
+        return _store_and_return(audio_blocks_response)
+
     accessible_response = accessible_learning.route_command(
         text,
         current_code,
@@ -10664,6 +10671,35 @@ def export_project_route():
         f"{'' if result['file_count'] == 1 else 's'}"
         f"{': ' + names if names else ''}. The download link is ready."
     )
+    return jsonify({
+        "success": True,
+        "export_id": export_id,
+        "download_url": f"/download-export/{export_id}",
+        "filename": result["filename"],
+        "file_count": result["file_count"],
+        "included": result["included"],
+        "excluded": result["excluded"],
+        "speech": speech,
+        "message": speech,
+    })
+
+
+@app.route("/export-audio-blocks", methods=["POST"])
+def export_audio_blocks_route():
+    mem = session_memory.get_memory(get_trace_storage())
+    workspace = audio_blocks.get_workspace(mem)
+    if not workspace:
+        msg = "There is no Audio Blocks workspace to export."
+        return jsonify({"success": False, "error": msg, "speech": msg, "message": msg}), 400
+    files, error = audio_blocks.export_files(workspace)
+    if not files:
+        return jsonify({"success": False, "error": error, "speech": error, "message": error}), 400
+    result = export_support.prepare_export(files, prefix="codeup_audio_blocks")
+    if not result.get("success"):
+        msg = "I could not prepare a safe Audio Blocks export."
+        return jsonify({"success": False, "error": msg, "speech": msg, "message": msg}), 400
+    export_id = _store_export(get_session_id(), result["filename"], result["bytes"])
+    speech = f"Audio Blocks export ready with {result['file_count']} safe files."
     return jsonify({
         "success": True,
         "export_id": export_id,

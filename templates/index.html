@@ -17,7 +17,9 @@
 
 <body class="cu-body">
 
-  <div id="srAnnouncer" role="status" aria-live="assertive" aria-atomic="true"
+  <div id="srAnnouncer" role="status" aria-live="polite" aria-atomic="true"
+       style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;"></div>
+  <div id="srAlert" role="alert" aria-live="assertive" aria-atomic="true"
        style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;"></div>
 
   <div id="cuStartBanner" role="region" aria-label="Getting started"
@@ -73,6 +75,23 @@
       <button id="tutorialBtn" class="cu-button cu-button-secondary" aria-label="Start interactive tutorial" style="font-size:0.8rem;padding:6px 12px;">
         Tutorial
       </button>
+      <label for="assistiveTechnologyProfile">Assistive technology profile</label>
+      <select id="assistiveTechnologyProfile" class="theme-selector" aria-label="Assistive technology profile">
+        <option value="default">Default</option>
+        <option value="nvda">NVDA</option>
+        <option value="jaws">JAWS</option>
+        <option value="narrator">Windows Narrator</option>
+        <option value="voiceover">VoiceOver</option>
+        <option value="orca">Orca</option>
+        <option value="vs code">VS Code handoff</option>
+      </select>
+      <button id="screenReaderModeToggle" class="theme-toggle" aria-pressed="false" aria-label="Toggle screen reader mode">
+        Screen Reader Mode (Off)
+      </button>
+      <button id="browserSpeechToggle" class="theme-toggle" aria-pressed="true" aria-label="Toggle browser speech">
+        Browser Speech (On)
+      </button>
+      <a href="/accessibility">Accessibility help</a>
     </div>
   </header>
 

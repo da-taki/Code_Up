@@ -6,6 +6,35 @@ import time
 import zipfile
 from typing import Dict, List, Tuple
 
+ACCESSIBILITY_NOTES = """# Accessibility handoff
+
+Open this folder in Visual Studio Code, then confirm that the editor accessibility
+setting is on. The included `.vscode/settings.json` sets
+`editor.accessibilitySupport` to `on` and enables word wrap.
+
+CodeUp can help beginners with spoken debugging and deterministic guidance. When
+you are ready for a professional editor, use VS Code with NVDA, JAWS, Windows
+Narrator, VoiceOver, or Orca as appropriate for your operating system.
+
+Common command equivalents:
+
+- go to definition
+- find references
+- next error
+- run
+- next step, previous step, and repeat step for trace navigation
+- safe rename
+
+CodeUp is designed to work alongside assistive technology. It does not replace a
+screen reader, Braille display, or VS Code.
+"""
+
+VSCODE_ACCESSIBILITY_SETTINGS = """{
+  "editor.accessibilitySupport": "on",
+  "editor.wordWrap": "on"
+}
+"""
+
 EXCLUDE_DIR_NAMES = {
     "__pycache__", ".pytest_cache", ".venv", "venv", "node_modules", ".git",
     ".claude", ".vscode", ".idea", ".mypy_cache", ".ruff_cache", ".eggs",
@@ -91,6 +120,8 @@ def prepare_export(files: Dict[str, str], *, prefix: str = "codeup_project") -> 
     kept, excluded = safe_file_map(files or {})
     if not kept:
         return {"success": False, "error": "Nothing safe to export.", "excluded": excluded}
+    kept["ACCESSIBILITY_NOTES.md"] = ACCESSIBILITY_NOTES
+    kept[".vscode/settings.json"] = VSCODE_ACCESSIBILITY_SETTINGS
     data = build_zip_bytes(kept)
     return {
         "success": True,

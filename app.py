@@ -1269,6 +1269,27 @@ def ide():
     return render_template('index.html')
 
 
+@app.route("/accessibility")
+def accessibility_page():
+    return render_template("accessibility.html")
+
+
+@app.route("/accessibility-settings", methods=["GET", "POST"])
+def accessibility_settings_route():
+    storage = get_trace_storage()
+    message = ""
+    if request.method == "POST":
+        body = safejson()
+        if isinstance(body.get("screen_reader_mode"), bool):
+            storage["screen_reader_mode"] = body["screen_reader_mode"]
+        if "screen_reader_profile" in body:
+            profile = _set_accessibility_profile(storage, body.get("screen_reader_profile"))
+            if profile is None:
+                return jsonify({"success": False, "error": "Unknown assistive technology profile."}), 400
+        message = "Assistive technology settings updated."
+    return jsonify({"success": True, "message": message, **_accessibility_state(storage)})
+
+
 @app.route("/vs/<path:filename>")
 def monaco_vs_asset(filename):
     return send_from_directory(
@@ -6624,10 +6645,11 @@ def get_voice_telemetry():
 
 
 _ONBOARDING_MESSAGE = (
-    "Learn Python here by speaking or typing. First, say: start tutorial, for a "
-    "guided lesson. You can also say: insert a loop, run code, explain it, "
-    "generate code, or fix this code to debug. No microphone? Just type the "
-    "command and press Enter. Say more, or more examples, for the full list."
+    "Learn Python by speaking or typing. Say start tutorial. "
+    "Try insert a loop, run code, explain it, generate code, or fix this code to debug. "
+    "No microphone? Type the command and press Enter. "
+    "For accessibility: enable screen reader mode, set screen reader to NVDA, or "
+    "open accessibility page. Say more examples."
 )
 _FIRST_STEP_MESSAGE = (
     "The best first step is to say: start tutorial. I will then guide you, one "
@@ -6676,6 +6698,93 @@ _SAY_MORE_RE = re.compile(
     r"tell\s+me\s+more|read\s+more|continue\s+reading|go\s+on)\s*[.?!]?\s*$",
     re.IGNORECASE,
 )
+
+_AT_PROFILE_NAMES = {
+    "default": "Default",
+    "nvda": "NVDA",
+    "jaws": "JAWS",
+    "narrator": "Windows Narrator",
+    "windows narrator": "Windows Narrator",
+    "voiceover": "VoiceOver",
+    "orca": "Orca",
+    "vs code": "VS Code handoff",
+    "vscode": "VS Code handoff",
+}
+
+
+def _accessibility_state(storage: dict) -> dict:
+    return {
+        "screen_reader_mode": bool(storage.get("screen_reader_mode", False)),
+        "screen_reader_profile": storage.get("screen_reader_profile", "default"),
+    }
+
+
+def _set_accessibility_profile(storage: dict, raw_profile: str) -> Optional[str]:
+    key = " ".join(str(raw_profile or "").lower().split())
+    if key not in _AT_PROFILE_NAMES:
+        return None
+    normalized = "narrator" if key == "windows narrator" else "vs code" if key == "vscode" else key
+    storage["screen_reader_profile"] = normalized
+    return normalized
+
+
+def _accessibility_command_response(text: str, storage: dict) -> Optional[dict]:
+    command = " ".join(str(text or "").lower().strip().rstrip(".?!").split())
+    mode_terms = r"(?:screen reader|assistive technology|at) mode"
+    if re.fullmatch(rf"(?:enable {mode_terms}|{mode_terms} on)", command):
+        storage["screen_reader_mode"] = True
+        message = "Screen reader mode is on. CodeUp will send command results to the screen reader status area."
+    elif re.fullmatch(rf"(?:disable {mode_terms}|{mode_terms} off)", command):
+        storage["screen_reader_mode"] = False
+        message = "Screen reader mode is off. Browser speech remains available."
+    elif re.fullmatch(rf"(?:what {mode_terms} am i using|is {mode_terms} on|{mode_terms} status)", command):
+        enabled = bool(storage.get("screen_reader_mode", False))
+        message = f"Screen reader mode is {'on' if enabled else 'off'}."
+    else:
+        profile_match = re.fullmatch(
+            r"set (?:screen reader|profile) to (nvda|jaws|(?:windows )?narrator|voiceover|orca|vs ?code)",
+            command,
+        )
+        if profile_match:
+            profile = _set_accessibility_profile(storage, profile_match.group(1))
+            display = _AT_PROFILE_NAMES[profile]
+            message = f"Screen reader profile set to {display}."
+        elif command in {"which screen reader profile is active", "what screen reader profile is active"}:
+            profile = storage.get("screen_reader_profile", "default")
+            display = _AT_PROFILE_NAMES.get(profile, "Default")
+            message = (
+                "No screen reader is detected automatically. The active profile is "
+                f"{display} because you selected it."
+            )
+        elif command in {"open accessibility page", "show accessibility page"}:
+            message = "Open /accessibility for screen reader setup notes."
+        elif command in {"show screen reader tips", "explain screen reader support"}:
+            profile = _AT_PROFILE_NAMES.get(storage.get("screen_reader_profile", "default"), "Default")
+            message = (
+                f"The active profile is {profile}. Command results use a polite status area, errors use an "
+                "assertive alert area, and browser speech can be turned off to avoid duplicate speech. "
+                "CodeUp does not detect or control your screen reader."
+            )
+        elif command == "list screen reader commands":
+            message = (
+                "Screen reader commands: enable screen reader mode, disable screen reader mode, set screen "
+                "reader to NVDA, which screen reader profile is active, show screen reader tips, and open "
+                "accessibility page."
+            )
+        elif command in {"export for vs code", "download vs code project", "prepare vs code handoff"}:
+            return {"success": True, "action": "export_project", "vscode_handoff": True,
+                    "speech": "I will prepare a VS Code handoff with accessibility notes and safe editor settings."}
+        else:
+            return None
+
+    state = _accessibility_state(storage)
+    return {
+        "success": True,
+        "action": "accessibility_setting",
+        "message": message,
+        "speech": message,
+        **state,
+    }
 
 
 def _sanitize_voice_response(response: dict) -> dict:
@@ -8342,6 +8451,12 @@ def voice():
         except Exception:
             pass
         return jsonify(response_dict), status_code
+
+    accessibility_response = _accessibility_command_response(text, storage)
+    if accessibility_response is not None:
+        accessibility_response.setdefault("heard", text)
+        accessibility_response.setdefault("confidence", 0.99)
+        return _store_and_return(accessibility_response)
 
     def _try_natural_command_understanding():
         if natural_code_editor.is_unsafe_edit_instruction(text):

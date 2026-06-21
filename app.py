@@ -10116,7 +10116,10 @@ def _event_to_speech(event, idx=None, total=None):
         changes = '; '.join(event.get('changes', []))
         return f"{step_prefix}State changed on line {event.get('line')}: {changes}"
     if t == 'call':
-        return f"{step_prefix}Called function {event.get('function')} at line {event.get('line')}"
+        function_name = event.get('function')
+        if function_name == '<module>':
+            return f"{step_prefix}Started top-level code at line {event.get('line')}"
+        return f"{step_prefix}Called function {function_name} at line {event.get('line')}"
     if t == 'return':
         return f"{step_prefix}Returned value {event.get('value')}"
     return f"{step_prefix}{t}: {event}"

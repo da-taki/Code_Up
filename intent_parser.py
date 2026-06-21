@@ -177,6 +177,18 @@ class IntentParser:
         r"^how is codeup different from quorum$", r"^explain vs code handoff$",
         r"^show accessible coding pathway$",
     ]
+    AUDIO_BLOCKS_PATTERNS = [
+        r"^(?:enter|open|switch to) block mode$", r"^(?:exit block mode|switch to code mode)$",
+        r"^what mode am i in$", r"^(?:list block categories|what blocks can i add|help with blocks)$",
+        r"^list (?:output|variable|math|condition|loop|list|function|input|comment) blocks$",
+        r"^(?:read block workspace|read block order|read block \d+|first block|last block|where am i in blocks|summarize blocks|read nested blocks|read children of block \d+)$",
+        r"^(?:move block \d+ (?:up|down|before block \d+|after block \d+)|(?:indent|outdent|delete) block \d+|put block \d+ inside (?:else of )?block \d+|remove block \d+ from loop|undo block change|redo block change|clear block workspace)$",
+        r"^(?:add print(?: block| text .+| variable \w+)|add variable \w+ (?:equals -?[\d.]+|text .+|expression .+)|set variable \w+ to .+|add change \w+ by -?[\d.]+|add .+ (?:plus|minus|times|divided by) .+ into \w+|add expression \w+ equals .+|add (?:repeat \d+ times block|for range block from -?[\d.]+ to -?[\d.]+|if .+|comparison .+|while .+|list (?:named \w+|\w+ with .+)|print item -?\d+ from \w+|loop through \w+ as \w+|function named \w+|call function \w+(?: with .+)?|return .+|input block for \w+|number input block for \w+|comment .+)|append .+ to \w+|edit block \d+|set block \d+ (?:text|variable|condition) to .+|rename block variable \w+ to \w+|clear block \d+ value)$",
+        r"^(?:compile blocks to python|convert blocks to code|send blocks to editor|preview generated code|run blocks|explain generated code|compare blocks and code)$",
+        r"^(?:convert code to blocks|import code into blocks|explain why code cannot become blocks)$",
+        r"^(?:start block lesson|next block lesson|check block lesson|give block lesson hint|show block lesson solution|exit block lesson)$",
+        r"^(?:export block project|download block project|export blocks and python)$",
+    ]
     IMPORT_POLICY_PATTERNS = [
         r"^explain\s+blocked\s+import$", r"^why\s+is\s+([A-Za-z_]\w*)\s+blocked$",
         r"^show\s+safe\s+imports$", r"^what\s+imports\s+are\s+allowed$",
@@ -1145,6 +1157,7 @@ class IntentParser:
 
     def _build_intent_map(self) -> Dict[str, List[str]]:
         return {
+            "audio_blocks": self.AUDIO_BLOCKS_PATTERNS,
             "accessible_learning": self.ACCESSIBLE_LEARNING_PATTERNS,
             "read_line":      self.READ_LINE_PATTERNS,
             "describe_line":  self.DESCRIBE_LINE_PATTERNS,

@@ -290,3 +290,46 @@ body.theme-night .cu-output { background: #06030a; }
   .cu-main { flex-direction: column; }
   .cu-snippets, .cu-structure { width: 100%; max-height: 300px; }
 }
+.cu-mode-switch {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.audio-blocks-panel {
+  padding: 1rem;
+  overflow: auto;
+  min-height: 28rem;
+}
+
+.audio-blocks-palette,
+.audio-blocks-workspace,
+.audio-blocks-preview {
+  margin: 0.75rem 0;
+  padding: 0.75rem;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+}
+
+.audio-blocks-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.audio-blocks-list-item {
+  margin: 0.35rem 0;
+  padding: 0.55rem;
+  border: 1px solid var(--border-soft);
+  border-left: 0.35rem solid var(--accent);
+  background: var(--bg-soft);
+}
+
+.audio-blocks-list-item[aria-current="true"],
+.audio-blocks-panel button:focus-visible,
+.audio-blocks-workspace:focus-visible,
+.audio-blocks-list-item:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}

@@ -71,6 +71,7 @@ import screen_reader_bridge
 import natural_command_mapper
 import natural_code_editor
 import beginner_templates
+import accessible_learning
 from command_normalization import normalize_command_transcript
 from speech_output import sanitize_speech_text
 
@@ -1272,6 +1273,11 @@ def ide():
 @app.route("/accessibility")
 def accessibility_page():
     return render_template("accessibility.html")
+
+
+@app.route("/accessible-coding-tools")
+def accessible_coding_tools_page():
+    return render_template("accessible_coding_tools.html")
 
 
 @app.route("/accessibility-settings", methods=["GET", "POST"])
@@ -7322,6 +7328,13 @@ def _resolve_pending_clarification(pending, text, mem):
 
 def _record_voice_memory(mem, text, intent, response):
     action = str(response.get("action") or "")
+    mem["command_count"] = max(0, int(mem.get("command_count") or 0)) + 1
+    if action:
+        command_types = mem.setdefault("command_type_counts", {})
+        command_types[action] = max(0, int(command_types.get(action) or 0)) + 1
+        if len(command_types) > 30:
+            least_used = min(command_types, key=command_types.get)
+            command_types.pop(least_used, None)
     session_memory.record_utterance(mem, text, intent or "", action)
     concept = concept_qa.concept_label(response.get("concept") or "")
     session_memory.record_activity(mem, action, concept=concept)
@@ -8457,6 +8470,20 @@ def voice():
         accessibility_response.setdefault("heard", text)
         accessibility_response.setdefault("confidence", 0.99)
         return _store_and_return(accessibility_response)
+
+    accessible_response = accessible_learning.route_command(
+        text,
+        current_code,
+        mem,
+        storage,
+        project=_project_state_from_voice_body(body, current_code),
+        cursor_line=cursor_line,
+        error=error_context,
+    )
+    if accessible_response is not None:
+        accessible_response.setdefault("heard", text)
+        accessible_response.setdefault("confidence", 1.0)
+        return _store_and_return(accessible_response)
 
     def _try_natural_command_understanding():
         if natural_code_editor.is_unsafe_edit_instruction(text):

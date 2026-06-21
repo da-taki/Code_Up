@@ -156,6 +156,27 @@ class IntentParser:
         r"^preview\s+csv(?:\s+file)?(?:\s+([A-Za-z0-9_./-]+\.csv))?$",
         r"^read\s+csv\s+preview(?:\s+([A-Za-z0-9_./-]+\.csv))?$",
     ]
+    ACCESSIBLE_LEARNING_PATTERNS = [
+        r"^(?:start|continue|reset) (?:learning|python) path$",
+        r"^(?:next|previous|repeat|skip) lesson$", r"^where am i in the learning path$",
+        r"^(?:list lessons|check lesson|give lesson hint|show lesson goal)$",
+        r"^(?:start (?:block|parsons) practice(?: \d+)?|read block order|read block \d+|move block \d+ (?:up|down)|(?:indent|outdent) block \d+|check block order|convert blocks to code|reset block practice|exit block practice)$",
+        r"^(?:show|practice) keyboard shortcuts$", r"^(?:enter|exit) navigation mode$",
+        r"^navigation mode (?:on|off)$", r"^what navigation mode am i in$",
+        r"^(?:next|previous) (?:symbol|loop|error|todo)$", r"^read current scope$",
+        r"^(?:give me (?:a small|a bigger|the next) hint|repeat hint|hide hints|why is this hint useful|show solution steps|stop hints)$",
+        r"^(?:summarize|describe) csv$", r"^list csv columns$", r"^read csv row \d+$",
+        r"^(?:find )?(?:highest|lowest)(?: value)? in [\w -]+$", r"^average(?: of)? [\w -]+$",
+        r"^compare columns [\w -]+ and [\w -]+$", r"^(?:describe chart|make chart accessible|read chart as text)$",
+        r"^(?:sonify data|sonify column [\w -]+|stop sonification)$",
+        r"^teacher mode (?:on|off)$", r"^(?:generate (?:lesson|student|mistakes) report|show common mistakes|export teacher report|reset teacher report)$",
+        r"^(?:include|exclude) code (?:in|from) teacher report$",
+        r"^(?:check beginner style|check readable names|check function length|check too much nesting|check confusing names|explain style issues|show more style issues)$",
+        r"^(?:start error practice|practice (?:indentation|name|type|syntax) errors|read error challenge|check error fix|give error hint|show error solution|next error challenge|exit error practice)$",
+        r"^(?:open|show) accessible coding tools$", r"^explain quorum$",
+        r"^how is codeup different from quorum$", r"^explain vs code handoff$",
+        r"^show accessible coding pathway$",
+    ]
     IMPORT_POLICY_PATTERNS = [
         r"^explain\s+blocked\s+import$", r"^why\s+is\s+([A-Za-z_]\w*)\s+blocked$",
         r"^show\s+safe\s+imports$", r"^what\s+imports\s+are\s+allowed$",
@@ -1124,6 +1145,7 @@ class IntentParser:
 
     def _build_intent_map(self) -> Dict[str, List[str]]:
         return {
+            "accessible_learning": self.ACCESSIBLE_LEARNING_PATTERNS,
             "read_line":      self.READ_LINE_PATTERNS,
             "describe_line":  self.DESCRIBE_LINE_PATTERNS,
             "explain_current_line": self.EXPLAIN_CURRENT_LINE_PATTERNS,

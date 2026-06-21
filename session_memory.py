@@ -26,6 +26,8 @@ def new_memory() -> Dict[str, Any]:
         "last_intent": "",
         "last_action": "",
         "last_actions": [],
+        "command_count": 0,
+        "command_type_counts": {},
         "last_gen_prompt": "",       # last generation request (prompt text)
         "last_gen_summary": "",
         "last_generated_code": "",   # bounded latest generated single-file code
@@ -53,6 +55,7 @@ def new_memory() -> Dict[str, Any]:
         "concepts_practiced": [],
         "pending_clarification": None,
         "hint_level": "small",
+        "error_type_counts": {},
         "landmarks": {},
         "last_navigated": None,       # last navigate-by-meaning target block
     }
@@ -187,6 +190,16 @@ def record_run(mem: Dict[str, Any], *, output: str = "", error: str = "",
     mem["run_count"] = max(0, int(mem.get("run_count") or 0)) + 1
     mem["last_run_output"] = _clip(output, _MAX_OUTPUT)
     mem["last_run_error"] = _clip(error, _MAX_ERROR)
+    error_text = str(error or "")
+    if error_text:
+        counts = mem.setdefault("error_type_counts", {})
+        kind = next((name for name in (
+            "IndentationError", "SyntaxError", "NameError", "TypeError", "ImportError"
+        ) if name in error_text), "")
+        if not kind and "blocked" in error_text.lower() and "import" in error_text.lower():
+            kind = "BlockedImport"
+        if kind:
+            counts[kind] = max(0, int(counts.get(kind) or 0)) + 1
     if ran_ok is not None:
         mem["last_run_ok"] = bool(ran_ok)
     if inputs is not None:

@@ -3116,7 +3116,7 @@ async function handleConfirmedAction(action, payload) {
   else if (action === 'generate_code') await generateCode(payload && payload.prompt ? payload.prompt : '', payload || {});
   else if (action === 'exact_symbol_clarification' || action === 'orchestrator_clarification' || action === 'deterministic_message' || action === 'clarify') {
     const message = (payload && (payload.message || payload.speech)) || 'No guidance available.';
-    out(message);
+    out((payload && payload.report) ? `${message}\n\n${payload.report}` : message);
     srAnnounce('Guidance shown');
     speak((payload && payload.speech) || message);
   }
@@ -3266,6 +3266,40 @@ async function handleConfirmedAction(action, payload) {
   else if (action === 'list_audio_breakpoints') {
     if (payload && payload.breakpoint_scope === 'line') listBreakpoints();
     else await requestAudioBreakpoint('list');
+  }
+  else if (action === 'export_teacher_report') {
+    const report = (payload && payload.report) || '';
+    const blob = new Blob([report], { type: 'text/markdown;charset=utf-8' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = (payload && payload.filename) || 'CodeUp_Teacher_Report.md';
+    document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+    const message = (payload && payload.speech) || 'Teacher report exported locally.';
+    out(message); srAnnounce(message); speak(message);
+  }
+  else if (action === 'accessible_data_sonify') {
+    const values = Array.isArray(payload && payload.values) ? payload.values.map(Number).filter(Number.isFinite) : [];
+    SonificationManager.clearAll();
+    if (!values.length) { out('No numeric values to sonify.'); speak('No numeric values to sonify.'); }
+    else {
+      const low = Math.min(...values), high = Math.max(...values), span = high - low || 1;
+      const message = (payload && payload.speech) || `Sonifying ${values.length} values.`;
+      out(message); srAnnounce(message); speak(message);
+      values.forEach((value, index) => setTimeout(() => {
+        SonificationManager.playTone(220 + ((value - low) / span) * 660, 0.12, 0.08);
+      }, index * 170));
+    }
+  }
+  else if (action === 'stop_data_sonification') {
+    SonificationManager.clearAll();
+    const message = (payload && payload.speech) || 'Sonification stopped.';
+    out(message); srAnnounce(message); speak(message);
+  }
+  else if (action === 'open_accessible_tools') {
+    const message = (payload && payload.speech) || 'Opening accessible coding tools.';
+    srAnnounce(message); speak(message);
+    window.location.assign('/accessible-coding-tools');
   }
   else if (action === 'why_audio_breakpoint') await requestAudioBreakpoint('why');
   else if (action === 'set_breakpoint')     setBreakpoint(payload && payload.line_number);
@@ -4745,6 +4779,26 @@ window.addEventListener('DOMContentLoaded', () => {
 
   document.addEventListener('keydown', e => {
     resumeAudio();
+    if (e.altKey && e.shiftKey && !e.ctrlKey && !e.metaKey) {
+      const commands = {
+        R: 'run', H: 'what can I do here', E: 'read errors only', M: 'code map',
+        T: 'run with step narration', S: 'stop', A: 'toggle screen reader mode',
+        K: 'show keyboard shortcuts', N: 'what navigation mode am I in',
+      };
+      const key = String(e.key || '').toUpperCase();
+      if (commands[key]) {
+        e.preventDefault();
+        if (key === 'N') {
+          const navOn = localStorage.getItem('codeupNavigationMode') === 'true';
+          const command = navOn ? 'navigation mode off' : 'navigation mode on';
+          localStorage.setItem('codeupNavigationMode', navOn ? 'false' : 'true');
+          handleCommandText(command);
+        } else {
+          handleCommandText(commands[key]);
+        }
+        return;
+      }
+    }
     const editableTarget = e.target && (
       e.target.isContentEditable ||
       ['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName || '')

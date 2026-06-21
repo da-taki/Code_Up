@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Accessible coding tools and pathways - CodeUp</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style/core.css') }}">
+</head>
+<body>
+  <main id="main-content" tabindex="-1">
+    <h1>Accessible coding tools and pathways</h1>
+    <section aria-labelledby="codeup-role">
+      <h2 id="codeup-role">CodeUp's role</h2>
+      <p>CodeUp is a Python-focused, audio-first beginner bridge. It helps visually impaired beginners learn Python and prepare to move into professional tools such as Visual Studio Code.</p>
+      <p>CodeUp does not replace a screen reader, Braille workflow, professional editor, or another accessible programming environment.</p>
+    </section>
+    <section aria-labelledby="quorum">
+      <h2 id="quorum">Quorum</h2>
+      <p>Quorum is an accessible, evidence-oriented programming language and learning ecosystem. CodeUp does not replace Quorum. CodeUp focuses on mainstream Python and the transition to VS Code.</p>
+    </section>
+    <section aria-labelledby="screen-readers">
+      <h2 id="screen-readers">Screen readers</h2>
+      <p>CodeUp is designed for workflows that may use NVDA, JAWS, Windows Narrator, VoiceOver, or Orca. Behavior varies by operating system, browser, and assistive technology, and requires testing with real users.</p>
+    </section>
+    <section aria-labelledby="professional-pathway">
+      <h2 id="professional-pathway">Professional editor pathway</h2>
+      <p>VS Code has a screen reader mode. CodeUp can export Python projects with handoff notes and accessibility settings so a learner can continue in VS Code with their usual assistive technology.</p>
+    </section>
+    <section aria-labelledby="suggested-pathway">
+      <h2 id="suggested-pathway">Suggested pathway</h2>
+      <ol>
+        <li>Start with CodeUp lessons and audio debugging.</li>
+        <li>Learn screen-reader-compatible coding habits.</li>
+        <li>Explore Quorum as another accessible programming environment if useful.</li>
+        <li>Move to VS Code for larger projects.</li>
+      </ol>
+    </section>
+    <p><a href="{{ url_for('ide') }}">Return to the CodeUp IDE</a></p>
+  </main>
+</body>
+</html>

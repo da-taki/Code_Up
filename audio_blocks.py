@@ -1249,6 +1249,21 @@ def _parse_add(text: str) -> Tuple[Optional[str], Dict[str, Any]]:
     return None, {}
 
 
+# Phrases that *enter* Audio Blocks Mode. Entry is deliberately restricted to a
+# real spoken voice command so the Python editor stays the default and learners
+# are never dropped into block mode by a stray typed phrase or restored session
+# state. route_command refuses these unless source == "voice" (see below).
+ENTER_PHRASES = {
+    "enter block mode",
+    "open block mode",
+    "switch to block mode",
+    "open audio blocks",
+    "enter audio blocks",
+    "switch to audio blocks",
+    "start audio blocks mode",
+}
+
+
 def handles(text: str) -> bool:
     value = " ".join(str(text or "").lower().strip().rstrip(".!?").split())
     exact = {
@@ -1294,7 +1309,7 @@ def handles(text: str) -> bool:
         "download block project",
         "export blocks and python",
     }
-    return value in exact or bool(
+    return value in exact or value in ENTER_PHRASES or bool(
         re.match(
             r"^(?:list (?:output|variable|math|condition|loop|list|function|input|comment) blocks|read block \d+|read children of block \d+|move block \d+ (?:up|down|before block \d+|after block \d+)|(?:indent|outdent|delete) block \d+|put block \d+ inside (?:else of )?block \d+|remove block \d+ from loop|edit block \d+|set block \d+ (?:text|variable|condition) to .+|rename block variable \w+ to \w+|clear block \d+ value|add .+|set variable .+|append .+ to .+)$",
             value,
@@ -1303,7 +1318,7 @@ def handles(text: str) -> bool:
 
 
 def route_command(
-    text: str, code: str, mem: Dict[str, Any]
+    text: str, code: str, mem: Dict[str, Any], source: str = "typed"
 ) -> Optional[Dict[str, Any]]:
     t = " ".join(str(text or "").lower().strip().rstrip(".!?").split())
     if not handles(t):
@@ -1328,7 +1343,17 @@ def route_command(
     workspace = get_workspace(mem, create=True)
     assert workspace is not None
 
-    if t in {"enter block mode", "open block mode", "switch to block mode"}:
+    if t in ENTER_PHRASES:
+        already_in_blocks = workspace.get("mode") == "audio_blocks"
+        # Only a real spoken command may enter Audio Blocks Mode. Typed or
+        # unknown sources are refused so the Python editor stays the default.
+        # Re-issuing the phrase while already inside block mode is harmless.
+        if source != "voice" and not already_in_blocks:
+            return _message(
+                "Audio Blocks Mode can only be opened by voice. "
+                "Press the voice button and say open audio blocks.",
+                workspace,
+            )
         workspace["mode"] = "audio_blocks"
         status = (
             "Blocks have changed and are not compiled yet."

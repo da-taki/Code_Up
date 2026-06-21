@@ -179,6 +179,7 @@ class IntentParser:
     ]
     AUDIO_BLOCKS_PATTERNS = [
         r"^(?:enter|open|switch to) block mode$", r"^(?:exit block mode|switch to code mode)$",
+        r"^(?:open|enter|switch to) audio blocks$", r"^start audio blocks mode$",
         r"^what mode am i in$", r"^(?:list block categories|what blocks can i add|help with blocks)$",
         r"^list (?:output|variable|math|condition|loop|list|function|input|comment) blocks$",
         r"^(?:read block workspace|read block order|read block \d+|first block|last block|where am i in blocks|summarize blocks|read nested blocks|read children of block \d+)$",

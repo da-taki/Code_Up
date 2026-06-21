@@ -19,6 +19,14 @@ def client():
 
 
 def voice(client, text, **payload):
+    # Audio Blocks Mode can only be entered by a real spoken command, so the
+    # voice helper defaults to source="voice" to mirror microphone input.
+    payload.setdefault("source", "voice")
+    return client.post("/voice-command", json={"text": text, **payload}).get_json()
+
+
+def typed(client, text, **payload):
+    payload.setdefault("source", "typed")
     return client.post("/voice-command", json={"text": text, **payload}).get_json()
 
 
@@ -533,3 +541,81 @@ def test_frontend_has_labeled_regions_buttons_keyboard_and_actions(client):
         "run blocks",
     ):
         assert token in js
+
+
+# --- Audio Blocks Mode is entered by voice only -----------------------------
+
+ENTER_PHRASES = sorted(audio_blocks.ENTER_PHRASES)
+
+
+@pytest.mark.parametrize("phrase", ENTER_PHRASES)
+def test_voice_source_enters_audio_blocks_mode(client, phrase):
+    result = voice(client, phrase)
+    assert result["audio_blocks"]["mode"] == "audio_blocks"
+    assert "Audio Blocks Mode is on" in result["speech"]
+
+
+@pytest.mark.parametrize("phrase", ENTER_PHRASES)
+def test_typed_source_refuses_to_enter_audio_blocks_mode(client, phrase):
+    result = typed(client, phrase)
+    assert result["audio_blocks"]["mode"] == "code"
+    assert "only be opened by voice" in result["speech"]
+    assert "ai_action" not in result
+
+
+def test_missing_source_does_not_enter_audio_blocks_mode(client):
+    # No source field at all is treated as typed/unknown and must not switch.
+    result = client.post(
+        "/voice-command", json={"text": "open audio blocks"}
+    ).get_json()
+    assert result["audio_blocks"]["mode"] == "code"
+    assert "only be opened by voice" in result["speech"]
+
+
+def test_typed_entry_is_refused_again_after_returning_to_code_mode(client):
+    assert voice(client, "enter block mode")["audio_blocks"]["mode"] == "audio_blocks"
+    assert voice(client, "switch to code mode")["audio_blocks"]["mode"] == "code"
+    refused = typed(client, "open audio blocks")
+    assert refused["audio_blocks"]["mode"] == "code"
+    assert "only be opened by voice" in refused["speech"]
+
+
+def test_block_commands_still_work_after_voice_entry(client):
+    assert voice(client, "open audio blocks")["audio_blocks"]["mode"] == "audio_blocks"
+    # Typed block editing and navigation stay available once inside block mode.
+    added = typed(client, "add variable total equals 0")
+    assert added["audio_blocks"]["mode"] == "audio_blocks"
+    assert added["audio_blocks"]["blocks"][-1]["slots"]["variable"] == "total"
+    typed(client, "add print variable total")
+    assert "Block 2" in typed(client, "read block 2")["speech"]
+    assert "Current block" in typed(client, "previous block")["speech"]
+
+
+def test_typed_reentry_while_inside_block_mode_is_allowed(client):
+    voice(client, "open audio blocks")
+    again = typed(client, "open audio blocks")
+    assert again["audio_blocks"]["mode"] == "audio_blocks"
+    assert "Audio Blocks Mode is on" in again["speech"]
+
+
+def test_exit_audio_blocks_mode_returns_to_code(client):
+    voice(client, "enter block mode")
+    exited = voice(client, "switch to code mode", code="print('keep')")
+    assert exited["audio_blocks"]["mode"] == "code"
+    assert "editor is unchanged" in exited["speech"]
+    voice(client, "enter block mode")
+    assert voice(client, "exit block mode")["audio_blocks"]["mode"] == "code"
+
+
+def test_typed_entry_refusal_calls_no_ai_provider(client, monkeypatch):
+    import app as app_module
+
+    def fail(*args, **kwargs):
+        raise AssertionError("AI provider was called")
+
+    monkeypatch.setattr(app_module, "call_gemini", fail)
+    monkeypatch.setattr(app_module, "call_conversation_orchestrator_ai", fail)
+    monkeypatch.setattr(app_module, "_call_ollama", fail)
+    refused = typed(client, "open audio blocks")
+    assert refused["success"] is True
+    assert "only be opened by voice" in refused["speech"]

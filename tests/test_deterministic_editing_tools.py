@@ -25,7 +25,7 @@ def second():
 """
 
 COMMANDS = {
-    "current_block": ["read current block", "read this block", "what block am I in"],
+    "current_block": ["read current block", "read this block", "describe current block"],
     "adjacent_symbol": [
         "go to next function", "next function", "go to previous function", "previous function",
         "go to next class", "go to previous class",

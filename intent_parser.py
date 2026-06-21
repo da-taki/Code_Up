@@ -101,7 +101,7 @@ class IntentParser:
     ]
 
     CURRENT_BLOCK_PATTERNS = [
-        r"^read\s+current\s+block$", r"^read\s+this\s+block$", r"^what\s+block\s+am\s+i\s+in$",
+        r"^read\s+current\s+block$", r"^read\s+this\s+block$", r"^describe\s+current\s+block$",
     ]
     ADJACENT_SYMBOL_PATTERNS = [
         r"^(?:go\s+to\s+)?(next|previous)\s+(function|class)$",

@@ -1,82 +1,115 @@
 # CodeUp
 
-A voice first Python IDE for blind and visually impaired beginners.
+CodeUp is a Python-first learning IDE for visually impaired beginners.
 
-Demo
+It has two learning modes.
+
+1. **Python Code Mode** — the normal mode. Students write real Python, run it, hear output, debug errors, trace execution, navigate code, and export projects.
+2. **Audio Blocks Mode** — a separate voice-opened mode for first-time beginners. Students build programs using numbered accessible blocks. CodeUp then compiles those blocks into real Python so the learner can move into Code Mode.
+
+CodeUp is not trying to replace VS Code, NVDA, JAWS, VoiceOver, Narrator, Orca, Braille displays, Quorum, or other accessibility tools. It is a bridge for beginners who need help understanding code structure, indentation, errors, loops, functions, and debugging before moving into full professional editors.
+
+Demo:
 
 https://code-up-fmqr.onrender.com/ide
 
-CodeUp helps learners create, run, debug, understand, navigate, package, and explain Python projects through typed or spoken natural language commands.
+## Why this exists
 
-It is not trying to replace VS Code, NVDA, JAWS, or Braille workflows. It is a beginner bridge for students who are still learning how code structure, indentation, errors, and runtime changes work.
+Programming can be hard to start when the interface assumes visual scanning.
 
-## Try these commands first
+A beginner often has to track:
+
+* where the cursor is
+* which block they are inside
+* whether indentation is correct
+* what changed after running the code
+* where an error happened
+* how variables changed step by step
+* how to move from learning examples into real projects
+
+CodeUp tries to make those steps audible, structured, and beginner-friendly.
+
+## Start here
+
+When the IDE opens, it starts in Python Code Mode.
+
+Try these first:
 
 ```text
 insert print hello world
 run
-give me a code map
-watch total
+what can I do here
+preflight check
+read errors only
 run with step narration
 ```
 
-## Core features
-
-Voice first code creation.
-
-Spoken output and beginner friendly error recovery.
-
-Audio Code Maps for indentation, scope, loops, functions, and structure.
-
-Step Narration and Variable Watch for real runtime changes.
-
-Mistake Replay for comparing a broken attempt with a fixed one.
-
-Conditional Audio Breakpoints for pausing when a watched value reaches a condition.
-
-Indentation sonification for hearing nested code blocks.
-
-Guided tutorial modules for beginner Python.
-
-Multi file project mode with project export.
-
-Teacher handoff reports and session learning recaps.
-
-Speech rate and verbosity controls.
-
-NVDA and JAWS aware interaction patterns.
-
-Optional AI coaching grounded in deterministic program facts.
-
-## Nonvisual code commands
-
-CodeUp includes deterministic commands that help learners understand code without relying on the screen.
+To enter Audio Blocks Mode, use voice and say:
 
 ```text
-explain this line
-read errors only
-where is my cursor
-read around me
-list variables
+open audio blocks
 ```
 
-These commands do not use AI. They use the current code, cursor position, parser, sandbox, trace, and stored run result.
+Audio Blocks Mode is voice-opened on purpose. The normal editor stays as the default so CodeUp does not surprise users or replace the Python workspace.
 
-## Guided learning and practice
+## Python Code Mode
 
-`start learning path` begins a 12-lesson Python pathway from spoken output through multi-file projects, screen-reader habits, and VS Code handoff. Each lesson has deterministic starter code, a task, a hint, and a success check.
+Python Code Mode includes:
 
-`start block practice` opens keyboard- and voice-operated Parsons-style exercises. Learners can read, move, indent, outdent, check, and explicitly convert numbered blocks to Python without drag and drop. `start error practice` provides six deterministic debugging challenges. Hints appear only after a learner asks for them.
+* Python editor
+* spoken output
+* beginner error messages
+* code map
+* indentation checks
+* run history
+* last output and last error recall
+* step narration
+* variable watch
+* mistake replay
+* safe editing commands
+* project checks
+* export support
+
+Useful commands:
+
+```text
+run
+read last output
+read last error
+where is my cursor
+read around me
+give me a code map
+check indentation
+show code stats
+go to definition of total
+find references to total
+rename total to score
+comment this line
+duplicate this line
+```
 
 ## Audio Blocks Mode
 
-Audio Blocks Mode is a separate, structured programming mode for beginners who are not ready to type full Python. It is designed for typed or spoken commands and keyboard navigation rather than drag and drop. A numbered visual workspace is also available for low-vision learners and sighted teachers.
+Audio Blocks Mode is for learners who are not ready to type full Python yet.
 
-Try:
+It uses numbered blocks instead of drag-and-drop-only blocks. This matters because drag-and-drop is often not enough for blind users.
+
+In Audio Blocks Mode, students can:
+
+* add blocks by voice or typed command after entering the mode
+* hear the current block order
+* move blocks up or down
+* nest blocks inside loops, conditions, and functions
+* edit block values
+* undo and redo block changes
+* preview generated Python
+* run blocks through the same CodeUp sandbox
+* export blocks and generated Python
+
+Example flow:
 
 ```text
-enter block mode
-list block categories
+open audio blocks
 add variable total equals 0
 add repeat 3 times block
 add change total by 1
@@ -84,101 +117,227 @@ put block 3 inside block 2
 add print variable total
 preview generated code
 run blocks
-switch to code mode
 ```
 
-Blocks are stored as structured data with stable IDs, validated slots, and parent/child relationships. They compile deterministically into beginner-readable Python, which runs through the existing CodeUp sandbox. Safe beginner Python can also be imported into blocks; unsupported constructs are refused with a line-specific explanation.
+Generated Python:
 
-Audio Blocks Mode is inspired by the general idea of learning with blocks, but it does not copy Scratch branding, UI, or assets and has no Scratch integration or partnership. It is a bridge into normal Code Mode and later VS Code. See [docs/AUDIO_BLOCKS_MODE.md](docs/AUDIO_BLOCKS_MODE.md).
+```python
+total = 0
+for i in range(3):
+    total += 1
+print(total)
+```
 
-## Accessible data tools
+Audio Blocks Mode has block categories for:
 
-Project CSV files can be summarized with commands such as `summarize csv`, `list csv columns`, `average score`, and `describe chart`. Text descriptions are always available. `sonify column score` uses browser Web Audio when available and degrades to the spoken/text command result when audio is unavailable.
+* output
+* variables
+* math
+* conditions
+* loops
+* lists
+* functions
+* input
+* comments
 
-## Teacher reports
+It also has built-in block lessons for hello world, variables, loops, lists, functions, and converting blocks into Python.
 
-`export teacher report` downloads `CodeUp_Teacher_Report.md`. Reports remain in the browser session, exclude full code by default, and contain lesson progress, activity counters, recent output/error summaries, tracked error types, and accessibility settings. See [docs/TEACHER_REPORTS.md](docs/TEACHER_REPORTS.md).
+## Non-AI tools
 
-## Screen readers and professional handoff
+Most of CodeUp works without AI.
 
-CodeUp results use the existing output, speech, and ARIA live-region paths. Keyboard shortcuts use Alt+Shift combinations and are listed by `show keyboard shortcuts`. Screen-reader and browser behavior varies by platform; see [docs/SCREEN_READER_TEST_PLAN.md](docs/SCREEN_READER_TEST_PLAN.md) for the manual test matrix.
-
-CodeUp is a Python-focused beginner bridge, not a replacement for NVDA, JAWS, Narrator, VoiceOver, Orca, Braille workflows, Quorum, or VS Code. The [accessible coding pathway](docs/ACCESSIBLE_CODING_PATHWAY.md) and `/accessible-coding-tools` page explain the handoff honestly.
-
-## AI use
-
-CodeUp does not need AI for the main learning flow.
-
-Execution, sandboxing, syntax checks, AST structure, Audio Code Maps, Step Narration, Variable Watch, Mistake Replay, Conditional Audio Breakpoints, sonification, tutorial validation, multi file projects, exports, typed commands, and nonvisual code commands work without a cloud AI key.
-
-When AI is enabled, it is used to make explanations easier to understand. It does not invent program state. The source of truth is still the parser, trace, sandbox, and diff.
-
-To test without cloud AI, set this locally.
+Deterministic tools include:
 
 ```text
-GEMINI_ENABLED=0
+preflight check
+check indentation
+read errors only
+show safe imports
+explain blocked import
+show code stats
+show nesting depth
+read current block
+outline this file
+go to definition of total
+find references to total
+check names
+check beginner style
+compare output to 3
+show run history
+reset run state
 ```
 
-## Local config
+These tools use Python parsing, AST analysis, tokenizer checks, sandbox state, trace data, and project metadata.
 
-Use the deployed link for review.
+They do not need Gemini, Groq, Ollama, OpenAI, or any cloud AI key.
 
-If the deployed link is down, the project is not ready to submit.
+## Learning tools
 
-Local runs need the Python requirements, a Flask secret key, and `python app.py`.
+CodeUp includes:
+
+* 12-lesson Python learning path
+* accessible Parsons practice
+* Audio Blocks lessons
+* error practice challenges
+* request-only hint ladder
+* beginner style checks
+* teacher reports
+
+Learning commands:
 
 ```text
-FLASK_SECRET_KEY=change-this
+start learning path
+next lesson
+check lesson
+give lesson hint
+start block practice
+check block order
+start error practice
+check error fix
+generate teacher report
 ```
 
-Optional AI config.
+Hints are request-only. CodeUp should not interrupt beginners with automatic suggestions.
+
+## Screen reader and assistive technology support
+
+CodeUp is designed to work alongside existing assistive technology.
+
+Supported profiles:
+
+* NVDA
+* JAWS
+* Windows Narrator
+* VoiceOver
+* Orca
+* VS Code handoff
+
+CodeUp includes:
+
+* screen reader mode
+* polite live region for normal status
+* assertive live region for errors
+* optional browser speech toggle
+* keyboard-first controls
+* accessible command output
+* VS Code export notes
+
+Commands:
 
 ```text
-GROQ_API_KEY=your-key
-GROQ_API_KEY_2=your-second-key
-OLLAMA_ENABLED=1
-OLLAMA_URL=http://localhost:11434
-OLLAMA_MODEL=llama3.2:3b
+enable screen reader mode
+set screen reader to NVDA
+set screen reader to JAWS
+set screen reader to VoiceOver
+show screen reader tips
+show keyboard shortcuts
 ```
 
-The IDE runs at `/ide`.
+Important limitation: actual NVDA, JAWS, Narrator, VoiceOver, Orca, Braille-display, microphone, and audible-TTS testing still needs real users and real platform hardware.
+
+## VS Code handoff
+
+CodeUp is meant to help students move toward real Python workflows.
+
+Exports can include:
+
+* generated Python files
+* Audio Blocks workspace JSON
+* accessibility notes
+* safe VS Code settings
+* teacher reports when requested
+
+The goal is:
+
+```text
+Audio Blocks Mode -> Python Code Mode -> VS Code with screen reader support
+```
+
+## Safety model
+
+CodeUp runs learner Python through a restricted sandbox.
+
+The sandbox is meant for beginner learning, not for hosting an unrestricted public online judge.
+
+CodeUp blocks or limits risky behavior such as:
+
+* unsafe imports
+* dangerous builtins
+* direct file/system access
+* long-running loops
+* oversized traces
+* unsafe generated code from blocks
+
+Security notes:
+
+* The sandbox reduces risk but does not replace a container, VM, or production judge.
+* AI is not used for security decisions.
+* Browser speech and microphone permissions depend on the browser.
+* Windows may not support the same process limits as Linux.
+
+To report a security issue, open a GitHub issue with the route or feature involved, minimal steps to reproduce, and your browser and OS.
+
+## Related tools
+
+CodeUp is not the only accessibility project in programming.
+
+Quorum is an accessible programming language and learning ecosystem. CodeUp has a different focus: mainstream Python and transition into tools like VS Code.
+
+Screen readers like NVDA, JAWS, Narrator, VoiceOver, and Orca are still important. CodeUp is designed to work beside them, not replace them.
 
 ## Testing
 
-The full suite passed with 2,554 tests on June 22, 2026. Coverage includes command routing, execution, sandboxing, accessibility flows, speech controls, tutorial behavior, multi file projects, project export, error recovery, nonvisual code understanding, and safety checks.
+Recent validation has included:
 
-Main test commands.
+* full Python test suite
+* focused accessibility regression tests
+* frontend Node tests
+* Ruff
+* Python compile checks
+* JavaScript syntax checks
+* no-AI guard tests
+* local `/ide` smoke tests
+* `/accessibility` route checks
+* `/accessible-coding-tools` route checks
+* Audio Blocks Mode smoke tests
+
+Do not overread this. Automated tests do not prove full accessibility. Real testing with daily screen reader users is still needed.
+
+## Local setup
+
+Install dependencies:
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+Run the app:
+
+```bash
+python app.py
+```
+
+Run tests:
 
 ```bash
 python -m pytest -q
-node tests/tutorial_model.test.js
-node tests/spoken_code.test.js
-node tests/voice_speech_chunking.test.js
+ruff check .
+python -m compileall .
 ```
 
-The deterministic accessibility learning packs have focused automated coverage for lesson checks, block ordering, navigation, request-only hints, CSV summaries, report privacy, style checks, error practice, command parsing, and the related-tools page. Real screen-reader, Braille-display, microphone, and audible-TTS testing still requires users and the relevant hardware/software platforms.
+If frontend tests exist in your checkout, run the existing Node test command used by the repo.
 
-Audio Blocks Mode has automated coverage for its workspace model, all block types, command routing, validation, navigation, nesting, undo/redo, compilation, existing-sandbox execution, Python import, eight lessons, accessible frontend contracts, export contents, no-AI behavior, and legacy Parsons routing.
+## Project status
 
-## Pilot and review
+CodeUp is still a student-built accessibility project.
 
-CodeUp has been piloted with 10 visually impaired users.
+It has been tested through automated tests and early demonstrations, but it still needs more feedback from visually impaired learners, trainers, and screen reader users.
 
-7 users rated it 10 out of 10.
+The current focus is simple:
 
-3 users rated it between 7.5 and 8.5 out of 10.
-
-Earlier versions were tested with students at the School for the Blind and Deaf, Patiala. That feedback shaped the focus on voice first coding, spoken debugging, indentation support, and beginner friendly explanations.
-
-CodeUp has also been shown to teams connected with Vision Aid, TTI of PBMA, NAB Delhi Academy, XRCVC Mumbai, NAB India, Blind People's Association India, and NIEPVD Dehradun as part of its external review path.
-
-## Scope
-
-CodeUp is built for beginner learning, demos, and supervised testing.
-
-The sandbox is not a public online judge.
-
-The frontend was vibe coded. The backend execution flow, sandboxing, tracing, AST analysis, command parsing, tutorial validation, and tests were built and checked separately.
+```text
+make beginner Python easier to hear, understand, debug, and eventually outgrow
+```
 
 ## License
 

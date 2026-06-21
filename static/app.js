@@ -961,6 +961,10 @@ function pasteCode() {
   }).catch(() => speak('Failed to paste code.'));
 }
 
+let _browserSpeechEnabled = true;
+let _screenReaderModeEnabled = false;
+let _assistiveTechnologyProfile = 'default';
+
 function speak(text, opts = {}) {
   // Test anchor for the single speech path: VoiceEngine.speak(text, opts).
   if (!text) return;
@@ -968,6 +972,10 @@ function speak(text, opts = {}) {
   const spokenText = sanitizeSpeechText(text);
   if (!spokenText) return;
   lastSpokenText = spokenText;
+  if (!_browserSpeechEnabled) {
+    srAnnounce(spokenText);
+    return;
+  }
   if (typeof VoiceEngine !== 'undefined' && VoiceEngine.speak) {
     // Single speech path remains VoiceEngine.speak(text, opts); text is sanitized first.
     VoiceEngine.speak(spokenText, opts).catch(() => {});
@@ -1015,6 +1023,8 @@ function buildVoiceCommandPayload(text, source = 'typed') {
     source,
     cursor_line: pos && pos.lineNumber ? pos.lineNumber : null,
     verbosity: getVerbosity(),
+    screen_reader_mode: _screenReaderModeEnabled,
+    screen_reader_profile: _assistiveTechnologyProfile,
   };
 }
 
@@ -1047,6 +1057,89 @@ function getVerbosity() {
 function restoreAccessibilityPreferences() {
   applySpeechRate(getStoredSpeechRate());
   getVerbosity();
+  try { _browserSpeechEnabled = localStorage.getItem('codeupBrowserSpeech') !== 'false'; } catch (e) {}
+  try { _screenReaderModeEnabled = localStorage.getItem('codeupScreenReaderMode') === 'true'; } catch (e) {}
+  try { _assistiveTechnologyProfile = localStorage.getItem('codeupAssistiveProfile') || 'default'; } catch (e) {}
+  applyAccessibilitySettings({
+    screen_reader_mode: _screenReaderModeEnabled,
+    screen_reader_profile: _assistiveTechnologyProfile,
+  });
+  initializeAssistiveTechnologyControls();
+}
+
+function applyAccessibilitySettings(settings) {
+  if (settings && typeof settings.screen_reader_mode === 'boolean') {
+    _screenReaderModeEnabled = settings.screen_reader_mode;
+  }
+  if (settings && settings.screen_reader_profile) {
+    _assistiveTechnologyProfile = String(settings.screen_reader_profile);
+  }
+  try {
+    localStorage.setItem('codeupScreenReaderMode', String(_screenReaderModeEnabled));
+    localStorage.setItem('codeupAssistiveProfile', _assistiveTechnologyProfile);
+  } catch (e) {}
+  const modeButton = document.getElementById('screenReaderModeToggle');
+  if (modeButton) {
+    modeButton.setAttribute('aria-pressed', String(_screenReaderModeEnabled));
+    modeButton.textContent = `Screen Reader Mode (${_screenReaderModeEnabled ? 'On' : 'Off'})`;
+  }
+  const profile = document.getElementById('assistiveTechnologyProfile');
+  if (profile) profile.value = _assistiveTechnologyProfile;
+}
+
+async function persistAccessibilitySettings(patch) {
+  applyAccessibilitySettings(patch || {});
+  try {
+    const res = await fetch('/accessibility-settings', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        screen_reader_mode: _screenReaderModeEnabled,
+        screen_reader_profile: _assistiveTechnologyProfile,
+      }),
+    });
+    const data = await res.json();
+    if (data.success) applyAccessibilitySettings(data);
+  } catch (e) {
+    srAlert('Could not save assistive technology settings for this session.');
+  }
+}
+
+function initializeAssistiveTechnologyControls() {
+  const profile = document.getElementById('assistiveTechnologyProfile');
+  const modeButton = document.getElementById('screenReaderModeToggle');
+  const speechButton = document.getElementById('browserSpeechToggle');
+  if (profile && !profile.dataset.codeupBound) {
+    profile.dataset.codeupBound = 'true';
+    profile.addEventListener('change', function () {
+      persistAccessibilitySettings({ screen_reader_profile: this.value });
+      srAnnounce(`Screen reader profile set to ${this.options[this.selectedIndex].text}.`);
+    });
+  }
+  if (modeButton && !modeButton.dataset.codeupBound) {
+    modeButton.dataset.codeupBound = 'true';
+    modeButton.addEventListener('click', function () {
+      const enabled = !_screenReaderModeEnabled;
+      persistAccessibilitySettings({ screen_reader_mode: enabled });
+      srAnnounce(enabled
+        ? 'Screen reader mode is on. CodeUp will send command results to the screen reader status area.'
+        : 'Screen reader mode is off. Browser speech remains available.');
+    });
+  }
+  if (speechButton && !speechButton.dataset.codeupBound) {
+    speechButton.dataset.codeupBound = 'true';
+    speechButton.addEventListener('click', function () {
+      _browserSpeechEnabled = !_browserSpeechEnabled;
+      try { localStorage.setItem('codeupBrowserSpeech', String(_browserSpeechEnabled)); } catch (e) {}
+      this.setAttribute('aria-pressed', String(_browserSpeechEnabled));
+      this.textContent = `Browser Speech (${_browserSpeechEnabled ? 'On' : 'Off'})`;
+      srAnnounce(`Browser speech is ${_browserSpeechEnabled ? 'on' : 'off'}.`);
+    });
+  }
+  if (speechButton) {
+    speechButton.setAttribute('aria-pressed', String(_browserSpeechEnabled));
+    speechButton.textContent = `Browser Speech (${_browserSpeechEnabled ? 'On' : 'Off'})`;
+  }
+  persistAccessibilitySettings({});
 }
 
 function offerProjectDownload(url, filename) {
@@ -1713,7 +1806,14 @@ function setCode(v, opts) {
   return true;
 }
 
-function out(t) { document.getElementById('output').textContent = t; }
+function out(t, options = {}) {
+  const output = document.getElementById('output');
+  if (output) output.textContent = t;
+  const text = String(t || '').trim();
+  const isError = options.assertive || /^(?:error\b|found \d+ errors?\b|mentor error\b)/i.test(text) ||
+    /\b(?:failed|failure)\.?$/i.test(text);
+  srAnnounce(text, isError ? 'assertive' : 'polite');
+}
 
 function updateCommandUnderstanding(update = {}) {
   const heardEl = document.getElementById('heardTranscript');
@@ -1887,7 +1987,7 @@ async function runCode(runFile) {
         setTimeout(function () { window._tutorialOnRunSuccess(); }, 2000);
       }
     } else {
-      out('ERROR:\n' + (data.error || ''));
+      out('ERROR:\n' + (data.error || ''), { assertive: true });
       cueError();
       _lastErrorContext = {
         code: getCode(),
@@ -1905,7 +2005,7 @@ async function runCode(runFile) {
       const lineMatch = (data.error || '').match(/line (\d+)/);
       const lineHint = lineMatch ? ` on line ${lineMatch[1]}` : '';
       speak(`Error${lineHint}: ${lastLine}`);
-      srAnnounce('Error in code');
+      srAlert(`Error${lineHint}: ${lastLine}`);
       if (data.explanation) {
         speak(data.explanation);
       }
@@ -1918,7 +2018,7 @@ async function runCode(runFile) {
       }
     }
   } catch (e) {
-    out('System error.'); console.error(e); cueError(); speak('System error.');
+    out('System error.', { assertive: true }); console.error(e); cueError(); speak('System error.');
   } finally {
     stopHeartbeat();
     AppState.isExecuting = false;
@@ -2690,11 +2790,26 @@ function applyConversationalEdit(aiAction) {
   srAnnounce('Conversational edit applied');
 }
 
-function srAnnounce(msg) {
-  const el = document.getElementById('srAnnouncer');
+const _liveRegionTimers = {};
+const _lastLiveRegionMessages = {};
+const _lastLiveRegionTimes = {};
+function srAnnounce(msg, priority = 'polite') {
+  const region = priority === 'assertive' ? 'assertive' : 'polite';
+  const el = document.getElementById(region === 'assertive' ? 'srAlert' : 'srAnnouncer');
   if (!el) return;
+  const cleaned = sanitizeSpeechText(String(msg || '').replace(/<module>/g, 'top-level code'))
+    .replace(/\s+/g, ' ').trim().slice(0, 600);
+  const now = Date.now();
+  if (!cleaned || (_lastLiveRegionMessages[region] === cleaned && now - (_lastLiveRegionTimes[region] || 0) < 250)) return;
+  _lastLiveRegionMessages[region] = cleaned;
+  _lastLiveRegionTimes[region] = now;
+  clearTimeout(_liveRegionTimers[region]);
   el.textContent = '';
-  setTimeout(function () { el.textContent = msg; }, 50);
+  _liveRegionTimers[region] = setTimeout(function () { el.textContent = cleaned; }, 50);
+}
+
+function srAlert(msg) {
+  srAnnounce(msg, 'assertive');
 }
 
 async function saveSnippet() {
@@ -2991,6 +3106,12 @@ async function handleConfirmedAction(action, payload) {
   else if (action === 'next_step' || action === 'previous_step' || action === 'what_changed') {
     const text = (payload && (payload.speech || payload.message)) || 'No trace event available.';
     out(text); speak(text);
+  }
+  else if (action === 'accessibility_setting') {
+    applyAccessibilitySettings(payload || {});
+    const message = (payload && (payload.message || payload.speech)) || 'Assistive technology settings updated.';
+    out(message);
+    speak(message);
   }
   else if (action === 'generate_code') await generateCode(payload && payload.prompt ? payload.prompt : '', payload || {});
   else if (action === 'exact_symbol_clarification' || action === 'orchestrator_clarification' || action === 'deterministic_message' || action === 'clarify') {

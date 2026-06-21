@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Accessibility support - CodeUp</title>
+  <style>
+    body { max-width: 52rem; margin: 0 auto; padding: 1rem 1.25rem 3rem; font: 1rem/1.6 system-ui, sans-serif; color: #171717; background: #fff; }
+    a { color: #0645ad; } code { font-size: 0.95em; } h1, h2 { line-height: 1.25; }
+    .skip-link { position: absolute; left: -9999px; } .skip-link:focus { position: static; }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <header>
+    <p><a href="/ide">Back to the CodeUp IDE</a></p>
+    <h1>CodeUp accessibility support</h1>
+  </header>
+  <main id="main-content">
+    <section aria-labelledby="what-codeup-is">
+      <h2 id="what-codeup-is">What CodeUp is</h2>
+      <p>CodeUp is a beginner Python learning IDE designed to work with existing assistive technology.</p>
+      <p>It does not replace NVDA, JAWS, Windows Narrator, VoiceOver, Orca, Braille displays, or VS Code.</p>
+    </section>
+
+    <section aria-labelledby="supported-workflow">
+      <h2 id="supported-workflow">Supported assistive technology workflow</h2>
+      <p>CodeUp is designed to work with NVDA, JAWS, and Windows Narrator on Windows; VoiceOver on macOS; and Orca on Linux. VS Code screen reader mode is a useful next step for students moving to a professional editor.</p>
+      <p>Testing has been manual where these tools were available. CodeUp needs more testing with daily screen reader users.</p>
+    </section>
+
+    <section aria-labelledby="keyboard-use">
+      <h2 id="keyboard-use">Keyboard-only use</h2>
+      <ul>
+        <li>Use Tab and Shift+Tab to focus the command input and other controls.</li>
+        <li>Press Control+Enter in the editor to run code.</li>
+        <li>Press Control+Shift+P to open command help.</li>
+        <li>Use the editor arrow keys to move through code.</li>
+        <li>Type <q>enable screen reader mode</q> to turn on the mode.</li>
+        <li>Type <q>export for VS Code</q> to prepare a project handoff.</li>
+      </ul>
+    </section>
+
+    <section aria-labelledby="reader-notes">
+      <h2 id="reader-notes">Screen reader notes</h2>
+      <p>Normal command results are sent to a polite live status region. Errors use an assertive alert region. Browser text-to-speech can run alongside a screen reader or be turned off in Accessibility settings to avoid duplicate speech.</p>
+    </section>
+
+    <section aria-labelledby="speech-support">
+      <h2 id="speech-support">Speech support</h2>
+      <p>Browser speech recognition depends on browser support. Chrome and Edge usually provide better Web Speech API support. Typed commands are always available as a fallback.</p>
+    </section>
+
+    <section aria-labelledby="browser-limits">
+      <h2 id="browser-limits">Known browser limits</h2>
+      <ul>
+        <li>Microphone permission is controlled by the browser.</li>
+        <li>Audible text-to-speech cannot be fully tested by automated unit tests.</li>
+        <li>Screen reader behavior varies by operating system, browser, and screen reader.</li>
+      </ul>
+    </section>
+
+    <section aria-labelledby="non-ai-tools">
+      <h2 id="non-ai-tools">Non-AI tools</h2>
+      <p>Deterministic tools include preflight, indentation checks, code map, read current block, go to definition, find references, safe rename, trace navigation, breakpoint management, edit commands, sandbox checks, expected output checks, project checks, CSV preview, and safe import guidance.</p>
+    </section>
+
+    <section aria-labelledby="tested">
+      <h2 id="tested">What was tested</h2>
+      <p>Project checks include the pytest suite, frontend tests, Ruff, Python compilation, the live local IDE, deployed IDE loading, deterministic no-AI coverage, and ARIA live-region tests.</p>
+    </section>
+
+    <section aria-labelledby="user-testing">
+      <h2 id="user-testing">What still needs real user testing</h2>
+      <p>Daily NVDA, JAWS, VoiceOver, and Orca use; Braille display workflows; and classroom use with visually impaired beginners still need direct testing with users.</p>
+    </section>
+  </main>
+  <footer><p><a href="/ide">Open CodeUp</a></p></footer>
+</body>
+</html>

@@ -1,4 +1,5 @@
 import io
+import json
 import os
 import zipfile
 
@@ -22,6 +23,8 @@ def client(monkeypatch):
 def _names(zip_bytes):
     return set(zipfile.ZipFile(io.BytesIO(zip_bytes)).namelist())
 
+
+HANDOFF_FILES = {"ACCESSIBILITY_NOTES.md", ".vscode/settings.json"}
 
 
 class TestSafety:
@@ -68,13 +71,13 @@ class TestExportRoute:
         data = client.post("/export-project", json={"code": "print('hello')"}).get_json()
         assert data["success"] is True
         assert data["download_url"].startswith("/download-export/")
-        assert set(data["included"]) == {"main.py", "codeup_project_report.md"}
+        assert set(data["included"]) == {"main.py", "codeup_project_report.md", *HANDOFF_FILES}
 
     def test_multi_file_export(self, client):
         project = {"name": "Demo", "files": {"main.py": "import helper", "helper.py": "x = 1"}}
         data = client.post("/export-project", json={"project": project}).get_json()
         assert data["success"] is True
-        assert set(data["included"]) == {"main.py", "helper.py", "codeup_project_report.md"}
+        assert set(data["included"]) == {"main.py", "helper.py", "codeup_project_report.md", *HANDOFF_FILES}
 
     def test_export_excludes_junk_and_secrets(self, client):
         project = {"files": {
@@ -89,7 +92,7 @@ class TestExportRoute:
         data = client.post("/export-project", json={"project": project}).get_json()
         dl = client.get(data["download_url"])
         names = _names(dl.data)
-        assert names == {"main.py", "codeup_project_report.md"}
+        assert names == {"main.py", "codeup_project_report.md", *HANDOFF_FILES}
         for bad in (".env", ".git/config", "__pycache__/m.pyc", ".claude/launch.json", "node_modules/lib.js", "creds.py"):
             assert bad not in names
 
@@ -99,7 +102,16 @@ class TestExportRoute:
         assert dl.status_code == 200
         assert dl.headers["Content-Type"] == "application/zip"
         assert "attachment" in dl.headers["Content-Disposition"]
-        assert _names(dl.data) == {"main.py", "codeup_project_report.md"}
+        assert _names(dl.data) == {"main.py", "codeup_project_report.md", *HANDOFF_FILES}
+
+    def test_export_includes_valid_vscode_accessibility_handoff(self, client):
+        data = client.post("/export-project", json={"code": "print('ready')"}).get_json()
+        archive = client.get(data["download_url"]).data
+        with zipfile.ZipFile(io.BytesIO(archive)) as zf:
+            notes = zf.read("ACCESSIBILITY_NOTES.md").decode("utf-8")
+            settings = json.loads(zf.read(".vscode/settings.json"))
+        assert "editor.accessibilitySupport" in notes
+        assert settings == {"editor.accessibilitySupport": "on", "editor.wordWrap": "on"}
 
     def test_no_content_asks_to_create(self, client):
         data = client.post("/export-project", json={"code": "   "}).get_json()

@@ -62,6 +62,26 @@ list variables
 
 These commands do not use AI. They use the current code, cursor position, parser, sandbox, trace, and stored run result.
 
+## Guided learning and practice
+
+`start learning path` begins a 12-lesson Python pathway from spoken output through multi-file projects, screen-reader habits, and VS Code handoff. Each lesson has deterministic starter code, a task, a hint, and a success check.
+
+`start block practice` opens keyboard- and voice-operated Parsons-style exercises. Learners can read, move, indent, outdent, check, and explicitly convert numbered blocks to Python without drag and drop. `start error practice` provides six deterministic debugging challenges. Hints appear only after a learner asks for them.
+
+## Accessible data tools
+
+Project CSV files can be summarized with commands such as `summarize csv`, `list csv columns`, `average score`, and `describe chart`. Text descriptions are always available. `sonify column score` uses browser Web Audio when available and degrades to the spoken/text command result when audio is unavailable.
+
+## Teacher reports
+
+`export teacher report` downloads `CodeUp_Teacher_Report.md`. Reports remain in the browser session, exclude full code by default, and contain lesson progress, activity counters, recent output/error summaries, tracked error types, and accessibility settings. See [docs/TEACHER_REPORTS.md](docs/TEACHER_REPORTS.md).
+
+## Screen readers and professional handoff
+
+CodeUp results use the existing output, speech, and ARIA live-region paths. Keyboard shortcuts use Alt+Shift combinations and are listed by `show keyboard shortcuts`. Screen-reader and browser behavior varies by platform; see [docs/SCREEN_READER_TEST_PLAN.md](docs/SCREEN_READER_TEST_PLAN.md) for the manual test matrix.
+
+CodeUp is a Python-focused beginner bridge, not a replacement for NVDA, JAWS, Narrator, VoiceOver, Orca, Braille workflows, Quorum, or VS Code. The [accessible coding pathway](docs/ACCESSIBLE_CODING_PATHWAY.md) and `/accessible-coding-tools` page explain the handoff honestly.
+
 ## AI use
 
 CodeUp does not need AI for the main learning flow.
@@ -102,7 +122,7 @@ The IDE runs at `/ide`.
 
 ## Testing
 
-CodeUp has 1,800 plus automated tests across command routing, execution, sandboxing, accessibility flows, speech controls, tutorial behavior, multi file projects, project export, error recovery, non visual code understanding, and safety checks.
+The full suite passed with 2,457 tests and 1 skipped test on June 22, 2026. Coverage includes command routing, execution, sandboxing, accessibility flows, speech controls, tutorial behavior, multi file projects, project export, error recovery, nonvisual code understanding, and safety checks.
 
 Main test commands.
 
@@ -112,6 +132,8 @@ node tests/tutorial_model.test.js
 node tests/spoken_code.test.js
 node tests/voice_speech_chunking.test.js
 ```
+
+The deterministic accessibility learning packs have focused automated coverage for lesson checks, block ordering, navigation, request-only hints, CSV summaries, report privacy, style checks, error practice, command parsing, and the related-tools page. Real screen-reader, Braille-display, microphone, and audible-TTS testing still requires users and the relevant hardware/software platforms.
 
 ## Pilot and review
 

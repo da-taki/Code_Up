@@ -8472,7 +8472,9 @@ def voice():
         accessibility_response.setdefault("confidence", 0.99)
         return _store_and_return(accessibility_response)
 
-    audio_blocks_response = audio_blocks.route_command(text, current_code, mem)
+    audio_blocks_response = audio_blocks.route_command(
+        text, current_code, mem, source=input_source
+    )
     if audio_blocks_response is not None:
         audio_blocks_response.setdefault("heard", text)
         audio_blocks_response.setdefault("confidence", 1.0)

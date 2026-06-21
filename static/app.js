@@ -1026,7 +1026,6 @@ function renderAudioBlocks(state) {
   if (codeRegion) codeRegion.hidden = isBlocks;
   if (blockButton) blockButton.setAttribute('aria-pressed', String(isBlocks));
   if (codeButton) codeButton.setAttribute('aria-pressed', String(!isBlocks));
-  try { localStorage.setItem('codeupProgrammingMode', isBlocks ? 'audio_blocks' : 'code'); } catch (e) {}
 
   const blocks = Array.isArray(state.blocks) ? state.blocks : [];
   const list = document.getElementById('audioBlocksList');
@@ -4861,12 +4860,13 @@ window.addEventListener('DOMContentLoaded', () => {
   const codeModeBtn = document.getElementById('codeModeBtn');
   const audioBlocksModeBtn = document.getElementById('audioBlocksModeBtn');
   if (codeModeBtn) codeModeBtn.addEventListener('click', () => audioBlocksCommand('switch to code mode'));
-  if (audioBlocksModeBtn) audioBlocksModeBtn.addEventListener('click', () => audioBlocksCommand('enter block mode'));
-  try {
-    if (localStorage.getItem('codeupProgrammingMode') === 'audio_blocks') {
-      setTimeout(() => audioBlocksCommand('enter block mode'), 0);
-    }
-  } catch (e) {}
+  // Audio Blocks Mode is entered by voice only. The button explains that instead
+  // of switching, and CodeUp never auto-opens block mode from a previous session
+  // so a fresh /ide load always starts in Python Code Mode.
+  if (audioBlocksModeBtn) audioBlocksModeBtn.addEventListener('click', () => {
+    const message = 'To enter Audio Blocks Mode, use voice and say open audio blocks.';
+    out(message); srAnnounce(message); speak(message);
+  });
   document.querySelectorAll('[data-block-command]').forEach(button => {
     button.addEventListener('click', () => audioBlocksCommand(button.getAttribute('data-block-command')));
   });

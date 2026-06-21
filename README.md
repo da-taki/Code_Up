@@ -68,6 +68,29 @@ These commands do not use AI. They use the current code, cursor position, parser
 
 `start block practice` opens keyboard- and voice-operated Parsons-style exercises. Learners can read, move, indent, outdent, check, and explicitly convert numbered blocks to Python without drag and drop. `start error practice` provides six deterministic debugging challenges. Hints appear only after a learner asks for them.
 
+## Audio Blocks Mode
+
+Audio Blocks Mode is a separate, structured programming mode for beginners who are not ready to type full Python. It is designed for typed or spoken commands and keyboard navigation rather than drag and drop. A numbered visual workspace is also available for low-vision learners and sighted teachers.
+
+Try:
+
+```text
+enter block mode
+list block categories
+add variable total equals 0
+add repeat 3 times block
+add change total by 1
+put block 3 inside block 2
+add print variable total
+preview generated code
+run blocks
+switch to code mode
+```
+
+Blocks are stored as structured data with stable IDs, validated slots, and parent/child relationships. They compile deterministically into beginner-readable Python, which runs through the existing CodeUp sandbox. Safe beginner Python can also be imported into blocks; unsupported constructs are refused with a line-specific explanation.
+
+Audio Blocks Mode is inspired by the general idea of learning with blocks, but it does not copy Scratch branding, UI, or assets and has no Scratch integration or partnership. It is a bridge into normal Code Mode and later VS Code. See [docs/AUDIO_BLOCKS_MODE.md](docs/AUDIO_BLOCKS_MODE.md).
+
 ## Accessible data tools
 
 Project CSV files can be summarized with commands such as `summarize csv`, `list csv columns`, `average score`, and `describe chart`. Text descriptions are always available. `sonify column score` uses browser Web Audio when available and degrades to the spoken/text command result when audio is unavailable.
@@ -122,7 +145,7 @@ The IDE runs at `/ide`.
 
 ## Testing
 
-The full suite passed with 2,457 tests and 1 skipped test on June 22, 2026. Coverage includes command routing, execution, sandboxing, accessibility flows, speech controls, tutorial behavior, multi file projects, project export, error recovery, nonvisual code understanding, and safety checks.
+The full suite passed with 2,554 tests on June 22, 2026. Coverage includes command routing, execution, sandboxing, accessibility flows, speech controls, tutorial behavior, multi file projects, project export, error recovery, nonvisual code understanding, and safety checks.
 
 Main test commands.
 
@@ -134,6 +157,8 @@ node tests/voice_speech_chunking.test.js
 ```
 
 The deterministic accessibility learning packs have focused automated coverage for lesson checks, block ordering, navigation, request-only hints, CSV summaries, report privacy, style checks, error practice, command parsing, and the related-tools page. Real screen-reader, Braille-display, microphone, and audible-TTS testing still requires users and the relevant hardware/software platforms.
+
+Audio Blocks Mode has automated coverage for its workspace model, all block types, command routing, validation, navigation, nesting, undo/redo, compilation, existing-sandbox execution, Python import, eight lessons, accessible frontend contracts, export contents, no-AI behavior, and legacy Parsons routing.
 
 ## Pilot and review
 

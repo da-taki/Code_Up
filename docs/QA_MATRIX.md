@@ -3,6 +3,7 @@
 | Area | Automated coverage | Manual coverage still required |
 | --- | --- | --- |
 | Learning path | 12 lesson definitions, progress, navigation, hints, deterministic checks | Lesson pacing and spoken clarity with beginners |
+| Audio Blocks Mode | All block types, model, commands, navigation, nesting, history, compiler, sandbox run, import, lessons, UI contract, and export | Nonvisual learning flow with real beginners and AT combinations |
 | Block practice | Six exercises, order, indentation, bounds, conversion | Long-session usability with screen readers |
 | Keyboard navigation | Command routing, mode state, symbols, loops, errors, TODOs, scope, JS shortcut wiring | Browser and screen-reader shortcut conflicts |
 | Hint ladder | Request-only state, progression, repeat, clear, lesson/error/block context | Whether hints reveal an appropriate amount |

@@ -7,10 +7,12 @@ CodeUp is a Python-focused, audio-first bridge for visually impaired beginners. 
 ## Suggested progression
 
 1. Complete the 12 CodeUp learning-path lessons.
-2. Practice line order and indentation with accessible block practice.
-3. Use error practice, request-only hints, code maps, and step narration.
-4. Learn descriptive naming, short functions, keyboard navigation, and screen-reader-compatible project habits.
-5. Export a project and continue in VS Code with screen reader mode and the learner's usual assistive technology.
+2. Use Audio Blocks Mode when structured numbered blocks are more approachable than typing full Python.
+3. Compile blocks into real Python and compare their structure with Code Mode.
+4. Practice line order and indentation with accessible Parsons block practice.
+5. Use error practice, request-only hints, code maps, and step narration.
+6. Learn descriptive naming, short functions, keyboard navigation, and screen-reader-compatible project habits.
+7. Export a project and continue in VS Code with screen reader mode and the learner's usual assistive technology.
 
 ## Related tools
 

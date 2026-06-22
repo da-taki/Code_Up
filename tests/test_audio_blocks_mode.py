@@ -81,6 +81,17 @@ def test_catalog_has_all_categories_and_required_types():
     assert set(audio_blocks.BLOCK_LABELS) == set(VALID_SLOTS)
 
 
+def test_public_workspace_tags_each_block_with_its_category():
+    # The category styling hook lets the UI color/group blocks without changing
+    # the block model. Every block type maps to exactly one catalog category.
+    assert set(audio_blocks.BLOCK_CATEGORY) == set(VALID_SLOTS)
+    workspace = audio_blocks.new_workspace()
+    audio_blocks.add_block(workspace, "print_text", {"text": "hi"})
+    audio_blocks.add_block(workspace, "repeat_times", {"times": 2})
+    public = audio_blocks.public_workspace(workspace)
+    assert [block["category"] for block in public["blocks"]] == ["output", "loops"]
+
+
 @pytest.mark.parametrize("block_type", sorted(VALID_SLOTS))
 def test_every_block_type_is_structured_and_generates_python(block_type):
     workspace = audio_blocks.new_workspace()

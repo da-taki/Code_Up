@@ -18,6 +18,18 @@
   --danger:  #8b1a05;
   --warning: #8a5a00;
 
+  /* Audio Blocks category accents. Light theme: dark, readable on cream and as
+     badge text (all pass AA against the panel background). */
+  --cat-output:     #3f6212;
+  --cat-variables:  #9a5512;
+  --cat-math:       #1b4f72;
+  --cat-conditions: #6b5300;
+  --cat-loops:      #5b2d91;
+  --cat-lists:      #0c5b5b;
+  --cat-functions:  #9b2247;
+  --cat-input:      #0e5a6b;
+  --cat-comments:   #5a432a;
+
   --radius-lg: 12px;
   --radius-md: 8px;
   --radius-sm: 6px;
@@ -48,6 +60,17 @@ body.theme-night {
   --success: #b9d39a;
   --danger:  #ff8a7a;
   --warning: #ffc46b;
+
+  /* Night theme: lighter category variants, readable on the dark panels. */
+  --cat-output:     #9fce6a;
+  --cat-variables:  #e0935a;
+  --cat-math:       #79b6e0;
+  --cat-conditions: #e6c050;
+  --cat-loops:      #c79bf0;
+  --cat-lists:      #57c9c9;
+  --cat-functions:  #f08aa8;
+  --cat-input:      #5fc4dc;
+  --cat-comments:   #c0a886;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -77,7 +100,7 @@ body.cu-body.theme-high-contrast::before { display: none; }
   border-bottom: 1px solid var(--border-strong);
 }
 .cu-header-top {
-  display: flex; justify-content: space-between; align-items: center;
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
   margin-bottom: 8px;
 }
 .cu-title {
@@ -296,40 +319,313 @@ body.theme-night .cu-output { background: #06030a; }
   padding: 0.5rem;
   border-bottom: 1px solid var(--border-soft);
 }
+/* Make the active mode obvious without disturbing the editor layout. */
+.cu-mode-switch .cu-button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
 
 .audio-blocks-panel {
-  padding: 1rem;
+  padding: 1rem 1.1rem 1.25rem;
   overflow: auto;
   min-height: 28rem;
+}
+.audio-blocks-panel > h2 {
+  font-size: 1.2rem;
+  letter-spacing: -0.01em;
+  margin-bottom: 0.5rem;
+}
+.audio-blocks-panel h3 {
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-dim);
+  margin-bottom: 0.6rem;
+}
+#audioBlocksStatus {
+  display: inline-block;
+  margin-bottom: 0.4rem;
+  padding: 0.3rem 0.75rem;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  border: 1px solid var(--border-soft);
+  color: var(--text-dim);
+  font-size: 0.82rem;
+  font-weight: 600;
 }
 
 .audio-blocks-palette,
 .audio-blocks-workspace,
 .audio-blocks-preview {
-  margin: 0.75rem 0;
-  padding: 0.75rem;
+  margin: 0.85rem 0;
+  padding: 0.95rem 1rem;
   border: 1px solid var(--border-soft);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+  box-shadow: 0 2px 12px -9px rgba(21, 10, 2, 0.35);
+}
+
+.audio-blocks-palette { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.audio-blocks-palette h3 { flex-basis: 100%; margin-bottom: 0.2rem; }
+.audio-blocks-palette .cu-button { border-radius: 999px; }
+.audio-blocks-palette .cu-button[data-category] { --cat: var(--accent); padding-left: 0.8rem; }
+.audio-blocks-palette .cu-button[data-category="output"]    { --cat: var(--cat-output); }
+.audio-blocks-palette .cu-button[data-category="variables"] { --cat: var(--cat-variables); }
+.audio-blocks-palette .cu-button[data-category="loops"]     { --cat: var(--cat-loops); }
+.audio-blocks-palette .cu-button[data-category]::before {
+  content: "";
+  display: inline-block;
+  width: 0.62rem; height: 0.62rem;
+  margin-right: 0.45rem;
+  border-radius: 50%;
+  background: var(--cat);
+  vertical-align: middle;
 }
 
 .audio-blocks-controls {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.4rem;
+  gap: 0.45rem;
+  margin: 0.85rem 0;
 }
+.audio-blocks-controls .cu-button { border-radius: 999px; }
 
-.audio-blocks-list-item {
-  margin: 0.35rem 0;
-  padding: 0.55rem;
+#audioBlocksList { list-style: none; margin: 0; padding: 0; }
+
+/* Block cards ------------------------------------------------------------- */
+.audio-block {
+  --cat: var(--accent);
+  position: relative;
+  list-style: none;
+  margin: 0.5rem 0;
+  padding: 0.55rem 0.8rem 0.6rem;
   border: 1px solid var(--border-soft);
-  border-left: 0.35rem solid var(--accent);
+  border-left: 0.42rem solid var(--cat);
+  border-radius: var(--radius-md);
   background: var(--bg-soft);
+  background: color-mix(in srgb, var(--cat) 10%, var(--bg-panel));
+  box-shadow: 0 2px 6px -3px rgba(21, 10, 2, 0.28);
+  transition: transform .12s ease, box-shadow .15s ease, border-color .15s ease;
+}
+.audio-block:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 16px -10px rgba(21, 10, 2, 0.45);
 }
 
-.audio-blocks-list-item[aria-current="true"],
-.audio-blocks-panel button:focus-visible,
+.audio-block--output     { --cat: var(--cat-output); }
+.audio-block--variables  { --cat: var(--cat-variables); }
+.audio-block--math       { --cat: var(--cat-math); }
+.audio-block--conditions { --cat: var(--cat-conditions); }
+.audio-block--loops      { --cat: var(--cat-loops); }
+.audio-block--lists      { --cat: var(--cat-lists); }
+.audio-block--functions  { --cat: var(--cat-functions); }
+.audio-block--input      { --cat: var(--cat-input); }
+.audio-block--comments   { --cat: var(--cat-comments); }
+
+.audio-block__header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.3rem; flex-wrap: wrap; }
+.audio-block__num {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 1.55rem; height: 1.55rem; padding: 0 0.4rem;
+  border-radius: 999px;
+  font-family: var(--font-mono); font-size: 0.74rem; font-weight: 700;
+  background: var(--cat); color: var(--bg-panel);
+}
+.audio-block__badge {
+  padding: 0.08rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.66rem; font-weight: 700;
+  letter-spacing: 0.05em; text-transform: uppercase;
+  color: var(--cat);
+  background: var(--bg-panel);
+  background: color-mix(in srgb, var(--cat) 15%, var(--bg-panel));
+  border: 1px solid var(--cat);
+}
+.audio-block__branch {
+  padding: 0.08rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.64rem; font-weight: 700;
+  letter-spacing: 0.05em; text-transform: uppercase;
+  background: var(--warning); color: var(--bg-panel);
+}
+.audio-block__label {
+  display: block;
+  font-size: 0.92rem; line-height: 1.4; font-weight: 600;
+  color: var(--text-main);
+  word-break: break-word;
+}
+
+/* Nesting: indent guide rail + dashed stripe for else branches. */
+.audio-block--nested::before {
+  content: "";
+  position: absolute;
+  left: -0.85rem; top: 0; bottom: 0;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--border-strong);
+}
+.audio-block--else { border-left-style: dashed; }
+
+/* Current block: strong, color-independent outline that survives high contrast. */
+.audio-block--current {
+  border-color: var(--cat);
+  outline: 3px solid var(--cat);
+  outline-offset: 2px;
+  box-shadow: 0 6px 16px -9px rgba(21, 10, 2, 0.5);
+}
+
+/* Keyboard focus stays obvious on every interactive surface. */
+.audio-block:focus-visible,
 .audio-blocks-workspace:focus-visible,
-.audio-blocks-list-item:focus-visible {
+.audio-blocks-panel button:focus-visible {
   outline: 3px solid var(--accent);
   outline-offset: 2px;
 }
+
+.audio-blocks-empty {
+  margin: 0.4rem 0 0;
+  padding: 1.3rem 1rem;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-soft);
+  color: var(--text-dim);
+  text-align: center;
+  font-size: 0.92rem; line-height: 1.55;
+}
+.audio-blocks-empty strong { color: var(--text-main); }
+
+.audio-blocks-preview > h3 { margin-bottom: 0.5rem; }
+#audioBlocksCodePreview {
+  margin: 0;
+  padding: 0.85rem 1rem;
+  border-radius: var(--radius-md);
+  background: var(--text-main); color: #f3e7d2;
+  font-family: var(--font-mono); font-size: 0.88rem; line-height: 1.6;
+  overflow: auto; white-space: pre-wrap; word-break: break-word;
+}
+body.theme-night #audioBlocksCodePreview { background: #06030a; }
+
+/* High contrast: drop tints/shadows, keep meaning in text and borders. */
+body.theme-high-contrast .audio-block {
+  background: #fff;
+  border-color: #000;
+  border-left-color: #000;
+  box-shadow: none;
+}
+body.theme-high-contrast .audio-block__num { background: #000; color: #fff; }
+body.theme-high-contrast .audio-block__badge,
+body.theme-high-contrast .audio-block__branch {
+  background: #fff; color: #000; border: 1px solid #000;
+}
+body.theme-high-contrast .audio-block--current { outline-color: #000; }
+body.theme-high-contrast .audio-blocks-palette .cu-button[data-category]::before {
+  background: #000;
+}
+
+/* Respect OS-level reduced motion in addition to the in-app toggle. */
+@media (prefers-reduced-motion: reduce) {
+  .audio-block { transition: none; }
+  .audio-block:hover { transform: none; }
+}
+
+/* ============================================================
+   IDE declutter: collapsible disclosures, mode badge, command help
+   Secondary controls live inside native <details> so the first screen
+   stays calm while every control keeps its id, label, and keyboard path.
+   ============================================================ */
+.cu-disclosure {
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+  margin: 0.35rem 0;
+}
+.cu-disclosure-summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.5rem 0.8rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text-main);
+  border-radius: var(--radius-md);
+  -webkit-user-select: none;
+  user-select: none;
+}
+.cu-disclosure-summary::-webkit-details-marker { display: none; }
+.cu-disclosure-summary::before {
+  content: "\25B8";
+  color: var(--text-dim);
+  font-size: 0.7rem;
+  transition: transform .15s ease;
+}
+.cu-disclosure[open] > .cu-disclosure-summary::before { transform: rotate(90deg); }
+.cu-disclosure-summary:hover { background: var(--accent-soft); color: var(--accent); }
+.cu-disclosure-summary:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+.cu-disclosure-body,
+.cu-tools-row,
+.audio-blocks-actions-row,
+.cu-help-content {
+  padding: 0.3rem 0.8rem 0.75rem;
+}
+.cu-tools-row,
+.audio-blocks-actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  align-items: center;
+}
+
+/* Header mode badge + inline settings disclosure */
+.cu-mode-badge {
+  padding: 0.28rem 0.7rem;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.cu-header-settings { margin-left: auto; background: transparent; border: none; }
+.cu-header-settings > .cu-disclosure-summary {
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  background: var(--bg-main);
+}
+.cu-header-settings[open] {
+  border: 1px solid var(--border-soft);
+  background: var(--bg-panel);
+}
+.cu-header-settings .cu-theme-controls { margin-top: 0.5rem; }
+
+/* Command help disclosure */
+.cu-help-intro { color: var(--text-dim); font-size: 0.85rem; margin: 0 0 0.7rem; line-height: 1.5; }
+.cu-help-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.7rem;
+}
+.cu-help-group {
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-main);
+  padding: 0.5rem 0.7rem;
+}
+.cu-help-group h4 {
+  font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--accent); margin: 0 0 0.35rem;
+}
+.cu-help-group ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.2rem; }
+.cu-help-group li { font-family: var(--font-mono); font-size: 0.78rem; color: var(--text-main); line-height: 1.35; }
+
+/* High-contrast keeps disclosure summaries legible. */
+body.theme-high-contrast .cu-disclosure-summary:hover { background: #000; color: #fff; }
+body.theme-high-contrast .cu-mode-badge { background: #fff; color: #000; border: 1px solid #000; }

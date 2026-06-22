@@ -43,16 +43,10 @@
   <header class="cu-header">
     <div class="cu-header-top">
       <h1 class="cu-title">CODEUP</h1>
-      <div class="cu-status-pill" aria-label="AI model: Llama 3.3 via Groq">LLAMA 3.3</div>
-    </div>
-    <div class="cu-subtitle">
-      A blind-first Python IDE for accessible learning.
-      Press <span class="cu-hotkey">Ctrl+Enter</span> to run.
-    </div>
-    <div class="cu-subtitle-info">
-      <small>Fully keyboard accessible · Real-time execution · No external dependencies needed</small>
-    </div>
-    <div class="cu-theme-controls" role="group" aria-label="Accessibility settings">
+      <span id="cuModeStatus" class="cu-mode-badge" role="status" aria-live="polite" aria-label="Current mode">Python Code Mode</span>
+      <details class="cu-disclosure cu-header-settings">
+        <summary class="cu-disclosure-summary" aria-label="Display and accessibility settings">Settings</summary>
+        <div class="cu-theme-controls" role="group" aria-label="Accessibility settings">
       <select id="colorVisionMode" class="theme-selector" aria-label="Color vision mode">
         <option value="default">Standard Colors (no special mode)</option>
         <option value="protanopia">Protanopia (Red-blind)</option>
@@ -92,63 +86,81 @@
         Browser Speech (On)
       </button>
       <a href="/accessibility">Accessibility help</a>
+        </div>
+      </details>
+    </div>
+    <div class="cu-subtitle">
+      A blind-first Python IDE. Press <span class="cu-hotkey">Ctrl+Enter</span> to run, or say <strong>&quot;what can I do here&quot;</strong>.
     </div>
   </header>
 
   <main class="cu-main">
 
-    <aside class="cu-panel cu-snippets" aria-label="Saved snippets">
-      <div class="cu-panel-title" id="snippets-heading">SNIPPETS</div>
-      <div class="cu-snippet-save" style="display:flex;gap:6px;margin-bottom:10px;">
-        <input
-          id="snippetNameInput"
-          type="text"
-          placeholder="Snippet name..."
-          aria-label="Snippet name"
-          style="flex:1;padding:7px 10px;border-radius:var(--radius-sm);border:1px solid var(--border-soft);background:var(--bg-soft);color:var(--text-main);font-family:inherit;font-size:0.85rem;"
-        />
-        <button
-          id="snippetSaveBtn"
-          class="cu-button cu-button-secondary"
-          aria-label="Save snippet with this name"
-          style="padding:6px 10px;font-size:0.8rem;"
-        >Save</button>
-      </div>
-      <div id="snippetList" class="cu-snippet-list" aria-labelledby="snippets-heading" style="max-height:180px;"></div>
+    <aside class="cu-panel cu-snippets" aria-label="Editor tools">
+      <details class="cu-disclosure">
+        <summary class="cu-disclosure-summary">Snippets</summary>
+        <div class="cu-disclosure-body">
+          <div class="cu-snippet-save" style="display:flex;gap:6px;margin-bottom:10px;">
+            <input
+              id="snippetNameInput"
+              type="text"
+              placeholder="Snippet name..."
+              aria-label="Snippet name"
+              style="flex:1;padding:7px 10px;border-radius:var(--radius-sm);border:1px solid var(--border-soft);background:var(--bg-soft);color:var(--text-main);font-family:inherit;font-size:0.85rem;"
+            />
+            <button
+              id="snippetSaveBtn"
+              class="cu-button cu-button-secondary"
+              aria-label="Save snippet with this name"
+              style="padding:6px 10px;font-size:0.8rem;"
+            >Save</button>
+          </div>
+          <div id="snippetList" class="cu-snippet-list" aria-label="Saved snippets" style="max-height:180px;"></div>
+        </div>
+      </details>
 
-      <div class="cu-panel-title" id="project-files-heading" style="margin-top:16px;">PROJECT FILES</div>
-      <div id="projectFileList" class="cu-snippet-list" aria-labelledby="project-files-heading" style="max-height:180px;">
-        <div style="color:var(--text-dim);font-style:italic;padding:6px 0;font-size:0.8rem;">Single-file mode</div>
-      </div>
+      <details class="cu-disclosure">
+        <summary class="cu-disclosure-summary">Project files</summary>
+        <div class="cu-disclosure-body">
+          <div id="projectFileList" class="cu-snippet-list" aria-label="Project files" style="max-height:180px;">
+            <div style="color:var(--text-dim);font-style:italic;padding:6px 0;font-size:0.8rem;">Single-file mode</div>
+          </div>
+        </div>
+      </details>
 
-      <div class="cu-panel-title" style="margin-top:16px;display:flex;justify-content:space-between;align-items:center;">
-        <span>INPUTS</span>
-        <span id="inputModeIndicator"
-              style="font-size:0.65rem;padding:2px 6px;border-radius:4px;background:var(--accent-soft);color:var(--accent);border:1px solid var(--accent);"
-              title="Pre-flight input mode">PRE-FLIGHT</span>
-      </div>
-      <div style="display:flex;gap:6px;margin-bottom:8px;">
-        <input
-          id="inputAddField"
-          type="text"
-          placeholder="Add an input value..."
-          aria-label="Add a pre-flight input value"
-          style="flex:1;padding:7px 10px;border-radius:var(--radius-sm);border:1px solid var(--border-soft);background:var(--bg-soft);color:var(--text-main);font-family:inherit;font-size:0.85rem;"
-        />
-        <button
-          id="inputAddBtn"
-          class="cu-button cu-button-secondary"
-          aria-label="Add this input value"
-          style="padding:6px 10px;font-size:0.8rem;"
-        >+</button>
-      </div>
-      <div id="inputsPanelList" aria-label="Pre-flight inputs">
-        <div style="color:var(--text-dim);font-style:italic;padding:6px 0;font-size:0.8rem;">No inputs declared</div>
-      </div>
-      <div style="display:flex;gap:6px;margin-top:8px;">
-        <button id="clearInputsBtn" class="cu-button" style="flex:1;font-size:0.75rem;padding:6px 8px;" aria-label="Clear all pre-flight inputs">Clear</button>
-        <button id="toggleInputModeBtn" class="cu-button" style="flex:1;font-size:0.75rem;padding:6px 8px;" aria-label="Toggle between pre-flight and live input mode">Live</button>
-      </div>
+      <details class="cu-disclosure">
+        <summary class="cu-disclosure-summary">Program inputs</summary>
+        <div class="cu-disclosure-body">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+            <span style="font-size:0.72rem;letter-spacing:0.08em;color:var(--text-dim);font-weight:700;">INPUT MODE</span>
+            <span id="inputModeIndicator"
+                  style="font-size:0.65rem;padding:2px 6px;border-radius:4px;background:var(--accent-soft);color:var(--accent);border:1px solid var(--accent);"
+                  title="Pre-flight input mode">PRE-FLIGHT</span>
+          </div>
+          <div style="display:flex;gap:6px;margin-bottom:8px;">
+            <input
+              id="inputAddField"
+              type="text"
+              placeholder="Add an input value..."
+              aria-label="Add a pre-flight input value"
+              style="flex:1;padding:7px 10px;border-radius:var(--radius-sm);border:1px solid var(--border-soft);background:var(--bg-soft);color:var(--text-main);font-family:inherit;font-size:0.85rem;"
+            />
+            <button
+              id="inputAddBtn"
+              class="cu-button cu-button-secondary"
+              aria-label="Add this input value"
+              style="padding:6px 10px;font-size:0.8rem;"
+            >+</button>
+          </div>
+          <div id="inputsPanelList" aria-label="Pre-flight inputs">
+            <div style="color:var(--text-dim);font-style:italic;padding:6px 0;font-size:0.8rem;">No inputs declared</div>
+          </div>
+          <div style="display:flex;gap:6px;margin-top:8px;">
+            <button id="clearInputsBtn" class="cu-button" style="flex:1;font-size:0.75rem;padding:6px 8px;" aria-label="Clear all pre-flight inputs">Clear</button>
+            <button id="toggleInputModeBtn" class="cu-button" style="flex:1;font-size:0.75rem;padding:6px 8px;" aria-label="Toggle between pre-flight and live input mode">Live</button>
+          </div>
+        </div>
+      </details>
     </aside>
 
     <section class="cu-panel cu-editor-wrapper" aria-label="Code editor">
@@ -168,25 +180,31 @@
         <section class="audio-blocks-palette" role="region" aria-label="Block palette">
           <h3>Block palette</h3>
           <button class="cu-button" data-block-command="list block categories" aria-label="List block categories">Categories</button>
-          <button class="cu-button" data-block-command="add print block" aria-label="Add print text block">Add print</button>
-          <button class="cu-button" data-block-command="add variable total equals 0" aria-label="Add variable total equals zero">Add variable</button>
-          <button class="cu-button" data-block-command="add repeat 3 times block" aria-label="Add repeat three times block">Add repeat</button>
+          <button class="cu-button" data-block-command="add print block" data-category="output" aria-label="Add print text block">Add print</button>
+          <button class="cu-button" data-block-command="add variable total equals 0" data-category="variables" aria-label="Add variable total equals zero">Add variable</button>
+          <button class="cu-button" data-block-command="add repeat 3 times block" data-category="loops" aria-label="Add repeat three times block">Add repeat</button>
         </section>
         <section class="audio-blocks-workspace" role="region" aria-label="Block workspace" tabindex="0" aria-describedby="audioBlocksKeyboardHelp">
           <h3>Numbered block workspace</h3>
           <p id="audioBlocksKeyboardHelp">Arrow keys read blocks. Control plus arrows move blocks. Left bracket outdents, right bracket indents, Delete removes, Control Enter compiles, and Control Shift Enter runs.</p>
-          <ol id="audioBlocksList" aria-label="Numbered blocks"></ol>
+          <ol id="audioBlocksList" role="list" aria-label="Numbered blocks"></ol>
+          <p id="audioBlocksEmptyState" class="audio-blocks-empty">No blocks yet. Say <strong>add print block</strong> or <strong>list block categories</strong> to add your first block.</p>
         </section>
         <div class="audio-blocks-controls" role="toolbar" aria-label="Audio Blocks controls">
           <button class="cu-button" data-block-command="previous block" aria-label="Read previous block">Previous</button>
           <button class="cu-button" data-block-command="next block" aria-label="Read next block">Next</button>
-          <button class="cu-button" id="audioBlockMoveUpBtn" aria-label="Move current block up">Move up</button>
-          <button class="cu-button" id="audioBlockMoveDownBtn" aria-label="Move current block down">Move down</button>
-          <button class="cu-button" id="audioBlockIndentBtn" aria-label="Indent current block">Indent</button>
-          <button class="cu-button" id="audioBlockOutdentBtn" aria-label="Outdent current block">Outdent</button>
-          <button class="cu-button" id="audioBlockDeleteBtn" aria-label="Delete current block">Delete</button>
           <button class="cu-button cu-button-primary" data-block-command="compile blocks to Python" aria-label="Compile blocks to Python">Compile</button>
           <button class="cu-button cu-button-primary" data-block-command="run blocks" aria-label="Compile and run blocks">Run blocks</button>
+          <details class="cu-disclosure cu-block-actions">
+            <summary class="cu-disclosure-summary">Block actions</summary>
+            <div class="audio-blocks-actions-row">
+              <button class="cu-button" id="audioBlockMoveUpBtn" aria-label="Move current block up">Move up</button>
+              <button class="cu-button" id="audioBlockMoveDownBtn" aria-label="Move current block down">Move down</button>
+              <button class="cu-button" id="audioBlockIndentBtn" aria-label="Indent current block">Indent</button>
+              <button class="cu-button" id="audioBlockOutdentBtn" aria-label="Outdent current block">Outdent</button>
+              <button class="cu-button" id="audioBlockDeleteBtn" aria-label="Delete current block">Delete</button>
+            </div>
+          </details>
         </div>
         <section class="audio-blocks-preview" role="region" aria-label="Generated code preview">
           <h3>Generated Python preview</h3>
@@ -196,19 +214,24 @@
 
       <div class="cu-command-bar" role="toolbar" aria-label="Editor actions">
         <button class="cu-button cu-button-primary" id="runBtn" aria-label="Run Python code (Ctrl+Enter)">Run</button>
-        <button class="cu-button" id="analyzeBtn" aria-label="Analyze code with AI">Analyze</button>
-        <button class="cu-button" id="fixBtn" aria-label="Fix code automatically">Fix</button>
         <button class="cu-button cu-button-voice" id="voiceButton" aria-label="Toggle voice control" aria-pressed="false">
           Voice (Off)
         </button>
         <span id="voiceStateIndicator" class="voice-state-indicator" aria-live="polite" aria-atomic="true"></span>
-        <button class="cu-button" id="codeMapBtn" aria-label="Audio code map - hear program structure">Code Map</button>
-        <button class="cu-button" id="stepNarrationBtn" aria-label="Run with step narration">Step Narration</button>
-        <button class="cu-button" id="mistakeReplayBtn" aria-label="Compare before and after mistake">Mistake Replay</button>
-        <button class="cu-button cu-button-secondary" id="saveBtn" aria-label="Save current code as snippet">Save</button>
-        <select id="languageSelector" class="cu-language-selector" aria-label="Response language: English" disabled title="CodeUp is English-only for now">
-          <option value="en">English</option>
-        </select>
+        <details class="cu-disclosure cu-tools-disclosure">
+          <summary class="cu-disclosure-summary">More tools</summary>
+          <div class="cu-tools-row">
+            <button class="cu-button" id="analyzeBtn" aria-label="Analyze code with AI">Analyze</button>
+            <button class="cu-button" id="fixBtn" aria-label="Fix code automatically">Fix</button>
+            <button class="cu-button" id="codeMapBtn" aria-label="Audio code map - hear program structure">Code Map</button>
+            <button class="cu-button" id="stepNarrationBtn" aria-label="Run with step narration">Step Narration</button>
+            <button class="cu-button" id="mistakeReplayBtn" aria-label="Compare before and after mistake">Mistake Replay</button>
+            <button class="cu-button cu-button-secondary" id="saveBtn" aria-label="Save current code as snippet">Save</button>
+            <select id="languageSelector" class="cu-language-selector" aria-label="Response language: English" disabled title="CodeUp is English-only for now">
+              <option value="en">English</option>
+            </select>
+          </div>
+        </details>
       </div>
 
     </section>
@@ -269,6 +292,55 @@
         <div><span class="cu-command-understanding-label">Understood:</span> <span id="understoodCommand">Waiting for a command.</span></div>
         <div><span class="cu-command-understanding-label">Next action:</span> <span id="nextCommandAction">None yet.</span></div>
       </div>
+
+      <details id="cuHelpPanel" class="cu-disclosure cu-help-disclosure">
+        <summary class="cu-disclosure-summary">Show commands &amp; help</summary>
+        <div class="cu-help-content">
+          <p class="cu-help-intro">Everything works by voice or by typing a command here — you do not need buttons. Say or type any command below, or say <strong>&quot;what can I do here&quot;</strong>.</p>
+          <div class="cu-help-grid">
+            <section class="cu-help-group" aria-label="Start commands">
+              <h4>Start</h4>
+              <ul><li>what can I do here</li><li>start tutorial</li><li>start learning path</li></ul>
+            </section>
+            <section class="cu-help-group" aria-label="Run commands">
+              <h4>Run</h4>
+              <ul><li>run</li><li>read last output</li><li>read last error</li></ul>
+            </section>
+            <section class="cu-help-group" aria-label="Debug commands">
+              <h4>Debug</h4>
+              <ul><li>read errors only</li><li>preflight check</li><li>run with step narration</li></ul>
+            </section>
+            <section class="cu-help-group" aria-label="Navigate commands">
+              <h4>Navigate</h4>
+              <ul><li>where is my cursor</li><li>read around me</li><li>give me a code map</li></ul>
+            </section>
+            <section class="cu-help-group" aria-label="Edit commands">
+              <h4>Edit</h4>
+              <ul><li>insert print hello world</li><li>comment this line</li><li>rename total to score</li></ul>
+            </section>
+            <section class="cu-help-group" aria-label="Learn commands">
+              <h4>Learn</h4>
+              <ul><li>next lesson</li><li>give lesson hint</li><li>start error practice</li></ul>
+            </section>
+            <section class="cu-help-group" aria-label="Audio Blocks commands">
+              <h4>Audio Blocks</h4>
+              <ul><li>open audio blocks (voice only)</li><li>add print block</li><li>list block categories</li></ul>
+            </section>
+            <section class="cu-help-group" aria-label="Accessibility commands">
+              <h4>Accessibility</h4>
+              <ul><li>enable screen reader mode</li><li>show keyboard shortcuts</li><li>set screen reader to NVDA</li></ul>
+            </section>
+            <section class="cu-help-group" aria-label="Project commands">
+              <h4>Project</h4>
+              <ul><li>show requirements</li><li>check missing files</li><li>show code stats</li></ul>
+            </section>
+            <section class="cu-help-group" aria-label="Export commands">
+              <h4>Export</h4>
+              <ul><li>export project</li><li>export blocks and python</li><li>generate teacher report</li></ul>
+            </section>
+          </div>
+        </div>
+      </details>
     </div>
   </section>
 

@@ -53,6 +53,13 @@ CATALOG: Dict[str, List[Tuple[str, str]]] = {
 BLOCK_LABELS = {
     block_type: label for items in CATALOG.values() for block_type, label in items
 }
+# Reverse lookup so the UI can color/group each block by its category. This is a
+# styling hook only; the block model and compilation are unchanged.
+BLOCK_CATEGORY = {
+    block_type: category
+    for category, items in CATALOG.items()
+    for block_type, _label in items
+}
 CONTAINERS = {
     "if_condition",
     "if_else_condition",
@@ -1003,6 +1010,7 @@ def public_workspace(workspace: Dict[str, Any]) -> Dict[str, Any]:
             b["id"] for b in blocks if b.get("parent_id") == block["id"]
         ]
         block["generated"] = _line_for(block)
+        block["category"] = BLOCK_CATEGORY.get(block.get("type"), "")
     return {
         "mode": workspace.get("mode", "code"),
         "blocks": blocks,

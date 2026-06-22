@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import re
 import time
 import zipfile
 from typing import Dict, List, Tuple
@@ -44,10 +45,14 @@ EXCLUDE_FILE_NAMES = {".env", ".gitignore", ".dockerignore"}
 EXCLUDE_FILE_SUFFIXES = (".key", ".pem", ".p12", ".pfx", ".pyc", ".pyo", ".log")
 
 SECRET_CONTENT_MARKERS = (
-    "API_KEY=", "SECRET=", "TOKEN=", "PASSWORD=",
     "GROQ_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
     "-----BEGIN PRIVATE KEY-----", "-----BEGIN RSA PRIVATE KEY-----",
     "-----BEGIN OPENSSH PRIVATE KEY-----",
+)
+SECRET_ASSIGNMENT_RE = re.compile(
+    r"(?im)\b(?:[A-Z][A-Z0-9_]*_)?(?:API_KEY|SECRET|TOKEN|PASSWORD)"
+    r"(?:_[A-Z0-9_]+)?"
+    r"\s*(?:=|:)\s*(?:(['\"])[^\r\n]*?\1|[^\s#,'\"}\])(;]+(?=\s*(?:#.*)?$))"
 )
 
 MAX_EXPORT_FILES = 200
@@ -77,7 +82,10 @@ def is_excluded_path(relpath: str) -> bool:
 def content_has_secret(text: str) -> bool:
     if not text:
         return False
-    return any(marker in text for marker in SECRET_CONTENT_MARKERS)
+    upper_text = text.upper()
+    return any(marker in upper_text for marker in SECRET_CONTENT_MARKERS) or bool(
+        SECRET_ASSIGNMENT_RE.search(text)
+    )
 
 
 def safe_file_map(files: Dict[str, str]) -> Tuple[Dict[str, str], List[Dict[str, str]]]:

@@ -44,6 +44,8 @@ class TestSafety:
     def test_secret_content_detected(self):
         assert export_support.content_has_secret("GROQ_API_KEY=abc123")
         assert export_support.content_has_secret("API_KEY=zzz")
+        assert export_support.content_has_secret('API_KEY = "sk-test-fake-secret"')
+        assert export_support.content_has_secret("password = 'fake-password'")
         assert export_support.content_has_secret("-----BEGIN PRIVATE KEY-----")
         assert not export_support.content_has_secret('password = input("pw: ")')
 
@@ -88,12 +90,17 @@ class TestExportRoute:
             ".claude/launch.json": "x",
             "node_modules/lib.js": "x",
             "creds.py": "SECRET=topsecret",
+            "spaced.py": 'API_KEY = "sk-test-fake-secret"',
+            "password.py": 'password = "fake-password"',
         }}
         data = client.post("/export-project", json={"project": project}).get_json()
         dl = client.get(data["download_url"])
         names = _names(dl.data)
         assert names == {"main.py", "codeup_project_report.md", *HANDOFF_FILES}
-        for bad in (".env", ".git/config", "__pycache__/m.pyc", ".claude/launch.json", "node_modules/lib.js", "creds.py"):
+        for bad in (
+            ".env", ".git/config", "__pycache__/m.pyc", ".claude/launch.json",
+            "node_modules/lib.js", "creds.py", "spaced.py", "password.py",
+        ):
             assert bad not in names
 
     def test_download_returns_zip(self, client):

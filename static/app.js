@@ -2094,6 +2094,7 @@ async function runCode(runFile) {
     window.traceIndex = 0;
 
     if (data.success) {
+      clearSrAlert();
       out(data.output);
       cueSuccess();
       ErrorBeaconManager.stop();
@@ -2948,6 +2949,15 @@ function srAnnounce(msg, priority = 'polite') {
 
 function srAlert(msg) {
   srAnnounce(msg, 'assertive');
+}
+
+function clearSrAlert() {
+  const el = document.getElementById('srAlert');
+  if (!el) return;
+  clearTimeout(_liveRegionTimers.assertive);
+  el.textContent = '';
+  _lastLiveRegionMessages.assertive = '';
+  _lastLiveRegionTimes.assertive = 0;
 }
 
 async function saveSnippet() {

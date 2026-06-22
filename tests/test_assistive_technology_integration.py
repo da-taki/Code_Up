@@ -122,6 +122,11 @@ def test_frontend_routes_visual_output_to_live_regions():
     assert "srAnnounce(text, isError ? 'assertive' : 'polite')" in source
     assert "found \\d+ errors?" in source
     assert "function srAlert(msg)" in source
+    assert "function clearSrAlert()" in source
+    run_code = source[source.index("async function runCode("):]
+    success_start = run_code.index("if (data.success) {")
+    run_success = run_code[success_start:run_code.index("} else {", success_start)]
+    assert run_success.index("clearSrAlert();") < run_success.index("out(data.output);")
     assert "replace(/<module>/g, 'top-level code')" in source
 
 

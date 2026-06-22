@@ -112,3 +112,31 @@ def test_app_js_applies_block_category_and_state_classes():
     js = Path("static/app.js").read_text(encoding="utf-8")
     for token in ("audio-block--", "audio-block--current", "audio-block--nested"):
         assert token in js, f"renderAudioBlocks should apply {token} for styling"
+
+
+# --- Monaco editor visibility (Code Mode shell) ------------------------------
+
+def test_code_mode_editor_shell_is_visible_by_default(client):
+    html = _ide_html(client)
+    visible = _visible_html(html)
+    # The Monaco mount point and its region are part of the visible first screen.
+    assert 'id="editor"' in visible
+    assert 'id="codeModeRegion"' in visible
+    region = re.search(r'<div[^>]*id="codeModeRegion"[^>]*>', html).group(0)
+    assert "hidden" not in region, "Code Mode editor region must be visible on load"
+    panel = re.search(r'<section[^>]*id="audioBlocksPanel"[^>]*>', html).group(0)
+    assert "hidden" in panel, "Audio Blocks panel must be hidden on load"
+
+
+def test_editor_is_not_trapped_inside_a_collapsed_details(client):
+    collapsed = "\n".join(_details_blocks(_ide_html(client)))
+    assert 'id="editor"' not in collapsed, "the Monaco editor must not be inside a collapsed <details>"
+    assert 'id="codeModeRegion"' not in collapsed
+
+
+def test_app_js_forces_monaco_layout_after_load_and_mode_switch():
+    # jsdom cannot measure Monaco, so assert the layout-hardening hooks exist:
+    # a layout pass after first paint and when returning to Code Mode.
+    js = Path("static/app.js").read_text(encoding="utf-8")
+    assert "editor.layout()" in js, "an explicit Monaco layout call must exist"
+    assert "requestAnimationFrame" in js, "layout should be forced on the next frame"

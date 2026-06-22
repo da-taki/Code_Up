@@ -1028,6 +1028,11 @@ function renderAudioBlocks(state) {
   if (codeButton) codeButton.setAttribute('aria-pressed', String(!isBlocks));
   const modeBadge = document.getElementById('cuModeStatus');
   if (modeBadge) modeBadge.textContent = isBlocks ? 'Audio Blocks Mode' : 'Python Code Mode';
+  // Returning to Code Mode un-hides the editor container (it was display:none in
+  // Audio Blocks Mode); force a layout so Monaco refills it instead of staying blank.
+  if (!isBlocks && typeof editor !== 'undefined' && editor && editor.layout) {
+    requestAnimationFrame(() => { try { editor.layout(); } catch (e) {} });
+  }
 
   const blocks = Array.isArray(state.blocks) ? state.blocks : [];
   const list = document.getElementById('audioBlocksList');
@@ -1477,6 +1482,15 @@ require(['vs/editor/editor.main'], function () {
   registerPythonAutocomplete();
   registerEditorShortcuts();
   loadSnippets();
+
+  // Guarantee Monaco measures its real container after first paint. If the
+  // container size is not final at creation time (web-font load, flex reflow),
+  // automaticLayout can race and the editor paints blank until a resize. Forcing
+  // a layout on the next frames closes that window so Code Mode is always visible.
+  const _forceEditorLayout = () => { try { if (editor) editor.layout(); } catch (e) {} };
+  requestAnimationFrame(_forceEditorLayout);
+  setTimeout(_forceEditorLayout, 200);
+  window.addEventListener('load', _forceEditorLayout, { once: true });
 });
 
 function getModel() { return editor && editor.getModel(); }

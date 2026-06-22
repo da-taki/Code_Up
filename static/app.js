@@ -1026,19 +1026,62 @@ function renderAudioBlocks(state) {
   if (codeRegion) codeRegion.hidden = isBlocks;
   if (blockButton) blockButton.setAttribute('aria-pressed', String(isBlocks));
   if (codeButton) codeButton.setAttribute('aria-pressed', String(!isBlocks));
+  const modeBadge = document.getElementById('cuModeStatus');
+  if (modeBadge) modeBadge.textContent = isBlocks ? 'Audio Blocks Mode' : 'Python Code Mode';
 
   const blocks = Array.isArray(state.blocks) ? state.blocks : [];
   const list = document.getElementById('audioBlocksList');
   if (list) {
     list.textContent = '';
     blocks.forEach(block => {
+      const indent = Math.max(0, Math.min(Number(block.indent) || 0, 6));
+      const category = String(block.category || '');
+      const categoryName = category ? category.charAt(0).toUpperCase() + category.slice(1) : 'Block';
+      const isCurrent = block.id === state.cursor_id;
       const item = document.createElement('li');
-      item.className = 'audio-blocks-list-item';
-      item.tabIndex = block.id === state.cursor_id ? 0 : -1;
-      item.setAttribute('aria-current', block.id === state.cursor_id ? 'true' : 'false');
-      item.setAttribute('aria-label', `Block ${block.id}, ${block.label}, nesting level ${block.indent}`);
-      item.style.marginLeft = `${Math.min(Number(block.indent) || 0, 6) * 1.25}rem`;
-      item.textContent = `Block ${block.id}: ${block.label}`;
+      // Keep the legacy class plus stable styling-hook classes for category,
+      // current, nested, and else-branch state.
+      item.className = 'audio-blocks-list-item audio-block';
+      if (category) item.classList.add('audio-block--' + category);
+      if (isCurrent) item.classList.add('audio-block--current');
+      if (indent > 0) item.classList.add('audio-block--nested');
+      if (block.branch === 'else') item.classList.add('audio-block--else');
+      if (Array.isArray(block.children) && block.children.length) item.classList.add('audio-block--parent');
+      item.dataset.category = category;
+      item.dataset.indent = String(indent);
+      item.tabIndex = isCurrent ? 0 : -1;
+      item.setAttribute('aria-current', isCurrent ? 'true' : 'false');
+      // The accessible name carries number, category, label, and nesting in text
+      // so meaning never depends on color. Inner spans are decorative.
+      item.setAttribute('aria-label', `Block ${block.id}, ${categoryName}, ${block.label}, nesting level ${block.indent}`);
+      item.style.marginLeft = `${indent * 1.5}rem`;
+
+      const header = document.createElement('div');
+      header.className = 'audio-block__header';
+      const num = document.createElement('span');
+      num.className = 'audio-block__num';
+      num.textContent = block.id;
+      num.setAttribute('aria-hidden', 'true');
+      const badge = document.createElement('span');
+      badge.className = 'audio-block__badge';
+      badge.textContent = categoryName;
+      badge.setAttribute('aria-hidden', 'true');
+      header.appendChild(num);
+      header.appendChild(badge);
+      if (block.branch === 'else') {
+        const branchTag = document.createElement('span');
+        branchTag.className = 'audio-block__branch';
+        branchTag.textContent = 'else';
+        branchTag.setAttribute('aria-hidden', 'true');
+        header.appendChild(branchTag);
+      }
+      const labelEl = document.createElement('span');
+      labelEl.className = 'audio-block__label';
+      labelEl.textContent = block.label;
+      labelEl.setAttribute('aria-hidden', 'true');
+      item.appendChild(header);
+      item.appendChild(labelEl);
+
       item.addEventListener('click', () => audioBlocksCommand(`read block ${block.id}`));
       item.addEventListener('keydown', event => {
         if (event.key === 'Enter' || event.key === ' ') {
@@ -1048,6 +1091,8 @@ function renderAudioBlocks(state) {
       list.appendChild(item);
     });
   }
+  const emptyState = document.getElementById('audioBlocksEmptyState');
+  if (emptyState) emptyState.hidden = blocks.length > 0;
   const status = document.getElementById('audioBlocksStatus');
   if (status) {
     status.textContent = blocks.length

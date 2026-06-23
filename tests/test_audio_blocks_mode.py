@@ -554,8 +554,6 @@ def test_frontend_has_labeled_regions_buttons_keyboard_and_actions(client):
         assert token in js
 
 
-# --- Audio Blocks Mode is entered by voice only -----------------------------
-
 ENTER_PHRASES = sorted(audio_blocks.ENTER_PHRASES)
 
 

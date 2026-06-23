@@ -27,8 +27,6 @@ def _tag(html, element, element_id):
     return match.group(0)
 
 
-# --- Part 1: default mode -----------------------------------------------------
-
 def test_ide_starts_in_python_code_mode_by_default(client):
     html = _ide_html(client)
     # The Python editor region is visible and the Audio Blocks panel is hidden.
@@ -74,8 +72,6 @@ def test_code_mode_commands_still_route(client, text, payload):
     assert data.get("success") is not False
     assert data.get("action") not in (None, "unknown")
 
-
-# --- Part 3 / 4: docs consolidated into README -------------------------------
 
 DELETED_DOCS = [
     "docs/AUDIO_BLOCKS_MODE.md",

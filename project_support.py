@@ -190,7 +190,6 @@ from score import grade_quiz
 
 
 def run_quiz():
-    # These sample answers let the project run without typing input.
     sample_answers = ["b", "a", "c"]
     print("Quiz game starting.")
     score = grade_quiz(QUESTIONS, sample_answers)
@@ -219,7 +218,6 @@ if __name__ == "__main__":
 ]
 """,
         "score.py": """def grade_quiz(questions, answers):
-    # Count each matching answer.
     score = 0
     for question, answer in zip(questions, answers):
         if answer.lower() == question["answer"]:
@@ -242,7 +240,6 @@ def _pandas_marks_template() -> Tuple[Dict[str, str], str, List[str]]:
 
 
 def summarize_marks():
-    # Load the small sample CSV from this project.
     marks = load_marks("data/marks.csv")
     print("Student marks summary")
     print("Average mark:", round(marks["mark"].mean(), 2))
@@ -262,7 +259,6 @@ except ImportError as exc:
 
 
 def load_marks(path):
-    # Pandas reads the CSV relative to the project root.
     return pd.read_csv(path)
 """,
         "data/marks.csv": "name,mark\nAsha,88\nKabir,76\nMeera,93\n",
@@ -281,7 +277,6 @@ def _numpy_stats_template() -> Tuple[Dict[str, str], str, List[str]]:
 
 
 def main():
-    # The sample data is small so the output is easy to hear.
     numbers = [4, 7, 9, 10, 12]
     summary = describe_numbers(numbers)
     print("Numpy statistics project")
@@ -301,7 +296,6 @@ except ImportError as exc:
 
 
 def describe_numbers(values):
-    # Convert the list to a numpy array for numeric summaries.
     arr = np.array(values)
     return {
         "mean": float(np.mean(arr)),

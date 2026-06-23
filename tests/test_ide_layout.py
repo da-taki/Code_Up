@@ -114,8 +114,6 @@ def test_app_js_applies_block_category_and_state_classes():
         assert token in js, f"renderAudioBlocks should apply {token} for styling"
 
 
-# --- Monaco editor visibility (Code Mode shell) ------------------------------
-
 def test_code_mode_editor_shell_is_visible_by_default(client):
     html = _ide_html(client)
     visible = _visible_html(html)

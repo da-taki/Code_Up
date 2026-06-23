@@ -2448,7 +2448,6 @@ async function loadDemoById(id) {
   }
 }
 
-// indentation announced. No AI/network, so "read my code" works even when the
 function readMyCodeAloud() {
   SpeechManager.cancelAll();
   const trimmed = String(getCode() || '').replace(/\s+$/, '');
@@ -4299,7 +4298,6 @@ function tryResolveConfirmation(txt) {
     return true;
   }
 
-  //    user was stuck repeating themselves until timeout.
   pendingConfirm = null;
   speak('Okay, listening for a new command.');
   return false;
@@ -5777,8 +5775,7 @@ function normalizeSpokenCodeText(text) {
 }
 
 
-// a bare word like "Taknoor" becomes a quoted string (it is almost always a
-// expression. Keeps assignment inserts valid both inside and outside the tutorial.
+// Bare words are usually intended as text, not variable references.
 function normalizeSpokenValue(value) {
   const raw = String(value || '').trim();
   if (!raw) return '""';
@@ -5847,7 +5844,6 @@ function formatFullOutputSpeech(output) {
 }
 // ==== SPOKEN-CODE-NORMALIZERS-END ====
 
-// learner to add the indented body next; outside the tutorial the placeholder
 function tutorialBuildingActivity() {
   return !!(window.TutorialController && window.TutorialController.active &&
             window.TutorialController.model &&

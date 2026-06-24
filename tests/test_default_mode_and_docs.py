@@ -1,5 +1,5 @@
 """CodeUp must always start in Python Code Mode, Audio Blocks Mode is reachable
-only by a real voice command, and the repository keeps a single consolidated
+by both button and voice command, and the repository keeps a single consolidated
 README instead of the recent extra markdown docs."""
 
 import re
@@ -46,11 +46,15 @@ def test_ide_never_auto_opens_audio_blocks_from_stored_state():
     assert "codeupProgrammingMode" not in js
 
 
-def test_audio_blocks_button_explains_instead_of_switching():
+def test_audio_blocks_button_switches_directly():
     js = Path("static/app.js").read_text(encoding="utf-8")
-    assert "To enter Audio Blocks Mode, use voice and say open audio blocks." in js
-    # The button must not directly enter block mode any more.
-    assert "audioBlocksCommand('enter block mode')" not in js
+    assert "audioBlocksCommand('open audio blocks')" in js
+    assert "To enter Audio Blocks Mode, use voice and say open audio blocks." not in js
+
+
+def test_voice_payload_includes_visible_programming_mode():
+    js = Path("static/app.js").read_text(encoding="utf-8")
+    assert "active_mode: window.activeMode || window._activeMode || 'python'" in js
 
 
 @pytest.mark.parametrize(

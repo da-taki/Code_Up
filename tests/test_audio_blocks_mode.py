@@ -31,18 +31,31 @@ def typed(client, text, **payload):
 
 
 VALID_SLOTS = {
+    "import_module": {"module": "math"},
+    "import_alias": {"module": "numpy", "alias": "np"},
+    "from_import": {"module": "math", "name": "sqrt"},
     "print_text": {"text": "Hello"},
     "print_variable": {"variable": "total"},
+    "print_format": {"text": "Total is {total}"},
     "set_number": {"variable": "total", "value": 1},
     "set_text": {"variable": "name", "text": "Asha"},
+    "set_boolean": {"variable": "passed", "value": "true"},
+    "set_list": {"variable": "scores", "values": "[70, 80]"},
+    "set_dict": {"variable": "student", "values": "{'marks': 90}"},
     "set_expression": {"variable": "total", "expression": "2 + 3"},
     "change_variable": {"variable": "total", "value": 1},
+    "convert_type": {"variable": "age", "conversion": "int", "value": "raw_age"},
     "add_numbers": {"variable": "total", "left": "2", "right": "3"},
     "subtract_numbers": {"variable": "total", "left": "5", "right": "2"},
     "multiply_numbers": {"variable": "total", "left": "2", "right": "3"},
     "divide_numbers": {"variable": "total", "left": "6", "right": "2"},
+    "modulo_numbers": {"variable": "remainder", "left": "5", "right": "2"},
+    "power_numbers": {"variable": "squared", "left": "3", "right": "2"},
+    "boolean_expression": {"variable": "ok", "expression": "total > 2 and passed"},
     "expression": {"variable": "total", "expression": "2 * 3"},
     "if_condition": {"condition": "total > 2"},
+    "elif_condition": {"condition": "total == 2"},
+    "else_block": {},
     "if_else_condition": {"condition": "total > 2"},
     "compare_values": {
         "variable": "passed",
@@ -53,13 +66,22 @@ VALID_SLOTS = {
     "repeat_times": {"times": 3},
     "for_range": {"variable": "number", "start": 0, "stop": 3},
     "while_condition": {"condition": "total < 3"},
+    "break_block": {},
+    "continue_block": {},
+    "pass_block": {},
     "create_list": {"variable": "scores", "values": "[70, 80]"},
     "append_list": {"variable": "scores", "value": "90"},
     "print_list_item": {"variable": "scores", "index": 0},
+    "get_list_item": {"variable": "first_score", "list": "scores", "index": 0},
+    "set_list_item": {"list": "scores", "index": 0, "value": "95"},
     "loop_list": {"variable": "scores", "item": "score"},
-    "define_function": {"name": "greet"},
+    "len_value": {"variable": "score_count", "target": "scores"},
+    "define_function": {"name": "greet", "params": ""},
     "call_function": {"name": "greet", "arguments": ""},
     "return_value": {"value": "total"},
+    "try_block": {},
+    "except_block": {"exception": "Exception"},
+    "finally_block": {},
     "ask_input": {"variable": "name", "text": "Name: "},
     "ask_number_input": {"variable": "age", "text": "Age: "},
     "comment_note": {"text": "remember to test"},
@@ -68,6 +90,7 @@ VALID_SLOTS = {
 
 def test_catalog_has_all_categories_and_required_types():
     assert list(audio_blocks.CATALOG) == [
+        "imports",
         "output",
         "variables",
         "math",
@@ -75,6 +98,7 @@ def test_catalog_has_all_categories_and_required_types():
         "loops",
         "lists",
         "functions",
+        "exceptions",
         "input",
         "comments",
     ]
@@ -198,21 +222,35 @@ def test_if_else_function_and_list_compilers():
 def test_every_required_block_type_participates_in_a_valid_compilation():
     workspace = audio_blocks.new_workspace()
     noncontainers = [
+        "import_module",
+        "import_alias",
+        "from_import",
         "print_text",
         "print_variable",
+        "print_format",
         "set_number",
         "set_text",
+        "set_boolean",
+        "set_list",
+        "set_dict",
         "set_expression",
         "change_variable",
+        "convert_type",
         "add_numbers",
         "subtract_numbers",
         "multiply_numbers",
         "divide_numbers",
+        "modulo_numbers",
+        "power_numbers",
+        "boolean_expression",
         "expression",
         "compare_values",
         "create_list",
         "append_list",
         "print_list_item",
+        "get_list_item",
+        "set_list_item",
+        "len_value",
         "call_function",
         "ask_input",
         "ask_number_input",
@@ -235,10 +273,26 @@ def test_every_required_block_type_participates_in_a_valid_compilation():
             workspace, container_type, VALID_SLOTS[container_type]
         )
         assert parent and not error
+        child_type = "break_block" if container_type == "while_condition" else "print_text"
+        child_slots = {} if child_type == "break_block" else {"text": container_type}
         child, error = audio_blocks.add_block(
-            workspace, "print_text", {"text": container_type}, parent_id=parent["id"]
+            workspace, child_type, child_slots, parent_id=parent["id"]
         )
         assert child and not error
+
+    if_block, error = audio_blocks.add_block(
+        workspace, "if_condition", {"condition": "total > 10"}
+    )
+    assert if_block and not error
+    audio_blocks.add_block(workspace, "print_text", {"text": "big"}, parent_id=if_block["id"])
+    elif_block, error = audio_blocks.add_block(
+        workspace, "elif_condition", VALID_SLOTS["elif_condition"]
+    )
+    assert elif_block and not error
+    audio_blocks.add_block(workspace, "print_text", {"text": "same"}, parent_id=elif_block["id"])
+    else_block, error = audio_blocks.add_block(workspace, "else_block", {})
+    assert else_block and not error
+    audio_blocks.add_block(workspace, "pass_block", {}, parent_id=else_block["id"])
 
     conditional, error = audio_blocks.add_block(
         workspace, "if_else_condition", VALID_SLOTS["if_else_condition"]
@@ -263,6 +317,25 @@ def test_every_required_block_type_participates_in_a_valid_compilation():
         workspace, "return_value", {"value": "1"}, parent_id=function["id"]
     )
     assert returned and not error
+
+    for_block, error = audio_blocks.add_block(
+        workspace, "for_range", {"variable": "j", "start": 0, "stop": 1}
+    )
+    assert for_block and not error
+    continued, error = audio_blocks.add_block(workspace, "continue_block", {}, parent_id=for_block["id"])
+    assert continued and not error
+
+    try_block, error = audio_blocks.add_block(workspace, "try_block", {})
+    assert try_block and not error
+    audio_blocks.add_block(workspace, "print_text", {"text": "try"}, parent_id=try_block["id"])
+    except_block, error = audio_blocks.add_block(
+        workspace, "except_block", VALID_SLOTS["except_block"]
+    )
+    assert except_block and not error
+    audio_blocks.add_block(workspace, "pass_block", {}, parent_id=except_block["id"])
+    finally_block, error = audio_blocks.add_block(workspace, "finally_block", {})
+    assert finally_block and not error
+    audio_blocks.add_block(workspace, "pass_block", {}, parent_id=finally_block["id"])
 
     code, error = audio_blocks.compile_workspace(workspace)
     assert code and not error
@@ -305,6 +378,7 @@ def test_mode_palette_add_edit_navigation_and_code_preservation(client):
     assert entered["audio_blocks"]["mode"] == "audio_blocks"
     assert "categories" in voice(client, "list block categories")["speech"].lower()
     for category in (
+        "import",
         "output",
         "variable",
         "math",
@@ -312,6 +386,7 @@ def test_mode_palette_add_edit_navigation_and_code_preservation(client):
         "loop",
         "list",
         "function",
+        "exception",
         "input",
         "comment",
     ):
@@ -337,31 +412,57 @@ def test_mode_palette_add_edit_navigation_and_code_preservation(client):
     "command, block_type",
     [
         ("add print text hello", "print_text"),
+        ("add import math block", "import_module"),
+        ("add import numpy as np block", "import_alias"),
+        ("add from math import sqrt block", "from_import"),
         ("add print variable total", "print_variable"),
+        ("add formatted print block", "print_format"),
         ("add variable total equals 1", "set_number"),
         ("add variable name text Asha", "set_text"),
+        ("add variable passed boolean true", "set_boolean"),
+        ("add variable scores list 70, 80", "set_list"),
+        ("add variable student dictionary 'marks': 90", "set_dict"),
         ("add variable total expression 2 + 3", "set_expression"),
         ("add change total by 1", "change_variable"),
+        ("add int conversion block for raw_age into age", "convert_type"),
         ("add 2 plus 3 into total", "add_numbers"),
         ("add 5 minus 2 into total", "subtract_numbers"),
         ("add 2 times 3 into total", "multiply_numbers"),
         ("add 6 divided by 2 into total", "divide_numbers"),
+        ("add 5 modulo 2 into remainder", "modulo_numbers"),
+        ("add 3 exponent 2 into squared", "power_numbers"),
+        ("add boolean expression ok equals total greater than 2", "boolean_expression"),
         ("add expression total equals 2 * 3", "expression"),
         ("add if total greater than 2", "if_condition"),
+        ("add elif block", "elif_condition"),
+        ("add else block", "else_block"),
         ("add if else total greater than 2", "if_else_condition"),
         ("add comparison total > 2 into passed", "compare_values"),
         ("add repeat 3 times block", "repeat_times"),
         ("add for range block from 0 to 3", "for_range"),
+        ("add for loop block", "for_range"),
         ("add while total less than 3", "while_condition"),
+        ("add while loop block", "while_condition"),
+        ("add break block", "break_block"),
+        ("add continue block", "continue_block"),
+        ("add pass block", "pass_block"),
         ("add list named scores", "create_list"),
         ("add list scores with 70, 80", "create_list"),
         ("append 90 to scores", "append_list"),
         ("add print item 0 from scores", "print_list_item"),
+        ("add get item 0 from scores into first_score", "get_list_item"),
+        ("add set item 0 of scores to 95", "set_list_item"),
+        ("add length of scores into score_count", "len_value"),
         ("add loop through scores as score", "loop_list"),
+        ("add function block", "define_function"),
         ("add function named greet", "define_function"),
         ("add call function greet", "call_function"),
         ("add call function greet with 1", "call_function"),
         ("add return total", "return_value"),
+        ("add return block", "return_value"),
+        ("add try block", "try_block"),
+        ("add except block", "except_block"),
+        ("add finally block", "finally_block"),
         ("add input block for name", "ask_input"),
         ("add number input block for age", "ask_number_input"),
         ("add comment remember to test", "comment_note"),
@@ -395,13 +496,17 @@ def test_command_workflow_compile_preview_compare_and_run_action(client):
     preview = voice(client, "preview generated code")
     assert "total += 1" in preview["code_preview"]
     compiled = voice(client, "compile blocks to Python")
-    assert compiled["action"] == "conversational_edit"
-    code = compiled["ai_action"]["code"]
+    assert compiled["action"] == "deterministic_message"
+    code = compiled["code_preview"]
     assert voice(client, "compare blocks and code", code=code)["speech"].startswith(
         "The editor matches"
     )
     run = voice(client, "run blocks")
     assert run["action"] == "audio_blocks_run" and run["code"] == code
+    transferred = voice(client, "transfer blocks to Python mode")
+    assert transferred["action"] == "conversational_edit"
+    assert transferred["audio_blocks"]["activeMode"] == "python"
+    assert transferred["ai_action"]["code"] == code
 
 
 def test_parsons_overlap_remains_available_when_audio_mode_is_off(client):
@@ -502,7 +607,11 @@ def test_audio_blocks_export_refuses_possible_secrets(client):
         "add print block",
         "read block workspace",
         "compile blocks to Python",
+        "transfer blocks to Python mode",
         "run blocks",
+        "add import math block",
+        "add from math import sqrt block",
+        "set selected block message to Hello CodeUp",
         "convert code to blocks",
         "start block lesson",
         "export block project",
@@ -534,6 +643,7 @@ def test_frontend_has_labeled_regions_buttons_keyboard_and_actions(client):
     html = client.get("/ide").get_data(as_text=True)
     for token in (
         'aria-label="Audio Blocks Mode"',
+        'aria-label="Open Audio Blocks Mode"',
         'aria-label="Block palette"',
         'aria-label="Block workspace"',
         'aria-label="Generated code preview"',
@@ -546,6 +656,8 @@ def test_frontend_has_labeled_regions_buttons_keyboard_and_actions(client):
         "renderAudioBlocks",
         "audio_blocks_run",
         "export_audio_blocks",
+        "audioBlocksModeBtn) audioBlocksModeBtn.addEventListener('click', () => audioBlocksCommand('open audio blocks'))",
+        "await runCode('', (payload && payload.code) || '')",
         "event.key === 'ArrowDown'",
         "event.key === 'Delete'",
         "compile blocks to Python",
@@ -561,32 +673,34 @@ ENTER_PHRASES = sorted(audio_blocks.ENTER_PHRASES)
 def test_voice_source_enters_audio_blocks_mode(client, phrase):
     result = voice(client, phrase)
     assert result["audio_blocks"]["mode"] == "audio_blocks"
-    assert "Audio Blocks Mode is on" in result["speech"]
+    assert result["audio_blocks"]["activeMode"] == "audio_blocks"
+    assert "Audio Blocks Mode opened" in result["speech"]
 
 
 @pytest.mark.parametrize("phrase", ENTER_PHRASES)
-def test_typed_source_refuses_to_enter_audio_blocks_mode(client, phrase):
+def test_typed_source_enters_audio_blocks_mode(client, phrase):
     result = typed(client, phrase)
-    assert result["audio_blocks"]["mode"] == "code"
-    assert "only be opened by voice" in result["speech"]
+    assert result["audio_blocks"]["mode"] == "audio_blocks"
+    assert result["audio_blocks"]["activeMode"] == "audio_blocks"
+    assert "Audio Blocks Mode opened" in result["speech"]
     assert "ai_action" not in result
 
 
-def test_missing_source_does_not_enter_audio_blocks_mode(client):
-    # No source field at all is treated as typed/unknown and must not switch.
+def test_missing_source_enters_audio_blocks_mode_for_button_parity(client):
     result = client.post(
         "/voice-command", json={"text": "open audio blocks"}
     ).get_json()
-    assert result["audio_blocks"]["mode"] == "code"
-    assert "only be opened by voice" in result["speech"]
+    assert result["audio_blocks"]["mode"] == "audio_blocks"
+    assert result["audio_blocks"]["activeMode"] == "audio_blocks"
+    assert "Audio Blocks Mode opened" in result["speech"]
 
 
-def test_typed_entry_is_refused_again_after_returning_to_code_mode(client):
+def test_typed_entry_works_again_after_returning_to_code_mode(client):
     assert voice(client, "enter block mode")["audio_blocks"]["mode"] == "audio_blocks"
     assert voice(client, "switch to code mode")["audio_blocks"]["mode"] == "code"
-    refused = typed(client, "open audio blocks")
-    assert refused["audio_blocks"]["mode"] == "code"
-    assert "only be opened by voice" in refused["speech"]
+    opened = typed(client, "open audio blocks")
+    assert opened["audio_blocks"]["mode"] == "audio_blocks"
+    assert "Audio Blocks Mode opened" in opened["speech"]
 
 
 def test_block_commands_still_work_after_voice_entry(client):
@@ -604,19 +718,20 @@ def test_typed_reentry_while_inside_block_mode_is_allowed(client):
     voice(client, "open audio blocks")
     again = typed(client, "open audio blocks")
     assert again["audio_blocks"]["mode"] == "audio_blocks"
-    assert "Audio Blocks Mode is on" in again["speech"]
+    assert "Audio Blocks Mode opened" in again["speech"]
 
 
 def test_exit_audio_blocks_mode_returns_to_code(client):
     voice(client, "enter block mode")
-    exited = voice(client, "switch to code mode", code="print('keep')")
+    exited = voice(client, "switch to python mode", code="print('keep')")
     assert exited["audio_blocks"]["mode"] == "code"
+    assert exited["audio_blocks"]["activeMode"] == "python"
     assert "editor is unchanged" in exited["speech"]
     voice(client, "enter block mode")
     assert voice(client, "exit block mode")["audio_blocks"]["mode"] == "code"
 
 
-def test_typed_entry_refusal_calls_no_ai_provider(client, monkeypatch):
+def test_typed_entry_calls_no_ai_provider(client, monkeypatch):
     import app as app_module
 
     def fail(*args, **kwargs):
@@ -625,6 +740,166 @@ def test_typed_entry_refusal_calls_no_ai_provider(client, monkeypatch):
     monkeypatch.setattr(app_module, "call_gemini", fail)
     monkeypatch.setattr(app_module, "call_conversation_orchestrator_ai", fail)
     monkeypatch.setattr(app_module, "_call_ollama", fail)
-    refused = typed(client, "open audio blocks")
-    assert refused["success"] is True
-    assert "only be opened by voice" in refused["speech"]
+    opened = typed(client, "open audio blocks")
+    assert opened["success"] is True
+    assert "Audio Blocks Mode opened" in opened["speech"]
+
+
+def test_audio_blocks_contextual_help_differs_from_python_help(client):
+    typed(client, "switch to python mode")
+    python_help = typed(client, "what can I do here")
+    assert python_help["action"] in {"help", "deterministic_message"}
+    assert "Audio Blocks Mode" not in python_help.get("speech", "")
+    opened = typed(client, "open audio blocks")
+    assert opened["audio_blocks"]["activeMode"] == "audio_blocks"
+    block_help = typed(client, "what can I do here")
+    assert block_help["action"] == "deterministic_message"
+    assert "Audio Blocks Mode" in block_help["speech"]
+    assert "add print block" in block_help["speech"]
+    assert block_help["speech"] != python_help.get("speech")
+
+
+def test_audio_blocks_run_uses_generated_blocks_not_python_editor(client):
+    typed(client, "open audio blocks")
+    typed(client, "add print block")
+    typed(client, "set message to Hello CodeUp")
+    run = typed(client, "run", code="print('python editor should not run')")
+    assert run["action"] == "audio_blocks_run"
+    assert run["code"] == "print('Hello CodeUp')\n"
+    assert run["audio_blocks"]["activeMode"] == "audio_blocks"
+
+
+def test_audio_blocks_import_commands_compile_at_top(client):
+    typed(client, "open audio blocks")
+    typed(client, "add print block")
+    typed(client, "add import random block")
+    typed(client, "add from math import sqrt block")
+    typed(client, "add import numpy as np block")
+    compiled = typed(client, "compile blocks")
+    assert compiled["action"] == "deterministic_message"
+    code = compiled["code_preview"]
+    assert code.startswith("import random\nfrom math import sqrt\nimport numpy as np\n")
+    assert "print('Hello world')" in code
+
+
+def test_audio_blocks_selected_block_voice_editing_and_history(client):
+    typed(client, "open audio blocks")
+    typed(client, "add print block")
+    typed(client, "select block one")
+    edited = typed(client, "set selected block message to Hello CodeUp")
+    assert edited["audio_blocks"]["blocks"][0]["slots"]["text"] == "Hello CodeUp"
+    duplicated = typed(client, "duplicate selected block")
+    assert len(duplicated["audio_blocks"]["blocks"]) == 2
+    moved = typed(client, "move selected block up")
+    assert "Moved block 2 up" in moved["speech"]
+    deleted = typed(client, "delete selected block")
+    assert len(deleted["audio_blocks"]["blocks"]) == 1
+    undone = typed(client, "undo")
+    assert len(undone["audio_blocks"]["blocks"]) == 2
+    redone = typed(client, "redo")
+    assert len(redone["audio_blocks"]["blocks"]) == 1
+
+
+def test_audio_blocks_variable_import_condition_range_function_and_return_edits(client):
+    typed(client, "open audio blocks")
+    typed(client, "add variable block")
+    typed(client, "set variable name to marks")
+    value = typed(client, "set variable value to 90")
+    assert value["audio_blocks"]["blocks"][0]["slots"] == {"variable": "marks", "value": "90"}
+    typed(client, "add import block")
+    typed(client, "set import library to math")
+    assert typed(client, "read selected block")["audio_blocks"]["blocks"][-1]["slots"]["module"] == "math"
+    typed(client, "add if block")
+    condition = typed(client, "set condition to marks greater than 40")
+    assert condition["audio_blocks"]["blocks"][-1]["slots"]["condition"] == "marks > 40"
+    typed(client, "add for loop block")
+    typed(client, "set loop variable to i")
+    typed(client, "set range start to 0")
+    range_stop = typed(client, "set range stop to 5")
+    assert range_stop["audio_blocks"]["blocks"][-1]["slots"]["stop"] == "5"
+    typed(client, "add function block")
+    typed(client, "set function name to calculate average")
+    typed(client, "set parameter to marks")
+    function = typed(client, "read selected block")
+    assert function["audio_blocks"]["blocks"][-1]["slots"]["name"] == "calculate_average"
+    assert function["audio_blocks"]["blocks"][-1]["slots"]["params"] == "marks"
+    typed(client, "add return block")
+    returned = typed(client, "set return value to marks")
+    assert returned["audio_blocks"]["blocks"][-1]["slots"]["value"] == "marks"
+
+
+def test_transfer_blocks_to_python_mode_action(client):
+    typed(client, "open audio blocks")
+    typed(client, "add import math block")
+    typed(client, "add print block")
+    typed(client, "select block two")
+    typed(client, "set message to Hello CodeUp")
+    transferred = typed(client, "transfer blocks to Python mode")
+    assert transferred["action"] == "conversational_edit"
+    assert transferred["audio_blocks"]["activeMode"] == "python"
+    assert transferred["audio_blocks"]["mode"] == "code"
+    assert transferred["ai_action"]["code"] == "import math\nprint('Hello CodeUp')\n"
+
+
+def test_audio_blocks_python_only_command_safe_fails_without_editor_mutation(client):
+    typed(client, "open audio blocks")
+    response = typed(client, "clear editor", code="print('keep')")
+    assert response["action"] == "deterministic_message"
+    assert "Python Code Mode" in response["speech"]
+    assert "ai_action" not in response
+
+
+@pytest.mark.parametrize("command", ["add print block", "compile blocks", "run blocks", "list blocks"])
+def test_audio_block_commands_refuse_in_python_mode(client, command):
+    typed(client, "switch to python mode")
+    response = typed(client, command, code="print('keep')\n")
+    assert response["action"] == "deterministic_message"
+    assert "Audio Blocks Mode" in response["speech"]
+    assert "open audio blocks" in response["speech"]
+    assert response["audio_blocks"]["activeMode"] == "python"
+    assert response["audio_blocks"]["blocks"] == []
+    assert "ai_action" not in response
+
+
+def test_visible_python_mode_overrides_stale_audio_blocks_session(client):
+    typed(client, "open audio blocks")
+    typed(client, "add print block")
+    response = typed(
+        client,
+        "add print block",
+        active_mode="python",
+        code="print('keep')\n",
+    )
+    assert response["action"] == "deterministic_message"
+    assert "Audio Blocks Mode" in response["speech"]
+    assert response["audio_blocks"]["activeMode"] == "python"
+    assert len(response["audio_blocks"]["blocks"]) == 1
+    assert "ai_action" not in response
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "insert a for loop that prints the first 3 whole numbers",
+        "clear editor",
+        "fix this code",
+    ],
+)
+def test_python_editor_commands_refuse_in_audio_blocks_mode(client, command):
+    typed(client, "open audio blocks")
+    response = typed(client, command, code="print('keep')\n")
+    assert response["action"] == "deterministic_message"
+    assert "Python Code Mode" in response["speech"]
+    assert "switch to Python mode" in response["speech"]
+    assert "ai_action" not in response
+
+
+def test_audio_blocks_project_report_and_export_use_block_workspace(client):
+    typed(client, "open audio blocks")
+    typed(client, "add print block")
+    report = typed(client, "make a project report")
+    assert report["action"] == "audio_blocks_project_report"
+    assert "Workspace summary" in report["report"]
+    assert "Generated Python" in report["report"]
+    export = typed(client, "export this project")
+    assert export["action"] == "export_audio_blocks"

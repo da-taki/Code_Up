@@ -8437,6 +8437,9 @@ def voice():
     input_source = _safe_text(body.get("source"), "typed", limit=20).strip().lower() or "typed"
     if input_source not in {"typed", "voice"}:
         input_source = "typed"
+    active_mode = _safe_text(body.get("active_mode"), limit=30).strip().lower()
+    if active_mode not in {"python", "audio_blocks"}:
+        active_mode = ""
     cursor_line = _as_optional_int(body.get("cursor_line"))
     verbosity = _safe_text(body.get("verbosity"), "normal", limit=20).strip().lower() or "normal"
     parsed = parse_intent(text)
@@ -8446,6 +8449,12 @@ def voice():
 
     storage = get_trace_storage()
     mem = session_memory.get_memory(storage)
+    if active_mode:
+        workspace = audio_blocks.get_workspace(
+            mem, create=(active_mode == "audio_blocks")
+        )
+        if workspace is not None:
+            audio_blocks.set_active_mode(workspace, active_mode)
 
     if intent == "repeat":
         last_action = storage.get('last_voice_action', None)
@@ -8473,7 +8482,7 @@ def voice():
         return _store_and_return(accessibility_response)
 
     audio_blocks_response = audio_blocks.route_command(
-        text, current_code, mem, source=input_source
+        text, current_code, mem, source=input_source, error_context=error_context
     )
     if audio_blocks_response is not None:
         audio_blocks_response.setdefault("heard", text)

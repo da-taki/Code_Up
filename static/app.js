@@ -1016,8 +1016,12 @@ function currentAudioBlockCommand(action) {
 
 function renderAudioBlocks(state) {
   if (!state || typeof state !== 'object') return;
+  const previousMode = window.activeMode || 'python';
   window._audioBlocksState = state;
-  const isBlocks = state.mode === 'audio_blocks';
+  const activeMode = state.activeMode || (state.mode === 'audio_blocks' ? 'audio_blocks' : 'python');
+  window.activeMode = activeMode;
+  window._activeMode = activeMode;
+  const isBlocks = activeMode === 'audio_blocks';
   const panel = document.getElementById('audioBlocksPanel');
   const codeRegion = document.getElementById('codeModeRegion');
   const blockButton = document.getElementById('audioBlocksModeBtn');
@@ -1028,6 +1032,9 @@ function renderAudioBlocks(state) {
   if (codeButton) codeButton.setAttribute('aria-pressed', String(!isBlocks));
   const modeBadge = document.getElementById('cuModeStatus');
   if (modeBadge) modeBadge.textContent = isBlocks ? 'Audio Blocks Mode' : 'Python Code Mode';
+  if (previousMode !== activeMode) {
+    srAnnounce(isBlocks ? 'Audio Blocks Mode opened.' : 'Python Code Mode opened.');
+  }
   // Returning to Code Mode un-hides the editor container (it was display:none in
   // Audio Blocks Mode); force a layout so Monaco refills it instead of staying blank.
   if (!isBlocks && typeof editor !== 'undefined' && editor && editor.layout) {
@@ -1150,6 +1157,7 @@ function buildVoiceCommandPayload(text, source = 'typed') {
     error: errorText,
     language: getLanguage(),
     source,
+    active_mode: window.activeMode || window._activeMode || 'python',
     cursor_line: pos && pos.lineNumber ? pos.lineNumber : null,
     verbosity: getVerbosity(),
     screen_reader_mode: _screenReaderModeEnabled,
@@ -2039,15 +2047,20 @@ function stopHeartbeat() {
 
 let _lastErrorContext = null;  // {code, error, language}
 
-async function runCode(runFile) {
+async function runCode(runFile, codeOverride) {
   if (_liveInputMode) {
     return runCodeStreaming();
   }
 
   SpeechManager.cancelAll();
 
-  const codeToCheck = getCode();
-  if (!ensurePythonEditorContent('run')) return;
+  const hasCodeOverride = codeOverride != null;
+  const codeToCheck = hasCodeOverride ? String(codeOverride || '') : getCode();
+  if (!codeToCheck.trim()) {
+    speak(hasCodeOverride ? 'The Audio Blocks program is empty.' : 'There is no Python code to run.');
+    return;
+  }
+  if (!hasCodeOverride && !ensurePythonEditorContent('run')) return;
   const usesInput = /\binput\s*\(/.test(codeToCheck);
   if (usesInput && _preflightInputs.length === 0) {
     speak('Heads up: your code uses input, but you have not declared any pre-flight inputs. The first input call will fail with a friendly error. To fix: say "set inputs to" followed by your values, or add a magic comment like "hash inputs colon Alice comma 17" at the top of your code, or say "live input mode" to switch to interactive mode.');
@@ -2075,11 +2088,11 @@ async function runCode(runFile) {
   srAnnounce(_runMsgSpoken);
   try {
     const payload = {
-      code: getCode(),
+      code: codeToCheck,
       language: getLanguage(),
       inputs: _preflightInputs,
     };
-    const project = currentProjectPayload(runFile);
+    const project = hasCodeOverride ? null : currentProjectPayload(runFile);
     if (project) {
       payload.project = project;
       payload.file = normalizeProjectPath(runFile || ProjectState.activeFile || project.entry);
@@ -2129,11 +2142,11 @@ async function runCode(runFile) {
       out('ERROR:\n' + (data.error || ''), { assertive: true });
       cueError();
       _lastErrorContext = {
-        code: getCode(),
+        code: codeToCheck,
         error: data.error || '',
         language: getLanguage(),
       };
-      window.previousCodeSnapshot = getCode();
+      window.previousCodeSnapshot = codeToCheck;
       window.previousErrorSnapshot = data.error || '';
       window.lastRunError = data.error || '';
       window.lastRunOutput = '';
@@ -3221,8 +3234,7 @@ async function handleConfirmedAction(action, payload) {
   }
   if (action === 'run')              await runCode();
   else if (action === 'audio_blocks_run') {
-    setCode((payload && payload.code) || '');
-    await runCode();
+    await runCode('', (payload && payload.code) || '');
   }
   else if (action === 'action_sequence') await executeActionSequence(payload || {});
   else if (action === 'mentor_stop') { SpeechManager.cancelAll(); speak('Mentor stopped.'); srAnnounce('Mentor stopped'); }
@@ -3289,6 +3301,13 @@ async function handleConfirmedAction(action, payload) {
     await exportProject();
   }
   else if (action === 'export_audio_blocks') await exportAudioBlocksProject();
+  else if (action === 'audio_blocks_project_report') {
+    const report = (payload && payload.report) || 'No Audio Blocks report available.';
+    const message = (payload && (payload.speech || payload.message)) || 'Audio Blocks project report ready.';
+    out(report);
+    srAnnounce(message);
+    speak(message);
+  }
   else if (action === 'project_report') {
     // requestProjectReport() owns the speech (concise summary + "say more"
     await requestProjectReport();
@@ -4927,13 +4946,7 @@ window.addEventListener('DOMContentLoaded', () => {
   const codeModeBtn = document.getElementById('codeModeBtn');
   const audioBlocksModeBtn = document.getElementById('audioBlocksModeBtn');
   if (codeModeBtn) codeModeBtn.addEventListener('click', () => audioBlocksCommand('switch to code mode'));
-  // Audio Blocks Mode is entered by voice only. The button explains that instead
-  // of switching, and CodeUp never auto-opens block mode from a previous session
-  // so a fresh /ide load always starts in Python Code Mode.
-  if (audioBlocksModeBtn) audioBlocksModeBtn.addEventListener('click', () => {
-    const message = 'To enter Audio Blocks Mode, use voice and say open audio blocks.';
-    out(message); srAnnounce(message); speak(message);
-  });
+  if (audioBlocksModeBtn) audioBlocksModeBtn.addEventListener('click', () => audioBlocksCommand('open audio blocks'));
   document.querySelectorAll('[data-block-command]').forEach(button => {
     button.addEventListener('click', () => audioBlocksCommand(button.getAttribute('data-block-command')));
   });

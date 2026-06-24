@@ -11,22 +11,40 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 
 CATALOG: Dict[str, List[Tuple[str, str]]] = {
-    "output": [("print_text", "print text"), ("print_variable", "print variable")],
+    "imports": [
+        ("import_module", "import module"),
+        ("import_alias", "import module as alias"),
+        ("from_import", "from module import name"),
+    ],
+    "output": [
+        ("print_text", "print text"),
+        ("print_variable", "print variable"),
+        ("print_format", "formatted print"),
+    ],
     "variables": [
         ("set_number", "set variable to number"),
         ("set_text", "set variable to text"),
+        ("set_boolean", "set variable to boolean"),
+        ("set_list", "set variable to list"),
+        ("set_dict", "set variable to dictionary"),
         ("set_expression", "set variable to expression"),
         ("change_variable", "change variable by number"),
+        ("convert_type", "convert value type"),
     ],
     "math": [
         ("add_numbers", "add numbers"),
         ("subtract_numbers", "subtract numbers"),
         ("multiply_numbers", "multiply numbers"),
         ("divide_numbers", "divide numbers"),
+        ("modulo_numbers", "modulo numbers"),
+        ("power_numbers", "exponent numbers"),
+        ("boolean_expression", "boolean expression"),
         ("expression", "expression block"),
     ],
     "conditions": [
         ("if_condition", "if condition"),
+        ("elif_condition", "elif condition"),
+        ("else_block", "else block"),
         ("if_else_condition", "if else condition"),
         ("compare_values", "compare values"),
     ],
@@ -34,17 +52,28 @@ CATALOG: Dict[str, List[Tuple[str, str]]] = {
         ("repeat_times", "repeat times"),
         ("for_range", "for each number in range"),
         ("while_condition", "while condition"),
+        ("break_block", "break"),
+        ("continue_block", "continue"),
+        ("pass_block", "pass"),
     ],
     "lists": [
         ("create_list", "create list"),
         ("append_list", "append to list"),
         ("print_list_item", "print list item"),
+        ("get_list_item", "get list item"),
+        ("set_list_item", "set list item"),
         ("loop_list", "loop through list"),
+        ("len_value", "length value"),
     ],
     "functions": [
         ("define_function", "define function"),
         ("call_function", "call function"),
         ("return_value", "return value"),
+    ],
+    "exceptions": [
+        ("try_block", "try block"),
+        ("except_block", "except block"),
+        ("finally_block", "finally block"),
     ],
     "input": [("ask_input", "ask input"), ("ask_number_input", "ask number input")],
     "comments": [("comment_note", "comment note")],
@@ -62,12 +91,17 @@ BLOCK_CATEGORY = {
 }
 CONTAINERS = {
     "if_condition",
+    "elif_condition",
+    "else_block",
     "if_else_condition",
     "repeat_times",
     "for_range",
     "while_condition",
     "loop_list",
     "define_function",
+    "try_block",
+    "except_block",
+    "finally_block",
 }
 MAX_BLOCKS = 100
 MAX_HISTORY = 30
@@ -77,6 +111,7 @@ SECRET_MARKERS = ("api_key", "secret=", "token=", "password=", "private key")
 def new_workspace() -> Dict[str, Any]:
     return {
         "mode": "code",
+        "active_mode": "python",
         "blocks": [],
         "next_id": 1,
         "cursor_id": None,
@@ -96,7 +131,27 @@ def get_workspace(
     if not isinstance(workspace, dict) and create:
         workspace = new_workspace()
         mem["audio_blocks"] = workspace
+    if isinstance(workspace, dict):
+        _normalize_mode(workspace)
     return workspace if isinstance(workspace, dict) else None
+
+
+def _normalize_mode(workspace: Dict[str, Any]) -> None:
+    mode = workspace.get("active_mode")
+    if mode not in {"python", "audio_blocks"}:
+        mode = "audio_blocks" if workspace.get("mode") == "audio_blocks" else "python"
+    workspace["active_mode"] = mode
+    workspace["mode"] = "audio_blocks" if mode == "audio_blocks" else "code"
+
+
+def set_active_mode(workspace: Dict[str, Any], mode: str) -> None:
+    workspace["active_mode"] = "audio_blocks" if mode == "audio_blocks" else "python"
+    _normalize_mode(workspace)
+
+
+def active_mode(workspace: Dict[str, Any]) -> str:
+    _normalize_mode(workspace)
+    return workspace["active_mode"]
 
 
 def _snapshot(workspace: Dict[str, Any]) -> Dict[str, Any]:
@@ -147,6 +202,8 @@ def valid_name(name: str) -> bool:
 _ALLOWED_EXPR_NODES = (
     ast.Expression,
     ast.Constant,
+    ast.JoinedStr,
+    ast.FormattedValue,
     ast.Name,
     ast.Load,
     ast.BinOp,
@@ -154,6 +211,7 @@ _ALLOWED_EXPR_NODES = (
     ast.BoolOp,
     ast.Compare,
     ast.List,
+    ast.Dict,
     ast.Tuple,
     ast.Subscript,
     ast.Slice,
@@ -176,6 +234,19 @@ _ALLOWED_EXPR_NODES = (
     ast.Gt,
     ast.GtE,
 )
+
+SAFE_IMPORT_MODULES = {
+    "math",
+    "random",
+    "datetime",
+    "statistics",
+    "string",
+    "json",
+    "numpy",
+    "pandas",
+}
+
+TYPE_CONVERSIONS = {"int", "float", "str"}
 
 
 def safe_expression(expression: str) -> Tuple[bool, str]:
@@ -226,21 +297,31 @@ def normalize_slots(
 ) -> Tuple[Optional[Dict[str, Any]], str]:
     s = {str(k): v for k, v in (slots or {}).items()}
     name_keys = {
+        "import_alias": ("alias",),
         "print_variable": ("variable",),
         "set_number": ("variable",),
         "set_text": ("variable",),
+        "set_boolean": ("variable",),
+        "set_list": ("variable",),
+        "set_dict": ("variable",),
         "set_expression": ("variable",),
         "change_variable": ("variable",),
+        "convert_type": ("variable",),
         "add_numbers": ("variable",),
         "subtract_numbers": ("variable",),
         "multiply_numbers": ("variable",),
         "divide_numbers": ("variable",),
+        "modulo_numbers": ("variable",),
+        "power_numbers": ("variable",),
+        "boolean_expression": ("variable",),
         "expression": ("variable",),
         "compare_values": ("variable",),
         "for_range": ("variable",),
         "create_list": ("variable",),
         "append_list": ("variable",),
         "print_list_item": ("variable",),
+        "get_list_item": ("variable",),
+        "len_value": ("variable",),
         "loop_list": ("variable", "item"),
         "define_function": ("name",),
         "call_function": ("name",),
@@ -254,12 +335,22 @@ def normalize_slots(
                 f"I cannot use {s.get(key) or 'an empty value'} as a variable or function name.",
             )
 
+    for key in {
+        "get_list_item": ("list",),
+        "set_list_item": ("list",),
+        "len_value": ("target",),
+    }.get(block_type, ()):
+        if not valid_name(str(s.get(key, ""))):
+            return None, f"I cannot use {s.get(key) or 'an empty value'} as a list or value name."
+
     numeric_keys = {
         "set_number": ("value",),
         "change_variable": ("value",),
         "repeat_times": ("times",),
         "for_range": ("start", "stop"),
         "print_list_item": ("index",),
+        "get_list_item": ("index",),
+        "set_list_item": ("index",),
     }
     for key in numeric_keys.get(block_type, ()):
         ok, normalized = _number(s.get(key, ""))
@@ -269,40 +360,98 @@ def normalize_slots(
 
     expr_keys = {
         "set_expression": ("expression",),
+        "convert_type": ("value",),
         "expression": ("expression",),
         "if_condition": ("condition",),
+        "elif_condition": ("condition",),
         "if_else_condition": ("condition",),
         "while_condition": ("condition",),
+        "except_block": ("exception",),
         "return_value": ("value",),
         "compare_values": ("left", "right"),
         "add_numbers": ("left", "right"),
         "subtract_numbers": ("left", "right"),
         "multiply_numbers": ("left", "right"),
         "divide_numbers": ("left", "right"),
+        "modulo_numbers": ("left", "right"),
+        "power_numbers": ("left", "right"),
+        "boolean_expression": ("expression",),
         "append_list": ("value",),
+        "set_list_item": ("value",),
         "call_function": ("arguments",),
+        "print_format": ("text",),
     }
     for key in expr_keys.get(block_type, ()):
         value = (
             _condition_words(str(s.get(key, "")))
-            if key == "condition"
+            if key in {"condition", "exception"}
             else str(s.get(key, "")).strip()
         )
         if block_type == "call_function" and key == "arguments" and not value:
             s[key] = ""
             continue
+        if block_type == "except_block" and key == "exception" and not value:
+            s[key] = "Exception"
+            continue
+        if block_type == "print_format" and key == "text":
+            value = f"f{s.get('text')!r}"
         ok, reason = safe_expression(value)
         if not ok:
             return None, f"Block {key} is unsafe: {reason}"
-        s[key] = value
+        s[key] = str(s.get(key, "")).strip() if block_type == "print_format" and key == "text" else value
+
+    if block_type in {"import_module", "import_alias", "from_import"}:
+        module = str(s.get("module", "")).strip()
+        if module not in SAFE_IMPORT_MODULES:
+            return None, f"Import {module or 'empty'} is not supported in Audio Blocks Mode."
+        s["module"] = module
+        if block_type == "from_import":
+            name = str(s.get("name", "")).strip()
+            if not valid_name(name):
+                return None, f"I cannot import {name or 'an empty name'}."
+            s["name"] = name
+
+    if block_type == "set_boolean":
+        value = str(s.get("value", "true")).strip().lower()
+        if value not in {"true", "false"}:
+            return None, "Boolean value must be true or false."
+        s["value"] = "True" if value == "true" else "False"
+
+    if block_type == "set_list":
+        expression = str(s.get("values", "")).strip()
+        expression = f"[{expression}]" if not expression.startswith("[") else expression
+        ok, reason = safe_expression(expression)
+        if not ok or not isinstance(ast.parse(expression, mode="eval").body, ast.List):
+            return None, f"List values are unsafe: {reason}"
+        s["values"] = expression
+
+    if block_type == "set_dict":
+        expression = str(s.get("values", "")).strip()
+        expression = f"{{{expression}}}" if not expression.startswith("{") else expression
+        ok, reason = safe_expression(expression)
+        if not ok or not isinstance(ast.parse(expression, mode="eval").body, ast.Dict):
+            return None, f"Dictionary values are unsafe: {reason}"
+        s["values"] = expression
+
+    if block_type == "convert_type":
+        conversion = str(s.get("conversion", "int")).strip().lower()
+        if conversion not in TYPE_CONVERSIONS:
+            return None, "Type conversion must be int, float, or str."
+        s["conversion"] = conversion
 
     if block_type == "print_text":
         text = str(s.get("text", ""))[:300]
         if not text:
             return None, "A print text block needs text."
         s["text"] = text
-    if block_type in {"set_text", "ask_input", "ask_number_input"}:
+    if block_type in {"set_text", "ask_input", "ask_number_input", "print_format"}:
         s["text"] = str(s.get("text", ""))[:300]
+    if block_type == "define_function":
+        params = str(s.get("params", "")).strip()
+        names = [part.strip() for part in params.split(",") if part.strip()]
+        if any(not valid_name(name) for name in names):
+            return None, "Function parameters must be safe variable names."
+        s["params"] = ", ".join(names)
     if block_type == "comment_note":
         text = str(s.get("text", "")).replace("\n", " ")[:300]
         if not text:
@@ -326,12 +475,20 @@ def normalize_slots(
 def block_label(block_type: str, slots: Dict[str, Any]) -> str:
     s = slots
     labels = {
+        "import_module": lambda: f"import {s['module']}",
+        "import_alias": lambda: f"import {s['module']} as {s['alias']}",
+        "from_import": lambda: f"from {s['module']} import {s['name']}",
         "print_text": lambda: f"print text {s['text']}",
         "print_variable": lambda: f"print variable {s['variable']}",
+        "print_format": lambda: f"formatted print {s['text']}",
         "set_number": lambda: f"set {s['variable']} to {s['value']}",
         "set_text": lambda: f"set {s['variable']} to text {s['text']}",
+        "set_boolean": lambda: f"set {s['variable']} to {s['value']}",
+        "set_list": lambda: f"set {s['variable']} to list {s['values']}",
+        "set_dict": lambda: f"set {s['variable']} to dictionary {s['values']}",
         "set_expression": lambda: f"set {s['variable']} to {s['expression']}",
         "change_variable": lambda: f"change {s['variable']} by {s['value']}",
+        "convert_type": lambda: f"set {s['variable']} to {s['conversion']} of {s['value']}",
         "add_numbers": lambda: f"set {s['variable']} to {s['left']} plus {s['right']}",
         "subtract_numbers": lambda: (
             f"set {s['variable']} to {s['left']} minus {s['right']}"
@@ -342,8 +499,13 @@ def block_label(block_type: str, slots: Dict[str, Any]) -> str:
         "divide_numbers": lambda: (
             f"set {s['variable']} to {s['left']} divided by {s['right']}"
         ),
+        "modulo_numbers": lambda: f"set {s['variable']} to {s['left']} modulo {s['right']}",
+        "power_numbers": lambda: f"set {s['variable']} to {s['left']} exponent {s['right']}",
+        "boolean_expression": lambda: f"set {s['variable']} to boolean expression {s['expression']}",
         "expression": lambda: f"set {s['variable']} to expression {s['expression']}",
         "if_condition": lambda: f"if {s['condition']}",
+        "elif_condition": lambda: f"elif {s['condition']}",
+        "else_block": lambda: "else",
         "if_else_condition": lambda: f"if else {s['condition']}",
         "compare_values": lambda: (
             f"set {s['variable']} to comparison {s['left']} {s['operator']} {s['right']}"
@@ -351,13 +513,26 @@ def block_label(block_type: str, slots: Dict[str, Any]) -> str:
         "repeat_times": lambda: f"repeat {s['times']} times",
         "for_range": lambda: f"for {s['variable']} from {s['start']} to {s['stop']}",
         "while_condition": lambda: f"while {s['condition']}",
+        "break_block": lambda: "break",
+        "continue_block": lambda: "continue",
+        "pass_block": lambda: "pass",
         "create_list": lambda: f"create list {s['variable']}",
         "append_list": lambda: f"append {s['value']} to {s['variable']}",
         "print_list_item": lambda: f"print item {s['index']} from {s['variable']}",
+        "get_list_item": lambda: f"set {s['variable']} to item {s['index']} from {s['list']}",
+        "set_list_item": lambda: f"set item {s['index']} of {s['list']} to {s['value']}",
         "loop_list": lambda: f"loop through {s['variable']} as {s['item']}",
-        "define_function": lambda: f"define function {s['name']}",
+        "len_value": lambda: f"set {s['variable']} to length of {s['target']}",
+        "define_function": lambda: (
+            f"define function {s['name']} with {s.get('params')}"
+            if s.get("params")
+            else f"define function {s['name']}"
+        ),
         "call_function": lambda: f"call function {s['name']}",
         "return_value": lambda: f"return {s['value']}",
+        "try_block": lambda: "try",
+        "except_block": lambda: f"except {s.get('exception', 'Exception')}",
+        "finally_block": lambda: "finally",
         "ask_input": lambda: f"ask for {s['variable']}",
         "ask_number_input": lambda: f"ask for number {s['variable']}",
         "comment_note": lambda: f"comment {s['text']}",
@@ -557,6 +732,20 @@ def delete_block(workspace: Dict[str, Any], block_id: int) -> str:
     return f"Deleted block {block_id}{suffix}."
 
 
+def duplicate_block(workspace: Dict[str, Any], block_id: int) -> str:
+    block = _find(workspace, block_id)
+    if not block:
+        return f"Block {block_id} does not exist."
+    copied, error = add_block(
+        workspace,
+        block["type"],
+        copy.deepcopy(block.get("slots", {})),
+        parent_id=block.get("parent_id"),
+        branch=block.get("branch", "body"),
+    )
+    return error if not copied else f"Duplicated block {block_id} as block {copied['id']}."
+
+
 def undo(workspace: Dict[str, Any]) -> str:
     history = workspace.setdefault("undo", [])
     if not history:
@@ -588,18 +777,31 @@ def _children(
 def _line_for(block: Dict[str, Any]) -> str:
     s, kind = block["slots"], block["type"]
     mapping = {
+        "import_module": lambda: f"import {s['module']}",
+        "import_alias": lambda: f"import {s['module']} as {s['alias']}",
+        "from_import": lambda: f"from {s['module']} import {s['name']}",
         "print_text": lambda: f"print({s['text']!r})",
         "print_variable": lambda: f"print({s['variable']})",
+        "print_format": lambda: f"print(f{s['text']!r})",
         "set_number": lambda: f"{s['variable']} = {s['value']}",
         "set_text": lambda: f"{s['variable']} = {s['text']!r}",
+        "set_boolean": lambda: f"{s['variable']} = {s['value']}",
+        "set_list": lambda: f"{s['variable']} = {s['values']}",
+        "set_dict": lambda: f"{s['variable']} = {s['values']}",
         "set_expression": lambda: f"{s['variable']} = {s['expression']}",
         "change_variable": lambda: f"{s['variable']} += {s['value']}",
+        "convert_type": lambda: f"{s['variable']} = {s['conversion']}({s['value']})",
         "add_numbers": lambda: f"{s['variable']} = {s['left']} + {s['right']}",
         "subtract_numbers": lambda: f"{s['variable']} = {s['left']} - {s['right']}",
         "multiply_numbers": lambda: f"{s['variable']} = {s['left']} * {s['right']}",
         "divide_numbers": lambda: f"{s['variable']} = {s['left']} / {s['right']}",
+        "modulo_numbers": lambda: f"{s['variable']} = {s['left']} % {s['right']}",
+        "power_numbers": lambda: f"{s['variable']} = {s['left']} ** {s['right']}",
+        "boolean_expression": lambda: f"{s['variable']} = {s['expression']}",
         "expression": lambda: f"{s['variable']} = {s['expression']}",
         "if_condition": lambda: f"if {s['condition']}:",
+        "elif_condition": lambda: f"elif {s['condition']}:",
+        "else_block": lambda: "else:",
         "if_else_condition": lambda: f"if {s['condition']}:",
         "compare_values": lambda: (
             f"{s['variable']} = {s['left']} {s['operator']} {s['right']}"
@@ -609,13 +811,22 @@ def _line_for(block: Dict[str, Any]) -> str:
             f"for {s['variable']} in range({s['start']}, {s['stop']}):"
         ),
         "while_condition": lambda: f"while {s['condition']}:",
+        "break_block": lambda: "break",
+        "continue_block": lambda: "continue",
+        "pass_block": lambda: "pass",
         "create_list": lambda: f"{s['variable']} = {s['values']}",
         "append_list": lambda: f"{s['variable']}.append({s['value']})",
         "print_list_item": lambda: f"print({s['variable']}[{s['index']}])",
+        "get_list_item": lambda: f"{s['variable']} = {s['list']}[{s['index']}]",
+        "set_list_item": lambda: f"{s['list']}[{s['index']}] = {s['value']}",
+        "len_value": lambda: f"{s['variable']} = len({s['target']})",
         "loop_list": lambda: f"for {s['item']} in {s['variable']}:",
-        "define_function": lambda: f"def {s['name']}():",
+        "define_function": lambda: f"def {s['name']}({s.get('params', '')}):",
         "call_function": lambda: f"{s['name']}({s['arguments']})",
         "return_value": lambda: f"return {s['value']}",
+        "try_block": lambda: "try:",
+        "except_block": lambda: f"except {s.get('exception', 'Exception')}:",
+        "finally_block": lambda: "finally:",
         "ask_input": lambda: f"{s['variable']} = input({s['text']!r})",
         "ask_number_input": lambda: f"{s['variable']} = float(input({s['text']!r}))",
         "comment_note": lambda: f"# {s['text']}",
@@ -628,8 +839,17 @@ def compile_workspace(workspace: Dict[str, Any]) -> Tuple[Optional[str], str]:
         return None, "The Audio Blocks workspace is empty."
     lines: List[str] = []
 
+    def ordered(blocks: Iterable[Dict[str, Any]], depth: int) -> List[Dict[str, Any]]:
+        items = list(blocks)
+        if depth:
+            return items
+        imports = [b for b in items if b["type"] in {"import_module", "import_alias", "from_import"}]
+        functions = [b for b in items if b["type"] == "define_function"]
+        others = [b for b in items if b not in imports and b not in functions]
+        return imports + functions + others
+
     def emit(blocks: Iterable[Dict[str, Any]], depth: int) -> Optional[str]:
-        for block in blocks:
+        for block in ordered(blocks, depth):
             if block.get("incomplete"):
                 return f"Block {block['id']} is incomplete. Set its cleared value before compiling."
             lines.append("    " * depth + _line_for(block))
@@ -1001,6 +1221,7 @@ def load_lesson_solution(workspace: Dict[str, Any], index: int) -> None:
 
 
 def public_workspace(workspace: Dict[str, Any]) -> Dict[str, Any]:
+    _normalize_mode(workspace)
     blocks = copy.deepcopy(workspace.get("blocks", []))
     by_id = {b["id"]: b for b in blocks}
     for block in blocks:
@@ -1013,6 +1234,7 @@ def public_workspace(workspace: Dict[str, Any]) -> Dict[str, Any]:
         block["category"] = BLOCK_CATEGORY.get(block.get("type"), "")
     return {
         "mode": workspace.get("mode", "code"),
+        "activeMode": workspace.get("active_mode", "python"),
         "blocks": blocks,
         "cursor_id": workspace.get("cursor_id"),
         "generated": bool(workspace.get("generated")),
@@ -1061,6 +1283,7 @@ def export_files(workspace: Dict[str, Any]) -> Tuple[Optional[Dict[str, str]], s
 
 
 def _message(text: str, workspace: Dict[str, Any], **extra: Any) -> Dict[str, Any]:
+    _normalize_mode(workspace)
     return {
         "success": True,
         "action": "deterministic_message",
@@ -1072,6 +1295,7 @@ def _message(text: str, workspace: Dict[str, Any], **extra: Any) -> Dict[str, An
 
 
 def _edit_response(code: str, text: str, workspace: Dict[str, Any]) -> Dict[str, Any]:
+    _normalize_mode(workspace)
     return {
         "success": True,
         "action": "conversational_edit",
@@ -1107,10 +1331,204 @@ def _read_block(workspace: Dict[str, Any], block: Dict[str, Any]) -> str:
     return f"Block {block['id']}, {BLOCK_LABELS[block['type']]}, {block['label']}, nesting level {depth}{suffix}."
 
 
+AUDIO_BLOCKS_HELP = (
+    "You are in Audio Blocks Mode. You can say add print block, add variable block, "
+    "add import math block, add from math import sqrt block, add for loop block, add if block, "
+    "select block one, set message to Hello CodeUp, set variable name to marks, "
+    "set variable value to 90, set condition to marks greater than 40, move selected block up, "
+    "delete selected block, duplicate selected block, compile blocks, run blocks, read output, "
+    "give me a code map, summarize structure, explain blocks, make a project report, "
+    "transfer blocks to Python mode, or switch to Python mode."
+)
+
+
+_NUMBER_WORDS = {
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+}
+
+
+def _block_number(value: str) -> Optional[int]:
+    text = str(value or "").strip().lower()
+    if text.isdigit():
+        return int(text)
+    return _NUMBER_WORDS.get(text)
+
+
+def _current_block(workspace: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    return _find(workspace, int(workspace.get("cursor_id") or 0))
+
+
+def _compile_or_message(workspace: Dict[str, Any]) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+    generated, error = compile_workspace(workspace)
+    if not generated:
+        return None, _message(error, workspace)
+    return generated, None
+
+
+def _blocks_structure_summary(workspace: Dict[str, Any]) -> str:
+    blocks = workspace.get("blocks", [])
+    if not blocks:
+        return "The Audio Blocks workspace is empty."
+    categories: Dict[str, int] = {}
+    for block in blocks:
+        category = BLOCK_CATEGORY.get(block.get("type"), "blocks")
+        categories[category] = categories.get(category, 0) + 1
+    category_text = ", ".join(
+        f"{count} {category}" for category, count in sorted(categories.items())
+    )
+    nested = sum(1 for block in blocks if block.get("parent_id") is not None)
+    current = _current_block(workspace)
+    cursor = f" Current block is {current['id']}: {current['label']}." if current else ""
+    return (
+        f"Audio Blocks structure: {len(blocks)} block"
+        f"{'' if len(blocks) == 1 else 's'}: {category_text}. "
+        f"{nested} block{'' if nested == 1 else 's'} are nested.{cursor}"
+    )
+
+
+def _generated_program_message(workspace: Dict[str, Any], prefix: str) -> Dict[str, Any]:
+    generated, failure = _compile_or_message(workspace)
+    if failure:
+        return failure
+    assert generated is not None
+    message = (
+        f"{prefix} The block program has {len(workspace.get('blocks', []))} blocks "
+        f"and {len(generated.splitlines())} generated Python lines. "
+        "The generated Python is shown in the Audio Blocks preview."
+    )
+    return _message(message, workspace, code_preview=generated)
+
+
+def _learning_recap(workspace: Dict[str, Any]) -> str:
+    blocks = workspace.get("blocks", [])
+    if not blocks:
+        return "Today in Audio Blocks Mode, you opened the block workspace. Add a print block to start building a program."
+    names = ", ".join(sorted({BLOCK_LABELS[b["type"]] for b in blocks})[:5])
+    return (
+        f"Today in Audio Blocks Mode, you practiced building programs from {len(blocks)} block"
+        f"{'' if len(blocks) == 1 else 's'}, including {names}. "
+        "You can compile blocks to see the Python version and run blocks to test the output."
+    )
+
+
+def _project_report(workspace: Dict[str, Any]) -> Dict[str, Any]:
+    generated, failure = _compile_or_message(workspace)
+    if failure:
+        return failure
+    assert generated is not None
+    block_lines = [
+        f"- Block {block['id']}: {block['label']}"
+        for block in workspace.get("blocks", [])
+    ]
+    report = (
+        "# Audio Blocks Project Report\n\n"
+        f"Active mode: Audio Blocks Mode\n\n"
+        f"Workspace summary: {_blocks_structure_summary(workspace)}\n\n"
+        "Blocks:\n"
+        + "\n".join(block_lines)
+        + "\n\nGenerated Python:\n```python\n"
+        + generated
+        + "```\n"
+    )
+    speech = (
+        "Audio Blocks project report ready. It includes the block workspace summary "
+        "and the generated Python."
+    )
+    return {
+        "success": True,
+        "action": "audio_blocks_project_report",
+        "message": speech,
+        "speech": speech,
+        "report": report,
+        "audio_blocks": public_workspace(workspace),
+        "code": generated,
+    }
+
+
+def _selected_slot_updates(block: Dict[str, Any], field: str, value: str) -> Tuple[Optional[Dict[str, Any]], str]:
+    slots = block.get("slots", {})
+    field = field.strip().lower()
+    value = value.strip()
+    if field == "message":
+        if "text" in slots:
+            return {"text": value}, ""
+        return None, "The selected block does not have a message field."
+    if field == "variable name":
+        if "variable" in slots:
+            return {"variable": value.replace(" ", "_")}, ""
+        if "name" in slots:
+            return {"name": value.replace(" ", "_")}, ""
+        return None, "The selected block does not have a variable or name field."
+    if field == "variable value":
+        for key in ("value", "expression", "text", "values"):
+            if key in slots:
+                return {key: value}, ""
+        return None, "The selected block does not have a value field."
+    if field == "import library":
+        if "module" in slots:
+            return {"module": value.lower()}, ""
+        return None, "The selected block is not an import block."
+    if field == "import alias":
+        if "alias" in slots:
+            return {"alias": value.replace(" ", "_")}, ""
+        return None, "The selected block does not have an import alias."
+    if field == "condition":
+        if "condition" in slots:
+            return {"condition": value}, ""
+        return None, "The selected block does not have a condition."
+    if field == "loop variable":
+        if block.get("type") in {"for_range", "loop_list"} and "variable" in slots:
+            return {"variable": value.replace(" ", "_")}, ""
+        return None, "The selected block does not have a loop variable."
+    if field == "range start":
+        if "start" in slots:
+            return {"start": value}, ""
+        return None, "The selected block does not have a range start."
+    if field == "range stop":
+        if "stop" in slots:
+            return {"stop": value}, ""
+        return None, "The selected block does not have a range stop."
+    if field == "function name":
+        if block.get("type") == "define_function":
+            return {"name": value.replace(" ", "_")}, ""
+        return None, "The selected block is not a function definition."
+    if field == "parameter":
+        if block.get("type") == "define_function":
+            return {"params": value.replace(" and ", ", ")}, ""
+        return None, "The selected block is not a function definition."
+    if field == "return value":
+        if block.get("type") == "return_value":
+            return {"value": value}, ""
+        return None, "The selected block is not a return block."
+    return None, "That selected-block field is not available yet."
+
+
 def _parse_add(text: str) -> Tuple[Optional[str], Dict[str, Any]]:
     patterns = [
+        (r"^add import block$", "import_module", {"module": "math"}),
+        (r"^add import (math|random|datetime|string|statistics|json) block$", "import_module", lambda m: {"module": m.group(1)}),
+        (
+            r"^add import (numpy|pandas) as (\w+) block$",
+            "import_alias",
+            lambda m: {"module": m.group(1), "alias": m.group(2)},
+        ),
+        (
+            r"^add from (math|random|datetime|string|statistics|json) import (\w+) block$",
+            "from_import",
+            lambda m: {"module": m.group(1), "name": m.group(2)},
+        ),
         (r"^add print block$", "print_text", {"text": "Hello world"}),
         (r"^add print text (.+)$", "print_text", lambda m: {"text": m.group(1)}),
+        (r"^add formatted print block$", "print_format", {"text": "Value is {value}"}),
         (
             r"^add print variable (\w+)$",
             "print_variable",
@@ -1120,6 +1538,27 @@ def _parse_add(text: str) -> Tuple[Optional[str], Dict[str, Any]]:
             r"^add variable (\w+) equals (-?[\d.]+)$",
             "set_number",
             lambda m: {"variable": m.group(1), "value": m.group(2)},
+        ),
+        (r"^add variable block$", "set_number", {"variable": "total", "value": 0}),
+        (
+            r"^add variable (\w+) boolean (true|false)$",
+            "set_boolean",
+            lambda m: {"variable": m.group(1), "value": m.group(2)},
+        ),
+        (
+            r"^add variable (\w+) list (.+)$",
+            "set_list",
+            lambda m: {"variable": m.group(1), "values": m.group(2)},
+        ),
+        (
+            r"^add variable (\w+) dictionary (.+)$",
+            "set_dict",
+            lambda m: {"variable": m.group(1), "values": m.group(2)},
+        ),
+        (
+            r"^add (int|float|str) conversion block for (.+) into (\w+)$",
+            "convert_type",
+            lambda m: {"conversion": m.group(1), "value": m.group(2), "variable": m.group(3)},
         ),
         (
             r"^set variable (\w+) to (.+)$",
@@ -1162,6 +1601,21 @@ def _parse_add(text: str) -> Tuple[Optional[str], Dict[str, Any]]:
             lambda m: {"left": m.group(1), "right": m.group(2), "variable": m.group(3)},
         ),
         (
+            r"^add (.+) modulo (.+) into (\w+)$",
+            "modulo_numbers",
+            lambda m: {"left": m.group(1), "right": m.group(2), "variable": m.group(3)},
+        ),
+        (
+            r"^add (.+) exponent (.+) into (\w+)$",
+            "power_numbers",
+            lambda m: {"left": m.group(1), "right": m.group(2), "variable": m.group(3)},
+        ),
+        (
+            r"^add boolean expression (\w+) equals (.+)$",
+            "boolean_expression",
+            lambda m: {"variable": m.group(1), "expression": _condition_words(m.group(2))},
+        ),
+        (
             r"^add expression (\w+) equals (.+)$",
             "expression",
             lambda m: {"variable": m.group(1), "expression": m.group(2)},
@@ -1171,6 +1625,7 @@ def _parse_add(text: str) -> Tuple[Optional[str], Dict[str, Any]]:
             "repeat_times",
             lambda m: {"times": m.group(1)},
         ),
+        (r"^add loop block$", "repeat_times", {"times": 3}),
         (
             r"^add for range block from (-?[\d.]+) to (-?[\d.]+)$",
             "for_range",
@@ -1182,6 +1637,10 @@ def _parse_add(text: str) -> Tuple[Optional[str], Dict[str, Any]]:
             lambda m: {"condition": m.group(1)},
         ),
         (r"^add if (.+)$", "if_condition", lambda m: {"condition": m.group(1)}),
+        (r"^add if block$", "if_condition", {"condition": "total > 0"}),
+        (r"^add elif block$", "elif_condition", {"condition": "total > 0"}),
+        (r"^add elif (.+)$", "elif_condition", lambda m: {"condition": m.group(1)}),
+        (r"^add else block$", "else_block", {}),
         (
             r"^add comparison (.+) (==|!=|>=|<=|>|<) (.+) into (\w+)$",
             "compare_values",
@@ -1192,11 +1651,16 @@ def _parse_add(text: str) -> Tuple[Optional[str], Dict[str, Any]]:
                 "variable": m.group(4),
             },
         ),
+        (r"^add while loop block$", "while_condition", {"condition": "total < 3"}),
         (
             r"^add while (.+)$",
             "while_condition",
             lambda m: {"condition": m.group(1)},
         ),
+        (r"^add for loop block$", "for_range", {"variable": "i", "start": 0, "stop": 3}),
+        (r"^add break block$", "break_block", {}),
+        (r"^add continue block$", "continue_block", {}),
+        (r"^add pass block$", "pass_block", {}),
         (
             r"^add list named (\w+)$",
             "create_list",
@@ -1218,6 +1682,21 @@ def _parse_add(text: str) -> Tuple[Optional[str], Dict[str, Any]]:
             lambda m: {"index": m.group(1), "variable": m.group(2)},
         ),
         (
+            r"^add get item (-?\d+) from (\w+) into (\w+)$",
+            "get_list_item",
+            lambda m: {"index": m.group(1), "list": m.group(2), "variable": m.group(3)},
+        ),
+        (
+            r"^add set item (-?\d+) of (\w+) to (.+)$",
+            "set_list_item",
+            lambda m: {"index": m.group(1), "list": m.group(2), "value": m.group(3)},
+        ),
+        (
+            r"^add length of (\w+) into (\w+)$",
+            "len_value",
+            lambda m: {"target": m.group(1), "variable": m.group(2)},
+        ),
+        (
             r"^add loop through (\w+) as (\w+)$",
             "loop_list",
             lambda m: {"variable": m.group(1), "item": m.group(2)},
@@ -1225,8 +1704,9 @@ def _parse_add(text: str) -> Tuple[Optional[str], Dict[str, Any]]:
         (
             r"^add function named (\w+)$",
             "define_function",
-            lambda m: {"name": m.group(1)},
+            lambda m: {"name": m.group(1), "params": ""},
         ),
+        (r"^add function block$", "define_function", {"name": "my_function", "params": ""}),
         (
             r"^add call function (\w+)$",
             "call_function",
@@ -1238,10 +1718,20 @@ def _parse_add(text: str) -> Tuple[Optional[str], Dict[str, Any]]:
             lambda m: {"name": m.group(1), "arguments": m.group(2)},
         ),
         (r"^add return (.+)$", "return_value", lambda m: {"value": m.group(1)}),
+        (r"^add return block$", "return_value", {"value": "None"}),
+        (r"^add try except block$", "try_block", {}),
+        (r"^add try block$", "try_block", {}),
+        (r"^add except block$", "except_block", {"exception": "Exception"}),
+        (r"^add finally block$", "finally_block", {}),
         (
             r"^add input block for (\w+)$",
             "ask_input",
             lambda m: {"variable": m.group(1), "text": f"Enter {m.group(1)}: "},
+        ),
+        (
+            r"^add input block$",
+            "ask_input",
+            {"variable": "user_input", "text": "Enter a value: "},
         ),
         (
             r"^add number input block for (\w+)$",
@@ -1257,10 +1747,6 @@ def _parse_add(text: str) -> Tuple[Optional[str], Dict[str, Any]]:
     return None, {}
 
 
-# Phrases that *enter* Audio Blocks Mode. Entry is deliberately restricted to a
-# real spoken voice command so the Python editor stays the default and learners
-# are never dropped into block mode by a stray typed phrase or restored session
-# state. route_command refuses these unless source == "voice" (see below).
 ENTER_PHRASES = {
     "enter block mode",
     "open block mode",
@@ -1271,15 +1757,79 @@ ENTER_PHRASES = {
     "start audio blocks mode",
 }
 
+PYTHON_MODE_PHRASES = {
+    "exit block mode",
+    "switch to code mode",
+    "open code mode",
+    "switch to python mode",
+    "open python mode",
+}
+
+ACTIVE_AUDIO_BLOCKS_COMMANDS = {
+    "help",
+    "what can i do",
+    "what can i do here",
+    "list blocks",
+    "read blocks",
+    "where am i",
+    "give me a code map",
+    "code map",
+    "summarize structure",
+    "undo",
+    "redo",
+    "compile blocks",
+    "transfer blocks to python mode",
+    "copy blocks to python mode",
+    "run",
+    "read output",
+    "read errors only",
+    "explain blocks",
+    "analyze",
+    "explain this program",
+    "teach me this code",
+    "sonify block",
+    "sonify",
+    "make a project report",
+    "what did i learn today",
+    "export this project",
+}
+
+GLOBAL_PASS_THROUGH = {
+    "stop",
+    "stop speaking",
+    "pause voice",
+    "resume voice",
+    "repeat",
+    "clear output",
+}
+
+AUDIO_MODE_REQUIRED = (
+    "That command is for Audio Blocks Mode. Say 'open audio blocks' or press the Audio Blocks button first."
+)
+PYTHON_MODE_REQUIRED = (
+    "That command is for Python Code Mode. Say 'switch to Python mode' first."
+)
+
+BLOCK_ONLY_RE = re.compile(
+    r"^(?:add .*(?:block|import|function)|compile blocks(?: to python)?|run blocks|"
+    r"list blocks|read blocks|read selected block|select block .+|edit selected block|"
+    r"set (?:selected block )?(?:message|variable|import|condition|loop|range|function|parameter|return).+|"
+    r"move selected block (?:up|down)|delete selected block|duplicate selected block|"
+    r"transfer blocks to python mode|copy blocks to python mode|send blocks to editor)$",
+    re.IGNORECASE,
+)
+
+PYTHON_ONLY_RE = re.compile(
+    r"^(?:insert .+|clear editor|clear code|fix this code|debug this like a teacher|"
+    r"generate .+|write .+|append line .+|replace line .+|delete line .+|"
+    r"comment this code|add comments?|remove comments?|rename variable .+)$",
+    re.IGNORECASE,
+)
+
 
 def handles(text: str) -> bool:
     value = " ".join(str(text or "").lower().strip().rstrip(".!?").split())
     exact = {
-        "enter block mode",
-        "open block mode",
-        "switch to block mode",
-        "exit block mode",
-        "switch to code mode",
         "what mode am i in",
         "list block categories",
         "what blocks can i add",
@@ -1296,10 +1846,18 @@ def handles(text: str) -> bool:
         "read nested blocks",
         "undo block change",
         "redo block change",
+        "edit selected block",
+        "delete selected block",
+        "duplicate selected block",
+        "move selected block up",
+        "move selected block down",
         "clear block workspace",
         "compile blocks to python",
+        "compile blocks",
         "convert blocks to code",
         "send blocks to editor",
+        "transfer blocks to python mode",
+        "copy blocks to python mode",
         "preview generated code",
         "run blocks",
         "explain generated code",
@@ -1317,21 +1875,38 @@ def handles(text: str) -> bool:
         "download block project",
         "export blocks and python",
     }
-    return value in exact or value in ENTER_PHRASES or bool(
+    return value in exact or value in ENTER_PHRASES or value in PYTHON_MODE_PHRASES or value in ACTIVE_AUDIO_BLOCKS_COMMANDS or bool(
         re.match(
-            r"^(?:list (?:output|variable|math|condition|loop|list|function|input|comment) blocks|read block \d+|read children of block \d+|move block \d+ (?:up|down|before block \d+|after block \d+)|(?:indent|outdent|delete) block \d+|put block \d+ inside (?:else of )?block \d+|remove block \d+ from loop|edit block \d+|set block \d+ (?:text|variable|condition) to .+|rename block variable \w+ to \w+|clear block \d+ value|add .+|set variable .+|append .+ to .+)$",
+            r"^(?:list (?:output|variable|math|condition|loop|list|function|input|comment|import|exception) blocks|read block \d+|read selected block|select block (?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)|read children of block \d+|move block \d+ (?:up|down|before block \d+|after block \d+)|(?:indent|outdent|delete) block \d+|put block \d+ inside (?:else of )?block \d+|remove block \d+ from loop|edit block \d+|set block \d+ (?:text|variable|condition) to .+|set (?:selected block )?(?:message|variable name|variable value|import library|import alias|condition|loop variable|range start|range stop|function name|parameter|return value) to .+|rename block variable \w+ to \w+|clear block \d+ value|add .+|set variable .+|append .+ to .+)$",
             value,
         )
     )
 
 
 def route_command(
-    text: str, code: str, mem: Dict[str, Any], source: str = "typed"
+    text: str,
+    code: str,
+    mem: Dict[str, Any],
+    source: str = "typed",
+    error_context: str = "",
 ) -> Optional[Dict[str, Any]]:
-    t = " ".join(str(text or "").lower().strip().rstrip(".!?").split())
-    if not handles(t):
-        return None
+    command_text = " ".join(str(text or "").strip().rstrip(".!?").split())
+    t = command_text.lower()
     existing = get_workspace(mem)
+    mode = active_mode(existing) if existing else "python"
+    if mode == "audio_blocks" and PYTHON_ONLY_RE.match(t):
+        return _message(PYTHON_MODE_REQUIRED, existing)
+    if not handles(t):
+        if t in GLOBAL_PASS_THROUGH:
+            return None
+        return (
+            _message(
+                PYTHON_MODE_REQUIRED if PYTHON_ONLY_RE.match(t) else "That block command is not available yet.",
+                existing,
+            )
+            if existing and mode == "audio_blocks"
+            else None
+        )
     overlaps_parsons = bool(
         t
         in {
@@ -1350,30 +1925,21 @@ def route_command(
         return None
     workspace = get_workspace(mem, create=True)
     assert workspace is not None
+    mode = active_mode(workspace)
 
     if t in ENTER_PHRASES:
-        already_in_blocks = workspace.get("mode") == "audio_blocks"
-        # Only a real spoken command may enter Audio Blocks Mode. Typed or
-        # unknown sources are refused so the Python editor stays the default.
-        # Re-issuing the phrase while already inside block mode is harmless.
-        if source != "voice" and not already_in_blocks:
-            return _message(
-                "Audio Blocks Mode can only be opened by voice. "
-                "Press the voice button and say open audio blocks.",
-                workspace,
-            )
-        workspace["mode"] = "audio_blocks"
+        set_active_mode(workspace, "audio_blocks")
         status = (
             "Blocks have changed and are not compiled yet."
             if workspace.get("dirty")
             else "The block workspace is ready."
         )
         return _message(
-            f"Audio Blocks Mode is on. {status} Say list block categories or add print block.",
+            f"Audio Blocks Mode opened. {status} Say 'what can I do here' for block commands.",
             workspace,
         )
-    if t in {"exit block mode", "switch to code mode"}:
-        workspace["mode"] = "code"
+    if t in PYTHON_MODE_PHRASES:
+        set_active_mode(workspace, "python")
         status = (
             " Blocks have changed but code has not been generated yet."
             if workspace.get("dirty")
@@ -1385,27 +1951,39 @@ def route_command(
     if t == "what mode am i in":
         name = (
             "Audio Blocks Mode"
-            if workspace.get("mode") == "audio_blocks"
-            else "Code Mode"
+            if active_mode(workspace) == "audio_blocks"
+            else "Python Code Mode"
         )
         return _message(f"You are in {name}.", workspace)
 
+    if active_mode(workspace) == "python" and BLOCK_ONLY_RE.match(t):
+        return _message(AUDIO_MODE_REQUIRED, workspace)
+
+    if active_mode(workspace) != "audio_blocks" and t != "start block lesson":
+        return None
+
+    if t in {"help", "what can i do", "what can i do here"}:
+        return _message(AUDIO_BLOCKS_HELP, workspace)
+
     if t in {"list block categories", "what blocks can i add", "help with blocks"}:
         return _message(
-            "Categories are output, variables, math, conditions, loops, lists, functions, input, and comments. Say list loop blocks.",
+            "Categories are imports, output, variables, math, conditions, loops, lists, functions, exceptions, input, and comments. Say list import blocks.",
             workspace,
         )
     match = re.match(
-        r"^list (output|variable|math|condition|loop|list|function|input|comment) blocks$",
+        r"^list (import|output|variable|math|condition|loop|list|function|exception|input|comment) blocks$",
         t,
     )
     if match:
         aliases = {
+            "import": "imports",
             "variable": "variables",
             "condition": "conditions",
             "loop": "loops",
             "list": "lists",
             "function": "functions",
+            "exception": "exceptions",
+            "input": "input",
             "comment": "comments",
         }
         category = aliases.get(match.group(1), match.group(1))
@@ -1413,6 +1991,24 @@ def route_command(
         return _message(
             f"{category.title()} blocks include {', '.join(labels[:4])}."
             + (" Say help with blocks for categories." if len(labels) > 4 else ""),
+            workspace,
+        )
+
+    match = re.match(
+        r"^set (?:selected block )?(message|variable name|variable value|import library|import alias|condition|loop variable|range start|range stop|function name|parameter|return value) to (.+)$",
+        command_text,
+        flags=re.IGNORECASE,
+    )
+    if match:
+        block = _current_block(workspace)
+        if not block:
+            return _message("There is no selected block.", workspace)
+        updates, field_error = _selected_slot_updates(block, match.group(1), match.group(2))
+        if not updates:
+            return _message(field_error, workspace)
+        updated, error = edit_block(workspace, block["id"], updates)
+        return _message(
+            error if not updated else f"Updated block {updated['id']}: {updated['label']}.",
             workspace,
         )
 
@@ -1480,13 +2076,46 @@ def route_command(
             workspace,
         )
 
+    if t in {"list blocks", "read blocks"}:
+        t = "read block workspace"
+
+    if t in {"give me a code map", "code map", "summarize structure"}:
+        return _message(_blocks_structure_summary(workspace), workspace)
+
+    if t in {"explain blocks", "analyze", "explain this program", "teach me this code"}:
+        return _generated_program_message(
+            workspace,
+            "Here is an Audio Blocks explanation.",
+        )
+
+    if t in {"sonify block", "sonify"}:
+        return _message(
+            "Audio Blocks sonification uses the generated Python structure. Compile or run blocks to hear indentation and output cues.",
+            workspace,
+        )
+
+    if t == "make a project report":
+        return _project_report(workspace)
+
+    if t == "what did i learn today":
+        return _message(_learning_recap(workspace), workspace)
+
+    if t == "export this project":
+        return {
+            "success": True,
+            "action": "export_audio_blocks",
+            "message": "Preparing a safe Audio Blocks project export.",
+            "speech": "Preparing a safe Audio Blocks project export.",
+            "audio_blocks": public_workspace(workspace),
+        }
+
     if t in {"read block workspace", "read block order", "summarize blocks"}:
         blocks = workspace.get("blocks", [])
         if not blocks:
             return _message("The Audio Blocks workspace is empty.", workspace)
         summary = " ".join(f"Block {b['id']}: {b['label']}." for b in blocks)
         return _message(f"Workspace has {len(blocks)} blocks. {summary}", workspace)
-    if t in {"read current block", "where am i in blocks"}:
+    if t in {"read current block", "read selected block", "where am i in blocks", "where am i"}:
         block = _find(workspace, int(workspace.get("cursor_id") or 0))
         return _message(
             _read_block(workspace, block)
@@ -1501,6 +2130,18 @@ def route_command(
             workspace["cursor_id"] = block["id"]
         return _message(
             _read_block(workspace, block)
+            if block
+            else f"Block {match.group(1)} does not exist.",
+            workspace,
+        )
+    match = re.match(r"^select block (\d+|one|two|three|four|five|six|seven|eight|nine|ten)$", t)
+    if match:
+        block_id = _block_number(match.group(1))
+        block = _find(workspace, int(block_id or 0))
+        if block:
+            workspace["cursor_id"] = block["id"]
+        return _message(
+            f"Selected {_read_block(workspace, block)}"
             if block
             else f"Block {match.group(1)} does not exist.",
             workspace,
@@ -1548,6 +2189,51 @@ def route_command(
             workspace,
         )
 
+    if t == "edit selected block":
+        block = _current_block(workspace)
+        return _message(
+            _read_block(workspace, block) + " Say set message, variable name, variable value, import library, condition, range start, range stop, function name, parameter, or return value."
+            if block
+            else "There is no selected block.",
+            workspace,
+        )
+    match = re.match(
+        r"^set (?:selected block )?(message|variable name|variable value|import library|import alias|condition|loop variable|range start|range stop|function name|parameter|return value) to (.+)$",
+        command_text,
+        flags=re.IGNORECASE,
+    )
+    if match:
+        block = _current_block(workspace)
+        if not block:
+            return _message("There is no selected block.", workspace)
+        updates, field_error = _selected_slot_updates(block, match.group(1), match.group(2))
+        if not updates:
+            return _message(field_error, workspace)
+        updated, error = edit_block(workspace, block["id"], updates)
+        return _message(
+            error if not updated else f"Updated block {updated['id']}: {updated['label']}.",
+            workspace,
+        )
+    if t == "delete selected block":
+        block = _current_block(workspace)
+        return _message(
+            delete_block(workspace, block["id"]) if block else "There is no selected block.",
+            workspace,
+        )
+    if t == "duplicate selected block":
+        block = _current_block(workspace)
+        return _message(
+            duplicate_block(workspace, block["id"]) if block else "There is no selected block.",
+            workspace,
+        )
+    if t in {"move selected block up", "move selected block down"}:
+        block = _current_block(workspace)
+        direction = "up" if t.endswith("up") else "down"
+        return _message(
+            move_relative(workspace, block["id"], direction) if block else "There is no selected block.",
+            workspace,
+        )
+
     match = re.match(r"^move block (\d+) (up|down)$", t)
     if match:
         return _message(
@@ -1586,6 +2272,10 @@ def route_command(
             else delete_block(workspace, block_id)
         )
         return _message(result, workspace)
+    if t == "undo":
+        t = "undo block change"
+    if t == "redo":
+        t = "redo block change"
     if t == "undo block change":
         return _message(undo(workspace), workspace)
     if t == "redo block change":
@@ -1601,20 +2291,42 @@ def route_command(
         )
 
     if t in {
+        "compile blocks",
         "compile blocks to python",
         "convert blocks to code",
-        "send blocks to editor",
     }:
         generated, error = compile_workspace(workspace)
-        return (
-            _message(error, workspace)
-            if not generated
-            else _edit_response(
-                generated,
-                "Compiled Audio Blocks into Python and sent the code to the editor.",
-                workspace,
-            )
+        return _message(
+            error if not generated else f"Compiled Audio Blocks into Python preview:\n{generated}",
+            workspace,
+            code_preview=generated or "",
         )
+    if t in {
+        "send blocks to editor",
+        "transfer blocks to python mode",
+        "copy blocks to python mode",
+    }:
+        generated, error = compile_workspace(workspace)
+        if not generated:
+            return _message(error, workspace)
+        set_active_mode(workspace, "python")
+        return _edit_response(
+            generated,
+            "Transferred Audio Blocks into Python Code Mode.",
+            workspace,
+        )
+    if t == "read output":
+        return {
+            "success": True,
+            "action": "read_output",
+            "message": "Reading the latest Audio Blocks output.",
+            "speech": "Reading the latest Audio Blocks output.",
+            "audio_blocks": public_workspace(workspace),
+        }
+    if t == "read errors only":
+        err = str(error_context or mem.get("last_run_error") or "").strip()
+        message = err if err else "There is no recent Audio Blocks error."
+        return _message(message, workspace)
     if t == "preview generated code":
         generated, error = compile_workspace(workspace)
         return _message(
@@ -1622,7 +2334,7 @@ def route_command(
             workspace,
             code_preview=generated or "",
         )
-    if t == "run blocks":
+    if t in {"run blocks", "run"}:
         generated, error = compile_workspace(workspace)
         if not generated:
             return _message(error, workspace)
@@ -1668,7 +2380,7 @@ def route_command(
         )
 
     if t == "start block lesson":
-        workspace["mode"] = "audio_blocks"
+        set_active_mode(workspace, "audio_blocks")
         workspace["lesson"] = {"index": 0}
         workspace["blocks"] = []
         workspace["next_id"] = 1

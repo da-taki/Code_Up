@@ -2,66 +2,65 @@
 
 **A blind-first Python learning environment for visually impaired beginners.**
 
-CodeUp is a browser-based IDE for learning Python without depending on visual scanning. It combines a real Python editor, an Audio Blocks workspace, spoken feedback, code maps, debugging support, and teacher handoff tools.
+CodeUp is a browser-based IDE for learning Python without depending on visual scanning. It combines a real Python editor, Audio Blocks Mode, spoken feedback, code maps, debugging support, and teacher handoff tools.
 
-## Why
+The project focuses on Python structure: indentation, nesting, errors, output, and control flow. CodeUp is a working prototype, stable enough for demos and structured testing while broader assistive-technology validation continues.
 
-Python depends heavily on structure.
+## Python Code Mode
 
-Indentation, nesting, errors, output, and control flow are not small details. They decide what the program does.
+CodeUp starts in Python Code Mode. Learners write and run real Python with spoken support around output, errors, structure, and program flow.
 
-CodeUp makes those parts easier to hear, inspect, debug, and understand.
+Python Code Mode is the default workspace for editing, execution, debugging, and understanding code.
 
-## Features
+## Audio Blocks Mode
 
-* real Python editor
-* Audio Blocks Mode
-* voice and typed commands
+Audio Blocks Mode is a separate workspace for building beginner Python programs with accessible numbered blocks. It opens through the Audio Blocks button or the `open audio blocks` command.
+
+Blocks can be compiled, run, explained, exported, or transferred into Python Code Mode when the learner is ready to work with the generated Python.
+
+## Non-AI tools
+
+Deterministic, non-AI features include:
+
 * spoken output
-* error explanations
 * code maps
 * structure summaries
+* error reading
 * mistake replay
+* Audio Blocks compile/run
 * block-to-Python transfer
 * project export
 * teacher/trainer reports
-* optional AI explanations
 
-## Modes
+Optional AI support can add explanations, but the core learning and routing tools do not depend on AI.
 
-### Python Code Mode
+## Screen reader and assistive technology support
 
-Write, run, debug, and understand real Python with spoken support around output, errors, structure, and program flow.
+CodeUp includes screen-reader-aware workflows, live regions, keyboard-accessible controls, and spoken feedback for editor and command-box interaction.
 
-### Audio Blocks Mode
+Broader validation with NVDA, JAWS, VoiceOver, Orca, Braille displays, and more visually impaired learners and trainers is still ongoing.
 
-Build beginner Python programs with blocks, then compile, run, explain, export, or transfer them into Python Code Mode.
+## Safety model
 
-Audio Blocks supports imports, variables, values, input/output, conditions, loops, functions, lists, try/except blocks, and comments.
+Python Code Mode and Audio Blocks Mode are separated. Commands affect the active workspace only, and blocks move into the Python editor only through explicit transfer.
 
-## Status
+Python execution is controlled and sandboxed according to the app's existing design, but CodeUp should still be treated as a learning prototype rather than a general-purpose online judge.
 
-CodeUp is a working prototype.
+## Testing
 
-Stable enough for demos and structured testing:
+CodeUp has automated regression coverage for Python flow, Audio Blocks routing, block compile/run/transfer, exports, and accessibility-related command behavior.
 
-* Python Code Mode
-* Audio Blocks Mode
-* command-box interaction
-* code execution
-* code maps
-* structure summaries
-* mistake replay
-* block compile/run/transfer
-* project export
-* teacher reports
+Quick tests: `py -m pytest -q`
 
-Still being validated:
+Full tests: `py -m pytest -q --run-full`
 
-* real microphone behavior across browsers
-* screen-reader workflows
-* Braille display workflows
-* testing with more visually impaired learners and trainers
+Docs tests: `py -m pytest -q -m docs`
+
+Current status: working prototype, stable enough for demos and structured testing.
+
+## Demo
+
+[https://code-up-fmqr.onrender.com/ide](https://code-up-fmqr.onrender.com/ide)
 
 ## Tech stack
 
@@ -70,12 +69,12 @@ Still being validated:
 * JavaScript
 * HTML/CSS
 * Browser speech APIs
-* optional AI support
+* Optional AI support
 
-## Demo
+## License
 
-[https://code-up-fmqr.onrender.com/ide](https://code-up-fmqr.onrender.com/ide)
+See LICENSE.
 
 ## Author
 
-Built by **Taknoor Singh**, Grade 12, Army Public School Patiala Cantt.
+Built by Taknoor Singh.

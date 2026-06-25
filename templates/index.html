@@ -293,6 +293,18 @@
         <div><span class="cu-command-understanding-label">Next action:</span> <span id="nextCommandAction">None yet.</span></div>
       </div>
 
+      <section id="liveAssistantPanel" class="cu-live-assistant" role="region" aria-label="Live Assistant">
+        <p id="liveAssistantStatus" class="cu-live-assistant-status" role="status" aria-live="polite" aria-atomic="true">Live Assistant: off</p>
+        <p id="liveAssistantHeard" class="cu-live-assistant-line">You said: (nothing yet)</p>
+        <p id="liveAssistantResponse" class="cu-live-assistant-line">CodeUp said: (nothing yet)</p>
+        <div class="cu-live-assistant-controls" role="group" aria-label="Live Assistant controls">
+          <button type="button" id="liveAssistantStartBtn" aria-pressed="false" aria-label="Start live assistant">Start live assistant</button>
+          <button type="button" id="liveAssistantPauseBtn" disabled aria-label="Pause or resume listening">Pause listening</button>
+          <button type="button" id="liveAssistantStopSpeakBtn" aria-label="Stop speaking">Stop speaking</button>
+          <button type="button" id="liveAssistantRepeatBtn" aria-label="Repeat last response">Repeat last response</button>
+        </div>
+      </section>
+
       <details id="cuHelpPanel" class="cu-disclosure cu-help-disclosure">
         <summary class="cu-disclosure-summary">Show commands &amp; help</summary>
         <div class="cu-help-content">
@@ -692,6 +704,7 @@
 
   <script src="/static/vendor/monaco/min/vs/loader.js"></script>
   <script src="/static/voice-engine.js"></script>
+  <script src="/static/live-assistant.js"></script>
   <script src="/static/app.js"></script>
   <script src="/static/tutorial.js"></script>
 

@@ -30,6 +30,7 @@ Deterministic, non-AI features include:
 * spoken error trace narration (crash location, likely cause, what to test next)
 * audio diff review with safe apply/reject and undo
 * spoken state and variable watch (values, loop state, condition results, stepping)
+* live assistant mode (hands-free or push-to-talk, interruptible, with a bounded transcript)
 * mistake replay
 * Audio Blocks compile/run
 * block-to-Python transfer

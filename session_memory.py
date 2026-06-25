@@ -40,6 +40,7 @@ def new_memory() -> Dict[str, Any]:
         "student_satisfied": None,
         "last_run_output": "",
         "last_run_error": "",
+        "last_run_traceback": "",
         "last_run_ok": None,
         "last_run_inputs": [],
         "run_count": 0,
@@ -186,8 +187,10 @@ def record_generation(mem: Dict[str, Any], prompt: str, code: Optional[str] = No
 
 
 def record_run(mem: Dict[str, Any], *, output: str = "", error: str = "",
+               traceback_text: str = "",
                inputs: Optional[List[str]] = None, ran_ok: Optional[bool] = None) -> None:
     mem["run_count"] = max(0, int(mem.get("run_count") or 0)) + 1
+    mem["last_run_traceback"] = _clip(traceback_text, _MAX_ERROR * 2)
     mem["last_run_output"] = _clip(output, _MAX_OUTPUT)
     mem["last_run_error"] = _clip(error, _MAX_ERROR)
     error_text = str(error or "")
@@ -209,6 +212,7 @@ def record_run(mem: Dict[str, Any], *, output: str = "", error: str = "",
 def clear_run_state(mem: Dict[str, Any]) -> None:
     mem["last_run_output"] = ""
     mem["last_run_error"] = ""
+    mem["last_run_traceback"] = ""
     mem["last_run_ok"] = None
     mem["last_run_inputs"] = []
     mem["run_count"] = 0

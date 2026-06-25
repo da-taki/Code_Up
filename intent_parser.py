@@ -933,6 +933,40 @@ class IntentParser:
         r"^read\s+file\s+tree$", r"^summarize\s+project\s+files$",
         r"^what\s+files\s+are\s+in\s+this\s+project$",
     ]
+    EXPLAIN_ERROR_PATTERNS = [
+        r"^explain\s+(?:the\s+)?error$",
+        r"^trace\s+(?:the\s+)?error$",
+        r"^explain\s+(?:the\s+)?traceback$",
+        r"^narrate\s+(?:the\s+)?error$",
+    ]
+    CRASH_LOCATION_PATTERNS = [
+        r"^where\s+did\s+it\s+crash$",
+        r"^where\s+(?:did\s+)?(?:the\s+|my\s+)?(?:program|code)\s+crash$",
+        r"^where\s+is\s+the\s+crash$",
+    ]
+    ERROR_CAUSE_PATTERNS = [
+        r"^what\s+caused\s+(?:this|the\s+error|the\s+crash|it)$",
+        r"^why\s+did\s+it\s+crash$",
+    ]
+    ERROR_VALUE_PATTERNS = [
+        r"^what\s+value\s+caused\s+(?:this|the\s+error|it|the\s+crash)$",
+        r"^which\s+value\s+caused\s+(?:this|the\s+error)$",
+    ]
+    READ_FULL_TRACEBACK_PATTERNS = [
+        r"^read\s+(?:the\s+)?full\s+traceback$",
+        r"^show\s+(?:me\s+)?(?:the\s+)?full\s+traceback$",
+        r"^read\s+(?:the\s+)?(?:whole|entire)\s+traceback$",
+    ]
+    TEST_NEXT_PATTERNS = [
+        r"^what\s+should\s+i\s+test\s+next$",
+        r"^what\s+do\s+i\s+test\s+next$",
+        r"^what\s+next\s+to\s+test$",
+    ]
+    FIX_WITH_EXPLANATION_PATTERNS = [
+        r"^fix\s+with\s+explanation$",
+        r"^explain\s+and\s+fix$",
+        r"^propose\s+a\s+fix$",
+    ]
     PROJECT_MAP_PATTERNS = [
         r"^project\s+map$",
         r"^(?:give|show)\s+me\s+(?:a|the)\s+project\s+map$",
@@ -1228,6 +1262,13 @@ class IntentParser:
             "project_health": self.PROJECT_HEALTH_PATTERNS,
             "project_file_tree": self.PROJECT_FILE_TREE_PATTERNS,
             "project_map": self.PROJECT_MAP_PATTERNS,
+            "explain_error_trace": self.EXPLAIN_ERROR_PATTERNS,
+            "crash_location": self.CRASH_LOCATION_PATTERNS,
+            "error_cause": self.ERROR_CAUSE_PATTERNS,
+            "error_value": self.ERROR_VALUE_PATTERNS,
+            "read_full_traceback": self.READ_FULL_TRACEBACK_PATTERNS,
+            "test_next": self.TEST_NEXT_PATTERNS,
+            "fix_with_explanation": self.FIX_WITH_EXPLANATION_PATTERNS,
             "loop_summary": self.LOOP_SUMMARY_PATTERNS,
             "where_in_program": self.WHERE_IN_PROGRAM_PATTERNS,
             "watch_var":       self.WATCH_VAR_PATTERNS,

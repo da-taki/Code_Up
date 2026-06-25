@@ -933,6 +933,19 @@ class IntentParser:
         r"^read\s+file\s+tree$", r"^summarize\s+project\s+files$",
         r"^what\s+files\s+are\s+in\s+this\s+project$",
     ]
+    PROJECT_MAP_PATTERNS = [
+        r"^project\s+map$",
+        r"^(?:give|show)\s+me\s+(?:a|the)\s+project\s+map$",
+        r"^map\s+(?:this|the)\s+project$",
+        r"^summarize\s+(?:this\s+|the\s+)?project$",
+        r"^what\s+does\s+each\s+file\s+do$",
+        r"^where\s+does\s+(?:the\s+|this\s+)?program\s+(?:start|begin)$",
+        r"^where\s+does\s+it\s+start$",
+        r"^what\s+is\s+(?:the\s+)?entry\s+point$",
+        r"^what\s+imports\s+what$",
+        r"^show\s+(?:me\s+)?(?:the\s+)?import\s+graph$",
+        r"^what\s+functions\s+are\s+in\s+(?:this\s+|the\s+)?project$",
+    ]
     LOOP_SUMMARY_PATTERNS = [
         r"^explain\s+loops$", r"^how\s+many\s+times\s+does\s+this\s+loop\s+run$", r"^check\s+loops$",
     ]
@@ -1214,6 +1227,7 @@ class IntentParser:
             "repeat_last_error": self.REPEAT_LAST_ERROR_PATTERNS,
             "project_health": self.PROJECT_HEALTH_PATTERNS,
             "project_file_tree": self.PROJECT_FILE_TREE_PATTERNS,
+            "project_map": self.PROJECT_MAP_PATTERNS,
             "loop_summary": self.LOOP_SUMMARY_PATTERNS,
             "where_in_program": self.WHERE_IN_PROGRAM_PATTERNS,
             "watch_var":       self.WATCH_VAR_PATTERNS,

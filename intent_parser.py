@@ -1001,6 +1001,52 @@ class IntentParser:
     CHANGE_APPLY_PATTERNS = [
         r"^apply\s+this\s+change$", r"^apply\s+the\s+(?:change|fix)$", r"^apply\s+all$",
     ]
+    PROGRAM_STATE_PATTERNS = [
+        r"^show\s+(?:me\s+)?(?:the\s+)?program\s+state$",
+        r"^show\s+(?:me\s+)?(?:the\s+)?state$",
+        r"^what\s+is\s+the\s+program\s+state$",
+    ]
+    SUMMARIZE_VARIABLES_PATTERNS = [
+        r"^summari[sz]e\s+(?:my\s+|the\s+)?variables$",
+        r"^what\s+variables\s+exist$",
+        r"^what\s+variables\s+are\s+there$",
+    ]
+    VARIABLE_NOW_PATTERNS = [
+        r"^what\s+is\s+(\w+)\s+now$",
+        r"^what'?s\s+(\w+)\s+now$",
+        r"^what\s+is\s+(?:the\s+value\s+of\s+)(\w+)$",
+        r"^what\s+is\s+(\w+)\s+right\s+now$",
+    ]
+    READ_WATCHED_PATTERNS = [
+        r"^read\s+watched\s+variables$",
+        r"^read\s+(?:my\s+)?watched\s+variables$",
+        r"^what\s+are\s+(?:my\s+)?watched\s+variables$",
+    ]
+    STEP_THROUGH_PATTERNS = [
+        r"^step\s+through\s+(?:this|the\s+code|my\s+code|it)$",
+        r"^start\s+stepping$", r"^step\s+through$", r"^trace\s+(?:this|the\s+code)$",
+    ]
+    # "next step" / "previous step" reuse the existing next_step/previous_step
+    # intents (context-aware in app.py), so they are not redefined here.
+    EXPLAIN_STEP_PATTERNS = [r"^explain\s+(?:the\s+)?current\s+step$", r"^explain\s+this\s+step$"]
+    LOOP_STATE_PATTERNS = [
+        r"^explain\s+loop\s+state$", r"^loop\s+state$", r"^what\s+is\s+the\s+loop\s+doing$",
+    ]
+    # Note: the bare "why did it pass/fail" forms are intentionally NOT matched
+    # here; "why did it fail" is an existing error follow-up. Use the explicit
+    # "condition" phrasings for State Watch.
+    CONDITION_PASS_PATTERNS = [
+        r"^why\s+did\s+(?:this\s+|the\s+)?condition\s+pass$",
+        r"^why\s+was\s+(?:the\s+)?condition\s+true$",
+    ]
+    CONDITION_FAIL_PATTERNS = [
+        r"^why\s+did\s+(?:this\s+|the\s+)?condition\s+fail$",
+        r"^why\s+was\s+(?:the\s+)?condition\s+false$",
+    ]
+    PROGRAM_OUTPUT_PATTERNS = [
+        r"^what\s+did\s+the\s+program\s+print$", r"^what\s+was\s+printed$",
+        r"^read\s+(?:the\s+)?printed\s+output$",
+    ]
     PROJECT_MAP_PATTERNS = [
         r"^project\s+map$",
         r"^(?:give|show)\s+me\s+(?:a|the)\s+project\s+map$",
@@ -1314,6 +1360,16 @@ class IntentParser:
             "reject_all_changes": self.DIFF_REJECT_ALL_PATTERNS,
             "undo_last_change": self.UNDO_CHANGE_PATTERNS,
             "change_apply": self.CHANGE_APPLY_PATTERNS,
+            "program_state": self.PROGRAM_STATE_PATTERNS,
+            "summarize_variables": self.SUMMARIZE_VARIABLES_PATTERNS,
+            "variable_now": self.VARIABLE_NOW_PATTERNS,
+            "read_watched": self.READ_WATCHED_PATTERNS,
+            "step_through": self.STEP_THROUGH_PATTERNS,
+            "explain_step": self.EXPLAIN_STEP_PATTERNS,
+            "loop_state": self.LOOP_STATE_PATTERNS,
+            "condition_pass": self.CONDITION_PASS_PATTERNS,
+            "condition_fail": self.CONDITION_FAIL_PATTERNS,
+            "program_output": self.PROGRAM_OUTPUT_PATTERNS,
             "loop_summary": self.LOOP_SUMMARY_PATTERNS,
             "where_in_program": self.WHERE_IN_PROGRAM_PATTERNS,
             "watch_var":       self.WATCH_VAR_PATTERNS,
@@ -1732,7 +1788,7 @@ class IntentParser:
             if match.groups() and match.group(1):
                 slots["variable"] = match.group(1).strip()
 
-        elif intent in ("watch_var", "stop_watching"):
+        elif intent in ("watch_var", "stop_watching", "variable_now"):
             if match.groups() and match.group(1):
                 slots["variable"] = match.group(1).strip()
 

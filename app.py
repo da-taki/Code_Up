@@ -63,6 +63,7 @@ import deterministic_code_tools
 import project_map
 import error_trace
 import audio_diff
+import state_watch
 import hint_engine
 import landmarks
 import debug_teacher
@@ -2458,6 +2459,47 @@ def _run_with_trace_for_narration(code: str, watched_vars: set, session_id: str)
 
     return {"success": True, "narration": narration, "narration_lines": narration_lines,
             "output": output_text, "error": "", "steps": steps, "raw_trace": trace}
+
+
+def _build_state_bundle(current_code: str, mem: Dict[str, Any], session_id: str) -> Dict[str, Any]:
+    """Run the current code in the existing sandbox trace and store a compact,
+    bounded state bundle for State / Variable Watch. Never executes user code in
+    the Flask process; all execution stays in _run_with_trace_for_narration."""
+    result = _run_with_trace_for_narration(current_code, set(), session_id)
+    raw_trace = result.get("raw_trace") or []
+    output = result.get("output") or ""
+    error = result.get("error") or ""
+    output_lines = len(output.splitlines()) if output else 0
+    if error:
+        bundle = {"code": current_code, "steps": [], "vars": {}, "output": output,
+                  "output_lines": output_lines, "loop": "", "conditions": [],
+                  "error": error, "cursor": 0}
+    else:
+        bundle = {
+            "code": current_code,
+            "steps": state_watch.build_steps(raw_trace, current_code),
+            "vars": state_watch.parse_state(raw_trace),
+            "output": output, "output_lines": output_lines,
+            "loop": state_watch.loop_state(raw_trace, current_code),
+            "conditions": state_watch.condition_outcomes(raw_trace, current_code),
+            "error": "", "cursor": 0,
+        }
+    session_memory.set_state_trace(mem, bundle)
+    return session_memory.get_state_trace(mem)  # the stored dict, so cursor edits persist
+
+
+def _state_error_message(error_text: str) -> str:
+    """Narrate a tracing failure using error_trace, without masking the error."""
+    low = (error_text or "").lower()
+    if any(word in low for word in ("tim", "limit", "exceed", "killed")):
+        return ("I stopped tracing because the program ran too long. This usually means an "
+                "infinite loop or too many steps. Check the loop's stop condition.")
+    analysis = error_trace.analyze(error_text or "")
+    exc = analysis.get("exception_type") or "an error"
+    line = analysis.get("line")
+    where = f" at line {line}" if line else ""
+    return ("I could not finish tracing because the program crashed. "
+            f"The latest error was {exc}{where}. Say 'explain error' to hear the error trace.")
 
 
 _AUDIO_BREAKPOINT_VAR_RE = re.compile(r'^[A-Za-z_]\w*$')
@@ -9089,6 +9131,90 @@ def voice():
             },
         })
 
+    state_watch_intents = {
+        "program_state", "summarize_variables", "variable_now", "read_watched",
+        "step_through", "explain_step",
+        "loop_state", "condition_pass", "condition_fail", "program_output",
+    }
+    if confidence >= 0.75 and intent in state_watch_intents:
+        def _smsg(s):
+            return {"success": True, "action": "deterministic_message", "intent": intent,
+                    "speech": s, "message": s, "heard": text, "confidence": confidence}
+
+        # Static, no-execution: just read the AST.
+        if intent == "summarize_variables":
+            return _store_and_return(_smsg(state_watch.narrate_variables(current_code)))
+
+        # Read watched names + their last traced values (no fresh run needed).
+        if intent == "read_watched":
+            watched = session_memory.get_watched_variables(mem)
+            if not watched:
+                return _store_and_return(_smsg(
+                    "You are not watching any variables yet. Say 'watch variable' and a name."))
+            existing = session_memory.get_state_trace(mem)
+            fresh_vars = (existing.get("vars", {}) if existing
+                          and (existing.get("code") or "") == (current_code or "") else {})
+            parts = []
+            for name in watched:
+                info = fresh_vars.get(name)
+                parts.append(f"{name} is {state_watch.summarize_value(info['value'], full=True)}."
+                             if info else f"{name} has no current value; say 'show program state' to refresh.")
+            return _store_and_return(_smsg("Watched variables: " + " ".join(parts)))
+
+        # Printed output from the most recent run.
+        if intent == "program_output":
+            out = (mem.get("last_run_output") or "").strip()
+            existing = session_memory.get_state_trace(mem)
+            if not out and existing and not existing.get("error"):
+                out = (existing.get("output") or "").strip()
+            if not out:
+                return _store_and_return(_smsg("The program did not print anything in the last run."))
+            out_lines = out.splitlines()
+            speech = (f"The program printed {len(out_lines)} line{'s' if len(out_lines) != 1 else ''}: "
+                      + " ".join(out_lines[:5]))
+            if len(out_lines) > 5:
+                speech += " and more."
+            return _store_and_return(_smsg(speech))
+
+        # The rest need a trace. Fresh-run commands re-trace; readers use the stored one.
+        needs_fresh = intent in {"program_state", "variable_now", "step_through"}
+        if needs_fresh:
+            bundle = _build_state_bundle(current_code, mem, get_session_id())
+        else:
+            bundle = session_memory.get_state_trace(mem)
+            if bundle is None:
+                return _store_and_return(_smsg(
+                    "I do not have a state trace yet. Say 'step through this' first."))
+            if (bundle.get("code") or "") != (current_code or ""):
+                return _store_and_return(_smsg(
+                    "The code changed after the last trace. Say 'step through this' to refresh the state."))
+        if bundle.get("error"):
+            return _store_and_return(_smsg(_state_error_message(bundle["error"])))
+
+        if intent == "program_state":
+            watched = set(session_memory.get_watched_variables(mem))
+            speech = state_watch.narrate_state(bundle["vars"], output_lines=bundle["output_lines"],
+                                               watched=watched or None)
+        elif intent == "variable_now":
+            speech = state_watch.variable_value(bundle["vars"], slots.get("variable", ""))
+        elif intent == "step_through":
+            bundle["cursor"] = 0
+            steps = bundle.get("steps") or []
+            speech = (state_watch.narrate_step(steps, 0) if steps
+                      else "I traced the program but found no steps to read.")
+        elif intent == "explain_step":
+            steps = bundle.get("steps") or []
+            speech = state_watch.narrate_step(steps, int(bundle.get("cursor", 0) or 0))
+        elif intent == "loop_state":
+            speech = bundle.get("loop") or "I did not see a loop in the last trace."
+        else:  # condition_pass / condition_fail
+            want = (intent == "condition_pass")
+            matching = [c for c in (bundle.get("conditions") or []) if c.get("result") == want]
+            speech = (state_watch.narrate_condition(matching[-1]) if matching
+                      else "I did not see a condition that "
+                           + ("passed" if want else "failed") + " in the last trace.")
+        return _store_and_return(_smsg(speech))
+
     if confidence >= 0.75 and intent in (
         "explain_current_line", "read_around_cursor", "list_variables", "read_error_summary"
     ):
@@ -9572,6 +9698,7 @@ def voice():
         if intent == "clear_breakpoints":
             return _store_and_return({"success": True, "action": "clear_breakpoints", "confidence": confidence})
         if intent == "watch_variable":
+            session_memory.add_watched_variable(mem, slots.get("variable", ""))
             return _store_and_return({"success": True, "action": "watch_variable", "variable": slots.get("variable", ""), "confidence": confidence})
         if intent == "debug_continue":
             return _store_and_return({"success": True, "action": "debug_continue", "confidence": confidence})
@@ -9599,10 +9726,25 @@ def voice():
             return _store_and_return({"success": True, "action": "clear_editor", "confidence": confidence})
         if intent == "read_output":
             return _store_and_return({"success": True, "action": "read_output", "confidence": confidence})
-        if intent == "next_step":
-            return _store_and_return({"success": True, "action": "next_step", "speech": _trace_playback("next"), "confidence": confidence})
-        if intent == "previous_step":
-            return _store_and_return({"success": True, "action": "previous_step", "speech": _trace_playback("prev"), "confidence": confidence})
+        if intent in ("next_step", "previous_step"):
+            # If a State Watch trace is active (from "step through this") and still
+            # matches the editor, step through it; otherwise keep the existing
+            # trace-playback behavior.
+            _st = session_memory.get_state_trace(mem)
+            if (_st and not _st.get("error") and (_st.get("code") or "") == (current_code or "")
+                    and _st.get("steps")):
+                _steps = _st["steps"]
+                _cur = int(_st.get("cursor", 0) or 0)
+                _cur = (min(_cur + 1, len(_steps) - 1) if intent == "next_step"
+                        else max(_cur - 1, 0))
+                _st["cursor"] = _cur
+                _speech = state_watch.narrate_step(_steps, _cur)
+                return _store_and_return({"success": True, "action": "deterministic_message",
+                                          "intent": intent, "speech": _speech, "message": _speech,
+                                          "heard": text, "confidence": confidence})
+            direction = "next" if intent == "next_step" else "prev"
+            return _store_and_return({"success": True, "action": intent,
+                                      "speech": _trace_playback(direction), "confidence": confidence})
         if intent == "what_changed":
             return _store_and_return({"success": True, "action": "what_changed", "speech": _trace_playback("current_change"), "confidence": confidence})
         if intent == "set_inputs":
@@ -9650,10 +9792,13 @@ def voice():
         if intent == "where_in_program":
             return _store_and_return({"success": True, "action": "code_map", "query": "where in program", "confidence": confidence})
         if intent == "watch_var":
+            session_memory.add_watched_variable(mem, slots.get("variable", ""))
             return _store_and_return({"success": True, "action": "watch_var", "variable": slots.get("variable", ""), "confidence": confidence})
         if intent == "stop_watching":
+            session_memory.remove_watched_variable(mem, slots.get("variable", ""))
             return _store_and_return({"success": True, "action": "stop_watching", "variable": slots.get("variable", ""), "confidence": confidence})
         if intent == "clear_watched":
+            mem["watched_variables"] = []
             return _store_and_return({"success": True, "action": "clear_watched", "confidence": confidence})
         if intent == "step_narration":
             return _store_and_return({"success": True, "action": "step_narration", "confidence": confidence})

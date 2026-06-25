@@ -42,6 +42,8 @@ def new_memory() -> Dict[str, Any]:
         "last_change": None,
         "change_cursor": 0,
         "pending_change_proposal": None,
+        "watched_variables": [],
+        "last_state_trace": None,
         "student_satisfied": None,
         "last_run_output": "",
         "last_run_error": "",
@@ -413,6 +415,54 @@ def get_change_proposal(mem: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 def clear_change_proposal(mem: Dict[str, Any]) -> None:
     mem["pending_change_proposal"] = None
+
+
+_MAX_WATCHED = 20
+
+
+def add_watched_variable(mem: Dict[str, Any], name: str) -> List[str]:
+    name = _clip(name, 60).strip()
+    watched = mem.setdefault("watched_variables", [])
+    if name and name not in watched:
+        watched.append(name)
+        del watched[:-_MAX_WATCHED]
+    return list(watched)
+
+
+def remove_watched_variable(mem: Dict[str, Any], name: str) -> List[str]:
+    name = (name or "").strip()
+    watched = mem.setdefault("watched_variables", [])
+    if name in watched:
+        watched.remove(name)
+    return list(watched)
+
+
+def get_watched_variables(mem: Dict[str, Any]) -> List[str]:
+    watched = mem.get("watched_variables")
+    return list(watched) if isinstance(watched, list) else []
+
+
+def set_state_trace(mem: Dict[str, Any], bundle: Optional[Dict[str, Any]]) -> None:
+    """Store a compact state-trace bundle (steps/vars/conditions, not raw trace)."""
+    if not bundle:
+        mem["last_state_trace"] = None
+        return
+    record = dict(bundle)
+    record.setdefault("cursor", 0)
+    record["timestamp"] = time.time()
+    mem["last_state_trace"] = record
+
+
+def get_state_trace(mem: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    bundle = mem.get("last_state_trace")
+    return bundle if isinstance(bundle, dict) else None
+
+
+def state_trace_is_stale(mem: Dict[str, Any], current_code: str) -> bool:
+    bundle = get_state_trace(mem)
+    if not bundle:
+        return False
+    return (current_code or "") != (bundle.get("code") or "")
 
 
 def snapshot(mem: Dict[str, Any], *, utterance: str = "", file_name: str = "") -> Dict[str, Any]:

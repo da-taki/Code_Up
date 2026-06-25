@@ -61,6 +61,7 @@ import structure_tools
 import error_replay
 import deterministic_code_tools
 import project_map
+import error_trace
 import hint_engine
 import landmarks
 import debug_teacher
@@ -3974,7 +3975,8 @@ def run_code():
         _save_mistake_snapshot(get_session_id(), code, safe_error, success=False, explanation=explanation)
         try:
             session_memory.record_run(session_memory.get_memory(get_trace_storage()),
-                                      error=safe_error, inputs=inputs, ran_ok=False)
+                                      error=safe_error, traceback_text=safe_error,
+                                      inputs=inputs, ran_ok=False)
         except Exception:
             pass
         return jsonify({
@@ -4145,7 +4147,8 @@ def run_code():
             _save_mistake_snapshot(get_session_id(), code, error, success=False, explanation=explanation)
             try:
                 session_memory.record_run(session_memory.get_memory(get_trace_storage()),
-                                          error=error, inputs=inputs, ran_ok=False)
+                                          error=error, traceback_text=sanitize_traceback(raw_error),
+                                          inputs=inputs, ran_ok=False)
             except Exception:
                 pass
             return jsonify({
@@ -6825,6 +6828,29 @@ def _project_state_from_voice_body(body: Dict[str, Any], current_code: str = "")
     return {"is_project": False, "code": current_code or "", "requirements": requirements}
 
 
+def _fix_with_explanation_proposal(analysis: Dict[str, Any]) -> str:
+    """Propose a deterministic fix without applying it. Defers risky fixes to the
+    existing 'fix this code' flow rather than silently editing the learner's code."""
+    exc = analysis.get("exception_type")
+    line = analysis.get("line")
+    cause = analysis.get("likely_cause") or "There is an error in the code."
+    if exc in ("IndentationError", "TabError") and line:
+        return (
+            "I found a likely fix.\n\n"
+            f"Problem:\n{cause}\n\n"
+            f"Proposed change:\nIndent line {line} by four spaces so it sits inside the block above it.\n\n"
+            "Risk:\nLow.\n\n"
+            "I will not change your code automatically. Say 'fix this code' to apply an "
+            "AI-assisted fix you can review, or indent it yourself and run again."
+        )
+    return (
+        "I can explain the problem but I do not have a safe one-step automatic fix for this error.\n\n"
+        f"Problem:\n{cause}\n\n"
+        f"What to try:\n{analysis.get('next_steps', '')}\n\n"
+        "Say 'fix this code' for an AI-assisted fix you can review before running."
+    )
+
+
 def _requirements_from_voice_body(body: Dict[str, Any], current_code: str = "") -> List[str]:
     reqs = body.get("requirements")
     if isinstance(reqs, list):
@@ -8811,6 +8837,60 @@ def voice():
             "heard": text, "onboarding": True,
         })
 
+    error_trace_intents = {
+        "explain_error_trace", "crash_location", "error_cause", "error_value",
+        "read_full_traceback", "test_next", "fix_with_explanation",
+    }
+    if confidence >= 0.75 and intent in error_trace_intents:
+        project_state = _project_state_from_voice_body(body, current_code)
+        project_files = project_state.get("files") if project_state.get("is_project") else None
+        executed_file = ""
+        if isinstance(project_files, dict):
+            executed_file = (_safe_text(body.get("file"), limit=200)
+                             or str(project_state.get("entry") or ""))
+        analysis = error_trace.analyze(
+            error_context or str(mem.get("last_run_error") or ""),
+            traceback_text=str(mem.get("last_run_traceback") or ""),
+            code=current_code,
+            project_files=project_files if isinstance(project_files, dict) else None,
+            executed_file=executed_file,
+        )
+        if not analysis.get("has_error"):
+            speech = "There is no recent Python error to explain. Run your code first."
+        elif intent == "crash_location":
+            file_name, line_no = analysis.get("file"), analysis.get("line")
+            if file_name and line_no:
+                speech = f"The program crashed in {file_name}, line {line_no}."
+            elif line_no:
+                speech = f"The program crashed at line {line_no}."
+            else:
+                speech = "I could not find the exact crash location in this error."
+            if analysis.get("code_line"):
+                speech += f" The line was: {analysis['code_line']}"
+        elif intent == "error_cause":
+            speech = f"The error is {analysis['exception_type']}. {analysis['likely_cause']}"
+        elif intent == "error_value":
+            speech = error_trace.value_narration(analysis)
+        elif intent == "read_full_traceback":
+            speech = error_trace.narrate(analysis, full=True)
+        elif intent == "test_next":
+            speech = "What to test next: " + (analysis.get("next_steps")
+                                              or "Run your code again and read the next error.")
+        elif intent == "fix_with_explanation":
+            speech = _fix_with_explanation_proposal(analysis)
+        else:  # explain_error_trace
+            speech = error_trace.narrate(analysis)
+        return _store_and_return({
+            "success": True, "action": "deterministic_message", "intent": intent,
+            "message": speech, "speech": speech, "heard": text, "confidence": confidence,
+            "error_trace": {
+                "exception_type": analysis.get("exception_type"),
+                "file": analysis.get("file"), "line": analysis.get("line"),
+                "code_line": analysis.get("code_line"), "value": analysis.get("value"),
+                "full_trace_available": analysis.get("full_trace_available"),
+            },
+        })
+
     if confidence >= 0.75 and intent in (
         "explain_current_line", "read_around_cursor", "list_variables", "read_error_summary"
     ):
@@ -8821,8 +8901,17 @@ def voice():
         elif intent == "list_variables":
             speech = structure_tools.list_variables_speech(current_code)
         else:
-            speech = (_beginner_error_summary(error_context or str(mem.get("last_run_error") or ""))
-                      or "There is no error to read yet. Run your code first.")
+            stored_err = error_context or str(mem.get("last_run_error") or "")
+            if not stored_err.strip():
+                speech = "There is no error to read yet. Run your code first."
+            else:
+                _err_analysis = error_trace.analyze(
+                    stored_err, traceback_text=str(mem.get("last_run_traceback") or ""),
+                    code=current_code,
+                )
+                speech = (error_trace.brief(_err_analysis)
+                          or _beginner_error_summary(stored_err)
+                          or "There is no error to read yet. Run your code first.")
         return _store_and_return({
             "success": True, "action": "deterministic_message",
             "speech": speech, "message": speech, "heard": text,

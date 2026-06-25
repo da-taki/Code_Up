@@ -161,13 +161,18 @@ def test_explain_current_line_follows_the_cursor(client):
 
 @pytest.mark.parametrize("phrase,error,expected", [
     ("read errors only", "NameError: name 'total' is not defined",
-     "Name total is used before it has a value."),
+     "Latest error: The program ran into an error. The error is NameError. "
+     "The name total is used before it has a value."),
     ("just tell me the error", "IndentationError: expected an indented block on line 3",
-     "Line 3 needs indentation because it belongs inside the block above it."),
+     "Latest error: The program crashed at line 3. The error is IndentationError. "
+     "Python expected an indented block after a loop, if, or function header."),
     ("summarize the error", '  File "<user>", line 2\n    x =\n       ^\nSyntaxError: invalid syntax',
-     "There is a syntax error near line 2."),
+     "Latest error: The program crashed at line 2. The error is SyntaxError. "
+     "Python could not understand the code structure near line 2."),
 ])
-def test_read_errors_only_speaks_short_summary(client, phrase, error, expected):
+def test_read_errors_only_speaks_narrated_summary(client, phrase, error, expected):
+    # read errors only now routes through the deterministic error_trace narrator
+    # (slice 2), giving a "Latest error:" summary instead of raw stderr.
     data = _vc(client, phrase, code="x = 1\n", error=error)
     assert data["action"] == "deterministic_message"
     assert _spoken(data) == expected

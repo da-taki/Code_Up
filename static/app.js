@@ -4387,6 +4387,11 @@ async function handleCommandText(txt) {
     if (handled) return;
   }
 
+  // Live Assistant control/meta commands are handled locally and never sent to
+  // the backend; cockpit commands fall through to the normal /voice-command path.
+  if (window.LiveAssistant && window.LiveAssistant.handleMetaCommand(txt)) return;
+
+  if (window.LiveAssistant) window.LiveAssistant.noteProcessing(true);
   try {
     const res  = await fetch('/voice-command', {
       method:  'POST',
@@ -4394,6 +4399,9 @@ async function handleCommandText(txt) {
       body:    JSON.stringify(buildVoiceCommandPayload(txt, 'typed')),
     });
     const data = await res.json();
+    if (window.LiveAssistant) {
+      window.LiveAssistant.recordTurn(txt, data.speech || data.message || '', data.action || '');
+    }
     applyCommandUnderstanding(data, txt);
 
     if (!data.success) { speak(data.message || 'Command not recognized.'); return; }
@@ -4425,6 +4433,8 @@ async function handleCommandText(txt) {
     await handleConfirmedAction(action, data);
   } catch (err) {
     console.error(err); speak('Voice command failed.');
+  } finally {
+    if (window.LiveAssistant) window.LiveAssistant.noteProcessing(false);
   }
 }
 
@@ -4522,6 +4532,94 @@ function toggleVoice() {
     return;
   }
   if (isListening) stopListening(); else startListening();
+}
+
+// ---- Live Assistant Mode wiring (state machine: static/live-assistant.js) ----
+function _assistantRecognitionAvailable() {
+  try {
+    if (typeof VoiceEngine !== 'undefined' && VoiceEngine.VoiceInput
+        && typeof VoiceEngine.VoiceInput.isSupported === 'function') {
+      return !!VoiceEngine.VoiceInput.isSupported();
+    }
+  } catch (e) {}
+  return !!(window.SpeechRecognition || window.webkitSpeechRecognition
+            || (typeof VoiceEngine !== 'undefined' && VoiceEngine.VoiceInput));
+}
+
+function _assistantEnsureListening() {
+  try {
+    if (typeof VoiceEngine !== 'undefined' && VoiceEngine.VoiceInput) {
+      if (!VoiceEngine.VoiceInput.isActive()) toggleVoice();
+    } else if (!isListening) {
+      startListening();
+    }
+  } catch (e) {}
+}
+
+function _assistantStopListening() {
+  try {
+    if (typeof VoiceEngine !== 'undefined' && VoiceEngine.VoiceInput) {
+      if (VoiceEngine.VoiceInput.isActive() || VoiceEngine.VoiceInput.isPaused()) {
+        VoiceEngine.VoiceInput.stop();
+      }
+      if (typeof markVoiceListeningOff === 'function') markVoiceListeningOff();
+    } else if (isListening) {
+      stopListening();
+    }
+  } catch (e) {}
+}
+
+function _renderLiveAssistant(snap) {
+  if (!snap) return;
+  const statusEl = document.getElementById('liveAssistantStatus');
+  const heardEl = document.getElementById('liveAssistantHeard');
+  const respEl = document.getElementById('liveAssistantResponse');
+  const startBtn = document.getElementById('liveAssistantStartBtn');
+  const pauseBtn = document.getElementById('liveAssistantPauseBtn');
+  if (statusEl) statusEl.textContent = 'Live Assistant: ' + snap.status;
+  if (heardEl) heardEl.textContent = 'You said: ' + (snap.lastHeardCommand || '(nothing yet)');
+  if (respEl) respEl.textContent = 'CodeUp said: ' + (snap.lastAssistantResponse || '(nothing yet)');
+  if (startBtn) {
+    startBtn.textContent = snap.assistantEnabled ? 'Stop live assistant' : 'Start live assistant';
+    startBtn.setAttribute('aria-pressed', snap.assistantEnabled ? 'true' : 'false');
+  }
+  if (pauseBtn) {
+    pauseBtn.disabled = !snap.assistantEnabled;
+    pauseBtn.textContent = snap.paused ? 'Resume listening' : 'Pause listening';
+  }
+}
+
+window.LiveAssistant = (typeof createLiveAssistant === 'function') ? createLiveAssistant({
+  speak: function (t) { try { speak(t); } catch (e) {} },
+  cancelSpeech: function () { try { SpeechManager.cancelAll(); } catch (e) {} },
+  startListening: _assistantEnsureListening,
+  stopListening: _assistantStopListening,
+  recognitionAvailable: _assistantRecognitionAvailable(),
+  speechAvailable: (typeof window !== 'undefined' && 'speechSynthesis' in window),
+  getMode: function () { return window.activeMode || window._activeMode || 'python'; },
+  getFile: function () { return (window.currentFileName || window._activeFileName || ''); },
+  onStateChange: function (snap) { try { _renderLiveAssistant(snap); } catch (e) {} },
+}) : null;
+
+function _wireLiveAssistantButtons() {
+  if (!window.LiveAssistant) return;
+  const startBtn = document.getElementById('liveAssistantStartBtn');
+  const pauseBtn = document.getElementById('liveAssistantPauseBtn');
+  const stopSpeakBtn = document.getElementById('liveAssistantStopSpeakBtn');
+  const repeatBtn = document.getElementById('liveAssistantRepeatBtn');
+  if (startBtn) startBtn.addEventListener('click', function () {
+    if (window.LiveAssistant.getState().assistantEnabled) window.LiveAssistant.stop();
+    else window.LiveAssistant.start();
+  });
+  if (pauseBtn) pauseBtn.addEventListener('click', function () {
+    const s = window.LiveAssistant.getState();
+    if (!s.assistantEnabled) return;
+    if (s.paused) window.LiveAssistant.resumeListening();
+    else window.LiveAssistant.pauseListening();
+  });
+  if (stopSpeakBtn) stopSpeakBtn.addEventListener('click', function () { window.LiveAssistant.stopSpeaking(); });
+  if (repeatBtn) repeatBtn.addEventListener('click', function () { window.LiveAssistant.repeat(); });
+  _renderLiveAssistant(window.LiveAssistant.getState());
 }
 
 function startListening() {
@@ -4942,6 +5040,7 @@ async function handleVoiceCommand(rawText) {
 
 window.addEventListener('DOMContentLoaded', () => {
   try { restoreAccessibilityPreferences(); } catch (e) {}
+  try { _wireLiveAssistantButtons(); } catch (e) {}
 
   const codeModeBtn = document.getElementById('codeModeBtn');
   const audioBlocksModeBtn = document.getElementById('audioBlocksModeBtn');

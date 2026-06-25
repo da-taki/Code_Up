@@ -37,6 +37,11 @@ def new_memory() -> Dict[str, Any]:
         "last_edit_old_code": "",
         "last_edit_new_code": "",
         "last_fix_explanation": "",
+        "change_history": [],
+        "undo_stack": [],
+        "last_change": None,
+        "change_cursor": 0,
+        "pending_change_proposal": None,
         "student_satisfied": None,
         "last_run_output": "",
         "last_run_error": "",
@@ -317,6 +322,97 @@ def get_pending(mem: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 def clear_pending(mem: Dict[str, Any]) -> None:
     mem["pending_clarification"] = None
+
+
+_MAX_CHANGE_HISTORY = 10
+
+
+def record_change(mem: Dict[str, Any], *, before: str = "", after: str = "",
+                  file_name: str = "", reason: str = "") -> Dict[str, Any]:
+    """Record an applied before/after code change for Audio Diff Review."""
+    record = {
+        "before": _clip(before, _MAX_CODE),
+        "after": _clip(after, _MAX_CODE),
+        "file": _clip(file_name, 200),
+        "reason": _clip(reason, 200),
+        "timestamp": time.time(),
+    }
+    history = mem.setdefault("change_history", [])
+    history.append(record)
+    del history[:-_MAX_CHANGE_HISTORY]
+    undo = mem.setdefault("undo_stack", [])
+    undo.append(record)
+    del undo[:-_MAX_CHANGE_HISTORY]
+    mem["last_change"] = record
+    mem["change_cursor"] = len(history) - 1
+    return record
+
+
+def get_last_change(mem: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    return mem.get("last_change")
+
+
+def get_change_history(mem: Dict[str, Any]) -> List[Dict[str, Any]]:
+    history = mem.get("change_history")
+    return history if isinstance(history, list) else []
+
+
+def get_change_at_cursor(mem: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    history = get_change_history(mem)
+    if not history:
+        return None
+    cursor = int(mem.get("change_cursor", len(history) - 1) or 0)
+    cursor = max(0, min(cursor, len(history) - 1))
+    mem["change_cursor"] = cursor
+    return history[cursor]
+
+
+def move_change_cursor(mem: Dict[str, Any], delta: int) -> Optional[Dict[str, Any]]:
+    history = get_change_history(mem)
+    if not history:
+        return None
+    cursor = int(mem.get("change_cursor", len(history) - 1) or 0) + delta
+    cursor = max(0, min(cursor, len(history) - 1))
+    mem["change_cursor"] = cursor
+    return history[cursor]
+
+
+def undo_last_change(mem: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Pop the most recent change. Caller restores the returned record's 'before'."""
+    undo = mem.get("undo_stack")
+    if not isinstance(undo, list) or not undo:
+        return None
+    record = undo.pop()
+    history = mem.get("change_history")
+    if isinstance(history, list) and history:
+        history.pop()
+    remaining = mem.get("change_history") or []
+    mem["last_change"] = remaining[-1] if remaining else None
+    mem["change_cursor"] = (len(remaining) - 1) if remaining else 0
+    return record
+
+
+def set_change_proposal(mem: Dict[str, Any], proposal: Optional[Dict[str, Any]]) -> None:
+    if not proposal:
+        mem["pending_change_proposal"] = None
+        return
+    record = dict(proposal)
+    record["timestamp"] = time.time()
+    mem["pending_change_proposal"] = record
+
+
+def get_change_proposal(mem: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    proposal = mem.get("pending_change_proposal")
+    if not isinstance(proposal, dict):
+        return None
+    if time.time() - float(proposal.get("timestamp", 0) or 0) > _PENDING_TTL_SECONDS:
+        mem["pending_change_proposal"] = None
+        return None
+    return proposal
+
+
+def clear_change_proposal(mem: Dict[str, Any]) -> None:
+    mem["pending_change_proposal"] = None
 
 
 def snapshot(mem: Dict[str, Any], *, utterance: str = "", file_name: str = "") -> Dict[str, Any]:

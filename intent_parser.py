@@ -967,6 +967,40 @@ class IntentParser:
         r"^explain\s+and\s+fix$",
         r"^propose\s+a\s+fix$",
     ]
+    DIFF_REVIEW_PATTERNS = [
+        r"^what\s+changed$", r"^review\s+(?:the\s+)?changes$", r"^audio\s+diff$",
+        r"^read\s+the\s+diff$", r"^read\s+(?:the\s+)?changes$", r"^review\s+the\s+diff$",
+        r"^show\s+(?:me\s+)?the\s+diff$",
+    ]
+    DIFF_BEFORE_AFTER_PATTERNS = [
+        r"^read\s+before\s+and\s+after$", r"^before\s+and\s+after$",
+        r"^read\s+(?:the\s+)?(?:old|previous)\s+version$",
+        r"^read\s+(?:the\s+)?new\s+version$",
+    ]
+    DIFF_EXPLAIN_PATTERNS = [
+        r"^explain\s+this\s+change$", r"^explain\s+the\s+change$",
+        r"^what\s+does\s+this\s+change\s+mean$",
+    ]
+    DIFF_RISK_PATTERNS = [
+        r"^is\s+this\s+risky$", r"^is\s+this\s+change\s+risky$",
+        r"^what\s+is\s+risky\s+about\s+this\s+change$",
+        r"^how\s+risky\s+is\s+(?:this|this\s+change)$",
+    ]
+    DIFF_NEXT_PATTERNS = [r"^next\s+change$"]
+    DIFF_PREV_PATTERNS = [r"^previous\s+change$", r"^prev\s+change$"]
+    DIFF_ACCEPT_PATTERNS = [
+        r"^accept\s+this\s+change$", r"^accept\s+the\s+change$", r"^keep\s+this\s+change$",
+    ]
+    DIFF_ACCEPT_ALL_PATTERNS = [r"^accept\s+all\s+changes$", r"^accept\s+all$"]
+    DIFF_REJECT_ALL_PATTERNS = [r"^reject\s+all\s+changes$", r"^reject\s+all$"]
+    UNDO_CHANGE_PATTERNS = [
+        r"^undo\s+last\s+change$", r"^undo\s+(?:the\s+)?last\s+(?:change|edit)$",
+        r"^undo\s+my\s+last\s+(?:change|edit)$", r"^undo\s+this\s+change$",
+        r"^undo\s+(?:the\s+)?change$", r"^reject\s+this\s+change$",
+    ]
+    CHANGE_APPLY_PATTERNS = [
+        r"^apply\s+this\s+change$", r"^apply\s+the\s+(?:change|fix)$", r"^apply\s+all$",
+    ]
     PROJECT_MAP_PATTERNS = [
         r"^project\s+map$",
         r"^(?:give|show)\s+me\s+(?:a|the)\s+project\s+map$",
@@ -1269,6 +1303,17 @@ class IntentParser:
             "read_full_traceback": self.READ_FULL_TRACEBACK_PATTERNS,
             "test_next": self.TEST_NEXT_PATTERNS,
             "fix_with_explanation": self.FIX_WITH_EXPLANATION_PATTERNS,
+            "diff_review": self.DIFF_REVIEW_PATTERNS,
+            "diff_before_after": self.DIFF_BEFORE_AFTER_PATTERNS,
+            "diff_explain": self.DIFF_EXPLAIN_PATTERNS,
+            "diff_risk": self.DIFF_RISK_PATTERNS,
+            "diff_next": self.DIFF_NEXT_PATTERNS,
+            "diff_prev": self.DIFF_PREV_PATTERNS,
+            "accept_change": self.DIFF_ACCEPT_PATTERNS,
+            "accept_all_changes": self.DIFF_ACCEPT_ALL_PATTERNS,
+            "reject_all_changes": self.DIFF_REJECT_ALL_PATTERNS,
+            "undo_last_change": self.UNDO_CHANGE_PATTERNS,
+            "change_apply": self.CHANGE_APPLY_PATTERNS,
             "loop_summary": self.LOOP_SUMMARY_PATTERNS,
             "where_in_program": self.WHERE_IN_PROGRAM_PATTERNS,
             "watch_var":       self.WATCH_VAR_PATTERNS,

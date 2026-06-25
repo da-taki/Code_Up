@@ -62,6 +62,7 @@ import error_replay
 import deterministic_code_tools
 import project_map
 import error_trace
+import audio_diff
 import hint_engine
 import landmarks
 import debug_teacher
@@ -6851,6 +6852,44 @@ def _fix_with_explanation_proposal(analysis: Dict[str, Any]) -> str:
     )
 
 
+def _build_fix_proposal(analysis: Dict[str, Any], current_code: str,
+                        mem: Dict[str, Any], text: str) -> str:
+    """fix-with-explanation: store an applyable deterministic proposal when we can
+    compute one (indentation), else explain and defer to the AI fix flow. The
+    proposal carries the error_trace cause and is applied only on an explicit
+    'apply'."""
+    exc = analysis.get("exception_type")
+    line = analysis.get("line")
+    cause = analysis.get("likely_cause") or "There is an error in the code."
+    lines = (current_code or "").splitlines()
+    if exc in ("IndentationError", "TabError") and line and 1 <= line <= len(lines) \
+            and not lines[line - 1].startswith((" ", "\t")) and lines[line - 1].strip():
+        fixed = lines[:]
+        fixed[line - 1] = "    " + fixed[line - 1]
+        after = "\n".join(fixed) + ("\n" if (current_code or "").endswith("\n") else "")
+        proposal_text = (
+            "I found a likely fix.\n\n"
+            f"Problem:\n{cause}\n\n"
+            f"Proposed change:\nIndent line {line} by four spaces.\n\n"
+            "Risk:\nLow.\n\n"
+            "Say apply, reject, or explain."
+        )
+        session_memory.set_change_proposal(mem, {
+            "before": current_code or "", "after": after,
+            "problem": cause, "change_desc": f"Indent line {line} by four spaces.",
+            "risk": "low", "proposal_text": proposal_text, "reason": text,
+            "applied_message": ("Applied the indentation fix.\nWhat changed:\n"
+                                f"Line {line} was indented under the block above it."),
+            "explanation": (f"{cause} Indenting line {line} by four spaces puts it inside the "
+                            "block above, so Python knows it belongs there. Say apply to make the "
+                            "change, or reject to leave the code as it is."),
+        })
+        return proposal_text
+    # No deterministic one-step fix: clear any stale proposal and defer.
+    session_memory.clear_change_proposal(mem)
+    return _fix_with_explanation_proposal(analysis)
+
+
 def _requirements_from_voice_body(body: Dict[str, Any], current_code: str = "") -> List[str]:
     reqs = body.get("requirements")
     if isinstance(reqs, list):
@@ -8489,6 +8528,29 @@ def voice():
             return jsonify({"success": True, "action": "unknown", "heard": "repeat", "message": "No previous command to repeat"})
         return jsonify(last_action[0]), last_action[1]
 
+    def _record_audio_diff_if_edit(response_dict):
+        # Central choke point: any response that carries a code edit (ai_action.code)
+        # records a before/after snapshot for Audio Diff Review. Reverts (undo/reject)
+        # opt out so we don't log the restore as a brand-new change.
+        if intent in {"undo_last_change", "reject_change", "reject_all_changes"}:
+            return
+        ai = response_dict.get("ai_action")
+        if not isinstance(ai, dict):
+            return
+        after = ai.get("code")
+        if not isinstance(after, str) or not after.strip():
+            return
+        before = current_code or ""
+        if (ai.get("action") or "") == "append_code":
+            after_full = (before.rstrip("\n") + "\n" + after) if before.strip() else after
+        else:
+            after_full = after
+        if before == after_full:
+            return
+        file_name = _safe_text(body.get("file"), limit=200) if isinstance(body.get("project"), dict) else ""
+        session_memory.record_change(mem, before=before, after=after_full,
+                                     file_name=file_name, reason=text)
+
     def _store_and_return(response_dict, status_code=200):
         if command_norm.get("changed"):
             response_dict.setdefault("raw_transcript", raw_text)
@@ -8500,7 +8562,50 @@ def voice():
             _record_voice_memory(mem, raw_text, intent, response_dict)
         except Exception:
             pass
+        try:
+            _record_audio_diff_if_edit(response_dict)
+        except Exception:
+            pass
         return jsonify(response_dict), status_code
+
+    # Safe apply/reject: when a change proposal is pending, bare apply/reject/explain
+    # operate on it. This is context-aware so the same words mean undo/explain on an
+    # already-applied change when no proposal is waiting.
+    _pending_proposal = session_memory.get_change_proposal(mem)
+    if _pending_proposal is not None:
+        _low = text.strip().lower()
+        if _low in {"apply", "apply it", "apply this change", "apply the change",
+                    "apply the fix", "apply all", "do it", "yes apply", "apply the proposal"}:
+            after_code = _pending_proposal.get("after") or ""
+            applied_msg = _pending_proposal.get("applied_message") or "Applied the change."
+            session_memory.clear_change_proposal(mem)
+            edit = _make_conversational_edit_response(
+                "replace_code", code=after_code, spoken_confirmation=applied_msg,
+                confidence=0.95, source="audio_diff", allow_unconfirmed_replace=True,
+            )
+            if edit is None:
+                msg = "I could not safely apply that change."
+                return _store_and_return({"success": True, "action": "deterministic_message",
+                                          "speech": msg, "message": msg, "heard": text})
+            edit.update({"heard": text, "speech": applied_msg, "message": applied_msg,
+                         "intent": "change_apply"})
+            return _store_and_return(edit)
+        if _low in {"reject", "reject it", "reject this change", "reject the change",
+                    "reject the fix", "reject proposal", "reject the proposal", "discard",
+                    "cancel the fix", "no thanks"}:
+            session_memory.clear_change_proposal(mem)
+            msg = "Rejected the proposed change. Your code was not modified."
+            return _store_and_return({"success": True, "action": "deterministic_message",
+                                      "speech": msg, "message": msg, "heard": text,
+                                      "intent": "reject_change"})
+        if _low in {"explain", "explain more", "explain the fix", "explain this change",
+                    "tell me more", "explain again", "explain the proposal"}:
+            msg = (_pending_proposal.get("explanation")
+                   or _pending_proposal.get("proposal_text")
+                   or "I proposed a fix. Say apply or reject.")
+            return _store_and_return({"success": True, "action": "deterministic_message",
+                                      "speech": msg, "message": msg, "heard": text,
+                                      "intent": "diff_explain"})
 
     accessibility_response = _accessibility_command_response(text, storage)
     if accessibility_response is not None:
@@ -8877,7 +8982,7 @@ def voice():
             speech = "What to test next: " + (analysis.get("next_steps")
                                               or "Run your code again and read the next error.")
         elif intent == "fix_with_explanation":
-            speech = _fix_with_explanation_proposal(analysis)
+            speech = _build_fix_proposal(analysis, current_code, mem, text)
         else:  # explain_error_trace
             speech = error_trace.narrate(analysis)
         return _store_and_return({
@@ -8888,6 +8993,99 @@ def voice():
                 "file": analysis.get("file"), "line": analysis.get("line"),
                 "code_line": analysis.get("code_line"), "value": analysis.get("value"),
                 "full_trace_available": analysis.get("full_trace_available"),
+            },
+        })
+
+    diff_review_intents = {
+        "diff_review", "diff_before_after", "diff_explain", "diff_risk",
+        "diff_next", "diff_prev", "accept_change", "accept_all_changes",
+        "reject_all_changes", "undo_last_change", "change_apply",
+    }
+    if confidence >= 0.75 and intent in diff_review_intents:
+        history = session_memory.get_change_history(mem)
+
+        if intent == "change_apply":
+            speech = "There is no proposed change to apply right now. Say 'fix with explanation' first."
+            return _store_and_return({"success": True, "action": "deterministic_message",
+                                      "speech": speech, "message": speech, "heard": text, "intent": intent})
+
+        if intent == "undo_last_change":
+            record = session_memory.undo_last_change(mem)
+            if not record:
+                speech = "There is no change to undo yet."
+                return _store_and_return({"success": True, "action": "deterministic_message",
+                                          "speech": speech, "message": speech, "heard": text, "intent": intent})
+            before_code = record.get("before") or ""
+            if before_code.strip():
+                edit = _make_conversational_edit_response(
+                    "replace_code", code=before_code, spoken_confirmation="Undid the last change.",
+                    confidence=0.95, source="audio_diff", allow_unconfirmed_replace=True)
+                if edit is not None:
+                    msg = "Undid the last change. Restored the previous version."
+                    edit.update({"heard": text, "speech": msg, "message": msg, "intent": intent})
+                    return _store_and_return(edit)
+            msg = "Undid the last change. The editor is back to empty."
+            return _store_and_return({"success": True, "action": "clear_editor",
+                                      "speech": msg, "message": msg, "heard": text, "intent": intent})
+
+        if intent == "reject_all_changes":
+            if not history:
+                speech = "There are no changes to reject."
+                return _store_and_return({"success": True, "action": "deterministic_message",
+                                          "speech": speech, "message": speech, "heard": text, "intent": intent})
+            original_before = history[0].get("before") or ""
+            count = len(history)
+            mem["change_history"] = []
+            mem["undo_stack"] = []
+            mem["last_change"] = None
+            mem["change_cursor"] = 0
+            if original_before.strip():
+                edit = _make_conversational_edit_response(
+                    "replace_code", code=original_before, spoken_confirmation="Rejected all changes.",
+                    confidence=0.95, source="audio_diff", allow_unconfirmed_replace=True)
+                if edit is not None:
+                    msg = f"Rejected all {count} changes and restored the original version."
+                    edit.update({"heard": text, "speech": msg, "message": msg, "intent": intent})
+                    return _store_and_return(edit)
+            msg = f"Rejected all {count} changes. The editor is back to empty."
+            return _store_and_return({"success": True, "action": "clear_editor",
+                                      "speech": msg, "message": msg, "heard": text, "intent": intent})
+
+        if not history:
+            speech = "There are no code changes to review yet. Make an edit, then ask what changed."
+            return _store_and_return({"success": True, "action": "deterministic_message",
+                                      "speech": speech, "message": speech, "heard": text, "intent": intent})
+
+        if intent == "diff_next":
+            record = session_memory.move_change_cursor(mem, 1)
+        elif intent == "diff_prev":
+            record = session_memory.move_change_cursor(mem, -1)
+        else:
+            record = session_memory.get_change_at_cursor(mem)
+        change = audio_diff.summarize_change(
+            record.get("before", ""), record.get("after", ""),
+            file_name=record.get("file", ""), reason=record.get("reason", ""))
+
+        if intent == "diff_before_after":
+            speech = audio_diff.narrate_before_after(change)
+        elif intent == "diff_explain":
+            metas = [audio_diff.change_meaning(c) for c in change["changes"][:4]]
+            speech = " ".join(metas) or "There is nothing to explain in this change."
+        elif intent == "diff_risk":
+            speech = f"Risk: {change['risk'].capitalize()}. {change['risk_reason']}"
+        elif intent == "accept_change":
+            speech = "Kept this change. It stays in your code."
+        elif intent == "accept_all_changes":
+            speech = f"Kept all {len(history)} change{'s' if len(history) != 1 else ''}."
+        else:  # diff_review, diff_next, diff_prev
+            speech = audio_diff.narrate(change)
+        return _store_and_return({
+            "success": True, "action": "deterministic_message", "intent": intent,
+            "speech": speech, "message": speech, "heard": text, "confidence": confidence,
+            "audio_diff": {
+                "file": change["file"], "risk": change["risk"], "summary": change["summary"],
+                "change_number": int(mem.get("change_cursor", 0)) + 1,
+                "total_changes": len(history),
             },
         })
 

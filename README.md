@@ -24,6 +24,7 @@ Deterministic, non-AI features include:
 
 * spoken output
 * code maps
+* spoken project map (single-file and multi-file)
 * structure summaries
 * error reading
 * mistake replay

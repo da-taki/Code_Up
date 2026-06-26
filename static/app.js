@@ -1162,6 +1162,7 @@ function buildVoiceCommandPayload(text, source = 'typed') {
     verbosity: getVerbosity(),
     screen_reader_mode: _screenReaderModeEnabled,
     screen_reader_profile: _assistiveTechnologyProfile,
+    active_file: (typeof ProjectState !== 'undefined' && ProjectState.activeFile) || '',
   };
 }
 
@@ -3834,8 +3835,9 @@ async function readBreadcrumb() {
     });
     const data = await res.json();
     if (data.success) {
-      speak(`You are in: ${data.breadcrumb}.`);
-      out(`Position: ${data.breadcrumb}`);
+      const ctx = data.context ? ' ' + data.context : '';
+      speak(`You are in: ${data.breadcrumb}.${ctx}`);
+      out(`Position: ${data.breadcrumb}${ctx}`);
     } else {
       speak(data.message || 'Could not determine position.');
     }

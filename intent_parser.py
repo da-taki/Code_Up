@@ -906,6 +906,7 @@ class IntentParser:
         r"^list\s+(?:my\s+)?functions$",
         r"^what\s+functions\s+(?:do\s+i\s+have|are\s+(?:there|defined|here))$",
         r"^show\s+(?:my\s+)?functions$",
+        r"^read\s+(?:my\s+|the\s+)?functions$",
     ]
 
     PREFLIGHT_CHECK_PATTERNS = [
@@ -916,6 +917,7 @@ class IntentParser:
     ]
     LIST_IMPORTS_PATTERNS = [
         r"^list\s+imports$", r"^what\s+imports\s+am\s+i\s+using$", r"^check\s+imports$",
+        r"^read\s+(?:my\s+|the\s+)?imports$",
     ]
     SANDBOX_CHECK_PATTERNS = [
         r"^find\s+risky\s+code$", r"^check\s+for\s+unsafe\s+code$", r"^sandbox\s+check$",
@@ -1220,6 +1222,31 @@ class IntentParser:
         r"^bookmarks?\s+(?:बताओ|सूची)$",
     ]
 
+    NAV_WHAT_FILE_PATTERNS = [
+        r"^what\s+file\s+am\s+i\s+in$", r"^which\s+file\s+am\s+i\s+in$",
+        r"^what\s+file\s+is\s+this$",
+    ]
+    NAV_READ_COMMENTS_PATTERNS = [
+        r"^read\s+(?:the\s+|all\s+)?comments$", r"^list\s+(?:the\s+)?comments$",
+    ]
+    NAV_CHANGED_LINE_PATTERNS = [
+        r"^jump\s+to\s+(?:the\s+)?changed\s+line$", r"^go\s+to\s+(?:the\s+)?changed\s+line$",
+        r"^read\s+(?:the\s+)?changed\s+line$", r"^where\s+was\s+the\s+last\s+change$",
+        r"^jump\s+to\s+(?:the\s+)?change$",
+    ]
+    NAV_GO_MAIN_PATTERNS = [
+        r"^go\s+to\s+(?:the\s+)?main\s+function$", r"^jump\s+to\s+(?:the\s+)?main\s+function$",
+        r"^find\s+(?:the\s+)?main\s+function$", r"^go\s+to\s+main$",
+    ]
+    NAV_OPEN_FILE_PATTERNS = [
+        r"^open\s+(?:the\s+)?file\s+(?:with|that\s+has|containing)\s+(?:the\s+)?main(?:\s+function)?$",
+        r"^open\s+(?:the\s+)?file\s+that\s+handles\s+(?:the\s+)?\w+$",
+        r"^open\s+(?:the\s+)?file\s+with\s+\w+$",
+    ]
+    NAV_WHAT_FILE_DOES_PATTERNS = [
+        r"^what\s+does\s+this\s+file\s+do$", r"^what\s+does\s+the\s+file\s+do$",
+        r"^what\s+is\s+this\s+file\s+for$",
+    ]
     WHERE_AM_I_PATTERNS = [
         r"^where\s+am\s+i(?:\s+in\s+execution)?$",
         r"^what\s+block\s+am\s+i\s+in$",
@@ -1404,6 +1431,7 @@ class IntentParser:
             "pause_voice":    self.PAUSE_VOICE_PATTERNS,
             "resume_voice":   self.RESUME_VOICE_PATTERNS,
             "read_project_files": self.READ_PROJECT_FILES_PATTERNS,
+            "nav_open_file":       self.NAV_OPEN_FILE_PATTERNS,
             "open_project_file": self.OPEN_PROJECT_FILE_PATTERNS,
             "create_project_file": self.CREATE_PROJECT_FILE_PATTERNS,
             "rename_project_file": self.RENAME_PROJECT_FILE_PATTERNS,
@@ -1484,6 +1512,11 @@ class IntentParser:
             "read_bookmark":       self.READ_BOOKMARK_PATTERNS,
             "list_bookmarks":      self.LIST_BOOKMARKS_PATTERNS,
             "where_am_i":          self.WHERE_AM_I_PATTERNS,
+            "nav_what_file":       self.NAV_WHAT_FILE_PATTERNS,
+            "nav_read_comments":   self.NAV_READ_COMMENTS_PATTERNS,
+            "nav_changed_line":    self.NAV_CHANGED_LINE_PATTERNS,
+            "nav_go_main":         self.NAV_GO_MAIN_PATTERNS,
+            "nav_what_file_does":  self.NAV_WHAT_FILE_DOES_PATTERNS,
             "explain_simply":      self.EXPLAIN_SIMPLY_PATTERNS,
             "narrate_diff":        self.NARRATE_DIFF_PATTERNS,
             "concept_question":    self.CONCEPT_QUESTION_PATTERNS,

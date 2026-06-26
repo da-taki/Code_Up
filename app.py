@@ -9266,6 +9266,90 @@ def voice():
                            + ("passed" if want else "failed") + " in the last trace.")
         return _store_and_return(_smsg(speech))
 
+    nav_intents = {
+        "nav_what_file", "nav_read_comments", "nav_changed_line",
+        "nav_go_main", "nav_open_file", "nav_what_file_does",
+    }
+    if confidence >= 0.75 and intent in nav_intents:
+        def _nav_msg(s, **extra):
+            base = {"success": True, "action": "deterministic_message", "intent": intent,
+                    "speech": s, "message": s, "heard": text, "confidence": confidence}
+            base.update(extra)
+            return base
+
+        nav_project_state = _project_state_from_voice_body(body, current_code)
+        is_blocks = (active_mode == "audio_blocks")
+        # Python line-level commands must not pretend to work in Audio Blocks Mode.
+        if is_blocks and intent in {"nav_read_comments", "nav_changed_line", "nav_go_main"}:
+            speech = ("You are in Audio Blocks Mode. Say 'read block map' or "
+                      "'switch to Python Code Mode' for Python line navigation.")
+            return _store_and_return(_nav_msg(speech))
+
+        if intent == "nav_what_file":
+            file_name = (_safe_text(body.get("file"), limit=200)
+                         or _safe_text(body.get("active_file"), limit=200))
+            if not file_name and nav_project_state.get("is_project"):
+                file_name = str(nav_project_state.get("entry") or "")
+            if is_blocks:
+                speech = "You are in Audio Blocks Mode, working in the block workspace, not a Python file."
+            elif file_name:
+                speech = f"You are in file {file_name}, in Python Code Mode."
+            else:
+                speech = "You are in Python Code Mode, working in the single editor file."
+            return _store_and_return(_nav_msg(speech))
+
+        if intent == "nav_read_comments":
+            return _store_and_return(_nav_msg(structure_tools.read_comments_speech(current_code)))
+
+        if intent == "nav_changed_line":
+            history = session_memory.get_change_history(mem)
+            if not history:
+                return _store_and_return(_nav_msg("There are no code changes to jump to yet."))
+            last = history[-1]
+            change = audio_diff.summarize_change(last.get("before", ""), last.get("after", ""),
+                                                 file_name=last.get("file", ""))
+            if change["changes"]:
+                line = change["changes"][0]["line"]
+                meaning = audio_diff.change_meaning(change["changes"][0])
+                speech = f"The latest change is on line {line}. {meaning}"
+                return _store_and_return(_nav_msg(speech, action="navigate_code", line=line, end_line=line))
+            return _store_and_return(_nav_msg("I could not find the changed line."))
+
+        if intent == "nav_go_main":
+            result = deterministic_code_tools.find_definition(current_code, "main")
+            if result.get("line"):
+                speech = f"The main function is on line {result['line']}. Moving there."
+                return _store_and_return(_nav_msg(speech, action="navigate_code",
+                                                  line=result["line"], end_line=result.get("end_line")))
+            return _store_and_return(_nav_msg("I could not find a function named main in this file."))
+
+        if intent == "nav_open_file":
+            target = project_map.find_file_for(nav_project_state, text)
+            if target:
+                speech = (f"The file you want is {target}. Open it from the project file list, "
+                          f"or say 'open {target}'.")
+                return _store_and_return(_nav_msg(speech, open_file=target))
+            return _store_and_return(_nav_msg("I could not find a matching file in this project."))
+
+        if intent == "nav_what_file_does":
+            data = project_map.build_map(nav_project_state)
+            file_name = _safe_text(body.get("file"), limit=200)
+            info = None
+            if data["is_project"] and file_name:
+                info = next((f for f in data["files"] if f["name"] == file_name), None)
+            if info:
+                parts = [f"{file_name}"]
+                if info["functions"]:
+                    parts.append("defines functions " + ", ".join(info["functions"][:6]))
+                if info["classes"]:
+                    parts.append("defines classes " + ", ".join(info["classes"][:6]))
+                if info["project_imports"]:
+                    parts.append("imports " + ", ".join(info["project_imports"]))
+                speech = ". ".join(parts) + "." if len(parts) > 1 else f"{file_name} has no functions or classes yet."
+            else:
+                speech = project_map.narrate(nav_project_state).replace("\n", " ")[:300]
+            return _store_and_return(_nav_msg(speech))
+
     if confidence >= 0.75 and intent in (
         "explain_current_line", "read_around_cursor", "list_variables", "read_error_summary"
     ):
@@ -10031,7 +10115,26 @@ def breadcrumbs():
                 parts.append(item["kind"])
         breadcrumb = ", inside ".join(parts) + f", line {line}"
 
-    return jsonify({"success": True, "breadcrumb": breadcrumb, "trail": trail})
+    # Recent change / error context makes "where am I" richer (slice 7).
+    context_bits = []
+    try:
+        nav_mem = session_memory.get_memory(get_trace_storage())
+        history = nav_mem.get("change_history") if isinstance(nav_mem.get("change_history"), list) else []
+        if history:
+            n = len(history)
+            context_bits.append(f"There {'is' if n == 1 else 'are'} {n} recent "
+                                f"change{'s' if n != 1 else ''}.")
+        err = str(nav_mem.get("last_run_error") or "")
+        if err:
+            analysis = error_trace.analyze(err, traceback_text=str(nav_mem.get("last_run_traceback") or ""),
+                                           code=code)
+            if analysis.get("line"):
+                context_bits.append(f"The latest error is on line {analysis['line']}.")
+    except Exception:
+        pass
+
+    return jsonify({"success": True, "breadcrumb": breadcrumb, "trail": trail,
+                    "context": " ".join(context_bits)})
 
 
 

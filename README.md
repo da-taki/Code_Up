@@ -1,10 +1,62 @@
 # CodeUp
 
-**A blind-first Python learning environment for visually impaired beginners.**
+**A blind-first Python learning IDE for visually impaired beginners.**
 
-CodeUp is a browser-based IDE for learning Python without depending on visual scanning. It combines a real Python editor, Audio Blocks Mode, spoken feedback, code maps, debugging support, and teacher handoff tools.
+CodeUp is a blind-first Python learning IDE that turns programming into a non-visual cockpit, helping visually impaired beginners understand project structure, debug errors, review code changes, inspect program state, navigate code, and generate teacher reports through speech, typed commands, and screen-reader-aware workflows.
 
-The project focuses on Python structure: indentation, nesting, errors, output, and control flow. CodeUp is a working prototype, stable enough for demos and structured testing while broader assistive-technology validation continues.
+Live demo: [https://code-up-fmqr.onrender.com/ide](https://code-up-fmqr.onrender.com/ide)
+
+The project focuses on Python structure: indentation, nesting, errors, output, and control flow. CodeUp is a strong working prototype, stable enough for demos and structured testing while broader assistive-technology and learner validation continues.
+
+## What CodeUp does now
+
+CodeUp is no longer just a voice-controlled editor. It is a non-visual programming cockpit for blind and visually impaired beginners learning Python.
+
+It helps learners:
+
+* understand project structure with Project Map
+* hear stack traces through Error Trace Narration
+* review code changes through Audio Diff Review
+* apply, reject, or undo fixes through Safe Apply/Reject
+* inspect variables and execution through State and Variable Watch
+* navigate code non-visually with line, function, error, change, and file-role commands
+* use Live Assistant Mode for controlled spoken interaction
+* generate teacher reports and learner recaps for pilots, trainers, and classrooms
+* move gradually toward professional tools like VS Code with screen readers
+
+## Core cockpit features
+
+### Project Map
+
+Explains files, imports, functions, classes, entry points, and project structure without requiring the learner to visually scan a file tree.
+
+### Error Trace Narration
+
+Turns Python errors into beginner-friendly explanations with the crash line, error type, likely cause, and next step.
+
+### Audio Diff Review
+
+Explains what changed in the code, reads before/after snippets, labels risk, and supports undo.
+
+### Safe Apply / Reject
+
+Proposes fixes before applying them, so learners can ask for an explanation, accept the fix, reject it, or undo later.
+
+### State and Variable Watch
+
+Lets learners ask what variables exist, what a variable is now, what the program printed, and why a loop or condition behaved a certain way.
+
+### Live Assistant Mode
+
+Adds a controlled assistant layer with start/stop, pause/resume, stop speaking, repeat, and typed fallback when browser speech recognition is unavailable.
+
+### Non-visual Navigation
+
+Supports commands such as where am I, read imports, read functions, go to main function, next error, jump to changed line, and open the file that handles a role.
+
+### Teacher Report and Session Recap
+
+Generates a clear report for teachers, trainers, NGO reviewers, and pilots using project structure, errors, fixes, code changes, watched variables, and session activity.
 
 ## Python Code Mode
 
@@ -20,23 +72,7 @@ Blocks can be compiled, run, explained, exported, or transferred into Python Cod
 
 ## Non-AI tools
 
-Deterministic, non-AI features include:
-
-* spoken output
-* code maps
-* spoken project map (single-file and multi-file)
-* non-visual navigation (where am I, read functions/imports/comments, go to main, jump to changed line)
-* structure summaries
-* error reading
-* spoken error trace narration (crash location, likely cause, what to test next)
-* audio diff review with safe apply/reject and undo
-* spoken state and variable watch (values, loop state, condition results, stepping)
-* live assistant mode (hands-free or push-to-talk, interruptible, with a bounded transcript)
-* mistake replay
-* Audio Blocks compile/run
-* block-to-Python transfer
-* project export
-* teacher/trainer reports (session recap with project map, errors, changes, and state)
+Deterministic, non-AI features include spoken output, project maps, non-visual navigation, structure summaries, error trace narration, audio diff review, safe apply/reject with undo, state and variable watch, Live Assistant Mode, mistake replay, Audio Blocks compile/run, block-to-Python transfer, project export, and teacher/trainer reports.
 
 Optional AI support can add explanations, but the core learning and routing tools do not depend on AI.
 
@@ -54,19 +90,31 @@ Python execution is controlled and sandboxed according to the app's existing des
 
 ## Testing
 
-CodeUp has automated regression coverage for Python flow, Audio Blocks routing, block compile/run/transfer, exports, and accessibility-related command behavior.
+CodeUp has 2,800+ automated tests covering command routing, sandboxed execution, accessibility flows, Audio Blocks, multi-file projects, project export, error narration, audio diff review, safe apply/reject, state watch, Live Assistant Mode, teacher reports, and non-visual navigation.
 
-Quick tests: `py -m pytest -q`
+For a quick local check:
 
-Full tests: `py -m pytest -q --run-full`
+```bash
+py -m pytest -q
+```
 
-Docs tests: `py -m pytest -q -m docs`
+For the full suite:
 
-Current status: working prototype, stable enough for demos and structured testing.
+```bash
+py -m pytest -q --run-full
+```
 
-## Demo
+Docs tests:
 
-[https://code-up-fmqr.onrender.com/ide](https://code-up-fmqr.onrender.com/ide)
+```bash
+py -m pytest -q -m docs
+```
+
+## Current validation status
+
+The deployed Render version has been sanity-checked through the browser for the main cockpit flow: error narration, fix proposal, apply, run, audio diff, state watch, navigation, teacher report, Live Assistant start/stop, and Audio Blocks opening.
+
+Real microphone use, NVDA, JAWS, VoiceOver, Orca, Braille display workflows, and post-cockpit learner testing still need separate validation.
 
 ## Tech stack
 

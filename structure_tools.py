@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import ast
+import io
 import re
+import tokenize
 from typing import Any, Dict, List, Optional
 
 _NUM_WORDS = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six",
@@ -549,3 +551,33 @@ def list_variables_speech(code: str) -> str:
     else:
         listed = ", ".join(names[:-1]) + ", and " + names[-1]
     return f"You have {len(names)} variables: {listed}."
+
+
+def collect_comments(code: str) -> List[Dict[str, Any]]:
+    """Return [{line, text}] for every comment. tokenize first, regex fallback."""
+    comments: List[Dict[str, Any]] = []
+    try:
+        for tok in tokenize.generate_tokens(io.StringIO(code or "").readline):
+            if tok.type == tokenize.COMMENT:
+                comments.append({"line": tok.start[0], "text": tok.string.lstrip("#").strip()})
+        return comments
+    except (tokenize.TokenError, IndentationError, SyntaxError, ValueError):
+        comments = []
+        for i, raw in enumerate((code or "").splitlines(), start=1):
+            # Best-effort: a # that is not inside an obvious string literal.
+            m = re.search(r"(?<!['\"])#(.*)$", raw)
+            if m and raw.count("'") % 2 == 0 and raw.count('"') % 2 == 0:
+                comments.append({"line": i, "text": m.group(1).strip()})
+        return comments
+
+
+def read_comments_speech(code: str) -> str:
+    comments = collect_comments(code)
+    if not comments:
+        return "There are no comments in this code yet."
+    n = len(comments)
+    head = f"There {'is' if n == 1 else 'are'} {n} comment{'s' if n != 1 else ''}. "
+    shown = comments[:6]
+    bits = [f"Line {c['line']}: {c['text'] or '(empty comment)'}" for c in shown]
+    tail = f" And {n - len(shown)} more." if n > len(shown) else ""
+    return head + ". ".join(bits) + "." + tail

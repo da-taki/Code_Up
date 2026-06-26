@@ -25,6 +25,7 @@ Deterministic, non-AI features include:
 * spoken output
 * code maps
 * spoken project map (single-file and multi-file)
+* non-visual navigation (where am I, read functions/imports/comments, go to main, jump to changed line)
 * structure summaries
 * error reading
 * spoken error trace narration (crash location, likely cause, what to test next)

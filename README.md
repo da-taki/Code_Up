@@ -35,7 +35,7 @@ Deterministic, non-AI features include:
 * Audio Blocks compile/run
 * block-to-Python transfer
 * project export
-* teacher/trainer reports
+* teacher/trainer reports (session recap with project map, errors, changes, and state)
 
 Optional AI support can add explanations, but the core learning and routing tools do not depend on AI.
 

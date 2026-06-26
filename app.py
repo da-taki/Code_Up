@@ -57,6 +57,7 @@ from openvino_intent_demo import classify_local_intent
 import export_support
 import report_support
 import learning_recap
+import teacher_report
 import structure_tools
 import error_replay
 import deterministic_code_tools
@@ -7675,9 +7676,28 @@ _REPORT_RE = re.compile(
     re.IGNORECASE,
 )
 _RECAP_RE = re.compile(
-    r"^(?:please\s+)?(?:what\s+did\s+i\s+learn\s+today|summari[sz]e\s+(?:today'?s\s+)?session|"
+    r"^(?:please\s+)?(?:what\s+did\s+i\s+learn\s+today|summari[sz]e\s+(?:my\s+|today'?s\s+)?session|"
     r"make\s+(?:a\s+)?learning\s+report|what\s+did\s+i\s+do\s+today|recap\s+my\s+session|"
     r"what\s+have\s+i\s+learned(?:\s+today)?|today'?s\s+recap|session\s+recap)$",
+    re.IGNORECASE,
+)
+# Enriched cockpit teacher report (distinct from the generic project report).
+_TEACHER_REPORT_RE = re.compile(
+    r"^(?:please\s+)?(?:(?:make|create|build|generate|give\s+me)\s+(?:a\s+|an\s+|the\s+|me\s+a\s+)?"
+    r"teacher\s+report|teacher\s+report)$",
+    re.IGNORECASE,
+)
+_PROJECT_CHANGES_RE = re.compile(
+    r"^(?:please\s+)?what\s+(?:has\s+)?changed\s+in\s+(?:this|the|my)\s+project$",
+    re.IGNORECASE,
+)
+_ERRORS_FIXED_RE = re.compile(
+    r"^(?:please\s+)?(?:what|which)\s+errors?\s+(?:did\s+i\s+fix(?:ed)?|have\s+i\s+fixed)$",
+    re.IGNORECASE,
+)
+_PRACTICE_RE = re.compile(
+    r"^(?:please\s+)?(?:what\s+should\s+i\s+practi[sc]e(?:\s+next)?|what\s+to\s+practi[sc]e\s+next|"
+    r"what\s+next\s+to\s+practi[sc]e)$",
     re.IGNORECASE,
 )
 
@@ -7717,6 +7737,35 @@ def _sprint1_command(text, mem, *, project_state=None, verbosity: str = "normal"
         return {"success": True, "action": "export_project", "speech": speech,
                 "message": speech, "heard": text}
 
+    _report_code = "" if (project_state or {}).get("is_project") else str((project_state or {}).get("code") or "")
+
+    if _TEACHER_REPORT_RE.match(t):
+        try:
+            _storage = get_trace_storage()
+        except Exception:
+            _storage = {}
+        report = teacher_report.build_report(mem, project_state, _report_code, storage=_storage)
+        mem["reports_generated"] = int(mem.get("reports_generated") or 0) + 1
+        # Full report in text (#output); concise summary in speech.
+        return {"success": True, "action": "deterministic_message", "teacher_report": True,
+                "message": report["report_md"], "speech": report["speech"],
+                "report_preview": report["report_md"], "heard": text}
+
+    if _PROJECT_CHANGES_RE.match(t):
+        speech = teacher_report.what_changed(mem, project_state, _report_code)
+        return {"success": True, "action": "deterministic_message",
+                "message": speech, "speech": speech, "heard": text}
+
+    if _ERRORS_FIXED_RE.match(t):
+        speech = teacher_report.what_errors_fixed(mem, _report_code)
+        return {"success": True, "action": "deterministic_message",
+                "message": speech, "speech": speech, "heard": text}
+
+    if _PRACTICE_RE.match(t):
+        speech = teacher_report.next_practice(mem, _report_code)
+        return {"success": True, "action": "deterministic_message",
+                "message": speech, "speech": speech, "heard": text}
+
     if _REPORT_RE.match(t):
         report = report_support.build_project_report(project_state or {}, mem, verbosity=verbosity)
         speech = report.get("speech") or "I will build a project report from the current code, concepts, session history, and next steps."
@@ -7724,7 +7773,7 @@ def _sprint1_command(text, mem, *, project_state=None, verbosity: str = "normal"
                 "message": speech, "heard": text, "report_preview": report.get("report_md", "")}
 
     if _RECAP_RE.match(t):
-        recap = learning_recap.build_recap(mem)
+        recap = teacher_report.learner_recap(mem, _report_code)
         return {"success": True, "action": "deterministic_message", "recap": True,
                 "message": recap["recap"], "speech": recap["speech"],
                 "next_step": recap.get("next_step", ""), "heard": text}
@@ -8621,6 +8670,7 @@ def voice():
             after_code = _pending_proposal.get("after") or ""
             applied_msg = _pending_proposal.get("applied_message") or "Applied the change."
             session_memory.clear_change_proposal(mem)
+            mem["fixes_applied"] = int(mem.get("fixes_applied") or 0) + 1
             edit = _make_conversational_edit_response(
                 "replace_code", code=after_code, spoken_confirmation=applied_msg,
                 confidence=0.95, source="audio_diff", allow_unconfirmed_replace=True,
@@ -8636,6 +8686,7 @@ def voice():
                     "reject the fix", "reject proposal", "reject the proposal", "discard",
                     "cancel the fix", "no thanks"}:
             session_memory.clear_change_proposal(mem)
+            mem["fixes_rejected"] = int(mem.get("fixes_rejected") or 0) + 1
             msg = "Rejected the proposed change. Your code was not modified."
             return _store_and_return({"success": True, "action": "deterministic_message",
                                       "speech": msg, "message": msg, "heard": text,
@@ -9267,6 +9318,15 @@ def voice():
             "ai_action": {"action": "append_code", "code": broken},
             "intentional_error": True, "heard": text, "speech": speech,
         })
+
+    # Export / report / recap / teacher-report commands are deterministic and must
+    # be handled before the AI edit-mapper below, which otherwise treats phrases
+    # like "make a teacher report" as a vague edit and asks for clarification.
+    _report_response = _sprint1_command(
+        text, mem, project_state=_project_state_from_voice_body(body, current_code),
+        verbosity=verbosity)
+    if _report_response is not None:
+        return _store_and_return(_report_response)
 
     if (
         str(current_code or "").strip()

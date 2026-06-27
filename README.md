@@ -58,6 +58,14 @@ Supports commands such as where am I, read imports, read functions, go to main f
 
 Generates a clear report for teachers, trainers, NGO reviewers, and pilots using project structure, errors, fixes, code changes, watched variables, and session activity.
 
+## Learning bridge features
+
+CodeUp is not trying to replace professional coding agents. It focuses on the stage before that: helping blind beginners understand code, errors, changes, and program state.
+
+- **Tutor Mode** gives hints and explanations before fixes, so students can try again instead of immediately accepting generated code.
+- **Codex Handoff Pack** creates a copyable summary of the learner's code, error, recent changes, program state, and questions to ask when moving to a professional coding agent.
+- **Understanding Checks** create short questions and practice prompts from the current code/session.
+
 ## Python Code Mode
 
 CodeUp starts in Python Code Mode. Learners write and run real Python with spoken support around output, errors, structure, and program flow.

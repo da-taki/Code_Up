@@ -177,6 +177,23 @@ class IntentParser:
         r"^how is codeup different from quorum$", r"^explain vs code handoff$",
         r"^show accessible coding pathway$",
     ]
+    TUTOR_MODE_PATTERNS = [
+        r"^(?:start|turn on) tutor mode$",
+        r"^(?:stop|turn off) tutor mode$",
+        r"^tutor mode status$",
+        r"^(?:hint only|give me a hint|explain first|let me try again|show fix|fix with teaching)$",
+    ]
+    CODEX_HANDOFF_PATTERNS = [
+        r"^(?:make|create|prepare) codex handoff$",
+        r"^make handoff pack$",
+        r"^copy handoff for codex$",
+    ]
+    UNDERSTANDING_CHECK_PATTERNS = [
+        r"^(?:check my understanding|quiz me on this code|ask me a question)$",
+        r"^what mistake did i make$",
+        r"^(?:give me a similar exercise|make practice question)$",
+        r"^grade my attempt$",
+    ]
     AUDIO_BLOCKS_PATTERNS = [
         r"^(?:enter|open|switch to) block mode$", r"^(?:exit block mode|switch to code mode|switch to python mode|open python mode)$",
         r"^(?:open|enter|switch to) audio blocks$", r"^start audio blocks mode$",
@@ -1322,6 +1339,9 @@ class IntentParser:
     def _build_intent_map(self) -> Dict[str, List[str]]:
         return {
             "audio_blocks": self.AUDIO_BLOCKS_PATTERNS,
+            "tutor_mode": self.TUTOR_MODE_PATTERNS,
+            "codex_handoff": self.CODEX_HANDOFF_PATTERNS,
+            "understanding_check": self.UNDERSTANDING_CHECK_PATTERNS,
             "accessible_learning": self.ACCESSIBLE_LEARNING_PATTERNS,
             "read_line":      self.READ_LINE_PATTERNS,
             "describe_line":  self.DESCRIBE_LINE_PATTERNS,

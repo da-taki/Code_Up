@@ -24,6 +24,19 @@ It helps learners:
 * generate teacher reports and learner recaps for pilots, trainers, and classrooms
 * move gradually toward professional tools like VS Code with screen readers
 
+## Command groups
+
+Every capability is reachable by one canonical command; listed aliases also work. This is the single authoritative map of what to say.
+
+1. **Learn Python (Programming Literacy Mode):** `start literacy mode`, `list lessons`, `start lesson`, `what am I learning`, `complete lesson`, `graduation report`.
+2. **Get hints (Tutor Mode):** `start tutor mode`, `give me a hint`, `show fix`, `let me try again`, `fix with teaching`.
+3. **Understanding Checks:** `check my understanding`, `quiz me on this code`, `give me a similar exercise`.
+4. **Codex Handoff Pack:** `make codex handoff`.
+5. **Teacher Reports:** `make a teacher report` (full session/cockpit summary), `teacher lesson report` (current literacy lesson).
+6. **Cockpit (orient, debug, review, inspect, navigate):** `project map`, `explain error`, `what changed`, `show program state`, `where am I`.
+7. **Audio Blocks:** `open audio blocks`, `read block map`, `read block order`, `switch to python code mode`.
+8. **Intel showcase (optional):** `intel toolkit status`.
+
 ## Core cockpit features
 
 ### Project Map
@@ -60,7 +73,7 @@ Generates a clear report for teachers, trainers, NGO reviewers, and pilots using
 
 ## Learning bridge features
 
-CodeUp is not trying to replace professional coding agents. It focuses on the stage before that: helping blind beginners understand code, errors, changes, and program state.
+CodeUp focuses on the stage before professional coding agents: helping blind beginners understand code, errors, changes, and program state.
 
 - **Tutor Mode** gives hints and explanations before fixes, so students can try again instead of immediately accepting generated code.
 - **Codex Handoff Pack** creates a copyable summary of the learner's code, error, recent changes, program state, and questions to ask when moving to a professional coding agent.
@@ -124,15 +137,13 @@ intel toolkit status
 show intel optimization report
 ```
 
-These commands show which Intel paths are available in the current environment and whether any local optimization or benchmark reports have been generated.
-
-The deployed app does not require all Intel packages to run. No speedup is claimed unless measured locally.
+These commands show which Intel paths are available in the current environment and whether any local optimization or benchmark reports have been generated. No speedup is claimed unless measured locally.
 
 ## Screen reader and assistive technology support
 
 CodeUp includes screen-reader-aware workflows, live regions, keyboard-accessible controls, and spoken feedback for editor and command-box interaction.
 
-Broader validation with NVDA, JAWS, VoiceOver, Orca, Braille displays, and more visually impaired learners and trainers is still ongoing.
+Broader assistive-technology validation is still ongoing; see Current validation status below for what has and has not been verified.
 
 ## Safety model
 

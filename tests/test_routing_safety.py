@@ -72,6 +72,16 @@ class TestLineNavigation:
     def test_absolute_line_commands_unaffected(self, client, text, expected):
         assert _action(client, text) == expected
 
+    @pytest.mark.parametrize("text", [
+        "read line",
+        "read current line",
+        "read this line",
+        "what is this line",
+        "describe this line",
+    ])
+    def test_current_line_commands_read_line_instead_of_sonifying(self, client, text):
+        assert _action(client, text) == "read_line_enhanced"
+
 
 
 class TestGenerationRouting:

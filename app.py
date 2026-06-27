@@ -8699,6 +8699,20 @@ def voice():
             return _store_and_return({"success": True, "action": "deterministic_message",
                                       "speech": msg, "message": msg, "heard": text,
                                       "intent": "diff_explain"})
+        if _low in {"read before and after", "show before and after", "before and after",
+                    "read the before and after", "read proposed change", "what would change",
+                    "what will change"}:
+            change = audio_diff.summarize_change(
+                _pending_proposal.get("before", ""),
+                _pending_proposal.get("after", ""),
+                reason=_pending_proposal.get("reason", ""),
+            )
+            msg = audio_diff.narrate_before_after(change)
+            if not msg or "no code changes" in msg.lower():
+                msg = _pending_proposal.get("proposal_text") or "I proposed a fix. Say apply or reject."
+            return _store_and_return({"success": True, "action": "deterministic_message",
+                                      "speech": msg, "message": msg, "heard": text,
+                                      "intent": "diff_before_after"})
 
     accessibility_response = _accessibility_command_response(text, storage)
     if accessibility_response is not None:
@@ -9022,6 +9036,18 @@ def voice():
             "success": True, "action": "deterministic_message",
             "message": _ONBOARDING_MESSAGE, "speech": _ONBOARDING_MESSAGE,
             "heard": text, "onboarding": True,
+        })
+    if re.match(
+        r"^(?:read\s+(?:the\s+)?(?:current|this)\s+line|read\s+line|"
+        r"what\s+is\s+this\s+line|describe\s+this\s+line)$",
+        early_text,
+        re.IGNORECASE,
+    ):
+        return _store_and_return({
+            "success": True,
+            "action": "read_line_enhanced",
+            "confidence": 0.98,
+            "heard": text,
         })
     if _TUTORIAL_ONBOARD_RE.match(text):
         return _store_and_return({

@@ -1337,7 +1337,7 @@ AUDIO_BLOCKS_HELP = (
     "select block one, set message to Hello CodeUp, set variable name to marks, "
     "set variable value to 90, set condition to marks greater than 40, move selected block up, "
     "delete selected block, duplicate selected block, compile blocks, run blocks, read output, "
-    "give me a code map, summarize structure, explain blocks, make a project report, "
+    "read block map, give me a code map, summarize structure, explain blocks, make a project report, "
     "transfer blocks to Python mode, or switch to Python mode."
 )
 
@@ -1762,7 +1762,9 @@ PYTHON_MODE_PHRASES = {
     "switch to code mode",
     "open code mode",
     "switch to python mode",
+    "switch to python code mode",
     "open python mode",
+    "open python code mode",
 }
 
 ACTIVE_AUDIO_BLOCKS_COMMANDS = {
@@ -1772,6 +1774,9 @@ ACTIVE_AUDIO_BLOCKS_COMMANDS = {
     "list blocks",
     "read blocks",
     "where am i",
+    "project map",
+    "give me a project map",
+    "read block map",
     "give me a code map",
     "code map",
     "summarize structure",
@@ -1822,7 +1827,10 @@ BLOCK_ONLY_RE = re.compile(
 PYTHON_ONLY_RE = re.compile(
     r"^(?:insert .+|clear editor|clear code|fix this code|debug this like a teacher|"
     r"generate .+|write .+|append line .+|replace line .+|delete line .+|"
-    r"comment this code|add comments?|remove comments?|rename variable .+)$",
+    r"comment this code|add comments?|remove comments?|rename variable .+|"
+    r"read (?:current |this )?line|read line \d+|read imports?|read functions?|"
+    r"go to main function|read current function|read surrounding code|"
+    r"next function|previous function|prev function|jump to changed line|next error)$",
     re.IGNORECASE,
 )
 
@@ -1834,6 +1842,7 @@ def handles(text: str) -> bool:
         "list block categories",
         "what blocks can i add",
         "help with blocks",
+        "read block map",
         "read block workspace",
         "read block order",
         "read current block",
@@ -2079,7 +2088,7 @@ def route_command(
     if t in {"list blocks", "read blocks"}:
         t = "read block workspace"
 
-    if t in {"give me a code map", "code map", "summarize structure"}:
+    if t in {"project map", "give me a project map", "read block map", "give me a code map", "code map", "summarize structure"}:
         return _message(_blocks_structure_summary(workspace), workspace)
 
     if t in {"explain blocks", "analyze", "explain this program", "teach me this code"}:

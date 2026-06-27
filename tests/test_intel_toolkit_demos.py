@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import subprocess
 import sys
 import textwrap
@@ -63,6 +64,19 @@ def test_neural_compressor_dry_run_is_honest(monkeypatch, capsys):
     assert "Intel Neural Compressor is optional" in output
 
 
+def test_neural_compressor_dry_run_can_write_report(tmp_path):
+    output = tmp_path / "neural_report.json"
+    result = _run_script(NEURAL_SCRIPT, "--dry-run", "--write-report", "--output", str(output))
+
+    assert result.returncode == 0
+    assert output.exists()
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["toolkit"] == "Intel Neural Compressor"
+    assert report["compression_run"] is False
+    assert report["reason"] == "no local intent model artifact found"
+    assert "speedup" not in json.dumps(report).lower()
+
+
 def test_sklearnex_check_env_exits_safely():
     result = _run_script(SKLEARNEX_SCRIPT, "--check-env")
 
@@ -97,6 +111,19 @@ def test_sklearnex_dry_run_does_not_claim_measured_speedup(monkeypatch, capsys):
     assert "Baseline scikit-learn mean seconds" not in output
 
 
+def test_sklearnex_dry_run_can_write_report(tmp_path):
+    output = tmp_path / "sklearnex_report.json"
+    result = _run_script(SKLEARNEX_SCRIPT, "--dry-run", "--write-report", "--output", str(output))
+
+    assert result.returncode == 0
+    assert output.exists()
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["toolkit"] == "Intel Extension for Scikit-learn, powered by oneDAL"
+    assert report["accelerated_benchmark_run"] is False
+    assert report["reason"] == "dry run only; benchmark was not executed"
+    assert "speedup_ratio" not in report
+
+
 def test_readme_documents_optional_intel_integrations():
     readme = README.read_text(encoding="utf-8")
 
@@ -108,6 +135,10 @@ def test_readme_documents_optional_intel_integrations():
     assert "These integrations are optional." in readme
     assert "The deployed CodeUp app does not require all Intel packages to run." in readme
     assert "pip install -r requirements-intel.txt" in readme
+    assert "### Intel showcase commands" in readme
+    assert "intel toolkit status" in readme
+    assert "show intel optimization report" in readme
+    assert "No speedup is claimed unless measured locally." in readme
 
 
 def test_app_startup_does_not_import_optional_intel_packages():

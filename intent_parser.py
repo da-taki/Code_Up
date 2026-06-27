@@ -324,6 +324,14 @@ class IntentParser:
         r"^summari[sz]e\s+(?:the\s+)?error$",
     ]
 
+    INTEL_TOOLKIT_STATUS_PATTERNS = [
+        r"^intel\s+toolkit\s+status$",
+        r"^show\s+intel\s+toolkit\s+status$",
+        r"^intel\s+status$",
+        r"^show\s+intel\s+optimization\s+report$",
+        r"^what\s+intel\s+tools\s+are\s+used$",
+    ]
+
     CLEAR_EDITOR_PATTERNS = [
         r"^(?:clear|reset)\s+(?:editor|code|file|the\s+editor)$",
         r"^(?:editor|code)\s+clear\s+karo$",
@@ -1321,6 +1329,7 @@ class IntentParser:
             "read_around_cursor":   self.READ_AROUND_PATTERNS,
             "list_variables":       self.LIST_VARIABLES_PATTERNS,
             "read_error_summary":   self.READ_ERROR_SUMMARY_PATTERNS,
+            "intel_toolkit_status":  self.INTEL_TOOLKIT_STATUS_PATTERNS,
             "delete_line":    self.DELETE_LINE_PATTERNS,
             "goto_line":      self.GOTO_LINE_PATTERNS,
             "read_function":  self.READ_FUNCTION_PATTERNS,

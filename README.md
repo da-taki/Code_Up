@@ -99,6 +99,19 @@ python tools/intel/neural_compressor_demo.py --check-env
 python tools/intel/sklearnex_benchmark.py --check-env
 ```
 
+### Intel showcase commands
+
+CodeUp can report its Intel integration status from inside the app:
+
+```text
+intel toolkit status
+show intel optimization report
+```
+
+These commands show which Intel paths are available in the current environment and whether any local optimization or benchmark reports have been generated.
+
+The deployed app does not require all Intel packages to run. No speedup is claimed unless measured locally.
+
 ## Screen reader and assistive technology support
 
 CodeUp includes screen-reader-aware workflows, live regions, keyboard-accessible controls, and spoken feedback for editor and command-box interaction.

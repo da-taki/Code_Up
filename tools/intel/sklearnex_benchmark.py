@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
+from pathlib import Path
 import statistics
 import time
 from typing import Sequence
@@ -13,6 +15,7 @@ OPTIONAL_MESSAGE = (
     "Intel Extension for Scikit-learn is optional. "
     "Install scikit-learn-intelex to run the accelerated benchmark."
 )
+DEFAULT_REPORT_PATH = Path("reports") / "intel" / "sklearnex_benchmark_report.json"
 
 SYNTHETIC_COMMANDS = [
     ("run code", "run_code"),
@@ -36,12 +39,35 @@ def _sklearn_available() -> bool:
     return importlib.util.find_spec("sklearn") is not None
 
 
+def _write_report(report: dict, output: str | Path | None) -> Path:
+    path = Path(output) if output else DEFAULT_REPORT_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
+def _base_report(mode: str, accelerated_benchmark_run: bool, reason: str) -> dict:
+    return {
+        "toolkit": "Intel Extension for Scikit-learn, powered by oneDAL",
+        "mode": mode,
+        "sklearn_available": _sklearn_available(),
+        "sklearnex_available": _sklearnex_available(),
+        "accelerated_benchmark_run": accelerated_benchmark_run,
+        "reason": reason,
+    }
+
+
 def check_environment() -> int:
     if _sklearnex_available():
         print("Intel Extension for Scikit-learn detected. Optional oneDAL benchmark can run.")
     else:
         print(OPTIONAL_MESSAGE)
     return 0
+
+
+def check_environment_report() -> dict:
+    reason = "dependency available" if _sklearnex_available() else "optional dependency is not installed"
+    return _base_report("check-env", False, reason)
 
 
 def dry_run() -> int:
@@ -54,6 +80,10 @@ def dry_run() -> int:
     if not _sklearnex_available():
         print(OPTIONAL_MESSAGE)
     return 0
+
+
+def dry_run_report() -> dict:
+    return _base_report("dry-run", False, "dry run only; benchmark was not executed")
 
 
 def _run_classifier_once() -> float:
@@ -102,21 +132,54 @@ def run_benchmark(iterations: int) -> int:
     return 0
 
 
+def run_benchmark_report(iterations: int) -> dict:
+    if not _sklearn_available():
+        return _base_report("run", False, "scikit-learn is not installed")
+    if not _sklearnex_available():
+        return _base_report("run", False, "optional dependency is not installed")
+
+    baseline_seconds = _measure(iterations)
+    from sklearnex import patch_sklearn  # type: ignore
+
+    patch_sklearn()
+    accelerated_seconds = _measure(iterations)
+    report = _base_report("run", True, "local benchmark completed")
+    report.update({
+        "iterations": iterations,
+        "baseline_seconds": baseline_seconds,
+        "accelerated_seconds": accelerated_seconds,
+    })
+    if accelerated_seconds > 0:
+        report["speedup_ratio"] = baseline_seconds / accelerated_seconds
+    return report
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check-env", action="store_true", help="Check optional dependency availability.")
     parser.add_argument("--dry-run", action="store_true", help="Describe the benchmark without running it.")
     parser.add_argument("--iterations", type=int, default=5, help="Benchmark repetitions when dependencies exist.")
+    parser.add_argument("--write-report", action="store_true", help="Write a small JSON status report.")
+    parser.add_argument("--output", default=str(DEFAULT_REPORT_PATH), help="Report path for --write-report.")
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.check_env:
-        return check_environment()
-    if args.dry_run:
-        return dry_run()
-    return run_benchmark(max(1, args.iterations))
+        code = check_environment()
+        report = check_environment_report()
+    elif args.dry_run:
+        code = dry_run()
+        report = dry_run_report()
+    else:
+        iterations = max(1, args.iterations)
+        code = run_benchmark(iterations)
+        report = run_benchmark_report(iterations)
+    if args.write_report:
+        path = _write_report(report, args.output)
+        print(f"Wrote Intel Extension for Scikit-learn report: {path}")
+    return code
 
 
 if __name__ == "__main__":

@@ -1,0 +1,5 @@
+openvino
+neural-compressor
+scikit-learn-intelex
+scikit-learn
+numpy

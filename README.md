@@ -76,6 +76,29 @@ Deterministic, non-AI features include spoken output, project maps, non-visual n
 
 Optional AI support can add explanations, but the core learning and routing tools do not depend on AI.
 
+## Intel toolkit integrations
+
+CodeUp includes optional Intel-focused demo tooling for accessibility and AI optimization experiments.
+
+- **OpenVINO**: used for the local intent-classification demo path.
+- **Intel Neural Compressor**: optional demo tooling for model-compression and quantization experiments around local intent models.
+- **Intel Extension for Scikit-learn, powered by oneDAL**: optional benchmark path for accelerated classical ML experiments around command-intent classification.
+
+These integrations are optional. The deployed CodeUp app does not require all Intel packages to run.
+
+Optional install:
+
+```bash
+pip install -r requirements-intel.txt
+```
+
+Environment check:
+
+```bash
+python tools/intel/neural_compressor_demo.py --check-env
+python tools/intel/sklearnex_benchmark.py --check-env
+```
+
 ## Screen reader and assistive technology support
 
 CodeUp includes screen-reader-aware workflows, live regions, keyboard-accessible controls, and spoken feedback for editor and command-box interaction.

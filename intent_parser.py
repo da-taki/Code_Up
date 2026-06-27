@@ -307,6 +307,7 @@ class IntentParser:
     READ_AROUND_PATTERNS = [
         r"^read\s+around\s+(?:me|here|the\s+cursor)$",
         r"^read\s+nearby\s+lines$",
+        r"^read\s+surrounding\s+code$",
         r"^read\s+the\s+lines\s+around\s+me$",
         r"^give\s+me\s+context$",
     ]

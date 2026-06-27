@@ -191,7 +191,7 @@ def test_where_am_i_aliases_reuse_existing_position_command(client, phrase):
     assert data["action"] == "where_am_i"
 
 
-@pytest.mark.parametrize("phrase", ["read around me", "read nearby lines", "give me context"])
+@pytest.mark.parametrize("phrase", ["read around me", "read nearby lines", "read surrounding code", "give me context"])
 def test_read_around_cursor_reads_neighbours(client, phrase):
     data = _vc(client, phrase, code=ACCESS_CODE, cursor_line=2)
     assert data["action"] == "deterministic_message"

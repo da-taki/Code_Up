@@ -170,6 +170,20 @@ def test_fix_with_explanation_creates_proposal_without_applying(client):
     assert "ai_action" not in proposal  # confirmation required: nothing applied yet
 
 
+def test_pending_fix_proposal_can_read_before_and_after_before_apply(client):
+    broken = "for i in range(3):\nprint(i)\n"
+    run(client, broken)
+    vc(client, "fix with explanation", code=broken)
+    review = vc(client, "read before and after", code=broken)
+    assert review["action"] == "deterministic_message"
+    assert review["intent"] == "diff_before_after"
+    assert "before" in review["speech"].lower()
+    assert "after" in review["speech"].lower()
+    assert "print(i)" in review["speech"]
+    assert "no code changes" not in review["speech"].lower()
+    assert "ai_action" not in review
+
+
 def test_apply_proposal_applies_and_records_diff(client):
     broken = "for i in range(3):\nprint(i)\n"
     run(client, broken)

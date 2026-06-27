@@ -54,10 +54,10 @@ t('pause and resume listening', () => {
   const { deps, log } = makeDeps();
   const la = createLiveAssistant(deps);
   la.start();
-  la.pauseListening();
+  assert.strictEqual(la.handleMetaCommand('pause live assistant'), true);
   assert.strictEqual(la.getState().status, 'paused');
   assert.strictEqual(la.getState().listening, false);
-  la.resumeListening();
+  assert.strictEqual(la.handleMetaCommand('resume live assistant'), true);
   assert.strictEqual(la.getState().status, 'listening');
   assert.strictEqual(la.getState().listening, true);
 });

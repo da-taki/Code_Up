@@ -209,8 +209,10 @@
       if (/^(stop|disable|turn off)( the)? live assistant$/.test(t) || t === 'stop assistant') {
         stop(); return true;
       }
-      if (t === 'pause listening' || t === 'pause') { pauseListening(); return true; }
-      if (t === 'resume listening' || t === 'resume') { resumeListening(); return true; }
+      if (t === 'pause listening' || t === 'pause live assistant'
+          || t === 'pause assistant' || t === 'pause') { pauseListening(); return true; }
+      if (t === 'resume listening' || t === 'resume live assistant'
+          || t === 'resume assistant' || t === 'resume') { resumeListening(); return true; }
       if (t === 'stop speaking' || t === 'stop talking' || t === 'be quiet' || t === 'quiet') {
         stopSpeaking(); return true;
       }

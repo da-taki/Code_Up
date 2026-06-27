@@ -723,7 +723,7 @@ def test_typed_reentry_while_inside_block_mode_is_allowed(client):
 
 def test_exit_audio_blocks_mode_returns_to_code(client):
     voice(client, "enter block mode")
-    exited = voice(client, "switch to python mode", code="print('keep')")
+    exited = voice(client, "switch to python code mode", code="print('keep')")
     assert exited["audio_blocks"]["mode"] == "code"
     assert exited["audio_blocks"]["activeMode"] == "python"
     assert "editor is unchanged" in exited["speech"]
@@ -849,6 +849,21 @@ def test_audio_blocks_python_only_command_safe_fails_without_editor_mutation(cli
     assert "ai_action" not in response
 
 
+def test_read_block_map_is_advertised_command_with_deterministic_response(client):
+    typed(client, "open audio blocks")
+    empty = typed(client, "read block map")
+    assert empty["action"] == "deterministic_message"
+    assert "not available yet" not in empty["speech"].lower()
+    assert "empty" in empty["speech"].lower()
+
+    typed(client, "add print block")
+    mapped = typed(client, "read block map")
+    assert mapped["action"] == "deterministic_message"
+    assert "Audio Blocks structure" in mapped["speech"]
+    assert "1 block" in mapped["speech"]
+    assert "not available yet" not in mapped["speech"].lower()
+
+
 @pytest.mark.parametrize("command", ["add print block", "compile blocks", "run blocks", "list blocks"])
 def test_audio_block_commands_refuse_in_python_mode(client, command):
     typed(client, "switch to python mode")
@@ -891,6 +906,45 @@ def test_python_editor_commands_refuse_in_audio_blocks_mode(client, command):
     assert response["action"] == "deterministic_message"
     assert "Python Code Mode" in response["speech"]
     assert "switch to Python mode" in response["speech"]
+    assert "ai_action" not in response
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "read current line",
+        "read imports",
+        "read functions",
+        "go to main function",
+        "read current function",
+        "read surrounding code",
+        "next function",
+        "previous function",
+        "jump to changed line",
+        "next error",
+    ],
+)
+def test_python_navigation_commands_refuse_in_audio_blocks_mode(client, command):
+    typed(client, "open audio blocks")
+    response = typed(
+        client,
+        command,
+        code="def main():\n    print('keep')\n\nmain()\n",
+    )
+    assert response["action"] == "deterministic_message"
+    assert "Python Code Mode" in response["speech"]
+    assert "switch to Python mode" in response["speech"]
+    assert "not available yet" not in response["speech"].lower()
+    assert "ai_action" not in response
+
+
+def test_project_map_in_audio_blocks_reports_block_workspace(client):
+    typed(client, "open audio blocks")
+    typed(client, "add print block")
+    response = typed(client, "project map")
+    assert response["action"] == "deterministic_message"
+    assert "Audio Blocks structure" in response["speech"]
+    assert "1 block" in response["speech"]
     assert "ai_action" not in response
 
 

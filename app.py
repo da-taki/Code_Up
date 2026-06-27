@@ -58,6 +58,7 @@ import export_support
 import report_support
 import learning_recap
 import learning_moat
+import literacy_mode
 import teacher_report
 import structure_tools
 import error_replay
@@ -8722,6 +8723,33 @@ def voice():
         accessibility_response.setdefault("confidence", 0.99)
         return _store_and_return(accessibility_response)
 
+    literacy_command = literacy_mode.command_kind(text)
+    if literacy_command is not None:
+        literacy_kind = literacy_command["kind"]
+        if (
+            literacy_kind in {"list_lessons", "next_lesson", "previous_lesson"}
+            and isinstance(mem.get("learning_path"), dict)
+            and not mem.get("literacy_mode_on")
+            and not mem.get("current_lesson_id")
+        ):
+            literacy_command = None
+        else:
+            if active_mode == "audio_blocks" and literacy_mode.is_python_lesson_command(literacy_kind):
+                msg = "You are in Audio Blocks Mode. Switch to Python Code Mode to use Python lessons."
+                return _store_and_return({
+                    "success": True, "action": "deterministic_message",
+                    "message": msg, "speech": msg, "heard": text,
+                    "intent": "programming_literacy", "literacy_mode": True,
+                    "confidence": 0.98,
+                })
+            result = literacy_mode.handle_command(literacy_command, mem, current_code, error_context)
+            return _store_and_return({
+                "success": True, "action": "deterministic_message",
+                "message": result.get("message", ""), "speech": result.get("speech", result.get("message", "")),
+                "heard": text, "intent": "programming_literacy", "literacy_mode": True,
+                "literacy_command": literacy_kind, "starter_code": result.get("starter_code"),
+                "lesson_id": result.get("lesson_id"), "confidence": 0.98,
+            })
     learning_pre_kind = learning_moat.command_kind(text)
     if active_mode == "audio_blocks" and learning_pre_kind in {
         "tutor_hint", "tutor_show_fix", "understanding_question",

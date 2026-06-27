@@ -194,6 +194,16 @@ class IntentParser:
         r"^(?:give me a similar exercise|make practice question)$",
         r"^grade my attempt$",
     ]
+    PROGRAMMING_LITERACY_PATTERNS = [
+        r"^(?:start programming literacy mode|start literacy mode)$",
+        r"^(?:start lesson|start first lesson|start lesson [a-z0-9 ]+|start [a-z ]+ lesson)$",
+        r"^(?:list lessons|show lessons)$",
+        r"^(?:next lesson|previous lesson|lesson status)$",
+        r"^(?:what am i learning|what should i do next|give me lesson starter code)$",
+        r"^(?:practice the mistake|check lesson understanding|complete lesson)$",
+        r"^(?:teacher lesson report|graduation report)$",
+        r"^am i ready for (?:codex|vs code|vscode)$",
+    ]
     AUDIO_BLOCKS_PATTERNS = [
         r"^(?:enter|open|switch to) block mode$", r"^(?:exit block mode|switch to code mode|switch to python mode|open python mode)$",
         r"^(?:open|enter|switch to) audio blocks$", r"^start audio blocks mode$",
@@ -1342,6 +1352,7 @@ class IntentParser:
             "tutor_mode": self.TUTOR_MODE_PATTERNS,
             "codex_handoff": self.CODEX_HANDOFF_PATTERNS,
             "understanding_check": self.UNDERSTANDING_CHECK_PATTERNS,
+            "programming_literacy": self.PROGRAMMING_LITERACY_PATTERNS,
             "accessible_learning": self.ACCESSIBLE_LEARNING_PATTERNS,
             "read_line":      self.READ_LINE_PATTERNS,
             "describe_line":  self.DESCRIBE_LINE_PATTERNS,

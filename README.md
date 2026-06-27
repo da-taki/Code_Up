@@ -66,6 +66,14 @@ CodeUp is not trying to replace professional coding agents. It focuses on the st
 - **Codex Handoff Pack** creates a copyable summary of the learner's code, error, recent changes, program state, and questions to ask when moving to a professional coding agent.
 - **Understanding Checks** create short questions and practice prompts from the current code/session.
 
+## Programming Literacy Mode
+
+CodeUp includes a beginner learning path for blind and visually impaired students who are learning Python from zero.
+
+Programming Literacy Mode guides learners through short missions on printing, variables, conditions, loops, lists, and functions. Each mission includes starter code, commands to try, mistake practice, hints, understanding checks, and teacher-facing reports.
+
+The goal is not to replace professional coding agents. The goal is to help beginners understand code non-visually before they move into tools like VS Code, GitHub, and Codex.
+
 ## Python Code Mode
 
 CodeUp starts in Python Code Mode. Learners write and run real Python with spoken support around output, errors, structure, and program flow.

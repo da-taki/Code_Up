@@ -57,6 +57,7 @@ from openvino_intent_demo import classify_local_intent
 import export_support
 import report_support
 import learning_recap
+import learning_moat
 import teacher_report
 import structure_tools
 import error_replay
@@ -8721,6 +8722,22 @@ def voice():
         accessibility_response.setdefault("confidence", 0.99)
         return _store_and_return(accessibility_response)
 
+    learning_pre_kind = learning_moat.command_kind(text)
+    if active_mode == "audio_blocks" and learning_pre_kind in {
+        "tutor_hint", "tutor_show_fix", "understanding_question",
+        "understanding_mistake", "understanding_practice", "understanding_grade",
+    }:
+        msg = (
+            "You are in Audio Blocks Mode. For Python code tutoring, say "
+            "'switch to Python Code Mode'."
+        )
+        return _store_and_return({
+            "success": True, "action": "deterministic_message",
+            "message": msg, "speech": msg, "heard": text,
+            "intent": learning_pre_kind, "learning_bridge": True,
+            "confidence": 0.98,
+        })
+
     audio_blocks_response = audio_blocks.route_command(
         text, current_code, mem, source=input_source, error_context=error_context
     )
@@ -8728,6 +8745,67 @@ def voice():
         audio_blocks_response.setdefault("heard", text)
         audio_blocks_response.setdefault("confidence", 1.0)
         return _store_and_return(audio_blocks_response)
+
+    learning_kind = learning_moat.command_kind(text)
+    if learning_kind is not None:
+        def _learning_msg(result, **extra):
+            payload = {
+                "success": True,
+                "action": "deterministic_message",
+                "message": result.get("message", ""),
+                "speech": result.get("speech", result.get("message", "")),
+                "heard": text,
+                "intent": learning_kind,
+                "learning_bridge": True,
+                "confidence": 0.98,
+            }
+            payload.update(extra)
+            return _store_and_return(payload)
+
+        if active_mode == "audio_blocks" and learning_kind in {
+            "tutor_hint", "tutor_show_fix", "understanding_question",
+            "understanding_mistake", "understanding_practice", "understanding_grade",
+        }:
+            msg = (
+                "You are in Audio Blocks Mode. For Python code tutoring, say "
+                "'switch to Python Code Mode'."
+            )
+            return _store_and_return({
+                "success": True, "action": "deterministic_message",
+                "message": msg, "speech": msg, "heard": text,
+                "intent": learning_kind, "learning_bridge": True,
+                "confidence": 0.98,
+            })
+
+        if learning_kind == "handoff":
+            project_state = _project_state_from_voice_body(body, current_code)
+            result = learning_moat.build_handoff_pack(
+                mem, current_code, project_state=project_state, error_text=error_context
+            )
+            return _learning_msg(result, codex_handoff=True, report_preview=result.get("message", ""))
+
+        if learning_kind.startswith("understanding_"):
+            result = learning_moat.build_understanding_check(
+                learning_kind, mem, current_code, error_context
+            )
+            return _learning_msg(result, understanding_check=True)
+
+        if learning_kind == "tutor_show_fix":
+            mem["tutor_mode"] = True
+            analysis = error_trace.analyze(
+                error_context or str(mem.get("last_run_error") or ""),
+                traceback_text=str(mem.get("last_run_traceback") or ""),
+                code=current_code,
+            )
+            if not analysis.get("has_error"):
+                msg = "There is no recent Python error to fix. Run your code first, then ask for a hint or show fix."
+                return _learning_msg({"message": msg, "speech": msg}, tutor_mode=True)
+            proposal = _build_fix_proposal(analysis, current_code, mem, text)
+            speech = "I proposed a fix and did not apply it. Say apply to use it, or let me try again to edit yourself."
+            return _learning_msg({"message": proposal, "speech": speech}, tutor_mode=True, proposed_fix=True)
+
+        result = learning_moat.handle_tutor_command(learning_kind, mem, current_code, error_context)
+        return _learning_msg(result, tutor_mode=bool(mem.get("tutor_mode")))
 
     accessible_response = accessible_learning.route_command(
         text,
@@ -8742,6 +8820,17 @@ def voice():
         accessible_response.setdefault("heard", text)
         accessible_response.setdefault("confidence", 1.0)
         return _store_and_return(accessible_response)
+
+    if mem.get("tutor_mode") and intent == "fix":
+        result = learning_moat.handle_tutor_command("tutor_hint", mem, current_code, error_context)
+        result["message"] += " I will not change the code unless you ask to show a fix and then say apply."
+        result["speech"] = result["message"]
+        return _store_and_return({
+            "success": True, "action": "deterministic_message",
+            "message": result["message"], "speech": result["speech"], "heard": text,
+            "intent": "tutor_hint", "learning_bridge": True, "tutor_mode": True,
+            "confidence": 0.98,
+        })
 
     def _try_natural_command_understanding():
         if natural_code_editor.is_unsafe_edit_instruction(text):

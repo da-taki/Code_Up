@@ -177,6 +177,19 @@ class IntentParser:
         r"^how is codeup different from quorum$", r"^explain vs code handoff$",
         r"^show accessible coding pathway$",
     ]
+    # Canonical command ownership (one owner per phrase; aliases route to that
+    # owner). When phrases overlap, the earlier entry in _build_intent_map wins,
+    # so precedence is encoded by registration order there:
+    #   tutor_mode           -> hints-before-fixes        (start tutor mode, give me a hint, show fix)
+    #   codex_handoff        -> bridge to coding agents   (make codex handoff)
+    #   understanding_check  -> session/code questions    (check my understanding, quiz me on this code)
+    #   programming_literacy -> structured lessons        (start literacy mode, list lessons, check lesson understanding)
+    #   accessible_learning  -> older learning-path/block-practice surface
+    # programming_literacy is registered ahead of accessible_learning, so shared
+    # lesson phrases ("list lessons", "next lesson") canonically belong to
+    # Programming Literacy Mode. Teacher reports split by owner too: the
+    # cockpit "make a teacher report" (full session) is handled in app.py, while
+    # "teacher lesson report" stays inside programming_literacy.
     TUTOR_MODE_PATTERNS = [
         r"^(?:start|turn on) tutor mode$",
         r"^(?:stop|turn off) tutor mode$",

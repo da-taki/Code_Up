@@ -66,6 +66,7 @@ import error_trace
 import audio_diff
 import state_watch
 import hint_engine
+import intel_showcase
 import landmarks
 import debug_teacher
 import concept_tutor
@@ -8778,7 +8779,7 @@ def voice():
     deterministic_code_intents = {
         "preflight_check", "check_indentation", "list_functions", "list_imports",
         "sandbox_check", "repeat_last_output", "repeat_last_error", "project_health",
-        "project_file_tree", "project_map", "loop_summary",
+        "project_file_tree", "project_map", "loop_summary", "intel_toolkit_status",
     }
     if confidence >= 0.75 and intent in deterministic_code_intents:
         project_state = _project_state_from_voice_body(body, current_code)
@@ -8796,6 +8797,7 @@ def voice():
             "project_file_tree": lambda: deterministic_code_tools.project_file_tree(project_state),
             "project_map": lambda: project_map.narrate(project_state),
             "loop_summary": lambda: deterministic_code_tools.loop_summary(current_code),
+            "intel_toolkit_status": lambda: intel_showcase.format_status_for_speech(),
         }
         speech = handlers[intent]()
         return _store_and_return({

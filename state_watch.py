@@ -218,7 +218,7 @@ def narrate_state(state: Dict[str, Dict[str, Any]], *, output_lines: int = 0,
             elif kind == "boolean":
                 lines.append(f"{name} is {info['value']}.")
             elif kind == "text":
-                lines.append(f"{name} is text.")
+                lines.append(f"{name} is {summarize_value(info['value'], full=True)}.")
             else:
                 lines.append(f"{name} is {summarize_value(info['value'])}.")
         base = "\n".join(lines)

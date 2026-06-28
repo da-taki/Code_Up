@@ -206,6 +206,7 @@ def test_run_endpoint_feeds_supplied_values_to_stdin(client):
 
 def test_run_endpoint_hint_uses_concierge_phrasing(client):
     data = client.post("/run", json={"code": NAME_AGE}).get_json()
-    assert data.get("inputs_hint")
-    assert "name" in data["inputs_hint"]
-    assert "age" in data["inputs_hint"]
+    assert data["action"] == "request_program_input"
+    assert "name" in data["prompt"].lower()
+    assert data["input_index"] == 1
+    assert data["input_count"] == 2

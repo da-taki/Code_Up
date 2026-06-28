@@ -58,6 +58,13 @@ def new_memory() -> Dict[str, Any]:
         "tutorial_module": "",
         "input_values": [],
         "input_prompts": [],
+        "pending_stdin_values": [],
+        "awaiting_program_input": False,
+        "awaiting_input_code_hash": "",
+        "awaiting_input_prompts": [],
+        "awaiting_input_values": [],
+        "awaiting_input_index": 0,
+        "last_input_run_summary": {},
         "code_map_summary": "",
         "features_used": [],
         "concepts_practiced": [],
@@ -195,7 +202,8 @@ def record_generation(mem: Dict[str, Any], prompt: str, code: Optional[str] = No
 
 def record_run(mem: Dict[str, Any], *, output: str = "", error: str = "",
                traceback_text: str = "",
-               inputs: Optional[List[str]] = None, ran_ok: Optional[bool] = None) -> None:
+               inputs: Optional[List[str]] = None, ran_ok: Optional[bool] = None,
+               input_source: str = "") -> None:
     mem["run_count"] = max(0, int(mem.get("run_count") or 0)) + 1
     mem["last_run_traceback"] = _clip(traceback_text, _MAX_ERROR * 2)
     mem["last_run_output"] = _clip(output, _MAX_OUTPUT)
@@ -214,6 +222,20 @@ def record_run(mem: Dict[str, Any], *, output: str = "", error: str = "",
         mem["last_run_ok"] = bool(ran_ok)
     if inputs is not None:
         mem["last_run_inputs"] = [_clip(v, 200) for v in inputs][:_MAX_VALUES]
+        if inputs:
+            mem["last_input_run_summary"] = {
+                "used_input": True,
+                "count": len(inputs[:_MAX_VALUES]),
+                "source": _clip(input_source, 40),
+                "values": [_clip(v, 200) for v in inputs][:_MAX_VALUES],
+            }
+        elif input_source:
+            mem["last_input_run_summary"] = {
+                "used_input": False,
+                "count": 0,
+                "source": _clip(input_source, 40),
+                "values": [],
+            }
 
 
 def clear_run_state(mem: Dict[str, Any]) -> None:
@@ -231,6 +253,56 @@ def record_input_values(mem: Dict[str, Any], values: List[str],
         mem["input_values"] = [_clip(v, 200) for v in values][:_MAX_VALUES]
     if prompts:
         mem["input_prompts"] = [_clip(p, 120) for p in prompts][:_MAX_VALUES]
+
+
+def set_pending_stdin_values(mem: Dict[str, Any], values: List[str]) -> List[str]:
+    cleaned = [_clip(v, 200) for v in (values or []) if str(v).strip()][:_MAX_VALUES]
+    mem["pending_stdin_values"] = cleaned
+    if cleaned:
+        mem["input_values"] = list(cleaned)
+    return cleaned
+
+
+def get_pending_stdin_values(mem: Dict[str, Any]) -> List[str]:
+    values = mem.get("pending_stdin_values")
+    return [_clip(v, 200) for v in values][:_MAX_VALUES] if isinstance(values, list) else []
+
+
+def clear_pending_stdin_values(mem: Dict[str, Any]) -> None:
+    mem["pending_stdin_values"] = []
+    mem["input_values"] = []
+
+
+def set_awaiting_program_input(
+    mem: Dict[str, Any], *, code_hash: str, prompts: List[Dict[str, Any]],
+    values: Optional[List[str]] = None, index: int = 0
+) -> None:
+    mem["awaiting_program_input"] = True
+    mem["awaiting_input_code_hash"] = _clip(code_hash, 80)
+    mem["awaiting_input_prompts"] = list(prompts or [])[:_MAX_VALUES]
+    mem["awaiting_input_values"] = [_clip(v, 200) for v in (values or [])][:_MAX_VALUES]
+    mem["awaiting_input_index"] = max(0, int(index or 0))
+
+
+def get_awaiting_program_input(mem: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if not mem.get("awaiting_program_input"):
+        return None
+    prompts = mem.get("awaiting_input_prompts")
+    values = mem.get("awaiting_input_values")
+    return {
+        "code_hash": _clip(mem.get("awaiting_input_code_hash", ""), 80),
+        "prompts": prompts if isinstance(prompts, list) else [],
+        "values": values if isinstance(values, list) else [],
+        "index": max(0, int(mem.get("awaiting_input_index") or 0)),
+    }
+
+
+def clear_awaiting_program_input(mem: Dict[str, Any]) -> None:
+    mem["awaiting_program_input"] = False
+    mem["awaiting_input_code_hash"] = ""
+    mem["awaiting_input_prompts"] = []
+    mem["awaiting_input_values"] = []
+    mem["awaiting_input_index"] = 0
 
 
 def record_file_open(mem: Dict[str, Any], path: str) -> None:

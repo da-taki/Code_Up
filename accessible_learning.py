@@ -659,6 +659,18 @@ def _style_issues(code: str) -> List[str]:
     return list(dict.fromkeys(issues))
 
 
+def _accessible_input_report_line(mem: Dict[str, Any]) -> str:
+    summary = mem.get("last_input_run_summary") if isinstance(mem.get("last_input_run_summary"), dict) else {}
+    if summary.get("used_input"):
+        count = int(summary.get("count") or 0)
+        source = str(summary.get("source") or "input").replace("_", " ")
+        return f"- Program used input: {count} value{'s' if count != 1 else ''} supplied by {source}."
+    pending = mem.get("pending_stdin_values") if isinstance(mem.get("pending_stdin_values"), list) else []
+    if pending:
+        return f"- Input values pending for next run: {len(pending)}"
+    return "- Program input: none recorded"
+
+
 def _teacher_report(mem: Dict[str, Any], storage: Dict[str, Any], code: str) -> str:
     lp = mem.get("learning_path") if isinstance(mem.get("learning_path"), dict) else {}
     command_count = max(0, int(mem.get("command_count") or 0))
@@ -699,6 +711,7 @@ def _teacher_report(mem: Dict[str, Any], storage: Dict[str, Any], code: str) -> 
         "## Recent result",
         f"- Last output: {str(mem.get('last_run_output') or 'None')[:240]}",
         f"- Last error: {str(mem.get('last_run_error') or 'None')[:240]}",
+        _accessible_input_report_line(mem),
         "",
         "## Common mistakes",
     ]

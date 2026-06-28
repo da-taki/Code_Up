@@ -119,6 +119,7 @@ let _preflightInputs = [];
 let _preflightInputPlaceholders = [];
 window.getPreflightInputs = () => _preflightInputs.slice();
 let _liveInputMode = false;
+let _programInputRequest = null;
 
 let _activeStreamRun = null;
 
@@ -2063,10 +2064,7 @@ async function runCode(runFile, codeOverride) {
   }
   if (!hasCodeOverride && !ensurePythonEditorContent('run')) return;
   const usesInput = /\binput\s*\(/.test(codeToCheck);
-  if (usesInput && _preflightInputs.length === 0) {
-    speak('Heads up: your code uses input, but you have not declared any pre-flight inputs. The first input call will fail with a friendly error. To fix: say "set inputs to" followed by your values, or add a magic comment like "hash inputs colon Alice comma 17" at the top of your code, or say "live input mode" to switch to interactive mode.');
-    out('Your code uses input() but no pre-flight inputs are declared.\n\nFix one of these ways:\n  • Say: "set inputs to Alice and 17"\n  • Add at top of code: # inputs: Alice, 17\n  • Say: "live input mode"\n\nRunning anyway — first input() will explain.');
-  } else if (usesInput && _preflightInputs.length > 0) {
+  if (usesInput && _preflightInputs.length > 0) {
     speak(`Pre-flight inputs ready: ${_preflightInputs.length} value${_preflightInputs.length === 1 ? '' : 's'}.`);
   }
 
@@ -2107,7 +2105,13 @@ async function runCode(runFile, codeOverride) {
     window.executionTrace = data.trace || [];
     window.traceIndex = 0;
 
+    if (data.action === 'request_program_input') {
+      handleProgramInputRequest(data);
+      return;
+    }
+
     if (data.success) {
+      _programInputRequest = null;
       clearSrAlert();
       out(data.output);
       cueSuccess();
@@ -2123,7 +2127,13 @@ async function runCode(runFile, codeOverride) {
       _previousOutput = _lastOutput;
       _lastOutput = data.output || '';
 
+      if (data.speech_summary) speak(data.speech_summary);
       speak(formatRunOutputSpeech(data.output));
+      if (data.clear_inputs_after_run) {
+        _preflightInputs = [];
+        _preflightInputPlaceholders = [];
+        updateInputsPanel();
+      }
 
       if (diff && !diff.identical && diff.total_changes > 0) {
         speak(diff.summary);
@@ -3234,6 +3244,7 @@ async function handleConfirmedAction(action, payload) {
     SpeechManager.cancelAll();
   }
   if (action === 'run')              await runCode();
+  else if (action === 'request_program_input') handleProgramInputRequest(payload || {});
   else if (action === 'audio_blocks_run') {
     await runCode('', (payload && payload.code) || '');
   }
@@ -3494,7 +3505,7 @@ async function handleConfirmedAction(action, payload) {
   else if (action === 'quiz_me')            await quizMe(payload && payload.topic);
   else if (action === 'explain_concept')    await explainConcept(payload && payload.concept);
   else if (action === 'bug_challenge')      await bugChallenge();
-  else if (action === 'set_inputs')         setPreflightInputs(payload && payload.values);
+  else if (action === 'set_inputs')         setPreflightInputs(payload && payload.values, payload && (payload.speech || payload.message));
   else if (action === 'clear_inputs')       clearPreflightInputs();
   else if (action === 'list_inputs')        listPreflightInputs();
   else if (action === 'live_input_mode')    enableLiveInputMode();
@@ -3539,7 +3550,26 @@ const _TUTORIAL_EDIT_ACTIONS = new Set([
   'insert_function', 'insert_class', 'append_line', 'insert_line', 'replace_line',
 ]);
 
-function setPreflightInputs(values) {
+function handleProgramInputRequest(payload) {
+  const prompt = String((payload && payload.prompt) || 'This program needs input.').trim();
+  const inputIndex = Number((payload && payload.input_index) || 1);
+  const inputCount = Number((payload && payload.input_count) || inputIndex || 1);
+  _programInputRequest = {
+    prompt,
+    inputIndex,
+    inputCount,
+    expectedType: (payload && payload.expected_type) || 'text',
+    values: Array.isArray(payload && payload.values) ? payload.values.slice() : [],
+    code: getCode(),
+  };
+  const position = inputCount > 1 ? `Input ${inputIndex} of ${inputCount}: ` : '';
+  const message = (payload && (payload.speech || payload.message)) || prompt;
+  out(`${position}${message}\nType or say the value now.`);
+  speak(message);
+  srAnnounce(message);
+}
+
+function setPreflightInputs(values, speechMessage) {
   if (!Array.isArray(values) || values.length === 0) {
     speak('No values heard. Try saying "set inputs to" followed by your values separated by "and" or commas.');
     return;
@@ -3548,7 +3578,7 @@ function setPreflightInputs(values) {
   _preflightInputPlaceholders = [];
   updateInputsPanel();
   const summary = _preflightInputs.join(', ');
-  speak(`${_preflightInputs.length} input${_preflightInputs.length === 1 ? '' : 's'} ready: ${summary}.`);
+  speak(speechMessage || `${_preflightInputs.length} input${_preflightInputs.length === 1 ? '' : 's'} ready: ${summary}.`);
   out(`PRE-FLIGHT INPUTS SET (${_preflightInputs.length}):\n${_preflightInputs.map((v, i) => `  ${i + 1}. ${v}`).join('\n')}\n\nThese will be used in order when your code calls input().`);
   srAnnounce(`${_preflightInputs.length} inputs set`);
 }

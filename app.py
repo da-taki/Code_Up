@@ -1,6 +1,7 @@
 import ast
 import atexit
 import errno
+import hashlib
 import io
 import json
 import os
@@ -3872,6 +3873,286 @@ def _detect_input_prompts(code: str) -> List[str]:
     return prompts[:50]
 
 
+def _code_hash(code: str) -> str:
+    return hashlib.sha256((code or "").encode("utf-8", errors="replace")).hexdigest()
+
+
+def _assigned_name_for_input(tree: ast.AST, input_node: ast.Call) -> str:
+    for parent in ast.walk(tree):
+        if isinstance(parent, ast.Assign):
+            value = parent.value
+            if value is input_node or (
+                isinstance(value, ast.Call)
+                and value.args
+                and value.args[0] is input_node
+            ):
+                target = parent.targets[0] if parent.targets else None
+                return target.id if isinstance(target, ast.Name) else ""
+        if isinstance(parent, ast.AnnAssign):
+            value = parent.value
+            if value is input_node or (
+                isinstance(value, ast.Call)
+                and value.args
+                and value.args[0] is input_node
+            ):
+                return parent.target.id if isinstance(parent.target, ast.Name) else ""
+    return ""
+
+
+def _detect_program_inputs(code: str) -> List[Dict[str, Any]]:
+    try:
+        tree = ast.parse(code or "")
+    except SyntaxError:
+        return []
+    wrappers: Dict[int, str] = {}
+    input_nodes: List[ast.Call] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+            continue
+        if node.func.id in {"int", "float"} and node.args:
+            arg = node.args[0]
+            if isinstance(arg, ast.Call) and isinstance(arg.func, ast.Name) and arg.func.id == "input":
+                wrappers[id(arg)] = node.func.id
+        if node.func.id == "input":
+            input_nodes.append(node)
+    input_nodes.sort(key=lambda n: (getattr(n, "lineno", 0), getattr(n, "col_offset", 0)))
+    descriptors: List[Dict[str, Any]] = []
+    for idx, node in enumerate(input_nodes[:50]):
+        prompt = ""
+        if node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
+            prompt = node.args[0].value.strip()
+        expected = wrappers.get(id(node), "text")
+        expected_type = {"int": "integer", "float": "decimal", "text": "text"}.get(expected, "text")
+        descriptors.append({
+            "prompt": prompt or f"This program needs input value {idx + 1}.",
+            "variable": _assigned_name_for_input(tree, node),
+            "expected_type": expected_type,
+            "raw_type": expected,
+            "input_index": idx + 1,
+            "input_count": len(input_nodes[:50]),
+        })
+    return descriptors
+
+
+def _input_type_note(descriptor: Dict[str, Any]) -> str:
+    raw = descriptor.get("raw_type")
+    if raw == "int":
+        return " This input is converted to an integer with int()."
+    if raw == "float":
+        return " This input is converted to a decimal number with float()."
+    return ""
+
+
+def _request_program_input_response(
+    mem: Dict[str, Any], *, code: str, descriptors: List[Dict[str, Any]],
+    values: Optional[List[str]] = None, index: int = 0, source: str = "runtime"
+) -> Dict[str, Any]:
+    values = list(values or [])
+    index = max(0, min(index, len(descriptors) - 1 if descriptors else 0))
+    descriptor = descriptors[index] if descriptors else {
+        "prompt": "This program needs input value 1.",
+        "input_index": 1,
+        "input_count": 1,
+        "expected_type": "text",
+        "raw_type": "text",
+        "variable": "",
+    }
+    session_memory.set_awaiting_program_input(
+        mem,
+        code_hash=_code_hash(code),
+        prompts=descriptors or [descriptor],
+        values=values,
+        index=index,
+    )
+    prompt = str(descriptor.get("prompt") or f"This program needs input value {index + 1}.").rstrip()
+    if prompt.endswith(":"):
+        spoken_prompt = prompt[:-1].strip() or prompt
+    else:
+        spoken_prompt = prompt
+    message = spoken_prompt + _input_type_note(descriptor)
+    return {
+        "success": True,
+        "action": "request_program_input",
+        "prompt": prompt,
+        "message": message,
+        "speech": message,
+        "input_index": int(descriptor.get("input_index") or index + 1),
+        "input_count": int(descriptor.get("input_count") or len(descriptors) or 1),
+        "expected_type": descriptor.get("expected_type", "text"),
+        "variable": descriptor.get("variable", ""),
+        "values": values,
+        "source": source,
+    }
+
+
+_INPUT_HELP_COMMANDS = {
+    "how do i work with inputs in codeup",
+    "how do i work with inputs",
+    "how do inputs work",
+    "how does input work",
+    "how do i use input",
+    "teach me input",
+    "explain input",
+}
+
+
+def _input_help_message() -> str:
+    return (
+        "In Python, input asks the user for a value while the program is running. "
+        "In CodeUp, you can either give the value before running, or CodeUp can ask "
+        "you for it when the program reaches input.\n\n"
+        "Example:\n"
+        "name = input(\"Enter name: \")\n"
+        "print(name)\n\n"
+        "You can say:\n"
+        "use Taknoor as input\n"
+        "insert 16 as value\n"
+        "clear input values\n"
+        "run"
+    )
+
+
+def _split_input_values(raw: str) -> List[str]:
+    text = str(raw or "").strip().strip(".")
+    if not text:
+        return []
+    if "," in text:
+        parts = re.split(r"\s*,\s*", text)
+    else:
+        parts = re.split(r"\s+and\s+", text, flags=re.IGNORECASE)
+    cleaned = [re.sub(r"^\s*and\s+", "", p, flags=re.IGNORECASE).strip(" ,.;:") for p in parts]
+    return [p for p in cleaned if p][:50]
+
+
+def _extract_input_command_values(text: str) -> Optional[List[str]]:
+    raw = str(text or "").strip()
+    patterns = [
+        r"^use\s+(.+?)\s+as\s+(?:an?\s+)?inputs?$",
+        r"^use\s+(.+?)\s+as\s+(?:a\s+)?values?$",
+        r"^insert\s+(.+?)\s+as\s+(?:an?\s+)?inputs?$",
+        r"^insert\s+(.+?)\s+as\s+(?:a\s+)?values?$",
+        r"^when\s+this\s+program\s+asks\s+for\s+input\s+use\s+(.+)$",
+        r"^this\s+program\s+must\s+use\s+input\s+value\s+(.+)$",
+        r"^set\s+input\s+to\s+(.+)$",
+    ]
+    for pat in patterns:
+        m = re.match(pat, raw, flags=re.IGNORECASE)
+        if m:
+            return _split_input_values(m.group(1))
+    return None
+
+
+def _input_command_response(text: str, mem: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    t = " ".join(str(text or "").lower().strip().rstrip(".!?").split())
+    if t in _INPUT_HELP_COMMANDS:
+        msg = _input_help_message()
+        return {"success": True, "action": "deterministic_message", "message": msg, "speech": msg, "input_help": True}
+    if t in {"clear input values", "clear input value", "clear inputs", "clear input"}:
+        session_memory.clear_pending_stdin_values(mem)
+        session_memory.clear_awaiting_program_input(mem)
+        msg = "Input values cleared."
+        return {"success": True, "action": "clear_inputs", "message": msg, "speech": msg}
+    if t in {"read input values", "what input values are set", "read inputs", "list input values"}:
+        values = session_memory.get_pending_stdin_values(mem)
+        if not values:
+            msg = "No input values are set."
+        elif len(values) == 1:
+            msg = f"One input value is set: {values[0]}."
+        else:
+            msg = "Input values are set: " + ", ".join(f"{i + 1}. {v}" for i, v in enumerate(values)) + "."
+        return {"success": True, "action": "list_inputs", "values": values, "message": msg, "speech": msg}
+    values = _extract_input_command_values(text)
+    if values is not None:
+        saved = session_memory.set_pending_stdin_values(mem, values)
+        if not saved:
+            msg = "No input value heard. Try saying: use 16 as input."
+            return {"success": True, "action": "deterministic_message", "message": msg, "speech": msg}
+        if len(saved) == 1:
+            msg = f"Input value saved. The next input call will receive: {saved[0]}."
+        else:
+            msg = "Input values saved. The next input calls will receive: " + ", ".join(saved) + "."
+        return {"success": True, "action": "set_inputs", "values": saved, "message": msg, "speech": msg}
+    return None
+
+
+_AWAITING_INPUT_CONTROL = {
+    "cancel input",
+    "clear input",
+    "clear inputs",
+    "stop input",
+}
+
+
+def _clean_program_input_reply(text: str) -> str:
+    value = str(text or "").strip()
+    for pat in (
+        r"^my\s+input\s+is\s+(.+)$",
+        r"^the\s+value\s+is\s+(.+)$",
+        r"^use\s+(.+)$",
+    ):
+        m = re.match(pat, value, flags=re.IGNORECASE)
+        if m:
+            return m.group(1).strip()
+    return value
+
+
+def _handle_awaiting_program_input(text: str, code: str, mem: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    awaiting = session_memory.get_awaiting_program_input(mem)
+    if not awaiting:
+        return None
+    t = " ".join(str(text or "").lower().strip().rstrip(".!?").split())
+    prompts = awaiting.get("prompts") or []
+    idx = max(0, int(awaiting.get("index") or 0))
+    if t in _AWAITING_INPUT_CONTROL:
+        session_memory.clear_awaiting_program_input(mem)
+        session_memory.clear_pending_stdin_values(mem)
+        msg = "Input request cancelled."
+        return {"success": True, "action": "clear_inputs", "message": msg, "speech": msg}
+    if t in {"read input prompt", "repeat input prompt"}:
+        descriptor = prompts[idx] if idx < len(prompts) else {}
+        prompt = str(descriptor.get("prompt") or f"This program needs input value {idx + 1}.")
+        msg = prompt + _input_type_note(descriptor)
+        return {
+            "success": True,
+            "action": "request_program_input",
+            "prompt": prompt,
+            "message": msg,
+            "speech": msg,
+            "input_index": idx + 1,
+            "input_count": len(prompts) or 1,
+            "expected_type": descriptor.get("expected_type", "text"),
+            "values": awaiting.get("values") or [],
+        }
+    if awaiting.get("code_hash") and awaiting.get("code_hash") != _code_hash(code):
+        session_memory.clear_awaiting_program_input(mem)
+        msg = "The code changed, so I cleared the old input request. Run again when ready."
+        return {"success": True, "action": "deterministic_message", "message": msg, "speech": msg}
+    values = list(awaiting.get("values") or [])
+    values.append(_clean_program_input_reply(text)[:1000])
+    if len(values) < len(prompts):
+        return _request_program_input_response(
+            mem, code=code, descriptors=prompts, values=values,
+            index=len(values), source="runtime"
+        )
+    session_memory.clear_awaiting_program_input(mem)
+    session_memory.set_pending_stdin_values(mem, values)
+    msg = "Input value received. Running the program now."
+    if len(values) > 1:
+        msg = "All input values received. Running the program now."
+    return {
+        "success": True,
+        "action": "action_sequence",
+        "spoken_summary": msg,
+        "speech": msg,
+        "message": msg,
+        "input_concierge": True,
+        "actions": [
+            {"action": "set_inputs", "values": values, "label": "Using the input value."},
+            {"action": "run", "label": "Running with your input."},
+        ],
+    }
+
+
 _last_outputs = {}
 _last_outputs_lock = threading.Lock()
 
@@ -4000,9 +4281,22 @@ def run_code():
     if project_run:
         code = project_run["files"][project_run["entry"]]
     inputs_from_body = body.get("inputs")
+    body_inputs_provided = isinstance(inputs_from_body, list) and len(inputs_from_body) > 0
     if not isinstance(inputs_from_body, list):
         inputs_from_body = None
-    inputs = inputs_from_body if inputs_from_body is not None else _parse_magic_inputs(code)
+    mem = session_memory.get_memory(get_trace_storage())
+    pending_inputs = session_memory.get_pending_stdin_values(mem)
+    input_source = "none"
+    if body_inputs_provided:
+        inputs = inputs_from_body
+        input_source = "pre-supplied"
+    elif pending_inputs:
+        inputs = pending_inputs
+        input_source = "session"
+    else:
+        magic_inputs = _parse_magic_inputs(code)
+        inputs = magic_inputs
+        input_source = "magic" if magic_inputs else "none"
     inputs = [str(x)[:1000] for x in inputs[:50]]
 
     if len(code) > MAX_CODE_SIZE:
@@ -4021,9 +4315,9 @@ def run_code():
         explanation = _local_error_explanation(code, safe_error, language=safe(body.get("language"), "en"), beginner=True)
         _save_mistake_snapshot(get_session_id(), code, safe_error, success=False, explanation=explanation)
         try:
-            session_memory.record_run(session_memory.get_memory(get_trace_storage()),
+            session_memory.record_run(mem,
                                       error=safe_error, traceback_text=safe_error,
-                                      inputs=inputs, ran_ok=False)
+                                      inputs=inputs, ran_ok=False, input_source=input_source)
         except Exception:
             pass
         return jsonify({
@@ -4040,9 +4334,19 @@ def run_code():
             "error": f"Rate limit exceeded. Max {RUN_RATE_LIMIT} runs per {RUN_RATE_WINDOW} seconds."
         }), 429
 
-    input_prompts = _detect_input_prompts(code)
-    uses_input = bool(input_prompts) or bool(re.search(r'\binput\s*\(', code))
+    input_descriptors = _detect_program_inputs(code)
+    input_prompts = [str(item.get("prompt", "")) for item in input_descriptors] or _detect_input_prompts(code)
+    uses_input = bool(input_descriptors) or bool(re.search(r'\binput\s*\(', code))
     inputs_hint = None
+    if uses_input and input_descriptors and len(inputs) < len(input_descriptors):
+        return jsonify(_request_program_input_response(
+            mem,
+            code=code,
+            descriptors=input_descriptors,
+            values=inputs,
+            index=len(inputs),
+            source="pre-run" if inputs else "runtime",
+        ))
     if uses_input and not inputs:
         concierge_inputs = detect_concierge_inputs(code)
         if concierge_inputs:
@@ -4193,11 +4497,17 @@ def run_code():
             explanation = explain_error(code, error, language=safe(body.get("language"), "en"))
             _save_mistake_snapshot(get_session_id(), code, error, success=False, explanation=explanation)
             try:
-                session_memory.record_run(session_memory.get_memory(get_trace_storage()),
+                session_memory.record_run(mem,
                                           error=error, traceback_text=sanitize_traceback(raw_error),
-                                          inputs=inputs, ran_ok=False)
+                                          inputs=inputs, ran_ok=False, input_source=input_source)
             except Exception:
                 pass
+            if "valueerror" in error.lower() and inputs:
+                typed_input = next((d for d in input_descriptors if d.get("raw_type") in {"int", "float"}), None)
+                if typed_input:
+                    kind = "number"
+                    example = "16" if typed_input.get("raw_type") == "int" else "92.5"
+                    explanation = f"The program expected a {kind}, but the input was text. Try a value like {example}."
             return jsonify({
                 "success": False,
                 "error": error,
@@ -4208,19 +4518,27 @@ def run_code():
 
         _save_mistake_snapshot(get_session_id(), code, "", success=True, output=output)
         try:
-            session_memory.record_run(session_memory.get_memory(get_trace_storage()),
-                                      output=output, inputs=inputs, ran_ok=True)
+            session_memory.record_run(mem,
+                                      output=output, inputs=inputs, ran_ok=True,
+                                      input_source=input_source if inputs else "none")
+            if inputs:
+                session_memory.clear_pending_stdin_values(mem)
         except Exception:
             pass
 
+        input_summary = ""
+        if inputs:
+            input_summary = f"The program used {len(inputs)} input value{'s' if len(inputs) != 1 else ''}."
         return jsonify({
             "success": True,
             "output": output or "Program finished with no output.",
+            "speech_summary": input_summary,
             "trace": trace,
             "semantic_issues": semantic_issues,
             "diff": diff_info,
             "inputs_consumed": len(inputs),
             "inputs_provided": len(inputs),
+            "clear_inputs_after_run": bool(inputs),
             "inputs_hint": inputs_hint,
             "input_prompts": input_prompts,
         })
@@ -8616,6 +8934,12 @@ def voice():
         if workspace is not None:
             audio_blocks.set_active_mode(workspace, active_mode)
 
+    awaiting_response = _handle_awaiting_program_input(text, current_code, mem)
+    if awaiting_response is not None:
+        awaiting_response.setdefault("heard", text)
+        awaiting_response.setdefault("confidence", 0.99)
+        return jsonify(_sanitize_voice_response(awaiting_response))
+
     if intent == "repeat":
         last_action = storage.get('last_voice_action', None)
         if not last_action:
@@ -8661,6 +8985,12 @@ def voice():
         except Exception:
             pass
         return jsonify(response_dict), status_code
+
+    input_response = _input_command_response(text, mem)
+    if input_response is not None:
+        input_response.setdefault("heard", text)
+        input_response.setdefault("confidence", 0.99)
+        return _store_and_return(input_response)
 
     # Safe apply/reject: when a change proposal is pending, bare apply/reject/explain
     # operate on it. This is context-aware so the same words mean undo/explain on an
@@ -9815,6 +10145,7 @@ def voice():
                 })
             if status == "ready":
                 message = concierge["message"]
+                session_memory.set_pending_stdin_values(mem, concierge["values"])
                 return _store_and_return({
                     "success": True,
                     "action": "action_sequence",
@@ -10037,11 +10368,15 @@ def voice():
         if intent == "what_changed":
             return _store_and_return({"success": True, "action": "what_changed", "speech": _trace_playback("current_change"), "confidence": confidence})
         if intent == "set_inputs":
-            return _store_and_return({"success": True, "action": "set_inputs", "values": slots.get("values", []), "confidence": confidence})
+            values = session_memory.set_pending_stdin_values(mem, slots.get("values", []))
+            return _store_and_return({"success": True, "action": "set_inputs", "values": values, "confidence": confidence})
         if intent == "clear_inputs":
+            session_memory.clear_pending_stdin_values(mem)
+            session_memory.clear_awaiting_program_input(mem)
             return _store_and_return({"success": True, "action": "clear_inputs", "confidence": confidence})
         if intent == "list_inputs":
-            return _store_and_return({"success": True, "action": "list_inputs", "confidence": confidence})
+            values = session_memory.get_pending_stdin_values(mem)
+            return _store_and_return({"success": True, "action": "list_inputs", "values": values, "confidence": confidence})
         if intent == "live_input_mode":
             return _store_and_return({"success": True, "action": "live_input_mode", "confidence": confidence})
         if intent == "preflight_input_mode":

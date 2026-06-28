@@ -2,11 +2,13 @@
 
 **A blind-first Python learning IDE for visually impaired beginners.**
 
-CodeUp is a blind-first Python learning IDE that turns programming into a non-visual cockpit, helping visually impaired beginners understand project structure, debug errors, review code changes, inspect program state, navigate code, and generate teacher reports through speech, typed commands, and screen-reader-aware workflows.
+CodeUp turns beginner Python programming into a non-visual cockpit. It helps visually impaired learners understand project structure, debug errors, review code changes, inspect program state, navigate code, work with input, and generate teacher reports through speech, typed commands, and screen-reader-aware workflows.
 
-Live demo: [https://code-up-fmqr.onrender.com/ide](https://code-up-fmqr.onrender.com/ide)
+Live demo: [https://code-up-fmqr.onrender.com/ide, and generate teacher reports through speech, typed commands, and screen-reader-aware workflows.
 
-The project focuses on Python structure: indentation, nesting, errors, output, and control flow. CodeUp is a strong working prototype, stable enough for demos and structured testing while broader assistive-technology and learner validation continues.
+Live demo: [https://code-up](https://code-up-fmqr.onrender.com/ide)
+
+CodeUp focuses on the parts of Python that are hardest to learn non-visually: indentation, nesting, errors, output, input, variables, control flow, and program state. It is a strong working prototype, stable enough for demos and structured testing while broader assistive-technology and learner validation continues.
 
 ## What CodeUp does now
 
@@ -19,6 +21,7 @@ It helps learners:
 * review code changes through Audio Diff Review
 * apply, reject, or undo fixes through Safe Apply/Reject
 * inspect variables and execution through State and Variable Watch
+* work with beginner `input()` programs through pre-set values or guided runtime prompts
 * navigate code non-visually with line, function, error, change, and file-role commands
 * use Live Assistant Mode for controlled spoken interaction
 * generate teacher reports and learner recaps for pilots, trainers, and classrooms
@@ -34,8 +37,9 @@ Every capability is reachable by one canonical command; listed aliases also work
 4. **Codex Handoff Pack:** `make codex handoff`.
 5. **Teacher Reports:** `make a teacher report` (full session/cockpit summary), `teacher lesson report` (current literacy lesson).
 6. **Cockpit (orient, debug, review, inspect, navigate):** `project map`, `explain error`, `what changed`, `show program state`, `where am I`.
-7. **Audio Blocks:** `open audio blocks`, `read block map`, `read block order`, `switch to python code mode`.
-8. **Intel showcase (optional):** `intel toolkit status`.
+7. **Python input support:** `how do inputs work`, `use 16 as input`, `insert 90 as value`, `read input values`, `clear input values`.
+8. **Audio Blocks:** `open audio blocks`, `read block map`, `read block order`, `switch to python code mode`.
+9. **Intel showcase (optional):** `intel toolkit status`.
 
 ## Core cockpit features
 
@@ -59,6 +63,20 @@ Proposes fixes before applying them, so learners can ask for an explanation, acc
 
 Lets learners ask what variables exist, what a variable is now, what the program printed, and why a loop or condition behaved a certain way.
 
+### Python Input Flow
+
+Supports beginner Python programs that use `input()`.
+
+Learners can set input values before running:
+
+```text
+use 16 as input
+insert Taknoor as value
+use Alice and 16 as inputs
+```
+
+If values are missing, CodeUp can ask for them while the program runs and continue automatically after the learner replies. This makes programs with names, ages, marks, passwords, and simple calculators usable without opening a separate terminal.
+
 ### Live Assistant Mode
 
 Adds a controlled assistant layer with start/stop, pause/resume, stop speaking, repeat, and typed fallback when browser speech recognition is unavailable.
@@ -69,15 +87,15 @@ Supports commands such as where am I, read imports, read functions, go to main f
 
 ### Teacher Report and Session Recap
 
-Generates a clear report for teachers, trainers, NGO reviewers, and pilots using project structure, errors, fixes, code changes, watched variables, and session activity.
+Generates a clear report for teachers, trainers, NGO reviewers, and pilots using project structure, errors, fixes, code changes, input usage, watched variables, and session activity.
 
 ## Learning bridge features
 
-CodeUp focuses on the stage before professional coding agents: helping blind beginners understand code, errors, changes, and program state.
+CodeUp focuses on the stage before professional coding agents: helping blind beginners understand code, errors, changes, input, and program state.
 
-- **Tutor Mode** gives hints and explanations before fixes, so students can try again instead of immediately accepting generated code.
-- **Codex Handoff Pack** creates a copyable summary of the learner's code, error, recent changes, program state, and questions to ask when moving to a professional coding agent.
-- **Understanding Checks** create short questions and practice prompts from the current code/session.
+* **Tutor Mode** gives hints and explanations before fixes, so students can try again instead of immediately accepting generated code.
+* **Codex Handoff Pack** creates a copyable summary of the learner's code, error, recent changes, program state, and questions to ask when moving to a professional coding agent.
+* **Understanding Checks** create short questions and practice prompts from the current code/session.
 
 ## Programming Literacy Mode
 
@@ -89,11 +107,9 @@ The goal is not to replace professional coding agents. The goal is to help begin
 
 ## Python Code Mode
 
-CodeUp starts in Python Code Mode. Learners write and run real Python with spoken support around output, errors, structure, and program flow.
+CodeUp starts in Python Code Mode. Learners write and run real Python with spoken support around output, input, errors, structure, and program flow.
 
 Python Code Mode is the default workspace for editing, execution, debugging, and understanding code.
-
-CodeUp supports beginner `input()` programs. Learners can pre-set input values with commands like `use 16 as input`, or CodeUp can ask for missing input while running and continue automatically after the learner replies.
 
 ## Audio Blocks Mode
 
@@ -103,7 +119,7 @@ Blocks can be compiled, run, explained, exported, or transferred into Python Cod
 
 ## Non-AI tools
 
-Deterministic, non-AI features include spoken output, project maps, non-visual navigation, structure summaries, error trace narration, audio diff review, safe apply/reject with undo, state and variable watch, Live Assistant Mode, mistake replay, Audio Blocks compile/run, block-to-Python transfer, project export, and teacher/trainer reports.
+Deterministic, non-AI features include spoken output, project maps, non-visual navigation, structure summaries, input handling, error trace narration, audio diff review, safe apply/reject with undo, state and variable watch, Live Assistant Mode, mistake replay, Audio Blocks compile/run, block-to-Python transfer, project export, and teacher/trainer reports.
 
 Optional AI support can add explanations, but the core learning and routing tools do not depend on AI.
 
@@ -111,26 +127,11 @@ Optional AI support can add explanations, but the core learning and routing tool
 
 CodeUp includes optional Intel-focused demo tooling for accessibility and AI optimization experiments.
 
-- **OpenVINO**: used for the local intent-classification demo path.
-- **Intel Neural Compressor**: optional demo tooling for model-compression and quantization experiments around local intent models.
-- **Intel Extension for Scikit-learn, powered by oneDAL**: optional benchmark path for accelerated classical ML experiments around command-intent classification.
+* **OpenVINO**: used for the local intent-classification demo path.
+* **Intel Neural Compressor**: optional demo tooling for model-compression and quantization experiments around local intent models.
+* **Intel Extension for Scikit-learn, powered by oneDAL**: optional benchmark path for accelerated classical ML experiments around command-intent classification.
 
 These integrations are optional. The deployed CodeUp app does not require all Intel packages to run.
-
-Optional install:
-
-```bash
-pip install -r requirements-intel.txt
-```
-
-Environment check:
-
-```bash
-python tools/intel/neural_compressor_demo.py --check-env
-python tools/intel/sklearnex_benchmark.py --check-env
-```
-
-### Intel showcase commands
 
 CodeUp can report its Intel integration status from inside the app:
 
@@ -155,31 +156,11 @@ Python execution is controlled and sandboxed according to the app's existing des
 
 ## Testing
 
-CodeUp has 2,800+ automated tests covering command routing, sandboxed execution, accessibility flows, Audio Blocks, multi-file projects, project export, error narration, audio diff review, safe apply/reject, state watch, Live Assistant Mode, teacher reports, and non-visual navigation.
-
-For a quick local check:
-
-```bash
-py -m pytest -q
-```
-
-For the full suite:
-
-```bash
-py -m pytest -q --run-full
-```
-
-Docs tests:
-
-```bash
-py -m pytest -q -m docs
-```
+CodeUp has 2,900+ automated tests covering command routing, sandboxed execution, accessibility flows, Python input handling, Audio Blocks, multi-file projects, project export, error narration, audio diff review, safe apply/reject, state watch, Live Assistant Mode, teacher reports, and non-visual navigation.
 
 ## Current validation status
 
-The deployed Render version has been sanity-checked through the browser for the main cockpit flow: error narration, fix proposal, apply, run, audio diff, state watch, navigation, teacher report, Live Assistant start/stop, and Audio Blocks opening.
-
-Real microphone use, NVDA, JAWS, VoiceOver, Orca, Braille display workflows, and post-cockpit learner testing still need separate validation.
+The deployed Render version has been sanity-checked for the main cockpit flow: error narration, fix proposal, apply, run, input handling, audio diff, state watch, navigation, teacher report, Live Assistant start/stop, and Audio Blocks opening.
 
 ## Tech stack
 

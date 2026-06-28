@@ -2,13 +2,11 @@
 
 **A blind-first Python learning IDE for visually impaired beginners.**
 
-CodeUp turns beginner Python programming into a non-visual cockpit. It helps visually impaired learners understand project structure, debug errors, review code changes, inspect program state, navigate code, work with input, and generate teacher reports through speech, typed commands, and screen-reader-aware workflows.
+CodeUp turns beginner Python programming into a non-visual cockpit. It helps visually impaired learners understand project structure, debug errors, review code changes, inspect program state, navigate code, work with input, build beginner programs with Audio Blocks, and generate teacher reports through speech, typed commands, and screen-reader-aware workflows.
 
-Live demo: [https://code-up-fmqr.onrender.com/ide, and generate teacher reports through speech, typed commands, and screen-reader-aware workflows.
+Live demo: https://code-up-fmqr.onrender.com/ide
 
-Live demo: [https://code-up](https://code-up-fmqr.onrender.com/ide)
-
-CodeUp focuses on the parts of Python that are hardest to learn non-visually: indentation, nesting, errors, output, input, variables, control flow, and program state. It is a strong working prototype, stable enough for demos and structured testing while broader assistive-technology and learner validation continues.
+The project focuses on Python structure: indentation, nesting, errors, output, input, variables, control flow, and program state. CodeUp is a strong working prototype, stable enough for demos and structured testing while broader learner validation continues.
 
 ## What CodeUp does now
 
@@ -23,9 +21,11 @@ It helps learners:
 * inspect variables and execution through State and Variable Watch
 * work with beginner `input()` programs through pre-set values or guided runtime prompts
 * navigate code non-visually with line, function, error, change, and file-role commands
+* build beginner programs in Audio Blocks before transferring them to Python Code Mode
 * use Live Assistant Mode for controlled spoken interaction
 * generate teacher reports and learner recaps for pilots, trainers, and classrooms
-* move gradually toward professional tools like VS Code with screen readers
+* export projects and work across multi-file beginner Python programs
+* move gradually toward professional tools like VS Code, GitHub, Codex, and screen readers
 
 ## Command groups
 
@@ -39,7 +39,8 @@ Every capability is reachable by one canonical command; listed aliases also work
 6. **Cockpit (orient, debug, review, inspect, navigate):** `project map`, `explain error`, `what changed`, `show program state`, `where am I`.
 7. **Python input support:** `how do inputs work`, `use 16 as input`, `insert 90 as value`, `read input values`, `clear input values`.
 8. **Audio Blocks:** `open audio blocks`, `read block map`, `read block order`, `switch to python code mode`.
-9. **Intel showcase (optional):** `intel toolkit status`.
+9. **Project export:** `export this project`, `make project zip`, `download project`.
+10. **Intel showcase (optional):** `intel toolkit status`.
 
 ## Core cockpit features
 
@@ -61,7 +62,7 @@ Proposes fixes before applying them, so learners can ask for an explanation, acc
 
 ### State and Variable Watch
 
-Lets learners ask what variables exist, what a variable is now, what the program printed, and why a loop or condition behaved a certain way.
+Lets learners ask what variables exist, what a variable is now, what the program printed, and why a loop, condition, input value, or assignment behaved a certain way.
 
 ### Python Input Flow
 
@@ -117,9 +118,15 @@ Audio Blocks Mode is a separate workspace for building beginner Python programs 
 
 Blocks can be compiled, run, explained, exported, or transferred into Python Code Mode when the learner is ready to work with the generated Python.
 
+Audio Blocks is not meant to replace Python Code Mode. It gives beginners a safer structure-first workspace before they work directly with full Python syntax.
+
+## Multi-file projects and export
+
+CodeUp supports multi-file project workflows, project structure summaries, ZIP export, and file-role navigation. These features help learners understand not just one script, but how files in a beginner project fit together.
+
 ## Non-AI tools
 
-Deterministic, non-AI features include spoken output, project maps, non-visual navigation, structure summaries, input handling, error trace narration, audio diff review, safe apply/reject with undo, state and variable watch, Live Assistant Mode, mistake replay, Audio Blocks compile/run, block-to-Python transfer, project export, and teacher/trainer reports.
+Deterministic, non-AI features include spoken output, project maps, non-visual navigation, structure summaries, Python input handling, error trace narration, audio diff review, safe apply/reject with undo, state and variable watch, Live Assistant Mode, mistake replay, Audio Blocks compile/run, block-to-Python transfer, multi-file project support, project export, and teacher/trainer reports.
 
 Optional AI support can add explanations, but the core learning and routing tools do not depend on AI.
 
@@ -133,6 +140,21 @@ CodeUp includes optional Intel-focused demo tooling for accessibility and AI opt
 
 These integrations are optional. The deployed CodeUp app does not require all Intel packages to run.
 
+Optional install:
+
+```bash
+pip install -r requirements-intel.txt
+```
+
+Environment check:
+
+```bash
+python tools/intel/neural_compressor_demo.py --check-env
+python tools/intel/sklearnex_benchmark.py --check-env
+```
+
+### Intel showcase commands
+
 CodeUp can report its Intel integration status from inside the app:
 
 ```text
@@ -144,9 +166,7 @@ These commands show which Intel paths are available in the current environment a
 
 ## Screen reader and assistive technology support
 
-CodeUp includes screen-reader-aware workflows, live regions, keyboard-accessible controls, and spoken feedback for editor and command-box interaction.
-
-Broader assistive-technology validation is still ongoing; see Current validation status below for what has and has not been verified.
+CodeUp includes screen-reader-aware workflows, live regions, keyboard-accessible controls, spoken feedback, keyboard-accessible interaction, and command-box fallback.
 
 ## Safety model
 
@@ -162,6 +182,8 @@ CodeUp has 2,900+ automated tests covering command routing, sandboxed execution,
 
 The deployed Render version has been sanity-checked for the main cockpit flow: error narration, fix proposal, apply, run, input handling, audio diff, state watch, navigation, teacher report, Live Assistant start/stop, and Audio Blocks opening.
 
+Mic-based voice interaction has also been tested for the main command flow. Broader structured learner testing is still ongoing.
+
 ## Tech stack
 
 * Python
@@ -170,6 +192,7 @@ The deployed Render version has been sanity-checked for the main cockpit flow: e
 * HTML/CSS
 * Browser speech APIs
 * Optional AI support
+* Optional Intel toolkit demos
 
 ## License
 

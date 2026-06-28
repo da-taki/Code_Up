@@ -628,10 +628,9 @@ def test_sandbox_input_blocked(client):
     res = client.post("/run", json={"code": "x = input('name: ')\nprint(x)"})
     assert res.status_code == 200
     data = res.get_json()
-    assert data["success"] is False
-    assert "input" in data["error"].lower() or (
-        data.get("explanation") and "input" in data["explanation"].lower()
-    )
+    assert data["success"] is True
+    assert data["action"] == "request_program_input"
+    assert data["prompt"] == "name:"
 
 
 def test_sandbox_allowed_modules(client):
@@ -2094,14 +2093,17 @@ class TestInputSandboxBackend:
     @pytest.mark.timeout(15)
     def test_input_call_fails(self, client):
         res = client.post("/run", json={"code": "x = input('enter: ')\nprint(x)"})
-        assert res.get_json()["success"] is False
+        data = res.get_json()
+        assert data["success"] is True
+        assert data["action"] == "request_program_input"
+        assert data["prompt"] == "enter:"
 
     @pytest.mark.timeout(15)
     def test_input_error_mentions_input(self, client):
         res = client.post("/run", json={"code": "name = input('name: ')"})
         data = res.get_json()
-        combined = (data.get("error") or "") + (data.get("explanation") or "")
-        assert "input" in combined.lower()
+        assert data["action"] == "request_program_input"
+        assert "name" in data["prompt"].lower()
 
     @pytest.mark.timeout(15)
     def test_variable_named_my_input_not_blocked(self, client):
@@ -2205,9 +2207,10 @@ class TestPreflightInputs:
         code = "a = input('a: ')\nb = input('b: ')\nprint(a, b)"
         res = client.post("/run", json={"code": code, "inputs": ["only_one"]})
         data = res.get_json()
-        assert data["success"] is False
-        combined = (data.get("error") or "") + (data.get("explanation") or "")
-        assert "input" in combined.lower()
+        assert data["success"] is True
+        assert data["action"] == "request_program_input"
+        assert data["prompt"] == "b:"
+        assert data["values"] == ["only_one"]
 
     @pytest.mark.timeout(15)
     def test_magic_comment_inputs(self, client):
@@ -2240,9 +2243,8 @@ class TestPreflightInputs:
         code = "x = input('?')\nprint(x)"
         res = client.post("/run", json={"code": code})
         data = res.get_json()
-        assert data.get("inputs_hint")
-        assert "input" in data["inputs_hint"].lower()
-        assert data["input_prompts"] == ["?"]
+        assert data["action"] == "request_program_input"
+        assert data["prompt"] == "?"
 
 
 class TestVoiceSetInputs:

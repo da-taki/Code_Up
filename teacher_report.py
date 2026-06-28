@@ -143,6 +143,24 @@ def _state_section(mem: Dict[str, Any]) -> List[str]:
     return lines
 
 
+def _input_section(mem: Dict[str, Any]) -> List[str]:
+    summary = mem.get("last_input_run_summary") if isinstance(mem.get("last_input_run_summary"), dict) else {}
+    pending = mem.get("pending_stdin_values") if isinstance(mem.get("pending_stdin_values"), list) else []
+    prompts = mem.get("input_prompts") if isinstance(mem.get("input_prompts"), list) else []
+    lines: List[str] = []
+    if summary.get("used_input"):
+        count = int(summary.get("count") or 0)
+        source = str(summary.get("source") or "input").replace("_", " ")
+        lines.append(f"Program used input: {count} value{'s' if count != 1 else ''} supplied by {source}.")
+    if prompts:
+        lines.append(f"Input variables/prompts detected: {', '.join(str(p) for p in prompts[:6])}.")
+    if pending:
+        lines.append(f"Pending input values are set for the next run: {len(pending)}.")
+    if not lines:
+        lines.append("No program input was recorded this session.")
+    return lines
+
+
 def _next_practice(mem: Dict[str, Any], concepts: List[str]) -> str:
     if mem.get("last_run_ok") is False:
         return "Practice reading an error message and fixing it, then run the code again."
@@ -167,7 +185,8 @@ def build_report(mem: Optional[Dict[str, Any]], project_state: Optional[Dict[str
 
     has_content = bool(
         base.get("has_content") or mem.get("command_count") or mem.get("change_history")
-        or mem.get("last_run_error") or mem.get("last_run_output") or mem.get("watched_variables"))
+        or mem.get("last_run_error") or mem.get("last_run_output") or mem.get("watched_variables")
+        or mem.get("last_input_run_summary") or mem.get("pending_stdin_values"))
 
     if not has_content:
         msg = ("# CodeUp Teacher Report\n\nThere is not much session activity yet. "
@@ -187,6 +206,7 @@ def build_report(mem: Optional[Dict[str, Any]], project_state: Optional[Dict[str
         "Errors and Debugging": _errors_section(mem, code_for_concepts),
         "Code Changes Reviewed": _changes_section(mem),
         "State and Variable Understanding": _state_section(mem),
+        "Program Input": _input_section(mem),
         "Accessibility Workflow": [
             f"Screen reader mode: {'on' if storage.get('screen_reader_mode') else 'off'}. "
             "Spoken output, project map, error narration and state narration were available. "

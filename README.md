@@ -93,6 +93,8 @@ CodeUp starts in Python Code Mode. Learners write and run real Python with spoke
 
 Python Code Mode is the default workspace for editing, execution, debugging, and understanding code.
 
+CodeUp supports beginner `input()` programs. Learners can pre-set input values with commands like `use 16 as input`, or CodeUp can ask for missing input while running and continue automatically after the learner replies.
+
 ## Audio Blocks Mode
 
 Audio Blocks Mode is a separate workspace for building beginner Python programs with accessible numbered blocks. It opens through the Audio Blocks button or the `open audio blocks` command.

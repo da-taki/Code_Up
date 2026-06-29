@@ -164,7 +164,8 @@ def test_literacy_module_list_works_without_ai():
 
 def test_readme_mentions_programming_literacy_mode_honestly():
     readme = Path("README.md").read_text(encoding="utf-8")
-    assert "## Programming Literacy Mode" in readme
-    assert "learning Python from zero" in readme
-    assert "The goal is not to replace professional coding agents" in readme
+    assert "## Modes" in readme
+    assert "Programming Literacy Mode" in readme
+    assert "learning missions" in readme
+    assert "replace professional coding agents" in readme
     assert "validated with blind users" not in readme.lower()

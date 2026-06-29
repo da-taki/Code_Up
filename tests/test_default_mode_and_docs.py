@@ -96,17 +96,22 @@ def test_readme_has_key_sections_and_no_dead_doc_links():
     readme = Path("README.md").read_text(encoding="utf-8")
     for heading in (
         "# CodeUp",
-        "## Python Code Mode",
-        "## Audio Blocks Mode",
-        "## Non-AI tools",
-        "## Screen reader and assistive technology support",
-        "## Safety model",
-        "## Testing",
+        "## Features",
+        "## Commands",
+        "## Modes",
+        "## Architecture",
+        "## Validation",
+        "## Limitations",
         "## License",
     ):
         assert heading in readme, f"README is missing section: {heading}"
-    assert "starts in Python Code Mode" in readme
+    assert "Python Code Mode" in readme
     assert "open audio blocks" in readme
+    assert "What CodeUp does now" not in readme
+    assert "npm install" not in readme
+    assert "npm run build" not in readme
+    assert "git clone" not in readme
+    assert "create venv" not in readme.lower()
     # No dead links to the deleted docs and no leftover "see docs/..." pointers.
     assert "docs/" not in readme
     for stem in ("AUDIO_BLOCKS_MODE", "ACCESSIBLE_CODING_PATHWAY", "QA_MATRIX",

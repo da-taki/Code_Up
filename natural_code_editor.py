@@ -477,6 +477,55 @@ def _make_marks_input(code: str, instruction: str) -> Optional[Tuple[str, str]]:
     return None
 
 
+def _add_name_input(code: str, instruction: str) -> Optional[Tuple[str, str]]:
+    low = _norm(instruction)
+    if "name" not in low or not re.search(r"\b(?:ask|input|add)\b", low):
+        return None
+    if re.search(r"\bname\s*=\s*input\s*\(", code):
+        return None
+    lines = code.splitlines()
+    insert_at = 0
+    for index, line in enumerate(lines):
+        if "input(" in line:
+            insert_at = index
+            break
+    lines.insert(insert_at, 'name = input("Enter name: ")')
+    updated = "\n".join(lines)
+    updated = re.sub(
+        r'print\("Next age:",\s*result\)',
+        'print(name, "will be", result)',
+        updated,
+        count=1,
+    )
+    return updated, "Added a name input and included the name in the final output."
+
+
+def _use_function_for_age_result(code: str, instruction: str) -> Optional[Tuple[str, str]]:
+    low = _norm(instruction)
+    if "function" not in low:
+        return None
+    if re.search(r"(?m)^def\s+\w+\s*\(", code):
+        return None
+    if "age" not in code or "age + 1" not in code:
+        return None
+    source = code.strip("\n")
+    source = re.sub(r"(?m)^result\s*=\s*age\s*\+\s*1\s*$", "result = next_age(age)", source, count=1)
+    updated = "def next_age(age):\n    return age + 1\n\n" + source
+    return updated, "Changed the program to use a function for the age calculation."
+
+
+def _ensure_print_result_at_end(code: str, instruction: str) -> Optional[Tuple[str, str]]:
+    low = _norm(instruction)
+    if not re.search(r"\bprint\b.*\bresult\b.*\bend\b|\bprint\s+the\s+result\b", low):
+        return None
+    if re.search(r"(?m)^print\([^)]*result[^)]*\)\s*$", code.strip().splitlines()[-1] if code.strip() else ""):
+        return None
+    if "result" not in code:
+        return None
+    updated = code.rstrip() + '\nprint("Result:", result)'
+    return updated, "Printed the result at the end of the program."
+
+
 def _pattern_row_edit(code: str, instruction: str) -> Optional[Tuple[str, str]]:
     low = _norm(instruction)
     row_match = re.search(r"\b(?:(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)|(\d+))(?:st|nd|rd|th)?\s+row\b", low)
@@ -604,6 +653,9 @@ def local_edit(current_code: str, instruction: str) -> Dict[str, Any]:
         return {"status": "unknown"}
 
     for editor in (
+        _add_name_input,
+        _use_function_for_age_result,
+        _ensure_print_result_at_end,
         _pattern_row_edit,
         _pattern_style_edit,
         _pattern_size_edit,

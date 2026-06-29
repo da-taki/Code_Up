@@ -2264,7 +2264,12 @@ def audio_code_map():
 
 
 
-def _run_with_trace_for_narration(code: str, watched_vars: set, session_id: str) -> dict:
+def _run_with_trace_for_narration(
+    code: str,
+    watched_vars: set,
+    session_id: str,
+    inputs: Optional[List[str]] = None,
+) -> dict:
     sandbox = get_sandbox(session_id)
     workspace_dir = sandbox.workspace_dir
     trace_file = os.path.join(workspace_dir, f"trace_{uuid.uuid4().hex}.json")
@@ -2275,9 +2280,21 @@ def _run_with_trace_for_narration(code: str, watched_vars: set, session_id: str)
         code_file.write(code)
         code_file_path = code_file.name
 
+    inputs_file_path = None
+    if inputs:
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False,
+                                          encoding='utf-8', dir=workspace_dir) as input_file:
+            for item in inputs:
+                input_file.write(str(item).replace('\n', ' ').replace('\r', ' ') + '\n')
+            inputs_file_path = input_file.name
+
     env = os.environ.copy()
     env['CODEUP_CODE_FILE'] = code_file_path
     env['CODEUP_TRACE_FILE'] = trace_file
+    if inputs_file_path:
+        env['CODEUP_INPUTS_FILE'] = inputs_file_path
+    else:
+        env.pop('CODEUP_INPUTS_FILE', None)
     env.pop('CODEUP_INTERACTIVE', None)
     env.pop('CODEUP_INPUT_FIFO', None)
     env.pop('CODEUP_EXEC_CODE', None)
@@ -2313,6 +2330,11 @@ def _run_with_trace_for_narration(code: str, watched_vars: set, session_id: str)
             os.unlink(code_file_path)
         except OSError:
             pass
+        if inputs_file_path:
+            try:
+                os.unlink(inputs_file_path)
+            except OSError:
+                pass
 
     trace = []
     try:
@@ -2473,7 +2495,8 @@ def _build_state_bundle(current_code: str, mem: Dict[str, Any], session_id: str)
     """Run the current code in the existing sandbox trace and store a compact,
     bounded state bundle for State / Variable Watch. Never executes user code in
     the Flask process; all execution stays in _run_with_trace_for_narration."""
-    result = _run_with_trace_for_narration(current_code, set(), session_id)
+    trace_inputs = mem.get("last_run_inputs") if "input(" in str(current_code or "") else None
+    result = _run_with_trace_for_narration(current_code, set(), session_id, inputs=trace_inputs)
     raw_trace = result.get("raw_trace") or []
     output = result.get("output") or ""
     error = result.get("error") or ""
@@ -4066,7 +4089,9 @@ def _input_command_response(text: str, mem: Dict[str, Any]) -> Optional[Dict[str
         return {"success": True, "action": "list_inputs", "values": values, "message": msg, "speech": msg}
     values = _extract_input_command_values(text)
     if values is not None:
-        saved = session_memory.set_pending_stdin_values(mem, values)
+        existing_values = session_memory.get_pending_stdin_values(mem)
+        values_to_save = existing_values + values if len(values) == 1 and existing_values else values
+        saved = session_memory.set_pending_stdin_values(mem, values_to_save)
         if not saved:
             msg = "No input value heard. Try saying: use 16 as input."
             return {"success": True, "action": "deterministic_message", "message": msg, "speech": msg}

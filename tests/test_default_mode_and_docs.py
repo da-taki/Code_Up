@@ -83,7 +83,6 @@ DELETED_DOCS = [
     "docs/QA_MATRIX.md",
     "docs/SCREEN_READER_TEST_PLAN.md",
     "docs/TEACHER_REPORTS.md",
-    "SECURITY.md",
 ]
 
 
@@ -102,11 +101,13 @@ def test_readme_has_key_sections_and_no_dead_doc_links():
         "## Architecture",
         "## Validation",
         "## Limitations",
+        "## Security",
         "## License",
     ):
         assert heading in readme, f"README is missing section: {heading}"
     assert "Python Code Mode" in readme
     assert "open audio blocks" in readme
+    assert "Voice generation/edit memory" in readme
     assert "What CodeUp does now" not in readme
     assert "npm install" not in readme
     assert "npm run build" not in readme
@@ -135,3 +136,11 @@ def test_no_shipped_source_references_deleted_docs():
         text = path.read_text(encoding="utf-8", errors="ignore")
         for stem in stems:
             assert stem not in text, f"{path} still references deleted doc {stem}"
+
+
+def test_security_policy_exists_for_submission():
+    security = Path("SECURITY.md").read_text(encoding="utf-8")
+    assert "# Security" in security
+    assert "Reporting" in security
+    assert "Demo Safety" in security
+    assert "general-purpose online judge" in security

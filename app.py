@@ -1224,6 +1224,9 @@ def extract_code(text: str):
 
 def _local_code_generation_fallback(prompt: str) -> str:
     lower = (prompt or "").lower()
+    template = beginner_templates.make_generation_program(prompt or "")
+    if template is not None and template.code:
+        return template.code + ("\n" if not template.code.endswith("\n") else "")
     if (
         ("zero to two" in lower or "0 to 2" in lower or "numbers zero" in lower)
         and ("print" in lower or "loop" in lower or "numbers" in lower)
@@ -5632,7 +5635,10 @@ def generate_code():
         return jsonify(exact_result)
 
     local_direct = _local_code_generation_fallback(prompt)
-    if local_direct and re.search(r"\b(?:zero|0)\s+to\s+(?:two|2)\b", prompt, re.IGNORECASE):
+    if local_direct and (
+        re.search(r"\b(?:zero|0)\s+to\s+(?:two|2)\b", prompt, re.IGNORECASE)
+        or beginner_templates.make_generation_program(prompt) is not None
+    ):
         explanation = _generation_explanation(prompt, local_direct)
         try:
             session_memory.record_generation(session_memory.get_memory(get_trace_storage()), prompt, local_direct)
@@ -7789,6 +7795,20 @@ def _record_voice_memory(mem, text, intent, response):
         return
     if action == "generate_code" and response.get("prompt"):
         session_memory.record_generation(mem, response.get("prompt"))
+    elif action == "conversational_edit" and isinstance(response.get("ai_action"), dict):
+        ai_action = response.get("ai_action") or {}
+        code = ai_action.get("code") or response.get("spoken_code") or ""
+        if code:
+            if str(response.get("template_intent") or "").startswith("generate_"):
+                session_memory.record_generation(mem, text, str(code))
+            else:
+                session_memory.record_code_edit(
+                    mem,
+                    instruction=text,
+                    old_code=str(mem.get("_current_voice_code") or ""),
+                    new_code=str(code),
+                    summary=str(response.get("speech") or ai_action.get("spoken_confirmation") or ""),
+                )
     elif action == "clear_editor":
         session_memory.clear_edit_memory(mem)
     elif action == "open_project_file" and response.get("path"):
@@ -7868,6 +7888,17 @@ def _map_followup_decision(decision, text, mem):
                     {"action": "run", "label": "Running with the same values."},
                 ]}
     if action == "modify_code":
+        edit_code = str(mem.get("_current_voice_code") or "") or str(mem.get("last_generated_code") or "")
+        if edit_code:
+            local = natural_code_editor.local_edit(edit_code, text)
+            if local.get("status") == "edited":
+                return _memory_edit_proposal_response(
+                    text=text,
+                    current_code=edit_code,
+                    updated_code=str(local.get("updated_code") or ""),
+                    summary=str(local.get("summary") or "Updated the current program."),
+                    mem=mem,
+                )
         prompt = _ai_modify_prompt(text, mem, params) or params.get("prompt", "")
         return {**base, "action": "generate_code", "prompt": prompt,
                 "source": "memory_followup", "followup_edit": True}
@@ -8652,6 +8683,46 @@ def _natural_code_edit_response(
     return response
 
 
+def _memory_edit_proposal_response(
+    *,
+    text: str,
+    current_code: str,
+    updated_code: str,
+    summary: str,
+    mem: Dict[str, Any],
+) -> dict:
+    before = str(current_code or "")
+    after = str(updated_code or "").strip("\n")
+    change = audio_diff.summarize_change(before, after, reason=text)
+    explanation = audio_diff.narrate_before_after(change) or summary
+    proposal_text = (
+        f"Proposed change: {summary or 'Updated the current program.'} "
+        "Say apply, reject, or explain."
+    )
+    session_memory.set_change_proposal(mem, {
+        "before": before,
+        "after": after,
+        "risk": "low",
+        "proposal_text": proposal_text,
+        "reason": text,
+        "explanation": explanation,
+        "applied_message": summary or "Applied the edit.",
+        "source": "memory_followup",
+    })
+    session_memory.record_edit_request(mem, text)
+    return {
+        "success": True,
+        "action": "deterministic_message",
+        "message": proposal_text,
+        "speech": proposal_text,
+        "heard": text,
+        "source": "memory_followup",
+        "followup_edit": True,
+        "proposed_edit": True,
+        "safe_apply_reject": True,
+    }
+
+
 def _response_from_code_edit_plan(
     text: str,
     current_code: str,
@@ -8927,6 +8998,11 @@ def voice():
 
     storage = get_trace_storage()
     mem = session_memory.get_memory(storage)
+    mem["_current_voice_code"] = current_code
+    try:
+        session_memory.record_editor_code(mem, current_code)
+    except Exception:
+        pass
     if active_mode:
         workspace = audio_blocks.get_workspace(
             mem, create=(active_mode == "audio_blocks")
@@ -9001,9 +9077,20 @@ def voice():
         if _low in {"apply", "apply it", "apply this change", "apply the change",
                     "apply the fix", "apply all", "do it", "yes apply", "apply the proposal"}:
             after_code = _pending_proposal.get("after") or ""
+            before_code = _pending_proposal.get("before") or current_code or ""
             applied_msg = _pending_proposal.get("applied_message") or "Applied the change."
             session_memory.clear_change_proposal(mem)
             mem["fixes_applied"] = int(mem.get("fixes_applied") or 0) + 1
+            try:
+                session_memory.record_code_edit(
+                    mem,
+                    instruction=str(_pending_proposal.get("reason") or text),
+                    old_code=before_code,
+                    new_code=after_code,
+                    summary=applied_msg,
+                )
+            except Exception:
+                pass
             edit = _make_conversational_edit_response(
                 "replace_code", code=after_code, spoken_confirmation=applied_msg,
                 confidence=0.95, source="audio_diff", allow_unconfirmed_replace=True,
@@ -9886,6 +9973,23 @@ def voice():
         verbosity=verbosity)
     if _report_response is not None:
         return _store_and_return(_report_response)
+
+    early_followup_category = session_memory.classify_followup(text)
+    current_hash = session_memory.code_hash(current_code)
+    generated_hash = str(mem.get("last_generated_code_hash") or "")
+    generated_target_active = bool(
+        generated_hash and (
+            current_hash == generated_hash
+            or (not str(current_code or "").strip() and mem.get("last_generated_code"))
+        )
+    )
+    if early_followup_category and generated_target_active:
+        early_decision = session_memory.resolve_followup(
+            early_followup_category, text, mem, code=current_code, error=error_context,
+        )
+        early_mapped = _map_followup_decision(early_decision, text, mem)
+        if early_mapped is not None and early_mapped.get("source") == "memory_followup":
+            return _store_and_return(early_mapped)
 
     if (
         str(current_code or "").strip()

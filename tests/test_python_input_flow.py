@@ -56,6 +56,14 @@ def test_multiple_input_values_parse_in_order(client):
     assert data["values"] == ["Alice", "16", "90"]
 
 
+def test_repeated_single_input_commands_append_in_order(client):
+    first = vc(client, "use Taknoor as input")
+    assert first["values"] == ["Taknoor"]
+    second = vc(client, "use 16 as input")
+    assert second["action"] == "set_inputs"
+    assert second["values"] == ["Taknoor", "16"]
+
+
 def test_clear_and_read_input_values(client):
     vc(client, "use Alice and 16 as inputs")
     listed = vc(client, "what input values are set")
@@ -168,3 +176,14 @@ def test_teacher_report_mentions_input_usage(client):
     assert report["action"] == "deterministic_message"
     assert "Program Input" in report["message"]
     assert "Program used input" in report["message"]
+
+
+def test_state_watch_reuses_last_run_inputs(client):
+    code = 'name = input("Enter name: ")\nage = int(input("Enter age: "))\nprint(name, age + 1)\n'
+    data = client.post("/run", json={"code": code, "inputs": ["Taknoor", "16"]}).get_json()
+    assert data["success"] is True
+    state = vc(client, "show program state", code=code)
+    assert state["action"] == "deterministic_message"
+    assert "Taknoor" in state["speech"]
+    assert "age is 16" in state["speech"]
+    assert "program printed" in state["speech"].lower()

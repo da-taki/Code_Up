@@ -10,6 +10,7 @@ Live demo: https://code-up-fmqr.onrender.com/ide
 
 - Python Code Mode for writing, generating, editing, running, and explaining beginner Python programs.
 - Voice and typed commands for code generation, follow-up code editing, Python input flow, output review, and navigation.
+- Voice generation/edit memory keeps follow-up commands attached to the current generated program instead of starting unrelated code.
 - Error Trace Narration, Project Map, Audio Diff Review, Safe Apply/Reject, State and Variable Watch, and Non-visual Navigation.
 - Programming Literacy Mode with Tutor Mode, Understanding Checks, Codex Handoff Pack, and Teacher Reports.
 - Audio Blocks Mode for building beginner programs as ordered structure blocks before transferring them into Python Code Mode.
@@ -73,6 +74,10 @@ The deployed app has been sanity-checked for the main cockpit flow, including er
 ## Limitations
 
 CodeUp is a learning prototype, not a general-purpose online judge, and it is not intended to replace professional coding agents. Browser speech recognition availability depends on the user's browser and device. Optional AI and Intel paths depend on local configuration and are not required for the deployed app.
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for supported reporting and safe demo-use expectations.
 
 ## License
 

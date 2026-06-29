@@ -142,6 +142,92 @@ def make_input_template(kind: str = "name") -> str:
     return 'name = input("Enter your name: ")\nprint("Hello", name)'
 
 
+def make_age_plus_one_program(*, include_name: bool = False, use_function: bool = False) -> str:
+    lines = [
+        'age = int(input("Enter age: "))',
+    ]
+    if include_name:
+        lines.insert(0, 'name = input("Enter name: ")')
+    if use_function:
+        body = [
+            "def next_age(age):",
+            "    return age + 1",
+            "",
+            *lines,
+            "result = next_age(age)",
+        ]
+    else:
+        body = [*lines, "result = age + 1"]
+    if include_name:
+        body.append('print(name, "will be", result)')
+    else:
+        body.append('print("Next age:", result)')
+    return "\n".join(body)
+
+
+def make_calculator_program() -> str:
+    return "\n".join([
+        "first_number = float(input(\"Enter first number: \"))",
+        "second_number = float(input(\"Enter second number: \"))",
+        'operation = input("Enter operation (+, -, *, /): ")',
+        "",
+        'if operation == "+":',
+        "    result = first_number + second_number",
+        'elif operation == "-":',
+        "    result = first_number - second_number",
+        'elif operation == "*":',
+        "    result = first_number * second_number",
+        'elif operation == "/" and second_number != 0:',
+        "    result = first_number / second_number",
+        "else:",
+        '    result = "Invalid operation"',
+        "",
+        'print("Result:", result)',
+    ])
+
+
+def make_marks_average_program() -> str:
+    return "\n".join([
+        'maths = float(input("Enter maths marks: "))',
+        'science = float(input("Enter science marks: "))',
+        'english = float(input("Enter english marks: "))',
+        "",
+        "average = (maths + science + english) / 3",
+        'print("Average marks:", average)',
+    ])
+
+
+def make_password_checker_program() -> str:
+    return "\n".join([
+        'password = input("Enter password: ")',
+        "",
+        'if len(password) >= 8 and any(ch.isdigit() for ch in password):',
+        '    print("Strong password")',
+        "else:",
+        '    print("Use at least 8 characters and one number")',
+    ])
+
+
+def make_generation_program(text: str) -> Optional[TemplateResult]:
+    low = _norm(text)
+    if not re.search(r"\b(?:make|write|create|generate|build)\b", low):
+        return None
+    if "age" in low and "plus one" in low and re.search(r"\bask(?:s)?\s+for\b|\binput\b", low):
+        code = make_age_plus_one_program(include_name=("name" in low), use_function=("function" in low))
+        return TemplateResult("generate_beginner_input_program", edit_action="replace_code", code=code, speech="Generated a beginner input program.")
+    if re.search(r"\bcalculator\b", low):
+        return TemplateResult("generate_calculator_program", edit_action="replace_code", code=make_calculator_program(), speech="Generated a beginner calculator program.")
+    if re.search(r"\bmarks?\s+average\b|\baverage\s+(?:marks?|program)\b", low):
+        return TemplateResult("generate_marks_average_program", edit_action="replace_code", code=make_marks_average_program(), speech="Generated a marks average program.")
+    if re.search(r"\bpassword\s+checker\b", low):
+        return TemplateResult("generate_password_checker_program", edit_action="replace_code", code=make_password_checker_program(), speech="Generated a password checker program.")
+    if re.search(r"\binput\s+program\b", low):
+        return TemplateResult("generate_input_program", edit_action="replace_code", code=make_input_template("name"), speech="Generated a beginner input program.")
+    if re.search(r"\bloop\s+program\b", low):
+        return TemplateResult("generate_loop_program", edit_action="replace_code", code=make_for_loop_template(), speech="Generated a beginner loop program.")
+    return None
+
+
 def make_if_template(kind: str = "marks") -> str:
     k = _norm(kind)
     if "age" in k or "adult" in k:
@@ -382,6 +468,10 @@ def match_template_command(text: str, *, current_code: str = "") -> Optional[Tem
     transform = _match_transform(low, current_code)
     if transform:
         return transform
+
+    generated = make_generation_program(raw)
+    if generated:
+        return generated
 
     loop = _match_loop(low)
     if loop:

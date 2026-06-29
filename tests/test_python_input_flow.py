@@ -187,3 +187,22 @@ def test_state_watch_reuses_last_run_inputs(client):
     assert "Taknoor" in state["speech"]
     assert "age is 16" in state["speech"]
     assert "program printed" in state["speech"].lower()
+
+
+def test_chained_safe_edit_demo_flow_runs_with_name_then_age(client):
+    generated = vc(client, "make a program that asks for age and prints age plus one")
+    code = generated["ai_action"]["code"]
+    vc(client, "now make it ask for name too", code=code)
+    vc(client, "change it to use a function", code=code)
+    applied = vc(client, "apply", code=code)
+    code = applied["ai_action"]["code"]
+    assert 'name = input("Enter name: ")' in code
+    assert "def next_age(age):" in code
+    vc(client, "use Taknoor as input", code=code)
+    inputs = vc(client, "use 16 as input", code=code)
+    assert inputs["values"] == ["Taknoor", "16"]
+    data = client.post("/run", json={"code": code}).get_json()
+    assert data["success"] is True
+    assert "ValueError" not in (data.get("error") or "")
+    assert "Taknoor" in data["output"]
+    assert "17" in data["output"]

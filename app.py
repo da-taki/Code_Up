@@ -754,7 +754,7 @@ def save_snippets(d: dict) -> None:
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "Insert_API_Key_Here")
 
-GEMINI_MODEL = "llama-3.3-70b-versatile"
+GEMINI_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b").strip() or "openai/gpt-oss-120b"
 
 def _current_api_key():
     if has_request_context():

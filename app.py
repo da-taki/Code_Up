@@ -7913,13 +7913,16 @@ def _map_followup_decision(decision, text, mem):
                     {"action": "run", "label": "Running with the same values."},
                 ]}
     if action == "modify_code":
-        edit_code = str(mem.get("_current_voice_code") or "") or str(mem.get("last_generated_code") or "")
+        pending_proposal = session_memory.get_change_proposal(mem)
+        pending_after = str((pending_proposal or {}).get("after") or "")
+        edit_code = pending_after or str(mem.get("_current_voice_code") or "") or str(mem.get("last_generated_code") or "")
+        proposal_before = str((pending_proposal or {}).get("before") or edit_code)
         if edit_code:
             local = natural_code_editor.local_edit(edit_code, text)
             if local.get("status") == "edited":
                 return _memory_edit_proposal_response(
                     text=text,
-                    current_code=edit_code,
+                    current_code=proposal_before,
                     updated_code=str(local.get("updated_code") or ""),
                     summary=str(local.get("summary") or "Updated the current program."),
                     mem=mem,

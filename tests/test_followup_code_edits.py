@@ -85,6 +85,46 @@ class TestFollowupEdits:
         applied = _vc(client, "apply", code=generated)
         assert "def next_age(age):" in applied["ai_action"]["code"]
 
+    def test_chained_safe_edit_proposals_compose_before_apply(self, client):
+        generated = _generate_age_plus_one_code(client)
+        name_proposal = _vc(client, "now make it ask for name too", code=generated)
+        assert name_proposal["safe_apply_reject"] is True
+        function_proposal = _vc(client, "change it to use a function", code=generated)
+        assert function_proposal["source"] == "memory_followup"
+        applied = _vc(client, "apply", code=generated)
+        code = applied["ai_action"]["code"]
+        assert 'name = input("Enter name: ")' in code
+        assert 'age = int(input("Enter age: "))' in code
+        assert "def next_age(age):" in code
+        assert 'print(name, "will be", result)' in code
+
+    def test_chained_safe_edit_reject_discards_latest_composed_proposal(self, client):
+        generated = _generate_age_plus_one_code(client)
+        _vc(client, "now make it ask for name too", code=generated)
+        _vc(client, "change it to use a function", code=generated)
+        rejected = _vc(client, "reject", code=generated)
+        assert rejected["action"] == "deterministic_message"
+        assert "rejected" in rejected["speech"].lower()
+        apply_after_reject = _vc(client, "apply", code=generated)
+        assert apply_after_reject["action"] != "conversational_edit"
+
+    def test_apply_after_one_safe_edit_still_works(self, client):
+        generated = _generate_age_plus_one_code(client)
+        _vc(client, "now make it ask for name too", code=generated)
+        applied = _vc(client, "apply", code=generated)
+        code = applied["ai_action"]["code"]
+        assert 'name = input("Enter name: ")' in code
+        assert "def next_age" not in code
+
+    def test_apply_after_two_chained_safe_edits_still_works(self, client):
+        generated = _generate_age_plus_one_code(client)
+        _vc(client, "now make it ask for name too", code=generated)
+        _vc(client, "change it to use a function", code=generated)
+        applied = _vc(client, "apply", code=generated)
+        code = applied["ai_action"]["code"]
+        assert 'name = input("Enter name: ")' in code
+        assert "def next_age(age):" in code
+
     def test_editor_code_hash_updates_when_editor_code_changes(self, client):
         _vc(client, "where am i", code="print('one')\n", cursor_line=1)
         mem = session_memory.get_memory(app_module.get_trace_storage())

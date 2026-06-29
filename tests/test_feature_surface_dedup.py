@@ -165,7 +165,7 @@ def test_readme_does_not_repeat_not_replacing_coding_agents_claim():
 
 def test_readme_has_single_authoritative_command_group_map():
     readme = _readme()
-    assert "## Command groups" in readme
+    assert "## Commands" in readme
     # The map names each canonical group once.
     for marker in ("Programming Literacy Mode", "Tutor Mode", "Understanding Checks",
                    "Codex Handoff Pack", "Teacher Reports", "Audio Blocks"):

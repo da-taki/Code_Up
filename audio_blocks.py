@@ -75,7 +75,11 @@ CATALOG: Dict[str, List[Tuple[str, str]]] = {
         ("except_block", "except block"),
         ("finally_block", "finally block"),
     ],
-    "input": [("ask_input", "ask input"), ("ask_number_input", "ask number input")],
+    "input": [
+        ("ask_input", "ask input"),
+        ("ask_number_input", "ask number input"),
+        ("ask_decimal_input", "ask decimal input"),
+    ],
     "comments": [("comment_note", "comment note")],
 }
 
@@ -121,6 +125,8 @@ def new_workspace() -> Dict[str, Any]:
         "undo": [],
         "redo": [],
         "lesson": None,
+        "source_map": {},
+        "line_map": {},
     }
 
 
@@ -162,6 +168,8 @@ def _snapshot(workspace: Dict[str, Any]) -> Dict[str, Any]:
         "generated": bool(workspace.get("generated")),
         "generated_code": str(workspace.get("generated_code") or ""),
         "dirty": bool(workspace.get("dirty")),
+        "source_map": copy.deepcopy(workspace.get("source_map", {})),
+        "line_map": copy.deepcopy(workspace.get("line_map", {})),
     }
 
 
@@ -173,6 +181,8 @@ def _restore(workspace: Dict[str, Any], snapshot: Dict[str, Any]) -> None:
         "generated",
         "generated_code",
         "dirty",
+        "source_map",
+        "line_map",
     ):
         workspace[key] = copy.deepcopy(snapshot[key])
 
@@ -187,6 +197,8 @@ def _before_change(workspace: Dict[str, Any]) -> None:
 def _changed(workspace: Dict[str, Any]) -> None:
     workspace["dirty"] = True
     workspace["generated"] = False
+    workspace["source_map"] = {}
+    workspace["line_map"] = {}
 
 
 def valid_name(name: str) -> bool:
@@ -327,6 +339,7 @@ def normalize_slots(
         "call_function": ("name",),
         "ask_input": ("variable",),
         "ask_number_input": ("variable",),
+        "ask_decimal_input": ("variable",),
     }
     for key in name_keys.get(block_type, ()):
         if not valid_name(str(s.get(key, ""))):
@@ -444,7 +457,7 @@ def normalize_slots(
         if not text:
             return None, "A print text block needs text."
         s["text"] = text
-    if block_type in {"set_text", "ask_input", "ask_number_input", "print_format"}:
+    if block_type in {"set_text", "ask_input", "ask_number_input", "ask_decimal_input", "print_format"}:
         s["text"] = str(s.get("text", ""))[:300]
     if block_type == "define_function":
         params = str(s.get("params", "")).strip()
@@ -535,6 +548,7 @@ def block_label(block_type: str, slots: Dict[str, Any]) -> str:
         "finally_block": lambda: "finally",
         "ask_input": lambda: f"ask for {s['variable']}",
         "ask_number_input": lambda: f"ask for number {s['variable']}",
+        "ask_decimal_input": lambda: f"ask for decimal {s['variable']}",
         "comment_note": lambda: f"comment {s['text']}",
     }
     return labels[block_type]()
@@ -827,8 +841,9 @@ def _line_for(block: Dict[str, Any]) -> str:
         "try_block": lambda: "try:",
         "except_block": lambda: f"except {s.get('exception', 'Exception')}:",
         "finally_block": lambda: "finally:",
-        "ask_input": lambda: f"{s['variable']} = input({s['text']!r})",
-        "ask_number_input": lambda: f"{s['variable']} = float(input({s['text']!r}))",
+        "ask_input": lambda: f"{s['variable']} = input({json.dumps(s['text'])})",
+        "ask_number_input": lambda: f"{s['variable']} = int(input({json.dumps(s['text'])}))",
+        "ask_decimal_input": lambda: f"{s['variable']} = float(input({json.dumps(s['text'])}))",
         "comment_note": lambda: f"# {s['text']}",
     }
     return mapping[kind]()
@@ -838,6 +853,8 @@ def compile_workspace(workspace: Dict[str, Any]) -> Tuple[Optional[str], str]:
     if not workspace.get("blocks"):
         return None, "The Audio Blocks workspace is empty."
     lines: List[str] = []
+    source_map: Dict[str, Dict[str, int]] = {}
+    line_map: Dict[str, int] = {}
 
     def ordered(blocks: Iterable[Dict[str, Any]], depth: int) -> List[Dict[str, Any]]:
         items = list(blocks)
@@ -852,7 +869,10 @@ def compile_workspace(workspace: Dict[str, Any]) -> Tuple[Optional[str], str]:
         for block in ordered(blocks, depth):
             if block.get("incomplete"):
                 return f"Block {block['id']} is incomplete. Set its cleared value before compiling."
+            line_number = len(lines) + 1
             lines.append("    " * depth + _line_for(block))
+            source_map[str(block["id"])] = {"start": line_number, "end": line_number}
+            line_map[str(line_number)] = int(block["id"])
             if block["type"] in CONTAINERS:
                 body = _children(workspace, block["id"], "body")
                 if not body:
@@ -880,6 +900,8 @@ def compile_workspace(workspace: Dict[str, Any]) -> Tuple[Optional[str], str]:
         return None, f"Generated code is invalid near line {exc.lineno}: {exc.msg}."
     workspace["generated"] = True
     workspace["generated_code"] = code
+    workspace["source_map"] = source_map
+    workspace["line_map"] = line_map
     workspace["dirty"] = False
     return code, ""
 
@@ -1240,6 +1262,8 @@ def public_workspace(workspace: Dict[str, Any]) -> Dict[str, Any]:
         "generated": bool(workspace.get("generated")),
         "dirty": bool(workspace.get("dirty")),
         "code_preview": workspace.get("generated_code", ""),
+        "source_map": copy.deepcopy(workspace.get("source_map", {})),
+        "line_map": copy.deepcopy(workspace.get("line_map", {})),
         "lesson": copy.deepcopy(workspace.get("lesson")),
     }
 
@@ -1738,6 +1762,26 @@ def _parse_add(text: str) -> Tuple[Optional[str], Dict[str, Any]]:
             "ask_number_input",
             lambda m: {"variable": m.group(1), "text": f"Enter {m.group(1)}: "},
         ),
+        (
+            r"^add decimal input block for (\w+)$",
+            "ask_decimal_input",
+            lambda m: {"variable": m.group(1), "text": f"Enter {m.group(1)}: "},
+        ),
+        (
+            r"^ask for (\w+) as number$",
+            "ask_number_input",
+            lambda m: {"variable": m.group(1), "text": f"Enter {m.group(1)}: "},
+        ),
+        (
+            r"^ask for (\w+) as decimal$",
+            "ask_decimal_input",
+            lambda m: {"variable": m.group(1), "text": f"Enter {m.group(1)}: "},
+        ),
+        (
+            r"^ask for (\w+)$",
+            "ask_input",
+            lambda m: {"variable": m.group(1), "text": f"Enter {m.group(1)}: "},
+        ),
         (r"^add comment (.+)$", "comment_note", lambda m: {"text": m.group(1)}),
     ]
     for pattern, kind, values in patterns:
@@ -1817,6 +1861,7 @@ PYTHON_MODE_REQUIRED = (
 
 BLOCK_ONLY_RE = re.compile(
     r"^(?:add .*(?:block|import|function)|compile blocks(?: to python)?|run blocks|"
+    r"ask for \w+(?: as (?:number|decimal))?|"
     r"list blocks|read blocks|read selected block|select block .+|edit selected block|"
     r"set (?:selected block )?(?:message|variable|import|condition|loop|range|function|parameter|return).+|"
     r"move selected block (?:up|down)|delete selected block|duplicate selected block|"
@@ -1883,10 +1928,11 @@ def handles(text: str) -> bool:
         "export block project",
         "download block project",
         "export blocks and python",
+        "explain generated code as blocks",
     }
     return value in exact or value in ENTER_PHRASES or value in PYTHON_MODE_PHRASES or value in ACTIVE_AUDIO_BLOCKS_COMMANDS or bool(
         re.match(
-            r"^(?:list (?:output|variable|math|condition|loop|list|function|input|comment|import|exception) blocks|read block \d+|read selected block|select block (?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)|read children of block \d+|move block \d+ (?:up|down|before block \d+|after block \d+)|(?:indent|outdent|delete) block \d+|put block \d+ inside (?:else of )?block \d+|remove block \d+ from loop|edit block \d+|set block \d+ (?:text|variable|condition) to .+|set (?:selected block )?(?:message|variable name|variable value|import library|import alias|condition|loop variable|range start|range stop|function name|parameter|return value) to .+|rename block variable \w+ to \w+|clear block \d+ value|add .+|set variable .+|append .+ to .+)$",
+            r"^(?:list (?:output|variable|math|condition|loop|list|function|input|comment|import|exception) blocks|read block \d+|read selected block|select block (?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)|read children of block \d+|move block \d+ (?:up|down|before block \d+|after block \d+)|(?:indent|outdent|delete) block \d+|put block \d+ inside (?:else of )?block \d+|remove block \d+ from loop|edit block \d+|set block \d+ (?:text|variable|condition) to .+|set (?:selected block )?(?:message|variable name|variable value|import library|import alias|condition|loop variable|range start|range stop|function name|parameter|return value) to .+|rename block variable \w+ to \w+|clear block \d+ value|which block made line \d+|what python did block \d+ create|ask for \w+(?: as (?:number|decimal))?|add .+|set variable .+|append .+ to .+)$",
             value,
         )
     )
@@ -2091,7 +2137,36 @@ def route_command(
     if t in {"project map", "give me a project map", "read block map", "give me a code map", "code map", "summarize structure"}:
         return _message(_blocks_structure_summary(workspace), workspace)
 
-    if t in {"explain blocks", "analyze", "explain this program", "teach me this code"}:
+    match = re.match(r"^which block made line (\d+)$", t)
+    if match:
+        generated, failure = _compile_or_message(workspace)
+        if failure:
+            return failure
+        block_id = (workspace.get("line_map") or {}).get(match.group(1))
+        if not block_id:
+            return _message(f"No block maps to generated line {match.group(1)}.", workspace)
+        block = _find(workspace, int(block_id))
+        return _message(
+            f"Generated line {match.group(1)} came from block {block_id}: {block['label']}.",
+            workspace,
+            code_preview=generated,
+        )
+
+    match = re.match(r"^what python did block (\d+) create$", t)
+    if match:
+        generated, failure = _compile_or_message(workspace)
+        if failure:
+            return failure
+        block = _find(workspace, int(match.group(1)))
+        if not block:
+            return _message(f"Block {match.group(1)} does not exist.", workspace)
+        return _message(
+            f"Block {block['id']} created Python: {_line_for(block)}",
+            workspace,
+            code_preview=generated,
+        )
+
+    if t in {"explain blocks", "analyze", "explain this program", "teach me this code", "explain generated code as blocks"}:
         return _generated_program_message(
             workspace,
             "Here is an Audio Blocks explanation.",

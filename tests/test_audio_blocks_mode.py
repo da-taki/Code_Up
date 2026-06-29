@@ -84,6 +84,7 @@ VALID_SLOTS = {
     "finally_block": {},
     "ask_input": {"variable": "name", "text": "Name: "},
     "ask_number_input": {"variable": "age", "text": "Age: "},
+    "ask_decimal_input": {"variable": "marks", "text": "Marks: "},
     "comment_note": {"text": "remember to test"},
 }
 
@@ -254,6 +255,7 @@ def test_every_required_block_type_participates_in_a_valid_compilation():
         "call_function",
         "ask_input",
         "ask_number_input",
+        "ask_decimal_input",
         "comment_note",
     ]
     for block_type in noncontainers:
@@ -345,6 +347,20 @@ def test_every_required_block_type_participates_in_a_valid_compilation():
         token in code
         for token in ("eval(", "exec(", "open(", "import os", "__import__")
     )
+
+
+def test_input_blocks_generate_integer_decimal_python_and_source_map():
+    workspace = audio_blocks.new_workspace()
+    audio_blocks.add_block(workspace, "ask_input", {"variable": "name", "text": "Enter name: "})
+    audio_blocks.add_block(workspace, "ask_number_input", {"variable": "age", "text": "Enter age: "})
+    audio_blocks.add_block(workspace, "ask_decimal_input", {"variable": "marks", "text": "Enter marks: "})
+    code, error = audio_blocks.compile_workspace(workspace)
+    assert code and not error
+    assert 'name = input("Enter name: ")' in code
+    assert 'age = int(input("Enter age: "))' in code
+    assert 'marks = float(input("Enter marks: "))' in code
+    assert workspace["source_map"]["1"] == {"start": 1, "end": 1}
+    assert workspace["line_map"]["2"] == 2
 
 
 def test_incomplete_container_refuses_compilation():
@@ -465,6 +481,9 @@ def test_mode_palette_add_edit_navigation_and_code_preservation(client):
         ("add finally block", "finally_block"),
         ("add input block for name", "ask_input"),
         ("add number input block for age", "ask_number_input"),
+        ("add decimal input block for marks", "ask_decimal_input"),
+        ("ask for age as number", "ask_number_input"),
+        ("ask for marks as decimal", "ask_decimal_input"),
         ("add comment remember to test", "comment_note"),
     ],
 )
@@ -472,6 +491,17 @@ def test_typed_commands_create_every_block_type(client, command, block_type):
     voice(client, "enter block mode")
     result = voice(client, command)
     assert result["audio_blocks"]["blocks"][-1]["type"] == block_type, result
+
+
+def test_source_map_commands_explain_line_and_block(client):
+    voice(client, "enter block mode")
+    voice(client, "ask for age as number")
+    voice(client, "add print variable age")
+    voice(client, "compile blocks")
+    line = voice(client, "which block made line 1")
+    assert "block 1" in line["speech"].lower()
+    block = voice(client, "what Python did block 1 create")
+    assert 'age = int(input("Enter age: "))' in block["speech"]
 
 
 def test_clear_value_marks_block_incomplete_and_compiler_refuses(client):

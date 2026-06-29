@@ -1,3 +1,4 @@
+import hashlib
 import re
 import time
 from typing import Any, Dict, List, Optional
@@ -19,6 +20,13 @@ def _clip(value: Any, limit: int = _MAX_TEXT) -> str:
     return text[:limit]
 
 
+def code_hash(code: Any) -> str:
+    value = str(code or "").replace("\x00", "")
+    if not value.strip():
+        return ""
+    return hashlib.sha256(value.encode("utf-8", errors="ignore")).hexdigest()[:16]
+
+
 def new_memory() -> Dict[str, Any]:
     return {
         "last_utterance": "",
@@ -31,6 +39,12 @@ def new_memory() -> Dict[str, Any]:
         "last_gen_prompt": "",       # last generation request (prompt text)
         "last_gen_summary": "",
         "last_generated_code": "",   # bounded latest generated single-file code
+        "last_generated_goal": "",
+        "last_generated_code_hash": "",
+        "last_code_generation_command": "",
+        "last_code_edit_command": "",
+        "last_code_generation_time": 0.0,
+        "current_editor_code_hash": "",
         "last_project_manifest": {},  # bounded latest generated/open project facts
         "last_edit_request": "",
         "last_edit_summary": "",
@@ -191,13 +205,22 @@ def record_generation(mem: Dict[str, Any], prompt: str, code: Optional[str] = No
             mem["student_satisfied"] = False
         else:
             mem["last_gen_prompt"] = prompt_text
+            mem["last_generated_goal"] = prompt_text
+            mem["last_code_generation_command"] = prompt_text
+            mem["last_code_generation_time"] = time.time()
             mem["latest_user_request"] = prompt_text
     if code:
         bounded_code = _clip(code, _MAX_CODE)
         mem["last_generated_code"] = bounded_code
+        mem["last_generated_code_hash"] = code_hash(bounded_code)
+        mem["current_editor_code_hash"] = mem["last_generated_code_hash"]
         lines = bounded_code.strip().splitlines()
         first = lines[0].strip() if lines else ""
         mem["last_gen_summary"] = _clip(f"{len(lines)} lines, starts with: {first}", 200)
+
+
+def record_editor_code(mem: Dict[str, Any], code: str) -> None:
+    mem["current_editor_code_hash"] = code_hash(code)
 
 
 def record_run(mem: Dict[str, Any], *, output: str = "", error: str = "",
@@ -351,9 +374,18 @@ def record_code_edit(mem: Dict[str, Any], *, instruction: str = "", old_code: st
                      new_code: str = "", summary: str = "") -> None:
     if instruction:
         mem["last_edit_request"] = _clip(instruction, _MAX_PROMPT)
-    mem["last_edit_old_code"] = _clip(old_code, _MAX_CODE)
-    mem["last_edit_new_code"] = _clip(new_code, _MAX_CODE)
-    mem["last_generated_code"] = _clip(new_code, _MAX_CODE) if new_code else mem.get("last_generated_code", "")
+        mem["last_code_edit_command"] = _clip(instruction, _MAX_PROMPT)
+    old_bounded = _clip(old_code, _MAX_CODE)
+    new_bounded = _clip(new_code, _MAX_CODE)
+    mem["last_edit_old_code"] = old_bounded
+    mem["last_edit_new_code"] = new_bounded
+    old_hash = code_hash(old_bounded)
+    if new_bounded and old_hash and old_hash == mem.get("last_generated_code_hash"):
+        mem["last_generated_code"] = new_bounded
+        mem["last_generated_code_hash"] = code_hash(new_bounded)
+        mem["current_editor_code_hash"] = mem["last_generated_code_hash"]
+    elif new_bounded:
+        mem["current_editor_code_hash"] = code_hash(new_bounded)
     mem["last_edit_summary"] = _clip(summary, 300)
     mem["student_satisfied"] = False
 
@@ -361,12 +393,16 @@ def record_code_edit(mem: Dict[str, Any], *, instruction: str = "", old_code: st
 def clear_edit_memory(mem: Dict[str, Any]) -> None:
     for key in (
         "last_gen_prompt", "last_gen_summary", "last_generated_code",
+        "last_generated_goal", "last_generated_code_hash",
+        "last_code_generation_command", "last_code_edit_command",
+        "current_editor_code_hash",
         "last_project_manifest", "last_edit_request", "last_edit_summary",
         "last_edit_old_code", "last_edit_new_code", "last_fix_explanation",
         "project_files", "last_active_file", "last_opened_file",
     ):
         mem[key] = [] if key == "project_files" else ({} if key == "last_project_manifest" else "")
     mem["student_satisfied"] = None
+    mem["last_code_generation_time"] = 0.0
 
 
 def record_tutorial(mem: Dict[str, Any], module: str) -> None:
@@ -591,12 +627,14 @@ _EXPLAIN_AGAIN = ["explain it again", "explain that again", "explain again",
 _EXPLAIN_SIMPLER = ["explain simpler", "say that simpler", "explain it simpler",
                     "explain that simpler", "say it simpler", "in simpler terms",
                     "simpler explanation"]
-_MODIFY = ["do the same", "add comments", "add a comment", "add some comments",
+_MODIFY = ["do the same", "now make it", "now change it", "now edit it",
+           "add comments", "add a comment", "add some comments",
            "add scoring", "add score", "add scores", "add input", "add levels",
            "add average", "add this", "add that", "add it", "replace this",
            "replace that", "replace it", "do this also", "do this", "do it also",
            "do that also", "make it easier", "make it shorter", "make it longer",
-           "make it simpler", "make it cleaner", "make it speak", "make it with",
+           "make it simpler", "make it cleaner", "make it speak", "make it ask",
+           "make it with",
            "make it use", "make it print", "make it return", "make it loop",
            "make it count", "make it a", "make it an", "remove the hard part",
            "change the name to", "change it to", "change it into", "rename it to",

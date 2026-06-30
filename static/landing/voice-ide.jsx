@@ -2,14 +2,14 @@
 const { useEffect, useState, useRef } = React;
 
 const VOICE_LINES = [
-  { say: "run the code",                     act: "▸ python sieve.py", lang: "EN", key: "Ctrl+Enter" },
-  { say: "go to line twenty five",           act: "▸ cursor → line 25", lang: "EN", key: "Alt+G" },
-  { say: "sonify this block",                act: "▸ playing 9 tones", lang: "EN", key: "Alt+S" },
-  { say: "what changed here",                act: "▸ x: 0 → 10, y added", lang: "EN", key: "—" },
-  { say: "tell the story",                   act: "▸ narrating trace", lang: "EN", key: "—" },
-  { say: "set breakpoint at line 10",        act: "▸ bp added · line 10", lang: "EN", key: "F9" },
-  { say: "explain simply",                   act: "▸ beginner-mode error", lang: "EN", key: "—" },
-  { say: "remember this as quick sort",      act: "▸ macro saved", lang: "EN", key: "—" },
+  { say: "run the code",                     act: "run python file", lang: "EN", key: "Ctrl+Enter" },
+  { say: "go to line twenty five",           act: "cursor to line 25", lang: "EN", key: "Alt+G" },
+  { say: "sonify this block",                act: "playing 9 tones", lang: "EN", key: "Alt+S" },
+  { say: "what changed here",                act: "x changed from 0 to 10, y added", lang: "EN", key: "-" },
+  { say: "tell the story",                   act: "narrating trace", lang: "EN", key: "-" },
+  { say: "set breakpoint at line 10",        act: "breakpoint added. line 10", lang: "EN", key: "F9" },
+  { say: "explain simply",                   act: "beginner-mode error", lang: "EN", key: "-" },
+  { say: "remember this as quick sort",      act: "macro saved", lang: "EN", key: "-" },
 ];
 
 function Voice() {
@@ -38,21 +38,19 @@ function Voice() {
       <div className="wrap">
         <div className="reveal section-head">
           <div>
-            <div className="eyebrow" style={{ marginBottom: 16 }}>02 — Voice</div>
-            <h2>Just <span className="accent">say it.</span></h2>
+            <div className="eyebrow" style={{ marginBottom: 16 }}>02. Commands</div>
+            <h2>Speak or <span className="accent">type.</span></h2>
           </div>
           <p className="desc">
-            A grammar-based intent parser. Not exact-match. Speak naturally in
-            English — say what you'd say to a person who can read code
-            for you. CodeUp will figure it out. Prefer to type? Every command
-            works typed into the command box too.
+            Use spoken or typed commands to move through code, run it, inspect
+            output, review changes, and ask for simpler explanations.
           </p>
         </div>
 
         <div className="reveal voice-card">
           <div className="voice-mic">
             <div className="voice-mic-status">
-              <span className="live"></span> LISTENING · {cur.lang}
+              <span className="live"></span> LISTENING. {cur.lang}
             </div>
             <div className="voice-quote">
               "{typed}<span className="cursor"></span>"
@@ -88,7 +86,7 @@ function Voice() {
 }
 
 // ────────────────────────────────────────────────────────────
-// IDE preview — animated trace stepper
+// IDE preview trace stepper
 // ────────────────────────────────────────────────────────────
 const IDE_LINES = [
   { n: 1, html: '<span class="tk-cmt"># sieve of eratosthenes</span>' },
@@ -106,12 +104,12 @@ const IDE_LINES = [
 
 const TRACE = [
   { line: 2, label: "enter primes_up_to(n=30)", delta: "n = 30" },
-  { line: 3, label: "build sieve", delta: "sieve = [T]·31" },
+  { line: 3, label: "build sieve", delta: "sieve = [T] x 31" },
   { line: 5, label: "loop range 2..6", delta: "i = 2" },
-  { line: 7, label: "inner loop · i*i = 4", delta: "j = 4, 6, 8, …" },
+  { line: 7, label: "inner loop. i*i = 4", delta: "j = 4, 6, 8, ..." },
   { line: 5, label: "next outer step", delta: "i = 3" },
-  { line: 7, label: "mark composites of 3", delta: "j = 9, 12, 15, …" },
-  { line: 9, label: "comprehension returns 10 primes", delta: "[2, 3, 5, 7, 11, 13, …]" },
+  { line: 7, label: "mark composites of 3", delta: "j = 9, 12, 15, ..." },
+  { line: 9, label: "comprehension returns 10 primes", delta: "[2, 3, 5, 7, 11, 13, ...]" },
 ];
 
 function IDE() {
@@ -130,22 +128,21 @@ function IDE() {
       <div className="wrap">
         <div className="reveal section-head">
           <div>
-            <div className="eyebrow" style={{ marginBottom: 16 }}>03 — Trace mode</div>
+            <div className="eyebrow" style={{ marginBottom: 16 }}>03. State Watch</div>
             <h2>
               Step through. <span className="accent">Hear the story.</span>
             </h2>
           </div>
           <p className="desc">
-            5,000 events captured per run. Step forward, step back, ask "what
-            changed here," or say "tell the story" and CodeUp narrates the trace
-            as a sequence of plain-English sentences — variables, branches, and all.
+            CodeUp can describe variables, loop movement, condition results, and
+            printed output while a beginner program runs.
           </p>
         </div>
 
         <div className="reveal ide">
           <div className="ide-bar">
             <div className="lights"><span></span><span></span><span></span></div>
-            <span className="path"><b>sieve.py</b> &nbsp;·&nbsp; ~/codeup/snippets</span>
+            <span className="path"><b>sieve.py</b> &nbsp;.&nbsp; ~/codeup/snippets</span>
             <div className="right">
               <span className="key">⌃↵ run</span>
               <span className="key">alt+N step</span>
@@ -187,13 +184,13 @@ function IDE() {
 
             <aside className="ide-right">
               <h4 style={{ fontFamily: "var(--font-mono)", fontSize: 10, letterSpacing: "0.18em", textTransform: "uppercase", color: "var(--dim)" }}>
-                Trace · step {step + 1}/{TRACE.length}
+                Trace. step {step + 1}/{TRACE.length}
               </h4>
               {TRACE.map((t, i) => (
                 <div key={i} className={"ide-trace-step" + (i === step ? " is-current" : "")}>
                   <span className="step-num">{String(i + 1).padStart(2, "0")}</span>
                   <div>
-                    <div className="label">L{t.line} · {t.label}</div>
+                    <div className="label">L{t.line}. {t.label}</div>
                     <div className="delta">{t.delta}</div>
                   </div>
                 </div>
@@ -202,8 +199,8 @@ function IDE() {
           </div>
 
           <div className="ide-foot">
-            <span>▸ <span className="tx">heartbeat</span> · 500ms · sandbox active · 5s wall · 512MB cap</span>
-            <span className="ok">● 200+ tests passing · run #042</span>
+            <span><span className="tx">heartbeat</span>. 500ms. sandbox active. 5s wall. 512MB cap</span>
+            <span className="ok">200+ tests passing. run #042</span>
           </div>
         </div>
       </div>

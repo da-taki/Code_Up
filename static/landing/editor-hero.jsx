@@ -3,8 +3,8 @@ const { useEffect, useState, useRef } = React;
 
 
 const SAMPLE = `# Welcome to CodeUp
-# Press Ctrl+Enter to run · Alt+S to sonify
-# Tab through controls · Esc stops speech
+# Press Ctrl+Enter to run. Alt+S sonifies.
+# Tab through controls. Esc stops speech.
 
 def greet(name):
     return f"Hello, {name}!"
@@ -132,17 +132,17 @@ function EditorHero() {
 
   function run() {
     setRunning(true);
-    setStatus("preview only — opening real IDE recommended");
+    setStatus("preview only. open the real IDE for full Python");
     setTimeout(() => {
       const r = mockRun(src);
       setOut(
-        "// PREVIEW MODE — limited interpreter (def, print, for, f-strings only)\n" +
+        "// PREVIEW MODE. Limited interpreter (def, print, for, f-strings only)\n" +
         "// For real Python execution, open the IDE: /ide\n" +
         "// ────────────────────────────────────────────────\n" +
         (r || "// (no output)")
       );
       setRunning(false);
-      setStatus("preview · " + (r.split("\n").length) + " lines · /ide for real run");
+      setStatus("preview. " + (r.split("\n").length) + " lines. /ide for real run");
       speak("This is a preview. For real Python execution, open the full IDE.", "en-US");
     }, 350);
   }
@@ -171,13 +171,13 @@ function EditorHero() {
       o.start(t); o.stop(t + 0.36);
       t += 0.34;
     });
-    setStatus("sonifying · " + lines.length + " tones");
+    setStatus("sonifying. " + lines.length + " tones");
   }
 
   function toggleVoice() {
     const next = !voice;
     setVoice(next);
-    setStatus(next ? "listening · " + lang : "voice off");
+    setStatus(next ? "listening. " + lang : "voice off");
     speak(next ? "Voice on" : "Voice off");
   }
 
@@ -195,7 +195,7 @@ function EditorHero() {
   const lineNums = Array.from({ length: Math.max(lineCount, 12) }, (_, i) => i + 1).join("\n");
 
   return (
-    <section className="eh" aria-label="Code editor — start coding">
+    <section className="eh" aria-label="Code editor. Start coding">
       <a href="#editor-area" className="skip-link">Skip to editor preview</a>
         <a href="/ide" className="skip-link" style={{left: 'auto', right: 0}}>Open real IDE</a>
 
@@ -203,17 +203,17 @@ function EditorHero() {
         <div className="eh-head">
           <div className="eh-headline">
             <span className="version-pill">
-              <span className="blip"></span> READY · v0.8.0
+              <span className="blip"></span> READY. v0.8.0
             </span>
             <h1 className="eh-h1">
               Open. <span className="accent">Code.</span> Listen.
             </h1>
             <p className="eh-sub">
-              <strong style={{color: 'var(--accent)'}}>Preview only —</strong> a tiny
+              <strong style={{color: 'var(--accent)'}}>Preview only.</strong> A tiny
               JS interpreter that handles <code>def</code>, <code>print</code>, <code>for</code>,
-              and f-strings. For real Python, <a href="/ide" style={{color: 'var(--accent)', textDecoration: 'underline'}}>open the IDE →</a>
-              &nbsp;<kbd>Ctrl</kbd>+<kbd>Enter</kbd> runs preview ·
-              <kbd>Alt</kbd>+<kbd>S</kbd> sonifies ·
+              and f-strings. For real Python, <a href="/ide" style={{color: 'var(--accent)', textDecoration: 'underline'}}>open CodeUp</a>
+              &nbsp;<kbd>Ctrl</kbd>+<kbd>Enter</kbd> runs preview.
+              <kbd>Alt</kbd>+<kbd>S</kbd> sonifies.
               <kbd>Esc</kbd> stops speech.
             </p>
           </div>
@@ -225,15 +225,15 @@ function EditorHero() {
         </div>
 
         <div className="eh-toolbar" role="toolbar" aria-label="Coding controls">
-          <button className="eh-btn eh-btn-primary" onClick={run} aria-label="Run code · Ctrl+Enter">
+          <button className="eh-btn eh-btn-primary" onClick={run} aria-label="Run code. Ctrl+Enter">
             <svg viewBox="0 0 16 16" aria-hidden="true"><polygon points="3,2 14,8 3,14" fill="currentColor"/></svg>
             Run <span className="eh-key">⌃↵</span>
           </button>
-          <button className={"eh-btn" + (voice ? " is-on" : "")} onClick={toggleVoice} aria-label="Toggle voice control · Ctrl+Shift+M" aria-pressed={voice}>
+          <button className={"eh-btn" + (voice ? " is-on" : "")} onClick={toggleVoice} aria-label="Toggle voice control. Ctrl+Shift+M" aria-pressed={voice}>
             <span className={"mic" + (voice ? " is-live" : "")} aria-hidden="true"></span>
             Voice {voice ? "on" : "off"} <span className="eh-key">⌃⇧M</span>
           </button>
-          <button className="eh-btn" onClick={sonify} aria-label="Sonify block · Alt+S">
+          <button className="eh-btn" onClick={sonify} aria-label="Sonify block. Alt+S">
             <span className="bars" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
             Sonify <span className="eh-key">⌥S</span>
           </button>
@@ -243,12 +243,12 @@ function EditorHero() {
             <button className="eh-pill is-on" aria-pressed="true" disabled>EN</button>
           </div>
           <div className="eh-divider" aria-hidden="true"></div>
-          <button className="eh-btn eh-btn-ghost" onClick={() => speak("Help. Press Control Enter to run. Press Alt S to sonify.")} aria-label="Help · Alt+H">
+          <button className="eh-btn eh-btn-ghost" onClick={() => speak("Help. Press Control Enter to run. Press Alt S to sonify.")} aria-label="Help. Alt+H">
             ? Help <span className="eh-key">⌥H</span>
           </button>
           <span className="eh-spacer"></span>
           <span className="eh-shortcuts" aria-hidden="true">
-            <kbd>⌃↵</kbd>run · <kbd>⌥S</kbd>sonify · <kbd>⌥V</kbd>vars · <kbd>⌥L</kbd>read line · <kbd>esc</kbd>stop
+            <kbd>⌃↵</kbd>run. <kbd>⌥S</kbd>sonify. <kbd>⌥V</kbd>vars. <kbd>⌥L</kbd>read line. <kbd>esc</kbd>stop
           </span>
         </div>
 
@@ -256,8 +256,8 @@ function EditorHero() {
           <div className="eh-editor">
             <div className="eh-editor-bar">
               <span className="lights"><span></span><span></span><span></span></span>
-              <span className="path"><b>scratch.py</b> · welcome to CodeUp</span>
-              <span className="badge">{lineCount} lines · {src.length} chars</span>
+              <span className="path"><b>scratch.py</b> welcome to CodeUp</span>
+              <span className="badge">{lineCount} lines. {src.length} chars</span>
             </div>
             <div className="eh-editor-body">
               <pre className="eh-gutter" aria-hidden="true">{lineNums}</pre>
@@ -289,7 +289,7 @@ function EditorHero() {
             </div>
             <pre className="eh-output-body">{out}</pre>
             <div className="eh-output-foot">
-              <span>▸ heartbeat 500ms · sandbox active</span>
+              <span>▸ heartbeat 500ms. sandbox active</span>
               <span className="speak-hint">screen reader: aria-live=polite</span>
             </div>
           </div>

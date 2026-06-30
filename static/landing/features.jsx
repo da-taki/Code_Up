@@ -8,35 +8,34 @@ function Features() {
       <div className="wrap">
         <div className="reveal section-head">
           <div>
-            <div className="eyebrow" style={{ marginBottom: 16 }}>04 — Features</div>
-            <h2>Built <span className="accent">end to end.</span></h2>
+            <div className="eyebrow" style={{ marginBottom: 16 }}>04. Features</div>
+            <h2>Made for <span className="accent">beginner Python.</span></h2>
           </div>
           <p className="desc">
-            Sandbox, sonifier, intent parser, audio debugger, AI mentor,
-            six-step tutorial. None of it is bolted on — every layer was
-            written with non-visual interaction as the assumption.
+            CodeUp helps a student understand the shape of code before moving
+            into the full professional toolchain.
           </p>
         </div>
 
         <div className="feat-grid">
           <div className="reveal feat span6">
-            <div className="feat-num">F.01 / sonification</div>
-            <h3>Pitch maps to indent. Timbre maps to construct.</h3>
-            <p>Functions sing in sine. Loops in triangle. Branches in square. The Web Audio engine renders the AST as a 9-tone phrase you can recognise on second hearing.</p>
+            <div className="feat-num">Python Code Mode</div>
+            <h3>Write and run real beginner Python.</h3>
+            <p>Students can make small programs, run them, give input values, hear output, and ask what the code is doing.</p>
             <div className="feat-art"><div className="eq"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div></div>
           </div>
 
           <div className="reveal delay-1 feat span6">
-            <div className="feat-num">F.02 / voice</div>
-            <h3>Grammar parser, not exact-match.</h3>
-            <p>"go to line twenty five," "set breakpoint at line 10," "explain simply" — all parsed to structured intents with slots. Number words are recognised in line-navigation commands, and every command can be typed instead of spoken.</p>
+            <div className="feat-num">Audio Blocks</div>
+            <h3>Build Python through numbered blocks.</h3>
+            <p>Audio Blocks lets students create real Python through accessible numbered blocks before moving into full syntax.</p>
             <div className="feat-art"><div className="pulse-art"><div className="ring"></div><div className="ring"></div><div className="ring"></div><div className="core"></div></div></div>
           </div>
 
           <div className="reveal feat span4">
-            <div className="feat-num">F.03 / sandbox</div>
-            <h3>Subprocess isolation by default.</h3>
-            <p>Per-session workspace. Restricted built-ins. RLIMIT_AS · RLIMIT_CPU on POSIX. eval/exec/open blocked. AST audit before execution.</p>
+            <div className="feat-num">Error Trace Narration</div>
+            <h3>Hear where a program broke.</h3>
+            <p>CodeUp explains the crash location, the failing line, the error type, and the next thing to test.</p>
             <div className="feat-art">
               <div className="sandbox-art">
                 <div className="row"><span>wall clock</span><b>5s</b></div>
@@ -50,9 +49,9 @@ function Features() {
           </div>
 
           <div className="reveal delay-1 feat span4">
-            <div className="feat-num">F.04 / input</div>
-            <h3>Type it, or say it.</h3>
-            <p>Every command works two ways — speak it, or type it in the command box and press Enter. Works best in Google Chrome; if a privacy-heavy browser blocks the microphone, typing always works.</p>
+            <div className="feat-num">Safe Apply and Reject</div>
+            <h3>Review fixes before they land.</h3>
+            <p>Students can hear what changed, accept a proposed fix, reject it, or undo the last change.</p>
             <div className="feat-art">
               <div className="bil-art">
                 <div className="en">
@@ -69,9 +68,9 @@ function Features() {
           </div>
 
           <div className="reveal delay-2 feat span4">
-            <div className="feat-num">F.05 / pitch ladder</div>
-            <h3>Indent, you can hear.</h3>
-            <p>Six tones. Each level of nesting moves you up the ladder.</p>
+            <div className="feat-num">Project Map</div>
+            <h3>Understand files, functions, and entry points.</h3>
+            <p>CodeUp can read project structure, imports, functions, comments, and where the program starts.</p>
             <div className="feat-art">
               <div className="ladder">
                 <div className="row"><div className="lvl" style={{ width: "20%" }}></div><span className="lab">in 0</span></div>
@@ -84,33 +83,33 @@ function Features() {
           </div>
 
           <div className="reveal feat span12" id="manifesto">
-            <div className="feat-num">F.06 / manifesto</div>
+            <div className="feat-num">State Watch and Teacher Reports</div>
             <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr 1fr", gap: 32 }}>
               <div>
                 <h3 style={{ fontSize: 36, lineHeight: 1.05 }}>
-                  Accessibility isn't a settings panel.
+                  A step before the professional toolchain.
                   <br />
-                  <span style={{ color: "var(--accent)", fontStyle: "italic" }}>It's the architecture.</span>
+                  <span style={{ color: "var(--accent)", fontStyle: "italic" }}>Not a replacement for it.</span>
                 </h3>
                 <p style={{ marginTop: 16 }}>
-                  Every dialog is an inline modal with focus management — no
-                  <code style={{ fontFamily: "var(--font-mono)" }}> window.prompt </code> anywhere.
-                  Every feature reaches by keyboard. <kbd style={{ fontFamily: "var(--font-mono)", padding: "2px 6px", border: "1px solid var(--rule-strong)", borderRadius: 4 }}>Esc</kbd> stops speech mid-sentence. AI is optional. The CDN is empty.
+                  CodeUp is not trying to replace VS Code, GitHub, screen readers,
+                  Braille workflows, or coding agents. It is a stepping stone
+                  for learning code structure first.
                 </p>
               </div>
               <ul style={{ listStyle: "none", display: "flex", flexDirection: "column", gap: 12, fontFamily: "var(--font-mono)", fontSize: 13 }}>
-                <li>● NVDA, JAWS, VoiceOver via aria-live</li>
-                <li>● Protanopia · Deuteranopia · Tritanopia</li>
-                <li>● High contrast + dyslexia mode</li>
-                <li>● Atkinson Hyperlegible bundled</li>
-                <li>● prefers-reduced-motion respected</li>
+                <li>State Watch</li>
+                <li>Project Map</li>
+                <li>Error Trace Narration</li>
+                <li>Safe Apply and Reject</li>
+                <li>Teacher Reports</li>
               </ul>
               <ul style={{ listStyle: "none", display: "flex", flexDirection: "column", gap: 12, fontFamily: "var(--font-mono)", fontSize: 13 }}>
-                <li>● Monaco vendored — no CDN</li>
-                <li>● Fonts vendored — no CDN</li>
-                <li>● AI = optional, network = optional</li>
-                <li>● 200+ tests, full isolation</li>
-                <li>● MIT license</li>
+                <li>loops and indentation</li>
+                <li>input and output</li>
+                <li>variables while code runs</li>
+                <li>project structure</li>
+                <li>Audio Blocks</li>
               </ul>
             </div>
           </div>
@@ -125,24 +124,24 @@ function Stats() {
     <section className="stats">
       <div className="stats-grid">
         <div className="reveal stat">
-          <div className="num">200<span className="accent">+</span></div>
-          <div className="lbl">Tests passing</div>
+          <div className="num">01<span className="accent">.</span></div>
+          <div className="lbl">Python Code Mode</div>
         </div>
         <div className="reveal delay-1 stat">
-          <div className="num">15<span className="accent">+</span></div>
-          <div className="lbl">Voice commands</div>
+          <div className="num">02<span className="accent">.</span></div>
+          <div className="lbl">Audio Blocks</div>
         </div>
         <div className="reveal delay-2 stat">
-          <div className="num">5<span className="accent">k</span></div>
-          <div className="lbl">Trace events / run</div>
+          <div className="num">03<span className="accent">.</span></div>
+          <div className="lbl">Project Map</div>
         </div>
         <div className="reveal delay-3 stat">
-          <div className="num">6<span className="accent">/6</span></div>
-          <div className="lbl">Tutorial steps</div>
+          <div className="num">04<span className="accent">.</span></div>
+          <div className="lbl">State Watch</div>
         </div>
         <div className="reveal stat">
-          <div className="num">0<span className="accent">.</span></div>
-          <div className="lbl">CDN dependencies</div>
+          <div className="num">05<span className="accent">.</span></div>
+          <div className="lbl">Teacher Reports</div>
         </div>
       </div>
     </section>
@@ -151,14 +150,14 @@ function Stats() {
 
 function StartHere() {
   const steps = [
-    'Open CodeUp — click "Open the IDE" and press Start in English.',
+    'Open CodeUp.',
     'Allow microphone permission if you want to talk to CodeUp.',
-    'No microphone? Use the command box — type a command and press Enter.',
-    'Try: "what can I do here" — to hear what you can do.',
-    'Try: "start tutorial" — to begin the guided, spoken lessons.',
+    'No microphone? Use the command box. Type a command and press Enter.',
+    'Try: "what can I do here".',
+    'Try: "start tutorial" to begin the guided lessons.',
     'Try: "insert a for loop that prints the first 3 whole numbers".',
-    'Try: "run" — to run your program and hear the output.',
-    'Try: "explain this code" — to hear how your program works.',
+    'Try: "run" to run your program and hear the output.',
+    'Try: "explain this code" to hear how your program works.',
   ];
   return (
     <section id="start-here" className="start-here" aria-labelledby="start-here-heading"
@@ -166,14 +165,13 @@ function StartHere() {
       <div className="wrap reveal">
         <span className="eyebrow">New here? Start in five minutes</span>
         <h2 id="start-here-heading" style={{ marginTop: 8 }}>
-          A voice-first way to learn <span className="accent">Python basics</span>.
+          A plain place to learn <span className="accent">Python basics</span>.
         </h2>
         <p style={{ maxWidth: 760, lineHeight: 1.7 }}>
-          CodeUp is built for blind and low-vision beginners. You create, run,
-          debug, and understand small Python programs by speaking or typing, and
-          everything important is read aloud. It is for <em>learning the basics</em> —
-          it works <em>alongside</em> your screen reader, Braille display, and editor.
-          It is not a replacement for NVDA, JAWS, Braille, or VS&nbsp;Code.
+          Most coding tools still treat sight like the default. Screen readers
+          can read code, but beginners still need help understanding where a
+          loop starts, where indentation changes, what line broke, and what
+          changed after a fix.
         </p>
         <div className="start-here-grid"
              style={{ display: "flex", flexWrap: "wrap", gap: 32, marginTop: 24 }}>
@@ -197,7 +195,7 @@ function StartHere() {
         </div>
         <div className="cta-row" style={{ marginTop: 28 }}>
           <a className="btn btn-primary" href="/ide">
-            Open the IDE <span className="arrow">→</span>
+            Open CodeUp <span className="arrow">→</span>
           </a>
         </div>
       </div>
@@ -210,23 +208,24 @@ function CTA() {
     <section className="cta">
       <div className="reveal">
         <h2>
-          Press play.
+          Learn the shape.
           <br />
-          <span className="accent">Listen to your code.</span>
+          <span className="accent">Then move outward.</span>
         </h2>
         <p>
-          CodeUp v0.8.0 — coffee theme. Independently developed by Taknoor Singh.
-          Intended for schools and accessibility programs.
+          CodeUp currently focuses on English beginner Python workflows. It is
+          for building structure and confidence before VS Code, GitHub, screen
+          readers, Braille workflows, and coding agents.
         </p>
         <div className="cta-row">
           <a className="btn btn-primary" href="/ide">
-            Open the IDE <span className="arrow">→</span>
+            Open CodeUp <span className="arrow">→</span>
           </a>
           <a className="btn btn-ghost" href="https://github.com/da-taki/Code_Up" target="_blank" rel="noreferrer">
-            View on GitHub
+            View GitHub
           </a>
-          <a className="btn btn-ghost" href="https://github.com/da-taki/Code_Up#quickstart" target="_blank" rel="noreferrer">
-            Read quickstart
+          <a className="btn btn-ghost" href="https://github.com/da-taki/Code_Up#readme" target="_blank" rel="noreferrer">
+            Read README
           </a>
         </div>
       </div>
@@ -243,7 +242,7 @@ function Foot() {
       <div className="meta">
         <span>v0.8.0 · coffee</span>
         <span>built with monaco · web audio · web speech</span>
-        <a href="https://github.com/da-taki/Code_Up">github.com/da-taki/Code_Up ↗</a>
+        <a href="https://github.com/da-taki/Code_Up">github.com/da-taki/Code_Up</a>
       </div>
     </footer>
   );

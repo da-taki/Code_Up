@@ -28,14 +28,14 @@ function Nav() {
         CodeUp<span style={{ color: "var(--dim)", marginLeft: 4 }}>/v0.8.0</span>
       </a>
       <div className="nav-links">
-        <a href="#hear">Hear</a>
-        <a href="#speak">Speak</a>
-        <a href="#ide">IDE</a>
+        <a href="#hear">Structure</a>
+        <a href="#speak">Commands</a>
+        <a href="#ide">State</a>
         <a href="#features">Features</a>
-        <a href="#manifesto">Manifesto</a>
+        <a href="#start-here">Start</a>
       </div>
       <a className="nav-cta" href="/ide">
-        Open the IDE <span aria-hidden="true">→</span>
+        Open CodeUp <span aria-hidden="true">→</span>
       </a>
     </nav>
   );
@@ -104,25 +104,28 @@ function Hero() {
           <span className="version-pill">
             <span className="blip"></span> v0.8.0 · COFFEE
           </span>
-          <span className="eyebrow">Built for ears, hands, and voice</span>
+          <span className="eyebrow">Blind-first Python learning</span>
         </div>
         <h1 className="h1">
-          Code<span className="accent">.</span>
+          CodeUp<span className="accent">.</span>
           <br />
-          <span className="stroke">you can</span> hear<span className="accent">.</span>
+          <span className="stroke">learn Python</span> by voice<span className="accent">.</span>
         </h1>
         <p className="hero-tagline">
-          A Python IDE where every core feature — navigation, execution, debugging,
-          code understanding — works through <em>audio</em>, <em>keyboard</em>,
-          and <em>natural language</em>. Not retrofitted accessibility.
-          Non-visual is the default.
+          CodeUp is a blind-first Python learning IDE for visually impaired
+          beginners. It teaches code structure through voice and typed commands,
+          with plain feedback for loops, indentation, errors, input, output,
+          project structure, state, safe fixes, teacher reports, and Audio Blocks.
         </p>
         <div className="hero-cta-row">
           <a className="btn btn-primary" href="/ide">
-            Open the IDE <span className="arrow">→</span>
+            Open CodeUp <span className="arrow">→</span>
           </a>
-          <a className="btn btn-ghost" href="#hear">
-            Listen to a function first
+          <a className="btn btn-ghost" href="https://github.com/da-taki/Code_Up" target="_blank" rel="noreferrer">
+            View GitHub
+          </a>
+          <a className="btn btn-ghost" href="https://github.com/da-taki/Code_Up#readme" target="_blank" rel="noreferrer">
+            Read README
           </a>
         </div>
       </div>

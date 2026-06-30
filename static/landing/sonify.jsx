@@ -90,15 +90,14 @@ function Sonify() {
       <div className="wrap">
         <div className="reveal section-head">
           <div>
-            <div className="eyebrow" style={{ marginBottom: 16 }}>01 — Sonification</div>
+            <div className="eyebrow" style={{ marginBottom: 16 }}>01. Structure sound</div>
             <h2>
               Code becomes <span className="accent">music</span>.
             </h2>
           </div>
           <p className="desc">
-            Pitch maps to indentation. Each construct gets its own timbre — sine for
-            functions, triangle for loops, square for branches. Close your eyes
-            and you can <em>feel</em> the shape of a program.
+            Pitch maps to indentation, and each construct gets a different
+            sound. It is a way to notice nesting before reading every line.
           </p>
         </div>
 
@@ -120,7 +119,7 @@ function Sonify() {
               const lvl = (PITCH[Math.min(row.indent, PITCH.length - 1)] - 110) / (660 - 110);
               return (
                 <div key={i} className={"tone-row" + (i === step ? " active" : "")}>
-                  <span>L{String(i + 1).padStart(2, "0")} ▸ in{row.indent}</span>
+                  <span>L{String(i + 1).padStart(2, "0")}. in{row.indent}</span>
                   <div className="tone-pitch-bar">
                     <div
                       className="fill"
@@ -151,12 +150,12 @@ function Sonify() {
               </button>
               <span>
                 {playing
-                  ? `▸ playing line ${step + 1} of ${SONIFY_CODE.length}`
-                  : 'press play · "sonify block"'}
+                  ? `playing line ${step + 1} of ${SONIFY_CODE.length}`
+                  : 'press play. "sonify block"'}
               </span>
             </div>
             <div className="sonify-meta">
-              <b>9 tones</b> · range <b>A2 → E5</b> · alt+S
+              <b>9 tones</b>. range <b>A2 to E5</b>. alt+S
             </div>
           </div>
         </div>

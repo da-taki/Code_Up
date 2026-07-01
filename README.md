@@ -199,7 +199,7 @@ CodeUp includes optional Intel-focused demo tooling for local intent classificat
 
 **Intel Extension for Scikit-learn, powered by oneDAL**: optional benchmark path for accelerated classical ML experiments around command-intent classification.
 
-These integrations are optional. The deployed app does not require all Intel packages to run.
+These integrations are optional. The deployed CodeUp app does not require all Intel packages to run.
 
 ## Validation
 

@@ -193,7 +193,13 @@ Some backend base code was also AI-generated. I built on top of it, reviewed the
 
 CodeUp includes optional Intel-focused demo tooling for local intent classification and optimization experiments.
 
-The deployed app does not require all Intel packages to run.
+**OpenVINO**: used for the local intent-classification demo path.
+
+**Intel Neural Compressor**: optional demo tooling for model-compression and quantization experiments around local intent models.
+
+**Intel Extension for Scikit-learn, powered by oneDAL**: optional benchmark path for accelerated classical ML experiments around command-intent classification.
+
+These integrations are optional. The deployed app does not require all Intel packages to run.
 
 ## Validation
 

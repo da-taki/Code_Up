@@ -1,101 +1,200 @@
 # CodeUp
 
-A blind-first Python learning IDE for beginner programmers.
+Blind-first Python IDE for beginners.
 
-CodeUp is a Flask and browser app for visually impaired learners who are learning Python structure, input, errors, code changes, and program state through voice, typed commands, keyboard workflows, and screen-reader-aware output.
+CodeUp is a Flask app that lets visually impaired students write, run, edit, and understand Python with voice commands, typed commands, keyboard workflows, and screen-reader-aware output.
 
 Live demo: https://code-up-fmqr.onrender.com/ide
 
 ## Features
 
-- Voice and typed commands through the IDE command box, with Live Assistant controls for microphone workflows.
-- Python Code Mode for writing, generating, editing, running, and explaining beginner Python programs.
-- Deterministic beginner code generation for common prompts such as calculators, loops, input programs, marks averages, and password checkers.
-- Voice generation/edit memory for follow-up changes like asking for a name, using a function, or explaining the latest edit.
-- Safe Apply/Reject, Audio Diff Review, Project Map, Error Trace Narration, State and Variable Watch, and Non-visual Navigation.
-- Python input flow with saved input values and runtime input continuation.
-- Programming Literacy Mode with Tutor Mode, Understanding Checks, Codex Handoff Pack, learner recaps, and Teacher Reports.
-- Multi-file projects with project summaries, file navigation, and project ZIP export.
-- Groq model selection through `GROQ_MODEL`; the default model is `openai/gpt-oss-120b`.
-- Optional Intel toolkit demos for local intent and optimization experiments.
+* Write and run beginner Python programs
+* Generate programs from commands
+* Edit code with follow-up commands
+* Hear what changed after an edit
+* Get spoken error help
+* Track variables and program state
+* Save and continue `input()` values
+* Build programs with Audio Blocks
+* Read project structure without needing sight
+* Export multi-file projects
+* Create learner recaps and teacher reports
 
 ## Modes
 
-**Python Code Mode** is the default workspace. It handles generated code, follow-up edits, guided `input()` values, debugging help, state watch, audio diff review, project workflows, and safe edit application.
+### Python Code Mode
 
-**Audio Blocks Mode** is a structure-first workspace for building beginner Python programs as ordered blocks before moving into full syntax. Some command paths refer to the same workflow as Code Blocks.
+The main workspace.
 
-**Programming Literacy Mode** provides short Python learning missions, tutor hints, checks for understanding, learner recaps, and teacher-facing reports.
+This is where most commands run. It handles code generation, edits, program runs, project files, error help, state watch, code maps, audio diffs, and safe apply/reject flows.
+
+### Audio Blocks Mode
+
+A block-based workspace for learning Python structure.
+
+Students can create numbered blocks for output, variables, input, math, conditions, loops, lists, functions, comments, and basic program flow.
+
+CodeUp can read the block order, explain the structure, run the program, and move the generated Python into the main editor.
+
+### Programming Literacy Mode
+
+Small Python lessons with tutor hints, checks for understanding, learner recaps, and teacher reports.
 
 ## Commands
 
-- Generate: `make a calculator`, `make a marks average program`, `make a password checker`, `make a loop program`, `make an input program`.
-- Edit: `now make it ask for name too`, `change it to use a function`, `make this code better but explain it like I am new`, `what changed`.
-- Run and input: `run`, `use Taknoor as input`, `use 16 as input`, `read input values`, `clear input values`.
-- Understand: `project map`, `explain error`, `read before and after`, `show program state`, `where am I`.
-- Learn and report: `start literacy mode`, `start tutor mode`, `list lessons`, `check my understanding`, `make codex handoff`, `make a teacher report`.
-- Audio Blocks: `open audio blocks`, `ask for age as number`, `ask for marks as decimal`, `read block map`, `read block order`, `run blocks`, `switch to python code mode`.
-- Projects and demos: `read project files`, `open main dot py`, `make project zip`, `intel toolkit status`.
+### Generate code
 
-## Audio Blocks
-
-Audio Blocks, also surfaced as Code Blocks in some command paths, is a structure-first workspace for blind beginners to build Python through numbered blocks before moving to full syntax.
-
-- Blocks represent real Python structures: output, variables, math, conditions, loops, lists, functions, exceptions, imports, comments, and input.
-- Numbered accessible blocks can be read, selected, moved, nested, edited, duplicated, deleted, undone, and redone.
-- Input blocks compile to real Python input code, including number input with `int(input(...))` and decimal input with `float(input(...))`.
-- Compile and run use the same Python runner as Python Code Mode.
-- Block map and block order commands explain the current program structure without requiring sight.
-- Source mapping connects each generated Python line back to the block that created it.
-- Transfer commands move generated Python into Python Code Mode when the learner is ready to work with syntax.
-
-## Architecture
-
-CodeUp uses a Flask/Python backend with a browser frontend. The backend handles command routing, sandboxed Python execution, session memory, project files, reports, deterministic learning tools, Audio Blocks compilation, optional Groq AI, and optional Intel demos.
-
-The frontend provides the editor, typed command box, voice controls, Live Assistant controls, Audio Blocks workspace, generated-code preview, output panes, and accessible status regions.
-
-Cloud AI is optional. Core command routing, beginner templates, Audio Blocks, input handling, project maps, reports, and many learning tools work without a Groq key.
-
-## Intel toolkit integrations
-
-CodeUp includes optional Intel-focused demo tooling for accessibility and AI optimization experiments.
-
-**OpenVINO**: used for the local intent-classification demo path.
-
-**Intel Neural Compressor**: optional demo tooling for model-compression and quantization experiments around local intent models.
-
-**Intel Extension for Scikit-learn, powered by oneDAL**: optional benchmark path for accelerated classical ML experiments around command-intent classification.
-
-These integrations are optional. The deployed CodeUp app does not require all Intel packages to run.
-
-### Intel showcase commands
-
-CodeUp can report optional Intel integration status from inside the app with `intel toolkit status` and `show intel optimization report`.
-No speedup is claimed unless measured locally.
-
-Local optional checks:
-
-```bash
-pip install -r requirements-intel.txt
-python tools/intel/neural_compressor_demo.py --check-env
-python tools/intel/sklearnex_benchmark.py --check-env
+```text
+make a calculator
+make a marks average program
+make a loop program
+make a password checker
+make a program that asks for [value]
 ```
 
-## Validation
+### Edit code
 
-The repository includes automated coverage for command routing, README claims, sandboxed execution, Python input handling, follow-up code edits, Audio Blocks, Programming Literacy Mode, project export, audio diff review, safe apply/reject, state watch, teacher reports, and non-visual navigation.
+```text
+make it use a function
+add a loop
+rename [old name] to [new name]
+insert print [text]
+comment this line
+make this code better
+```
 
-The deployed app has also had sanity checks across the main cockpit flow, Audio Blocks flow, Live Assistant controls, input continuation, and reviewer-style beginner prompts. Validation notes are kept honest: optional AI and Intel paths depend on configuration.
+### Understand code
 
-## Limitations
+```text
+project map
+give me a code map
+where does the program start
+where am I
+read around me
+what variables exist
+show program state
+step through this
+```
 
-CodeUp is a learning prototype, not a general-purpose online judge, and it is not intended to replace professional coding agents. Browser speech recognition depends on the user's browser and device. Optional AI and Intel paths depend on local or server configuration.
+### Debug
+
+```text
+explain error
+where did it crash
+what caused this
+what value caused this
+fix with explanation
+read last error
+```
+
+### Review changes
+
+```text
+what changed
+read before and after
+explain this change
+is this risky
+apply
+reject
+undo last change
+```
+
+### Audio Blocks
+
+```text
+open audio blocks
+list block categories
+add print block
+add variable block
+ask for [value] as number
+read block order
+compile blocks to Python
+run blocks
+transfer blocks to Python mode
+switch to Python Code Mode
+```
+
+### Learn and report
+
+```text
+start literacy mode
+list lessons
+start [lesson name] lesson
+check lesson understanding
+complete lesson
+start tutor mode
+give me a hint
+show fix
+check my understanding
+make a teacher report
+```
+
+### Projects, voice, and accessibility
+
+```text
+read project files
+open [file name]
+create file [file name]
+run [file name]
+export this project
+export for VS Code
+start live assistant
+pause listening
+stop speaking
+enable screen reader mode
+set screen reader to [screen reader]
+intel toolkit status
+```
+
+### Input
+
+```text
+read input prompt
+use [text] as input
+use [number] as input
+read input values
+clear input values
+```
+
+## Tech stack
+
+* Python
+* Flask
+* HTML
+* CSS
+* JavaScript
+* Browser speech APIs
+* Optional Groq AI
+* Optional Intel demo tooling
+
+Most core learning flows work without a Groq key. AI features need configuration.
+
+## AI use declaration
+
+AI was used in this project.
+
+The frontend was heavily AI-assisted. Vibe coded, basically. I used AI to get the browser UI moving, then tested it, changed it, broke it, fixed it, and shaped it around the demo.
+
+Some backend base code was also AI-generated. I built on top of it, reviewed the logic, connected the flows, fixed bugs, added tests, and made the final decisions.
+
+Project direction, feature choices, testing, demos, and submission are mine.
+
+Built by Da-Taki.
+
+## Intel tool-kits
+
+CodeUp includes optional Intel demo paths for local intent classification and optimization experiments.
+
+The deployed app does not need the Intel packages to run.
+
+## Limits
+
+CodeUp is a prototype. Browser speech depends on the browser and device. AI features need keys.
 
 ## Security
 
-See [SECURITY.md](SECURITY.md) for reporting and demo-safety expectations.
+See `SECURITY.md`.
 
 ## License
 
-See [LICENSE](LICENSE).
+See `LICENSE`.

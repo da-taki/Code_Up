@@ -210,18 +210,6 @@ python tools/intel/neural_compressor_demo.py --check-env
 python tools/intel/sklearnex_benchmark.py --check-env
 ```
 
-<!--
-Test contract strings:
-CodeUp includes optional Intel-focused demo tooling
-**OpenVINO**: used for the local intent-classification demo path.
-**Intel Neural Compressor**: optional demo tooling
-**Intel Extension for Scikit-learn, powered by oneDAL**
-These integrations are optional.
-The deployed CodeUp app does not require all Intel packages to run.
-No speedup is claimed unless measured locally.
--->
-
-
 ## Validation
 
 The repo has tests for command routing, Python input handling, Audio Blocks, safe edits, state watch, project maps, reports, project export, and the main IDE flows.

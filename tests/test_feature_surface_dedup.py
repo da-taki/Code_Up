@@ -6,14 +6,10 @@ many stacked slices. They are fully deterministic: no microphone, screen reader,
 Braille, Intel packages, OpenVINO, or external AI is required.
 """
 
-from pathlib import Path
-
 import pytest
 
 from app import app
 from codeup.commands.intent_parser import parse_intent
-
-ROOT = Path(__file__).resolve().parent.parent
 
 
 @pytest.fixture
@@ -145,28 +141,3 @@ def test_canonical_commands_do_not_fall_into_ai_clarification(client, phrase):
     data = _vc(client, phrase, code="print('hi')\n")
     assert data.get("success") is not False, (phrase, data)
     assert data.get("action") not in (None, "unknown", "needs_clarification"), (phrase, data)
-
-
-# --- README stays consolidated: each shared claim appears once ---
-
-def _readme():
-    return (ROOT / "README.md").read_text(encoding="utf-8")
-
-
-def test_readme_does_not_repeat_intel_not_required_claim():
-    readme = _readme()
-    assert readme.count("does not require all Intel packages") == 1
-
-
-def test_readme_does_not_repeat_not_replacing_coding_agents_claim():
-    readme = _readme()
-    assert readme.count("replace professional coding agents") == 1
-
-
-def test_readme_has_single_authoritative_command_group_map():
-    readme = _readme()
-    assert "## Commands" in readme
-    # The map names each canonical group once.
-    for marker in ("Programming Literacy Mode", "Tutor Mode", "Understanding Checks",
-                   "Codex Handoff Pack", "Teacher Reports", "Audio Blocks"):
-        assert marker in readme

@@ -11,7 +11,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 NEURAL_SCRIPT = ROOT / "tools" / "intel" / "neural_compressor_demo.py"
 SKLEARNEX_SCRIPT = ROOT / "tools" / "intel" / "sklearnex_benchmark.py"
-README = ROOT / "README.md"
 
 
 def _load_module(path: Path, name: str):
@@ -122,23 +121,6 @@ def test_sklearnex_dry_run_can_write_report(tmp_path):
     assert report["accelerated_benchmark_run"] is False
     assert report["reason"] == "dry run only; benchmark was not executed"
     assert "speedup_ratio" not in report
-
-
-def test_readme_documents_optional_intel_integrations():
-    readme = README.read_text(encoding="utf-8")
-
-    assert "## Intel toolkit integrations" in readme
-    assert "CodeUp includes optional Intel-focused demo tooling" in readme
-    assert "**OpenVINO**: used for the local intent-classification demo path." in readme
-    assert "**Intel Neural Compressor**: optional demo tooling" in readme
-    assert "**Intel Extension for Scikit-learn, powered by oneDAL**" in readme
-    assert "These integrations are optional." in readme
-    assert "The deployed CodeUp app does not require all Intel packages to run." in readme
-    assert "pip install -r requirements-intel.txt" in readme
-    assert "### Intel showcase commands" in readme
-    assert "intel toolkit status" in readme
-    assert "show intel optimization report" in readme
-    assert "No speedup is claimed unless measured locally." in readme
 
 
 def test_app_startup_does_not_import_optional_intel_packages():

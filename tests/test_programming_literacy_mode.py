@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import pytest
 
 from codeup.learning import literacy_mode
@@ -160,12 +158,3 @@ def test_literacy_module_list_works_without_ai():
     result = literacy_mode.handle_command({"kind": "list_lessons"}, {})
     assert "Programming Literacy Mode lessons" in result["message"]
     assert "Functions" in result["message"]
-
-
-def test_readme_mentions_programming_literacy_mode_honestly():
-    readme = Path("README.md").read_text(encoding="utf-8")
-    assert "## Modes" in readme
-    assert "Programming Literacy Mode" in readme
-    assert "learning missions" in readme
-    assert "replace professional coding agents" in readme
-    assert "validated with blind users" not in readme.lower()

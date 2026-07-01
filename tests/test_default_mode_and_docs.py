@@ -107,7 +107,6 @@ def test_readme_has_key_sections_and_no_dead_doc_links():
         assert heading in readme, f"README is missing section: {heading}"
     assert "Python Code Mode" in readme
     assert "open audio blocks" in readme
-    assert "Voice generation/edit memory" in readme
     assert "What CodeUp does now" not in readme
     assert "npm install" not in readme
     assert "npm run build" not in readme

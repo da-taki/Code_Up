@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-import audio_blocks
+from codeup.accessibility import audio_blocks
 from app import app
-from intent_parser import parse_intent
+from codeup.commands.intent_parser import parse_intent
 
 
 @pytest.fixture

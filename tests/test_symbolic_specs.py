@@ -3,7 +3,7 @@ import io
 
 import pytest
 
-from symbolic_specs import (
+from codeup.commands.symbolic_specs import (
     build_exact_symbol_generation,
     is_exact_symbol_task,
     normalize_spoken_symbols,

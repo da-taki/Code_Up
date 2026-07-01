@@ -1,8 +1,8 @@
 import pytest
 
 import app as app_module
-from command_normalization import normalize_command_transcript
-from speech_output import sanitize_speech_text
+from codeup.commands.command_normalization import normalize_command_transcript
+from codeup.accessibility.speech_output import sanitize_speech_text
 
 
 LOOP = "for i in range(3):\n    print(i)\n"

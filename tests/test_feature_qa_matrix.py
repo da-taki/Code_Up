@@ -1,8 +1,8 @@
 import pytest
 
 import app as app_module
-import deterministic_code_tools
-import sandbox_runner
+from codeup.commands import deterministic_code_tools
+from codeup.runtime import sandbox_runner
 from app import app
 
 

@@ -7,7 +7,7 @@ routing, plus that the existing project-report behavior is preserved.
 
 import pytest
 
-import teacher_report
+from codeup.reports import teacher_report
 from app import app
 
 

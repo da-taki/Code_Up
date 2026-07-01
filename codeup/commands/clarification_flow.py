@@ -2,7 +2,7 @@
 import re
 from typing import Dict, List, Optional
 
-from symbolic_specs import (
+from codeup.commands.symbolic_specs import (
     _dimensions,
     _find_symbol,
     _row_exception,

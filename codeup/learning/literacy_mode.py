@@ -11,7 +11,7 @@ import re
 import time
 from typing import Any, Dict, List, Optional
 
-import learning_moat
+from codeup.learning import learning_moat
 
 __all__ = ["LESSONS", "command_kind", "handle_command", "is_python_lesson_command", "lesson_by_id"]
 

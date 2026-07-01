@@ -1,7 +1,7 @@
 import pytest
 
 import app as app_module
-from intent_parser import IntentParser
+from codeup.commands.intent_parser import IntentParser
 
 
 @pytest.fixture

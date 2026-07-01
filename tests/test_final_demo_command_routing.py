@@ -1,7 +1,7 @@
 import pytest
 
 import app as app_module
-import ask_code
+from codeup.learning import ask_code
 
 
 LOOP = "for i in range(3):\nprint(i)\n"

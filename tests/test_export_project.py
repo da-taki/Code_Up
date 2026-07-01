@@ -6,7 +6,7 @@ import zipfile
 import pytest
 
 import app as app_module
-import export_support
+from codeup.projects import export_support
 
 
 @pytest.fixture

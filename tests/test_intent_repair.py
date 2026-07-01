@@ -1,7 +1,7 @@
 import pytest
 
 import app as app_module
-import intent_repair as ir
+from codeup.commands import intent_repair as ir
 
 
 @pytest.fixture

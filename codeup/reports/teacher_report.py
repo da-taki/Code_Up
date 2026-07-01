@@ -19,11 +19,11 @@ browser, so it is described, not fabricated (see Accessibility Workflow).
 import re
 from typing import Any, Dict, List, Optional
 
-import audio_diff
-import error_trace
-import learning_recap
-import project_map
-import report_support
+from codeup.accessibility import audio_diff
+from codeup.runtime import error_trace
+from codeup.learning import learning_recap
+from codeup.projects import project_map
+from codeup.reports import report_support
 
 __all__ = ["build_report", "learner_recap", "what_changed", "what_errors_fixed",
            "next_practice"]

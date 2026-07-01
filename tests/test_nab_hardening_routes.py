@@ -1,7 +1,7 @@
 import pytest
 
 import app as app_module
-import session_memory
+from codeup.runtime import session_memory
 
 
 LOOP = "for i in range(3):\n    print(i)\n"

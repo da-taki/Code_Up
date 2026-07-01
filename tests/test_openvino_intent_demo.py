@@ -4,8 +4,8 @@ import importlib
 import pytest
 
 import app as app_module
-import openvino_intent_demo
-from openvino_intent_demo import classify_local_intent
+from codeup.integrations import openvino_intent_demo
+from codeup.integrations.openvino_intent_demo import classify_local_intent
 
 
 RESULT_KEYS = {"available", "source", "intent", "confidence", "note"}

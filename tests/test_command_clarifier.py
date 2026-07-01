@@ -1,9 +1,9 @@
 import pytest
 
 import app as app_module
-import command_clarifier as cc
-import session_memory as sm
-from symbolic_specs import build_exact_symbol_generation
+from codeup.commands import command_clarifier as cc
+from codeup.runtime import session_memory as sm
+from codeup.commands.symbolic_specs import build_exact_symbol_generation
 
 
 @pytest.fixture

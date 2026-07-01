@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 import app as app_module
 from app import app
-from project_support import extract_project_json, normalize_project_path
+from codeup.projects.project_support import extract_project_json, normalize_project_path
 
 
 @pytest.fixture

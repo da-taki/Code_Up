@@ -1,7 +1,7 @@
 import pytest
 
 import app as app_module
-import input_concierge as ic
+from codeup.commands import input_concierge as ic
 
 
 NAME_AGE = 'name = input("Enter name: ")\nage = int(input("Enter age: "))\nprint(name, age)\n'

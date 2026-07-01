@@ -1,7 +1,7 @@
 import pytest
 
 import app as app_module
-import session_memory as sm
+from codeup.runtime import session_memory as sm
 
 
 @pytest.fixture

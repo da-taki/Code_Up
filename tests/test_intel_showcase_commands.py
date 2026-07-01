@@ -9,8 +9,8 @@ from pathlib import Path
 import pytest
 
 import app as app_module
-import intel_showcase
-from intent_parser import parse_intent
+from codeup.integrations import intel_showcase
+from codeup.commands.intent_parser import parse_intent
 
 
 @pytest.fixture

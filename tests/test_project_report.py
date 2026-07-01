@@ -1,7 +1,7 @@
 import pytest
 
 import app as app_module
-import report_support
+from codeup.reports import report_support
 
 
 @pytest.fixture
@@ -92,7 +92,7 @@ class TestReport:
         assert "run" in d["run_instruction"].lower()
 
     def test_report_includes_last_run_result(self, client):
-        import session_memory
+        from codeup.runtime import session_memory
         mem = session_memory.new_memory()
         session_memory.record_run(mem, error="NameError: name 'x' is not defined", ran_ok=False)
         rep = report_support.build_project_report({"is_project": False, "code": "print(x)"}, mem)
@@ -144,14 +144,14 @@ class TestBehaviorExplanation:
         assert "function" in d["speech"].lower()
 
     def test_report_speech_mentions_last_output_when_present(self):
-        import session_memory
+        from codeup.runtime import session_memory
         mem = session_memory.new_memory()
         session_memory.record_run(mem, output="0\n1\n2\n", ran_ok=True)
         rep = report_support.build_project_report({"is_project": False, "code": self.LOOP}, mem)
         assert "last successful output was 0, 1, 2" in rep["speech"].lower()
 
     def test_report_speech_mentions_last_error_when_present(self):
-        import session_memory
+        from codeup.runtime import session_memory
         mem = session_memory.new_memory()
         session_memory.record_run(mem, error="NameError: name 'x' is not defined", ran_ok=False)
         rep = report_support.build_project_report({"is_project": False, "code": "print(x)\n"}, mem)

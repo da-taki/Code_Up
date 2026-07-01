@@ -3,8 +3,8 @@ import os
 import pytest
 
 import app as app_module
-import report_support
-import session_memory
+from codeup.reports import report_support
+from codeup.runtime import session_memory
 
 _STATIC = os.path.join(os.path.dirname(__file__), "..", "static")
 

@@ -1,7 +1,7 @@
 import pytest
 
 import app as app_module
-import landmarks
+from codeup.accessibility import landmarks
 
 
 @pytest.fixture

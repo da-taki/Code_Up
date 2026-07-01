@@ -1,7 +1,7 @@
 import pytest
 
 import app as app_module
-import tutorial_engine
+from codeup.learning import tutorial_engine
 
 
 @pytest.fixture

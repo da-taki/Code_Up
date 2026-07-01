@@ -11,10 +11,10 @@ import ast
 import re
 from typing import Any, Dict, Optional
 
-import audio_diff
-import error_trace
-import project_map
-import report_support
+from codeup.accessibility import audio_diff
+from codeup.runtime import error_trace
+from codeup.projects import project_map
+from codeup.reports import report_support
 
 __all__ = [
     "command_kind",

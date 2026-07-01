@@ -1,6 +1,6 @@
 import pytest
 
-import beginner_templates as bt
+from codeup.commands import beginner_templates as bt
 
 
 DEFAULT_FOR = "for i in range(3):\n    print(i)"

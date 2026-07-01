@@ -4,7 +4,7 @@ import os
 import pytest
 
 import app as app_module
-from conversation_orchestrator import (
+from codeup.commands.conversation_orchestrator import (
     frontend_actions,
     orchestrate_command,
     strip_wake_phrase,

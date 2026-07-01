@@ -5,7 +5,7 @@ import json
 import re
 from typing import Any, Callable, Dict, Optional, Tuple
 
-import groq_key_manager
+from codeup.integrations import groq_key_manager
 
 
 ALLOWED_INTENTS = {

@@ -3,9 +3,9 @@ from pathlib import Path
 import pytest
 
 import app as app_module
-import deterministic_code_tools as tools
+from codeup.commands import deterministic_code_tools as tools
 from app import app
-from intent_parser import parse_intent
+from codeup.commands.intent_parser import parse_intent
 
 
 CODE = """import math as maths

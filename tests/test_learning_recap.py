@@ -1,8 +1,8 @@
 import pytest
 
 import app as app_module
-import learning_recap
-import session_memory as sm
+from codeup.learning import learning_recap
+from codeup.runtime import session_memory as sm
 
 
 @pytest.fixture

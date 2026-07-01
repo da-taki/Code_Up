@@ -1,7 +1,7 @@
 import pytest
 
 import app as app_module
-import structure_tools
+from codeup.projects import structure_tools
 
 _MUTATING = {"conversational_edit", "generate_code", "fix", "insert_line",
              "replace_line", "delete_line", "append_line"}

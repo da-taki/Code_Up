@@ -9,9 +9,9 @@ record a reviewable diff.
 
 import pytest
 
-import audio_diff
+from codeup.accessibility import audio_diff
 from app import app
-from intent_parser import parse_intent
+from codeup.commands.intent_parser import parse_intent
 
 
 @pytest.fixture

@@ -1,6 +1,6 @@
 import pytest
 
-import groq_key_manager as gkm
+from codeup.integrations import groq_key_manager as gkm
 
 
 class ApiError(RuntimeError):

@@ -12,9 +12,9 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 import app as app_module
 from app import app
-from intent_parser import parse_intent
-import sandboxed_fs as sandboxed_fs_module
-from sandboxed_fs import SandboxedFileSystem
+from codeup.commands.intent_parser import parse_intent
+from codeup.runtime import sandboxed_fs as sandboxed_fs_module
+from codeup.runtime.sandboxed_fs import SandboxedFileSystem
 
 
 
@@ -712,7 +712,7 @@ def test_sandbox_datetime_imports(client):
 
 
 def test_sandbox_module_allowlist_and_preload_are_consistent():
-    import sandbox_runner
+    from codeup.runtime import sandbox_runner
 
     assert "date" not in sandbox_runner.ALLOWED_MODULES
     lazy_third_party = {"numpy", "pandas", "matplotlib"}
@@ -740,7 +740,7 @@ def test_sandbox_bad_inputs_file_reports_clear_failure(tmp_path):
     env["CODEUP_INPUTS_FILE"] = str(inputs_file)
 
     result = subprocess.run(
-        [sys.executable, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "sandbox_runner.py"))],
+        [sys.executable, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "codeup", "runtime", "sandbox_runner.py"))],
         env=env,
         capture_output=True,
         text=True,
@@ -1816,7 +1816,7 @@ def test_hindi_intent_parsing(hindi_text, expected_intent, slot_check):
 
 
 def test_hindi_number_parser_direct():
-    from intent_parser import get_parser
+    from codeup.commands.intent_parser import get_parser
     parser = get_parser()
     assert parser._word_to_number("बीस") == 20
     assert parser._word_to_number("पंद्रह") == 15
@@ -1849,7 +1849,7 @@ def test_hindi_help_via_http(client):
 class TestPerSessionSandbox:
 
     def test_separate_sessions_get_different_workspaces(self):
-        from sandboxed_fs import get_sandbox
+        from codeup.runtime.sandboxed_fs import get_sandbox
         sb1 = get_sandbox("test-session-aaa")
         sb2 = get_sandbox("test-session-bbb")
         assert sb1 is not sb2, "Different session IDs must return different sandbox instances"
@@ -1858,7 +1858,7 @@ class TestPerSessionSandbox:
         )
 
     def test_delete_in_one_session_does_not_affect_other(self):
-        from sandboxed_fs import get_sandbox
+        from codeup.runtime.sandboxed_fs import get_sandbox
         sb1 = get_sandbox("test-session-ccc")
         sb2 = get_sandbox("test-session-ddd")
 
@@ -2023,7 +2023,7 @@ class TestRunRateLimit:
 class TestStructureParserFix:
 
     def setup_method(self):
-        from structure_parser import CodeAnalyzer
+        from codeup.projects.structure_parser import CodeAnalyzer
         self.analyzer = CodeAnalyzer()
 
     def test_async_function_flagged(self):

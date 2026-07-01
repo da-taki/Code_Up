@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from app import app
-from intent_parser import parse_intent
+from codeup.commands.intent_parser import parse_intent
 
 ROOT = Path(__file__).resolve().parent.parent
 

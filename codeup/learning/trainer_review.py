@@ -1,7 +1,7 @@
 from typing import Any, Dict, List, Optional
 
-import learning_recap
-import structure_tools
+from codeup.learning import learning_recap
+from codeup.projects import structure_tools
 
 _HANDOFF_FEATURES = {"exported the project", "made a project report", "reviewed the session"}
 _DEBUG_FEATURES = {"debugged errors"}

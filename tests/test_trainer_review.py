@@ -1,7 +1,7 @@
 import pytest
 
 import app as app_module
-import trainer_review
+from codeup.learning import trainer_review
 
 LOOP_OK = "for i in range(3):\n    print(i)\n"
 

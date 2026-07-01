@@ -9,9 +9,9 @@ Audio-Blocks-mode safety. Reuses existing modules; deterministic; no AI.
 
 import pytest
 
-import structure_tools
+from codeup.projects import structure_tools
 from app import app
-from intent_parser import parse_intent
+from codeup.commands.intent_parser import parse_intent
 
 
 @pytest.fixture

@@ -7,9 +7,9 @@ exposes it, including read-errors-only and mistake-replay integration.
 
 import pytest
 
-import error_trace
+from codeup.runtime import error_trace
 from app import app
-from intent_parser import parse_intent
+from codeup.commands.intent_parser import parse_intent
 
 
 @pytest.fixture

@@ -6,8 +6,8 @@ import json
 import re
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-import groq_key_manager
-from project_support import ProjectPathError, normalize_project_path
+from codeup.integrations import groq_key_manager
+from codeup.projects.project_support import ProjectPathError, normalize_project_path
 
 
 ALLOWED_ACTIONS = {

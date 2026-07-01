@@ -2,9 +2,9 @@ from pathlib import Path
 
 import pytest
 
-import literacy_mode
+from codeup.learning import literacy_mode
 from app import app
-from intent_parser import parse_intent
+from codeup.commands.intent_parser import parse_intent
 
 
 @pytest.fixture

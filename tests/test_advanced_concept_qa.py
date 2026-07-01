@@ -1,7 +1,7 @@
 import pytest
 
 import app as app_module
-import concept_qa
+from codeup.learning import concept_qa
 
 LOOP = "for i in range(3):\n    print(i)\n"
 

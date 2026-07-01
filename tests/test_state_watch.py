@@ -8,9 +8,9 @@ trace only through the existing sandbox (never executing user code in-process).
 import pytest
 
 import app as app_module
-import state_watch as sw
+from codeup.runtime import state_watch as sw
 from app import app, _run_with_trace_for_narration
-from intent_parser import parse_intent
+from codeup.commands.intent_parser import parse_intent
 
 
 @pytest.fixture

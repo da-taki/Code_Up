@@ -2,8 +2,8 @@ import json
 import re
 from typing import Any, Callable, Dict, List, Optional
 
-from intent_parser import parse_intent
-from symbolic_specs import build_exact_symbol_generation, constraint_summary, normalize_spoken_symbols
+from codeup.commands.intent_parser import parse_intent
+from codeup.commands.symbolic_specs import build_exact_symbol_generation, constraint_summary, normalize_spoken_symbols
 
 
 MAX_ACTIONS = 5

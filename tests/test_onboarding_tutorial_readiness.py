@@ -3,8 +3,8 @@ import os
 import pytest
 
 import app as app_module
-import tutorial_engine
-from speech_output import sanitize_speech_text
+from codeup.learning import tutorial_engine
+from codeup.accessibility.speech_output import sanitize_speech_text
 
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
@@ -234,7 +234,7 @@ def test_ide_start_gate_explains_what_codeup_is_and_how_to_start():
 def test_landing_bundle_has_a_how_to_start_and_scope_section():
     bundle = _read("static/landing/dist/bundle.js")
     assert "How to start" in bundle
-    assert "not a replacement for NVDA" in bundle
+    assert "not trying to replace VS Code" in bundle
     assert "what can I do here" in bundle
     assert "insert a for loop that prints the first 3 whole numbers" in bundle
     assert "Before you begin" in bundle

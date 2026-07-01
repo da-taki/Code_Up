@@ -1,7 +1,7 @@
 import pytest
 
 import app as app_module
-import screen_reader_bridge as srb
+from codeup.accessibility import screen_reader_bridge as srb
 
 LOOP_OK = "for i in range(3):\n    print(i)\n"
 

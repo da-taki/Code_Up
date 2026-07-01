@@ -1,7 +1,7 @@
 import pytest
 
 import app as app_module
-import hint_engine
+from codeup.learning import hint_engine
 
 IND_ERR = "IndentationError: expected an indented block"
 BROKEN = "for i in range(3):\nprint(i)"

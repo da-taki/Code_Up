@@ -24,17 +24,17 @@ from dotenv import load_dotenv
 from flask import Flask, Response, g, has_request_context, jsonify, render_template, request, send_from_directory, stream_with_context
 from rapidfuzz import fuzz
 
-from conversation_orchestrator import frontend_actions, action_next_label, looks_like_generation_request, orchestrate_command, strip_wake_phrase
-from input_concierge import build_input_plan, concierge_request_message, detect_inputs as detect_concierge_inputs
-import session_memory
-import command_clarifier
-import grounded_ai
-import groq_key_manager
-import clarification_flow
-import concept_qa
-import intent_repair
-from intent_parser import parse_intent
-from project_support import (
+from codeup.commands.conversation_orchestrator import frontend_actions, action_next_label, looks_like_generation_request, orchestrate_command, strip_wake_phrase
+from codeup.commands.input_concierge import build_input_plan, concierge_request_message, detect_inputs as detect_concierge_inputs
+from codeup.runtime import session_memory
+from codeup.commands import command_clarifier
+from codeup.integrations import grounded_ai
+from codeup.integrations import groq_key_manager
+from codeup.commands import clarification_flow
+from codeup.learning import concept_qa
+from codeup.commands import intent_repair
+from codeup.commands.intent_parser import parse_intent
+from codeup.projects.project_support import (
     PROJECT_MANIFEST,
     PROJECT_ROOT_DIR,
     PROJECT_TEMPLATES,
@@ -50,40 +50,40 @@ from project_support import (
     normalize_project_path,
     project_summary,
 )
-from sandboxed_fs import cleanup_sandbox, cleanup_stale_sandboxes, get_sandbox
-from symbolic_specs import build_exact_symbol_generation, constraint_summary, validate_exact_output
-from structure_parser import CodeAnalyzer
-import tutorial_engine
-from openvino_intent_demo import classify_local_intent
-import export_support
-import report_support
-import learning_recap
-import learning_moat
-import literacy_mode
-import teacher_report
-import structure_tools
-import error_replay
-import deterministic_code_tools
-import project_map
-import error_trace
-import audio_diff
-import state_watch
-import hint_engine
-import intel_showcase
-import landmarks
-import debug_teacher
-import concept_tutor
-import ask_code
-import trainer_review
-import lesson_builder
-import screen_reader_bridge
-import natural_command_mapper
-import natural_code_editor
-import beginner_templates
-import accessible_learning
-import audio_blocks
-from command_normalization import normalize_command_transcript
-from speech_output import sanitize_speech_text
+from codeup.runtime.sandboxed_fs import cleanup_sandbox, cleanup_stale_sandboxes, get_sandbox
+from codeup.commands.symbolic_specs import build_exact_symbol_generation, constraint_summary, validate_exact_output
+from codeup.projects.structure_parser import CodeAnalyzer
+from codeup.learning import tutorial_engine
+from codeup.integrations.openvino_intent_demo import classify_local_intent
+from codeup.projects import export_support
+from codeup.reports import report_support
+from codeup.learning import learning_recap
+from codeup.learning import learning_moat
+from codeup.learning import literacy_mode
+from codeup.reports import teacher_report
+from codeup.projects import structure_tools
+from codeup.accessibility import error_replay
+from codeup.commands import deterministic_code_tools
+from codeup.projects import project_map
+from codeup.runtime import error_trace
+from codeup.accessibility import audio_diff
+from codeup.runtime import state_watch
+from codeup.learning import hint_engine
+from codeup.integrations import intel_showcase
+from codeup.accessibility import landmarks
+from codeup.runtime import debug_teacher
+from codeup.learning import concept_tutor
+from codeup.learning import ask_code
+from codeup.learning import trainer_review
+from codeup.learning import lesson_builder
+from codeup.accessibility import screen_reader_bridge
+from codeup.commands import natural_command_mapper
+from codeup.commands import natural_code_editor
+from codeup.commands import beginner_templates
+from codeup.learning import accessible_learning
+from codeup.accessibility import audio_blocks
+from codeup.commands.command_normalization import normalize_command_transcript
+from codeup.accessibility.speech_output import sanitize_speech_text
 
 load_dotenv(override=True)
 
@@ -2273,7 +2273,7 @@ def _run_with_trace_for_narration(
     sandbox = get_sandbox(session_id)
     workspace_dir = sandbox.workspace_dir
     trace_file = os.path.join(workspace_dir, f"trace_{uuid.uuid4().hex}.json")
-    runner_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sandbox_runner.py')
+    runner_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'codeup', 'runtime', 'sandbox_runner.py')
 
     with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False,
                                       encoding='utf-8', dir=workspace_dir) as code_file:
@@ -4398,7 +4398,7 @@ def run_code():
         run_cwd = project_run["project_root"] if project_run else workspace_dir
         trace_file = os.path.join(workspace_dir, f"trace_{uuid.uuid4().hex}.json")
 
-        _runner_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sandbox_runner.py')
+        _runner_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'codeup', 'runtime', 'sandbox_runner.py')
 
         cleanup_code_file = False
         if project_run:
@@ -11176,7 +11176,7 @@ def run_stream_start():
         code_file_path = cf.name
 
     trace_file = os.path.join(workspace_dir, f"trace_{run_id}.json")
-    runner_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sandbox_runner.py')
+    runner_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'codeup', 'runtime', 'sandbox_runner.py')
 
     env = os.environ.copy()
     env['CODEUP_CODE_FILE'] = code_file_path

@@ -1,7 +1,7 @@
 import ast
 from typing import Any, Dict, List, Optional
 
-import structure_tools
+from codeup.projects import structure_tools
 
 _POSITIONING = ("CodeUp is a bridge, not a replacement for NVDA, JAWS, or VS Code — "
                 "it helps you build understanding before you move into them.")

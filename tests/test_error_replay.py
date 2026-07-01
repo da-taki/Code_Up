@@ -1,7 +1,7 @@
 import pytest
 
 import app as app_module
-import error_replay
+from codeup.accessibility import error_replay
 
 BROKEN_INDENT = "for i in range(3):\nprint(i)\n"
 FIXED_INDENT = "for i in range(3):\n    print(i)\n"

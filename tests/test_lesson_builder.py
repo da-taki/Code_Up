@@ -1,7 +1,7 @@
 import pytest
 
 import app as app_module
-import lesson_builder
+from codeup.learning import lesson_builder
 
 
 @pytest.fixture

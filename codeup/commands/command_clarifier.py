@@ -2,8 +2,8 @@
 import re
 from typing import Any, Callable, Dict, List, Optional
 
-import clarification_flow
-import grounded_ai
+from codeup.commands import clarification_flow
+from codeup.integrations import grounded_ai
 
 _VAGUE_FILE_OP = re.compile(
     r"^(?:please\s+)?(delete|remove|trash|erase|rename)\s+"

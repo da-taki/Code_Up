@@ -6,7 +6,7 @@ import re
 import tokenize
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
-from project_support import SAFE_STDLIB_MODULES, THIRD_PARTY_MODULES
+from codeup.projects.project_support import SAFE_STDLIB_MODULES, THIRD_PARTY_MODULES
 
 
 ALLOWED_MODULES = frozenset(SAFE_STDLIB_MODULES | set(THIRD_PARTY_MODULES))

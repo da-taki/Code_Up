@@ -1,7 +1,7 @@
 import pytest
 
 import app as app_module
-import input_concierge as ic
+from codeup.commands import input_concierge as ic
 
 LOOP = "for i in range(3):\n    print(i)\n"
 NAME_AGE = "name = input()\nage = int(input())\nprint(name, age)\n"

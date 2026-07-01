@@ -3,12 +3,12 @@ import os
 import pytest
 
 import app as app_module
-import concept_tutor
-import lesson_builder
-import report_support
-import screen_reader_bridge
-import session_memory
-from command_normalization import normalize_command_transcript
+from codeup.learning import concept_tutor
+from codeup.learning import lesson_builder
+from codeup.reports import report_support
+from codeup.accessibility import screen_reader_bridge
+from codeup.runtime import session_memory
+from codeup.commands.command_normalization import normalize_command_transcript
 
 LOOP = "for i in range(3):\n    print(i)\n"
 ROOT = os.path.dirname(os.path.dirname(__file__))

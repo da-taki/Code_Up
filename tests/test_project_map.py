@@ -6,9 +6,9 @@ detection, readable narration) and the /voice-command routing that exposes it.
 
 import pytest
 
-import project_map
+from codeup.projects import project_map
 from app import app
-from intent_parser import parse_intent
+from codeup.commands.intent_parser import parse_intent
 
 
 @pytest.fixture

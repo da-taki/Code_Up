@@ -3,8 +3,8 @@ import ast
 import re
 from typing import Any, Dict, List, Optional
 
-import hint_engine
-import structure_tools
+from codeup.learning import hint_engine
+from codeup.projects import structure_tools
 
 NEXT_COMMANDS = ["give me a bigger hint", "show me the answer", "replay the mistake"]
 

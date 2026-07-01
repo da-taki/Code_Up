@@ -2,7 +2,7 @@
 import ast
 from typing import Any, Dict, List, Optional
 
-import structure_tools
+from codeup.projects import structure_tools
 
 _CONCEPT_WORD = {
     "imports": "imports", "variables": "variables", "loops": "loops",

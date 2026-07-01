@@ -1,6 +1,6 @@
 import pytest
 
-import tutorial_engine as te
+from codeup.learning import tutorial_engine as te
 
 
 class TestModulePack:

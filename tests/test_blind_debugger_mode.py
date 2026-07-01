@@ -1,7 +1,7 @@
 import pytest
 
 import app as app_module
-import debug_teacher
+from codeup.runtime import debug_teacher
 
 LOOP_OK = "for i in range(3):\n    print(i)\n"
 LOOP_BAD_INDENT = "for i in range(3):\nprint(i)\n"

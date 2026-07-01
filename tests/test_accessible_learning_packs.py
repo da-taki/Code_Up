@@ -2,9 +2,9 @@ import ast
 from pathlib import Path
 
 import pytest
-import accessible_learning as learning
+from codeup.learning import accessible_learning as learning
 from app import app
-from intent_parser import parse_intent
+from codeup.commands.intent_parser import parse_intent
 
 
 @pytest.fixture

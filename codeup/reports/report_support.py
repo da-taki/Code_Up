@@ -5,7 +5,7 @@ import ast
 import re
 from typing import Any, Dict, List, Optional
 
-import learning_recap
+from codeup.learning import learning_recap
 
 _CONCEPT_ORDER = [
     "print output", "variables", "loops", "conditionals (if/else)", "functions",

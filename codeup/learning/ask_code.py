@@ -3,7 +3,7 @@ import ast
 import re
 from typing import Any, Dict, List, Optional
 
-import structure_tools
+from codeup.projects import structure_tools
 
 _WORD = {0: "zero", 1: "one", 2: "two", 3: "three", 4: "four", 5: "five",
          6: "six", 7: "seven", 8: "eight", 9: "nine", 10: "ten"}

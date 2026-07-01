@@ -1,7 +1,7 @@
 import pytest
 
 import app as app_module
-import grounded_ai as g
+from codeup.integrations import grounded_ai as g
 
 
 DET_Q = "Do you want a 5 by 5 pattern, and should the third line have a different number of symbols?"

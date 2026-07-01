@@ -1,8 +1,8 @@
 import pytest
 
-import learning_moat
+from codeup.learning import learning_moat
 from app import app
-from intent_parser import parse_intent
+from codeup.commands.intent_parser import parse_intent
 
 
 @pytest.fixture

@@ -3,7 +3,7 @@ import ast
 import re
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from intent_parser import IntentParser, _ONES
+from codeup.commands.intent_parser import IntentParser, _ONES
 
 _PARSER = IntentParser()
 

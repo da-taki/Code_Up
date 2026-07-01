@@ -1,7 +1,7 @@
 import pytest
 
 import app as app_module
-import concept_tutor
+from codeup.learning import concept_tutor
 
 LOOP_OK = "for i in range(3):\n    print(i)\n"
 VAR_CODE = 'name = "Asha"\nprint(name)\n'
@@ -65,7 +65,7 @@ class TestTutor:
 class TestTutorTeachesBeforePractice:
 
     def _mem_with_output(self, output="0\n1\n2\n"):
-        import session_memory
+        from codeup.runtime import session_memory
         mem = session_memory.new_memory()
         session_memory.record_run(mem, output=output, ran_ok=True)
         return mem

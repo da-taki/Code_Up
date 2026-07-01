@@ -17,7 +17,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt -r requirements-dev.txt
       - name: Compile Python sources
-        run: python -m compileall app.py intent_parser.py sandbox_runner.py sandboxed_fs.py structure_parser.py tutorial_engine.py tests
+        run: python -m compileall app.py codeup tests
       - name: Run tests
         run: python -m pytest -q
 

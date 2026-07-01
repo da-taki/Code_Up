@@ -3,9 +3,9 @@ import json
 import pytest
 
 import app as app_module
-import natural_code_editor
-import natural_command_mapper
-import session_memory
+from codeup.commands import natural_code_editor
+from codeup.commands import natural_command_mapper
+from codeup.runtime import session_memory
 
 
 HELLO = 'print("Hello")'

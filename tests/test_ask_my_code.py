@@ -1,7 +1,7 @@
 import pytest
 
 import app as app_module
-import ask_code
+from codeup.learning import ask_code
 
 CODE = ("total = 0\n"
         "for i in range(3):\n"

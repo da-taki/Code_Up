@@ -1,7 +1,7 @@
 import pytest
 
 import app as app_module
-import structure_tools
+from codeup.projects import structure_tools
 
 
 @pytest.fixture

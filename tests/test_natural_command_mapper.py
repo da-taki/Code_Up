@@ -3,7 +3,7 @@ import json
 import pytest
 
 import app as app_module
-import natural_command_mapper
+from codeup.commands import natural_command_mapper
 
 
 LOOP_CODE = "for i in range(3):\n    print(i)"

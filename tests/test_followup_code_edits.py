@@ -1,7 +1,7 @@
 import pytest
 
 import app as app_module
-import session_memory
+from codeup.runtime import session_memory
 
 
 EVEN = "for i in range(5):\n    if i % 2 == 0:\n        print(i)\n"

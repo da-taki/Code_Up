@@ -3,7 +3,7 @@ import os
 import pytest
 
 import app as app_module
-from intent_parser import parse_intent
+from codeup.commands.intent_parser import parse_intent
 
 
 ROOT = os.path.dirname(os.path.dirname(__file__))

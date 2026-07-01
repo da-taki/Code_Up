@@ -20,26 +20,6 @@ Live demo: https://code-up-fmqr.onrender.com/ide
 * Export multi-file projects
 * Create learner recaps and teacher reports
 
-## Modes
-
-### Python Code Mode
-
-The main workspace.
-
-This is where most commands run. It handles code generation, edits, program runs, project files, error help, state watch, code maps, audio diffs, and safe apply/reject flows.
-
-### Audio Blocks Mode
-
-A block-based workspace for learning Python structure.
-
-Students can create numbered blocks for output, variables, input, math, conditions, loops, lists, functions, comments, and basic program flow.
-
-CodeUp can read the block order, explain the structure, run the program, and move the generated Python into the main editor.
-
-### Programming Literacy Mode
-
-Small Python lessons with tutor hints, checks for understanding, learner recaps, and teacher reports.
-
 ## Commands
 
 ### Generate code
@@ -126,6 +106,7 @@ start tutor mode
 give me a hint
 show fix
 check my understanding
+make codex handoff
 make a teacher report
 ```
 
@@ -156,6 +137,38 @@ read input values
 clear input values
 ```
 
+## Modes
+
+### Python Code Mode
+
+The main workspace.
+
+This is where most commands run. It handles code generation, edits, program runs, project files, error help, state watch, code maps, audio diffs, and safe apply/reject flows.
+
+### Audio Blocks Mode
+
+A block-based workspace for learning Python structure.
+
+Students can create numbered blocks for output, variables, input, math, conditions, loops, lists, functions, comments, and basic program flow.
+
+CodeUp can read the block order, explain the structure, run the program, and move the generated Python into the main editor.
+
+### Programming Literacy Mode
+
+Small learning missions for Python basics.
+
+It includes Tutor Mode, Understanding Checks, Codex Handoff Pack, learner recaps, and Teacher Reports.
+
+## Architecture
+
+CodeUp uses a Flask/Python backend with a browser frontend.
+
+The backend handles command routing, sandboxed Python execution, session memory, project files, reports, beginner templates, Audio Blocks compilation, optional Groq AI, and optional Intel demo tooling.
+
+The frontend handles the editor, command box, voice controls, Audio Blocks workspace, generated-code preview, output panes, and accessible status regions.
+
+Most core learning flows work without a Groq key. AI features need configuration.
+
 ## Tech stack
 
 * Python
@@ -167,29 +180,29 @@ clear input values
 * Optional Groq AI
 * Optional Intel demo tooling
 
-Most core learning flows work without a Groq key. AI features need configuration.
-
 ## AI use declaration
 
 AI was used in this project.
 
-The frontend was heavily AI-assisted. Vibe coded, basically. I used AI to get the browser UI moving, then tested it, changed it, broke it, fixed it, and shaped it around the demo.
+The frontend was heavily AI-assisted. Vibe coded, basically. I used AI to get the browser UI moving.
 
-Some backend base code was also AI-generated. I built on top of it, reviewed the logic, connected the flows, fixed bugs, added tests, and made the final decisions.
+Some backend base code was also AI-generated. I built on top of it, reviewed the logic and made the final decisions.
 
-Project direction, feature choices, testing, demos, and submission are mine.
-
-Built by Da-Taki.
-
-## Intel tool-kits
+## Intel toolkit integrations
 
 CodeUp includes optional Intel demo paths for local intent classification and optimization experiments.
 
-The deployed app does not need the Intel packages to run.
+The deployed app does not require all Intel packages to run.
 
-## Limits
+## Validation
+
+The repo has tests for command routing, Python input handling, Audio Blocks, safe edits, state watch, project maps, reports, project export, and the main IDE flows.
+
+## Limitations
 
 CodeUp is a prototype. Browser speech depends on the browser and device. AI features need keys.
+
+CodeUp is not intended to replace professional coding agents.
 
 ## Security
 

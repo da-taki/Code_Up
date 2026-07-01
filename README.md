@@ -19,6 +19,7 @@ Live demo: https://code-up-fmqr.onrender.com/ide
 * Read project structure without needing sight
 * Export multi-file projects
 * Create learner recaps and teacher reports
+* Voice generation/edit memory for follow-up code changes
 
 ## Commands
 
@@ -190,7 +191,7 @@ Some backend base code was also AI-generated. I built on top of it, reviewed the
 
 ## Intel toolkit integrations
 
-CodeUp includes optional Intel demo paths for local intent classification and optimization experiments.
+CodeUp includes optional Intel-focused demo tooling for local intent classification and optimization experiments.
 
 The deployed app does not require all Intel packages to run.
 

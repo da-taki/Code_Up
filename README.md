@@ -193,13 +193,23 @@ Some backend base code was also AI-generated. I built on top of it, reviewed the
 
 CodeUp includes optional Intel-focused demo tooling for local intent classification and optimization experiments.
 
-**OpenVINO**: used for the local intent-classification demo path.
+OpenVINO: used for the local intent-classification demo path.
 
-**Intel Neural Compressor**: optional demo tooling for model-compression and quantization experiments around local intent models.
+Intel Neural Compressor: optional demo tooling for model-compression and quantization experiments around local intent models.
 
-**Intel Extension for Scikit-learn, powered by oneDAL**: optional benchmark path for accelerated classical ML experiments around command-intent classification.
+Intel Extension for Scikit-learn, powered by oneDAL: optional benchmark path for accelerated classical ML experiments around command-intent classification.
 
 These integrations are optional. The deployed CodeUp app does not require all Intel packages to run.
+
+## Intel showcase commands
+
+CodeUp can report optional Intel integration status from inside the app with intel toolkit status and show intel optimization report.
+
+Local optional checks:
+
+pip install -r requirements-intel.txt
+python tools/intel/neural_compressor_demo.py --check-env
+python tools/intel/sklearnex_benchmark.py --check-env
 
 ## Validation
 

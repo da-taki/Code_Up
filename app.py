@@ -5645,6 +5645,40 @@ def generate_code():
     prompt = safe(body.get("prompt"), "")
     language = safe(body.get("language"), "en")
     requested_mode = safe(body.get("mode"), "")
+    mem = session_memory.get_memory(get_trace_storage())
+    previous_code = _safe_text(body.get("previousCode"), limit=MAX_CONVERSATIONAL_CONTEXT_SIZE + 1)
+    followup_edit = bool(body.get("followupEdit"))
+    followup_command = _safe_text(body.get("followupCommand") or "", limit=MAX_VOICE_TEXT_SIZE)
+
+    def _record_generated_success(generated_code: str, source: str = "generate_code") -> None:
+        try:
+            session_memory.record_generation(mem, prompt, generated_code)
+            pending_prompt = str(mem.get("pending_generated_edit_prompt") or "")
+            pending_before = str(mem.get("pending_generated_edit_before") or "")
+            pending_command = str(mem.get("pending_generated_edit_command") or "")
+            before_for_edit = previous_code or (pending_before if pending_prompt == prompt else "")
+            command_for_edit = followup_command or (pending_command if pending_prompt == prompt else "") or prompt
+            prompt_low = str(prompt or "").strip().lower()
+            is_followup_generation = (
+                followup_edit
+                or bool(before_for_edit and pending_prompt == prompt)
+                or prompt_low.startswith("using the current program")
+                or prompt_low.startswith("earlier you generated code for:")
+            )
+            if is_followup_generation and before_for_edit.strip():
+                session_memory.record_code_change(
+                    mem,
+                    before_code=before_for_edit,
+                    after_code=generated_code,
+                    command=command_for_edit,
+                    source=source,
+                    summary="Updated the current code from your edit command.",
+                )
+                mem["pending_generated_edit_before"] = ""
+                mem["pending_generated_edit_command"] = ""
+                mem["pending_generated_edit_prompt"] = ""
+        except Exception:
+            pass
 
     if len(prompt) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": f"Prompt too large (max {MAX_CODE_SIZE} bytes)"}), 413
@@ -5652,7 +5686,7 @@ def generate_code():
         return jsonify({"success": False, "error": "Prompt cannot be empty"}), 400
 
     try:
-        session_memory.record_generation(session_memory.get_memory(get_trace_storage()), prompt)
+        session_memory.record_generation(mem, prompt)
     except Exception:
         pass
 
@@ -5662,10 +5696,7 @@ def generate_code():
     exact_result = build_exact_symbol_generation(prompt, source=input_source)
     if exact_result:
         if exact_result.get("success") and exact_result.get("code"):
-            try:
-                session_memory.record_generation(session_memory.get_memory(get_trace_storage()), prompt, exact_result.get("code"))
-            except Exception:
-                pass
+            _record_generated_success(exact_result.get("code"), "deterministic_exact")
         return jsonify(exact_result)
 
     local_direct = _local_code_generation_fallback(prompt)
@@ -5674,10 +5705,7 @@ def generate_code():
         or beginner_templates.make_generation_program(prompt) is not None
     ):
         explanation = _generation_explanation(prompt, local_direct)
-        try:
-            session_memory.record_generation(session_memory.get_memory(get_trace_storage()), prompt, local_direct)
-        except Exception:
-            pass
+        _record_generated_success(local_direct, "local_fallback")
         return jsonify({"success": True, "code": local_direct, "source": "local_fallback",
                         "explanation": explanation, "speech": explanation})
 
@@ -5690,8 +5718,7 @@ def generate_code():
             project["manifest"] = manifest
             project["speech"] = project_summary(manifest)
             try:
-                mem = session_memory.get_memory(get_trace_storage())
-                session_memory.record_generation(mem, prompt, project["files"].get(manifest["active_file"], ""))
+                _record_generated_success(project["files"].get(manifest["active_file"], ""), "project_template")
                 session_memory.record_project_manifest(mem, manifest)
             except Exception:
                 pass
@@ -5745,8 +5772,7 @@ def generate_code():
         manifest = _write_project_files(sandbox, parsed_project["files"], parsed_project["manifest"])
         speech = parsed_project.get("speech") or project_summary(manifest)
         try:
-            mem = session_memory.get_memory(get_trace_storage())
-            session_memory.record_generation(mem, prompt, parsed_project["files"].get(manifest["active_file"], ""))
+            _record_generated_success(parsed_project["files"].get(manifest["active_file"], ""), "ai_project")
             session_memory.record_project_manifest(mem, manifest)
         except Exception:
             pass
@@ -5809,10 +5835,7 @@ def generate_code():
         fallback = _local_code_generation_fallback(prompt)
         if fallback and _should_use_local_generation_fallback(raw):
             explanation = _generation_explanation(prompt, fallback)
-            try:
-                session_memory.record_generation(session_memory.get_memory(get_trace_storage()), prompt, fallback)
-            except Exception:
-                pass
+            _record_generated_success(fallback, "local_fallback")
             return jsonify({"success": True, "code": fallback, "source": "local_fallback",
                             "explanation": explanation, "speech": explanation})
         error = raw.strip() if raw else "AI returned empty response. Try rephrasing."
@@ -5831,10 +5854,7 @@ def generate_code():
             fallback = _local_code_generation_fallback(prompt)
             if fallback and not _generated_code_safety_error(fallback, prompt):
                 explanation = _generation_explanation(prompt, fallback)
-                try:
-                    session_memory.record_generation(session_memory.get_memory(get_trace_storage()), prompt, fallback)
-                except Exception:
-                    pass
+                _record_generated_success(fallback, "local_fallback")
                 return jsonify({"success": True, "code": fallback, "source": "local_fallback",
                                 "explanation": explanation, "speech": explanation})
             return jsonify({"success": False, "error": safety_error, "code": ""})
@@ -5855,10 +5875,7 @@ def generate_code():
                 fallback = _local_code_generation_fallback(prompt)
                 if fallback and not _generated_code_safety_error(fallback, prompt):
                     explanation = _generation_explanation(prompt, fallback)
-                    try:
-                        session_memory.record_generation(session_memory.get_memory(get_trace_storage()), prompt, fallback)
-                    except Exception:
-                        pass
+                    _record_generated_success(fallback, "local_fallback")
                     return jsonify({"success": True, "code": fallback, "source": "local_fallback",
                                     "explanation": explanation, "speech": explanation})
                 return jsonify({"success": False, "error": safety_error, "code": ""})
@@ -5867,20 +5884,14 @@ def generate_code():
             fallback = _local_code_generation_fallback(prompt)
             if fallback and _should_use_local_generation_fallback(raw_retry):
                 explanation = _generation_explanation(prompt, fallback)
-                try:
-                    session_memory.record_generation(session_memory.get_memory(get_trace_storage()), prompt, fallback)
-                except Exception:
-                    pass
+                _record_generated_success(fallback, "local_fallback")
                 return jsonify({"success": True, "code": fallback, "source": "local_fallback",
                                 "explanation": explanation, "speech": explanation})
             if _is_ai_service_message(raw_retry):
                 return jsonify({"success": False, "error": raw_retry.strip(), "code": ""})
             return jsonify({"success": False, "error": "AI returned invalid Python code. Please try rephrasing your request.", "code": ""})
     explanation = _generation_explanation(prompt, code)
-    try:
-        session_memory.record_generation(session_memory.get_memory(get_trace_storage()), prompt, code)
-    except Exception:
-        pass
+    _record_generated_success(code, "generate_code")
     return jsonify({"success": True, "code": code, "explanation": explanation, "speech": explanation})
 
 
@@ -7587,7 +7598,7 @@ def _spoken_variable_response(text, code, mem, intent):
             "heard": text, "speech": confirmation, "spoken_code": python}
 
 
-def _template_result_voice_response(result, text, *, source="beginner_templates"):
+def _template_result_voice_response(result, text, *, source="beginner_templates", current_code=""):
     if result is None:
         return None
     if result.needs_clarification or result.edit_action == "clarify":
@@ -7606,6 +7617,17 @@ def _template_result_voice_response(result, text, *, source="beginner_templates"
             "source": source,
         }
     position = "end_of_file" if result.edit_action == "append_code" else ""
+    if result.edit_action == "replace_code" and str(current_code or "").strip() == str(result.code or "").strip():
+        message = "I could not find a new code change to review yet."
+        return {
+            "success": True,
+            "action": "deterministic_message",
+            "message": message,
+            "speech": message,
+            "heard": text,
+            "template_intent": result.intent,
+            "source": source,
+        }
     response = _make_conversational_edit_response(
         result.edit_action,
         code=result.code,
@@ -7656,7 +7678,7 @@ def _beginner_template_command_response(text, code, *, mode="all"):
             return None
         if mode == "transforms" and not is_transform:
             return None
-    return _template_result_voice_response(result, text, source="beginner_templates")
+    return _template_result_voice_response(result, text, source="beginner_templates", current_code=code)
 
 
 def _route_repaired_intent(text, code, allow_ai=False):
@@ -7859,6 +7881,12 @@ def _record_voice_memory(mem, text, intent, response):
                 session_memory.record_active_file(mem, a.get("path"))
         return
     if action == "generate_code" and response.get("prompt"):
+        if response.get("followup_edit") or response.get("source") == "memory_followup":
+            mem["pending_generated_edit_before"] = str(mem.get("_current_voice_code") or "")
+            mem["pending_generated_edit_command"] = _safe_text(text, limit=MAX_VOICE_TEXT_SIZE)
+            mem["pending_generated_edit_prompt"] = _safe_text(response.get("prompt"), limit=MAX_CODE_SIZE)
+        else:
+            session_memory.clear_change_review(mem)
         session_memory.record_generation(mem, response.get("prompt"))
     elif action == "conversational_edit" and isinstance(response.get("ai_action"), dict):
         ai_action = response.get("ai_action") or {}
@@ -7958,6 +7986,10 @@ def _map_followup_decision(decision, text, mem):
         edit_code = pending_after or str(mem.get("_current_voice_code") or "") or str(mem.get("last_generated_code") or "")
         proposal_before = str((pending_proposal or {}).get("before") or edit_code)
         if edit_code:
+            if pending_proposal is None:
+                template_response = _beginner_template_command_response(text, edit_code, mode="transforms")
+                if template_response is not None:
+                    return template_response
             local = natural_code_editor.local_edit(edit_code, text)
             if local.get("status") == "edited":
                 return _memory_edit_proposal_response(
@@ -8714,6 +8746,18 @@ def _natural_code_edit_response(
     source: str,
     mapped_intent: str = "edit_current_code",
 ) -> dict:
+    if str(current_code or "").strip() == str(updated_code or "").strip():
+        message = "I could not find a new code change to review yet."
+        return {
+            "success": True,
+            "action": "deterministic_message",
+            "message": message,
+            "speech": message,
+            "heard": text,
+            "mapped_intent": mapped_intent,
+            "natural_code_edit": True,
+            "source": source,
+        }
     response = _make_conversational_edit_response(
         "replace_code",
         code=updated_code,
@@ -8967,6 +9011,7 @@ def _route_ai_natural_command_mapper(
             template_result,
             text,
             source="natural_command_mapper",
+            current_code=current_code,
         )
         if response:
             response.update(base)
@@ -9099,6 +9144,8 @@ def voice():
         ai = response_dict.get("ai_action")
         if not isinstance(ai, dict):
             return
+        if str(response_dict.get("template_intent") or "").startswith("generate_"):
+            return
         after = ai.get("code")
         if not isinstance(after, str) or not after.strip():
             return
@@ -9107,11 +9154,19 @@ def voice():
             after_full = (before.rstrip("\n") + "\n" + after) if before.strip() else after
         else:
             after_full = after
-        if before == after_full:
-            return
         file_name = _safe_text(body.get("file"), limit=200) if isinstance(body.get("project"), dict) else ""
-        session_memory.record_change(mem, before=before, after=after_full,
-                                     file_name=file_name, reason=text)
+        session_memory.record_code_change(
+            mem,
+            before_code=before,
+            after_code=after_full,
+            command=text,
+            source=str(ai.get("source") or response_dict.get("source") or ""),
+            summary=str(response_dict.get("edit_summary")
+                        or response_dict.get("speech")
+                        or ai.get("spoken_confirmation")
+                        or ""),
+            file_name=file_name,
+        )
 
     def _store_and_return(response_dict, status_code=200):
         if command_norm.get("changed"):
@@ -9787,8 +9842,16 @@ def voice():
             record = session_memory.move_change_cursor(mem, 1)
         elif intent == "diff_prev":
             record = session_memory.move_change_cursor(mem, -1)
+        elif intent in {"diff_review", "diff_before_after"}:
+            record = session_memory.get_last_change(mem) or session_memory.get_change_at_cursor(mem)
+            if record in history:
+                mem["change_cursor"] = history.index(record)
         else:
             record = session_memory.get_change_at_cursor(mem)
+        if not record:
+            speech = "I could not find a new code change to review yet."
+            return _store_and_return({"success": True, "action": "deterministic_message",
+                                      "speech": speech, "message": speech, "heard": text, "intent": intent})
         change = audio_diff.summarize_change(
             record.get("before", ""), record.get("after", ""),
             file_name=record.get("file", ""), reason=record.get("reason", ""))
@@ -9806,6 +9869,9 @@ def voice():
             speech = f"Kept all {len(history)} change{'s' if len(history) != 1 else ''}."
         else:  # diff_review, diff_next, diff_prev
             speech = audio_diff.narrate(change)
+            summary = str(record.get("summary") or "").strip()
+            if summary and intent == "diff_review" and summary.lower() not in speech.lower():
+                speech = f"Latest edit: {summary}\n{speech}"
         return _store_and_return({
             "success": True, "action": "deterministic_message", "intent": intent,
             "speech": speech, "message": speech, "heard": text, "confidence": confidence,

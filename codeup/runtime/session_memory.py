@@ -197,6 +197,7 @@ def record_actions(mem: Dict[str, Any], action_names: List[str]) -> None:
 
 
 def record_generation(mem: Dict[str, Any], prompt: str, code: Optional[str] = None) -> None:
+    fresh_generation = False
     if prompt:
         prompt_text = _clip(prompt, _MAX_PROMPT)
         lower_prompt = prompt_text.lower()
@@ -204,12 +205,15 @@ def record_generation(mem: Dict[str, Any], prompt: str, code: Optional[str] = No
             mem["last_edit_request"] = prompt_text
             mem["student_satisfied"] = False
         else:
+            fresh_generation = True
             mem["last_gen_prompt"] = prompt_text
             mem["last_generated_goal"] = prompt_text
             mem["last_code_generation_command"] = prompt_text
             mem["last_code_generation_time"] = time.time()
             mem["latest_user_request"] = prompt_text
     if code:
+        if fresh_generation:
+            clear_change_review(mem)
         bounded_code = _clip(code, _MAX_CODE)
         mem["last_generated_code"] = bounded_code
         mem["last_generated_code_hash"] = code_hash(bounded_code)
@@ -391,6 +395,7 @@ def record_code_edit(mem: Dict[str, Any], *, instruction: str = "", old_code: st
 
 
 def clear_edit_memory(mem: Dict[str, Any]) -> None:
+    clear_change_review(mem)
     for key in (
         "last_gen_prompt", "last_gen_summary", "last_generated_code",
         "last_generated_goal", "last_generated_code_hash",
@@ -437,14 +442,29 @@ def clear_pending(mem: Dict[str, Any]) -> None:
 _MAX_CHANGE_HISTORY = 10
 
 
+def clear_change_review(mem: Dict[str, Any]) -> None:
+    mem["change_history"] = []
+    mem["undo_stack"] = []
+    mem["last_change"] = None
+    mem["change_cursor"] = 0
+    mem["change_order"] = 0
+    mem["pending_change_proposal"] = None
+
+
 def record_change(mem: Dict[str, Any], *, before: str = "", after: str = "",
-                  file_name: str = "", reason: str = "") -> Dict[str, Any]:
+                  file_name: str = "", reason: str = "", summary: str = "",
+                  source: str = "") -> Dict[str, Any]:
     """Record an applied before/after code change for Audio Diff Review."""
+    order = max(0, int(mem.get("change_order") or 0)) + 1
+    mem["change_order"] = order
     record = {
         "before": _clip(before, _MAX_CODE),
         "after": _clip(after, _MAX_CODE),
         "file": _clip(file_name, 200),
         "reason": _clip(reason, 200),
+        "summary": _clip(summary, 300),
+        "source": _clip(source, 80),
+        "order": order,
         "timestamp": time.time(),
     }
     history = mem.setdefault("change_history", [])
@@ -456,6 +476,32 @@ def record_change(mem: Dict[str, Any], *, before: str = "", after: str = "",
     mem["last_change"] = record
     mem["change_cursor"] = len(history) - 1
     return record
+
+
+def record_code_change(mem: Dict[str, Any], *, before_code: str = "", after_code: str = "",
+                       command: str = "", source: str = "", summary: str = "",
+                       file_name: str = "") -> Optional[Dict[str, Any]]:
+    """Record a successful applied code edit, returning None for no real change."""
+    before_raw = str(before_code or "")
+    after_raw = str(after_code or "")
+    if before_raw.strip() == after_raw.strip():
+        return None
+    record_code_edit(
+        mem,
+        instruction=command,
+        old_code=before_raw,
+        new_code=after_raw,
+        summary=summary,
+    )
+    return record_change(
+        mem,
+        before=before_raw,
+        after=after_raw,
+        file_name=file_name,
+        reason=command,
+        summary=summary,
+        source=source,
+    )
 
 
 def get_last_change(mem: Dict[str, Any]) -> Optional[Dict[str, Any]]:

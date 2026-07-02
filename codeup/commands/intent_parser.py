@@ -1019,12 +1019,12 @@ class IntentParser:
         r"^propose\s+a\s+fix$",
     ]
     DIFF_REVIEW_PATTERNS = [
-        r"^what\s+changed$", r"^review\s+(?:the\s+)?changes$", r"^audio\s+diff$",
+        r"^what\s+changed$", r"^show\s+what\s+changed$", r"^review\s+(?:the\s+)?changes$", r"^audio\s+diff$",
         r"^read\s+the\s+diff$", r"^read\s+(?:the\s+)?changes$", r"^review\s+the\s+diff$",
         r"^show\s+(?:me\s+)?the\s+diff$",
     ]
     DIFF_BEFORE_AFTER_PATTERNS = [
-        r"^read\s+before\s+and\s+after$", r"^before\s+and\s+after$",
+        r"^read\s+before\s+and\s+after$", r"^show\s+before\s+and\s+after$", r"^before\s+and\s+after$",
         r"^read\s+(?:the\s+)?(?:old|previous)\s+version$",
         r"^read\s+(?:the\s+)?new\s+version$",
     ]

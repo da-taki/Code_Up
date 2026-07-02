@@ -9,9 +9,30 @@ record a reviewable diff.
 
 import pytest
 
+import app as app_module
 from codeup.accessibility import audio_diff
 from app import app
 from codeup.commands.intent_parser import parse_intent
+
+
+AGE_PROGRAM = 'age = 16\nresult = age + 1\nprint("Next age:", result)\n'
+LOOP_PROGRAM = 'for i in range(3):\n    print(i)\n'
+MARKS_PROGRAM = (
+    'maths = float(input("Enter maths marks: "))\n'
+    'science = float(input("Enter science marks: "))\n'
+    'english = float(input("Enter english marks: "))\n\n'
+    'average = (maths + science + english) / 3\n'
+    'print("Average marks:", average)\n'
+)
+MARKS_FUNCTION_PROGRAM = (
+    "def calculate_average(maths, science, english):\n"
+    "    return (maths + science + english) / 3\n\n"
+    "maths = 80\n"
+    "science = 90\n"
+    "english = 85\n\n"
+    "average = calculate_average(maths, science, english)\n"
+    'print("Average marks:", average)\n'
+)
 
 
 @pytest.fixture
@@ -104,7 +125,9 @@ def test_project_diff_multi_file_summary():
 
 def test_intents_registered():
     assert parse_intent("what changed")["intent"] == "diff_review"
+    assert parse_intent("show what changed")["intent"] == "diff_review"
     assert parse_intent("read before and after")["intent"] == "diff_before_after"
+    assert parse_intent("show before and after")["intent"] == "diff_before_after"
     assert parse_intent("explain this change")["intent"] == "diff_explain"
     assert parse_intent("is this risky")["intent"] == "diff_risk"
     assert parse_intent("next change")["intent"] == "diff_next"
@@ -133,6 +156,106 @@ def test_read_before_and_after(client):
     vc(client, "insert a for loop that prints the first 3 whole numbers", code="")
     data = vc(client, "read before and after")
     assert "Before:" in data["speech"] and "After:" in data["speech"]
+
+
+def test_single_edit_review_and_before_after_use_recorded_pair(client):
+    edit = vc(client, "make it use a function", code=AGE_PROGRAM)
+    assert edit["action"] == "conversational_edit"
+    edited_code = edit["ai_action"]["code"]
+    assert "def next_age" in edited_code
+
+    review = vc(client, "show what changed", code=edited_code)
+    assert review["action"] == "deterministic_message"
+    assert "function" in review["speech"].lower()
+    assert review["audio_diff"]["change_number"] == review["audio_diff"]["total_changes"]
+
+    before_after = vc(client, "read before and after", code=edited_code)
+    assert "Before:" in before_after["speech"]
+    assert "age = 16" in before_after["speech"]
+    assert "After:" in before_after["speech"]
+    assert "def next_age" in before_after["speech"]
+
+
+def test_two_edits_keep_latest_change_reviewable(client):
+    first = vc(client, "make it use a function", code=AGE_PROGRAM)
+    function_code = first["ai_action"]["code"]
+
+    first_review = vc(client, "what changed", code=function_code)
+    assert "function" in first_review["speech"].lower()
+
+    second = vc(client, "add comments", code=function_code)
+    assert second["action"] == "conversational_edit"
+    commented_code = second["ai_action"]["code"]
+    assert "# " in commented_code
+
+    latest_review = vc(client, "what changed", code=commented_code)
+    assert latest_review["action"] == "deterministic_message"
+    assert "comments" in latest_review["speech"].lower()
+    assert latest_review["audio_diff"]["change_number"] == latest_review["audio_diff"]["total_changes"]
+
+    before_after = vc(client, "read before and after", code=commented_code)
+    assert "Before:" in before_after["speech"]
+    assert "After:" in before_after["speech"]
+    assert "Store a value" in before_after["speech"]
+
+
+def test_generated_followup_edit_records_before_after_then_latest_comment_edit(client, monkeypatch):
+    monkeypatch.setattr(app_module, "call_gemini", lambda *_args, **_kwargs: MARKS_FUNCTION_PROGRAM)
+
+    followup = vc(client, "make it use a function", code=MARKS_PROGRAM)
+    assert followup["action"] == "generate_code"
+    assert followup.get("source") == "memory_followup"
+
+    generated = client.post("/generate-code", json={"prompt": followup["prompt"], "source": "typed"}).get_json()
+    assert generated["success"] is True
+    assert generated["code"].strip() == MARKS_FUNCTION_PROGRAM.strip()
+
+    review = vc(client, "what changed", code=MARKS_FUNCTION_PROGRAM)
+    assert review["action"] == "deterministic_message"
+    assert review["audio_diff"]["total_changes"] >= 1
+    before_after = vc(client, "read before and after", code=MARKS_FUNCTION_PROGRAM)
+    assert "Before:" in before_after["speech"]
+    assert "Enter maths marks" in before_after["speech"]
+    assert "After:" in before_after["speech"]
+    assert "calculate_average" in before_after["speech"]
+
+    comments = vc(client, "add comments", code=MARKS_FUNCTION_PROGRAM)
+    assert comments["action"] == "conversational_edit"
+    commented_code = comments["ai_action"]["code"]
+    latest = vc(client, "what changed", code=commented_code)
+    assert "comments" in latest["speech"].lower()
+    assert latest["audio_diff"]["change_number"] == latest["audio_diff"]["total_changes"]
+
+
+def test_non_edit_commands_do_not_erase_latest_change(client):
+    first = vc(client, "make it use a function", code=AGE_PROGRAM)
+    function_code = first["ai_action"]["code"]
+    second = vc(client, "add comments", code=function_code)
+    commented_code = second["ai_action"]["code"]
+
+    assert "Project map:" in vc(client, "project map", code=commented_code)["speech"]
+    assert vc(client, "show program state", code=commented_code)["action"] == "deterministic_message"
+    concept = vc(client, "what is a print function", code=commented_code)
+    assert concept["action"] == "deterministic_message"
+    assert concept.get("concept") == "print"
+
+    review = vc(client, "what changed", code=commented_code)
+    assert "comments" in review["speech"].lower()
+    assert review["audio_diff"]["total_changes"] >= 2
+
+
+def test_fresh_generation_clears_stale_change_review(client):
+    edit = vc(client, "add comments", code=LOOP_PROGRAM)
+    commented_code = edit["ai_action"]["code"]
+    assert "comments" in vc(client, "what changed", code=commented_code)["speech"].lower()
+
+    generated = vc(client, "make a marks average program", code=commented_code)
+    assert generated["action"] in {"generate_code", "conversational_edit"}
+
+    stale = vc(client, "read before and after", code="")
+    assert stale["action"] == "deterministic_message"
+    assert "no code changes to review" in stale["speech"].lower()
+    assert "Loop through the values" not in stale["speech"]
 
 
 def test_explain_this_change(client):

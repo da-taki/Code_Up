@@ -4053,7 +4053,7 @@ def _split_input_values(raw: str) -> List[str]:
 def _extract_input_command_values(text: str) -> Optional[List[str]]:
     raw = str(text or "").strip()
     patterns = [
-        r"^use\s+(.+?)\s+as\s+(?:an?\s+)?inputs?$",
+        r"^use\s+(.+?)\s+(?:as|hours?|has|is)\s+(?:an?\s+)?inputs?$",
         r"^use\s+(.+?)\s+as\s+(?:a\s+)?values?$",
         r"^insert\s+(.+?)\s+as\s+(?:an?\s+)?inputs?$",
         r"^insert\s+(.+?)\s+as\s+(?:a\s+)?values?$",

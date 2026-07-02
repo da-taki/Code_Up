@@ -42,12 +42,34 @@ def test_input_help_commands_are_deterministic(client, command):
     assert data.get("needs_clarification") is not True
 
 
-@pytest.mark.parametrize("command", ["use 16 as input", "insert 16 as value"])
+@pytest.mark.parametrize("command", ["use 16 as input", "use 80 as input", "insert 16 as value"])
 def test_single_input_value_commands_store_pending_value(client, command):
     data = vc(client, command)
     assert data["action"] == "set_inputs"
-    assert data["values"] == ["16"]
-    assert "next input call will receive: 16" in data["speech"]
+    expected = "80" if "80" in command else "16"
+    assert data["values"] == [expected]
+    assert f"next input call will receive: {expected}" in data["speech"]
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ("use 80 hours input", "80"),
+        ("use 90 hour input", "90"),
+        ("use 80 has input", "80"),
+        ("use 80 is input", "80"),
+        ("use hello hours input", "hello"),
+    ],
+)
+def test_misheard_as_input_commands_store_pending_value(client, command, expected):
+    data = vc(client, command)
+    assert data["action"] == "set_inputs"
+    assert data["values"] == [expected]
+
+
+def test_input_mishearing_normalization_is_scoped_to_input_commands():
+    assert app_module._extract_input_command_values("use 80 hours input") == ["80"]
+    assert app_module._extract_input_command_values("write code about 80 hours") is None
 
 
 def test_multiple_input_values_parse_in_order(client):

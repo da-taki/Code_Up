@@ -41,9 +41,24 @@ def test_live_assistant_module_is_self_contained():
     assert "document.getElementById" not in src  # the factory must stay DOM-free
 
 
-def test_index_html_has_accessible_live_assistant_panel():
+def test_index_html_keeps_live_assistant_hooks_but_hides_demo_panel():
     html = _read("templates/index.html")
     assert 'id="liveAssistantPanel"' in html
+    panel_start = html.index('<section id="liveAssistantPanel"')
+    panel_end = html.index("</section>", panel_start) + len("</section>")
+    panel_open_tag = html[panel_start:html.index(">", panel_start)]
+    visible_html = html[:panel_start] + html[panel_end:]
+    assert " hidden" in panel_open_tag
+    for phrase in (
+        "Live Assistant: off",
+        "You said: (nothing yet)",
+        "CodeUp said: (nothing yet)",
+        "Start live assistant",
+        "Pause listening",
+        "Stop speaking",
+        "Repeat last response",
+    ):
+        assert phrase not in visible_html
     assert 'aria-label="Live Assistant"' in html
     # Status uses a polite live region (not assertive).
     assert 'id="liveAssistantStatus"' in html and 'aria-live="polite"' in html

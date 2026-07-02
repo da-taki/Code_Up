@@ -30,8 +30,6 @@ def vc(client, text, code=""):
         "how do inputs work",
         "how does input work",
         "how do I use input",
-        "teach me input",
-        "explain input",
     ],
 )
 def test_input_help_commands_are_deterministic(client, command):
@@ -40,6 +38,17 @@ def test_input_help_commands_are_deterministic(client, command):
     assert data["input_help"] is True
     assert "input asks the user" in data["message"]
     assert data.get("needs_clarification") is not True
+
+
+@pytest.mark.parametrize("command", ["teach me input", "explain input", "what is input", "what is an input function"])
+def test_input_concept_commands_are_short_deterministic_theory(client, command):
+    data = vc(client, command)
+    assert data["action"] == "deterministic_message"
+    assert data.get("concept") == "input"
+    assert data.get("input_help") is not True
+    assert "input is how Python asks" in data["message"]
+    assert "Example:\n" in data["message"]
+    assert "Beginner note:" in data["message"]
 
 
 @pytest.mark.parametrize("command", ["use 16 as input", "use 80 as input", "insert 16 as value"])
@@ -123,6 +132,26 @@ def test_reply_while_awaiting_input_runs_next(client):
     assert data["action"] == "action_sequence"
     assert [a["action"] for a in data["actions"]] == ["set_inputs", "run"]
     assert data["actions"][0]["values"] == ["Taknoor"]
+
+
+def test_input_command_phrases_while_awaiting_use_values_only(client):
+    first = client.post("/run", json={"code": NAME_AGE}).get_json()
+    assert first["action"] == "request_program_input"
+    second = vc(client, "use 80 as input", code=NAME_AGE)
+    assert second["action"] == "request_program_input"
+    assert second["values"] == ["80"]
+    done = vc(client, "use 80 hours input", code=NAME_AGE)
+    assert done["action"] == "action_sequence"
+    set_inputs = next(a for a in done["actions"] if a["action"] == "set_inputs")
+    assert set_inputs["values"] == ["80", "80"]
+
+
+def test_project_map_command_while_awaiting_input_routes_normally(client):
+    first = client.post("/run", json={"code": NAME}).get_json()
+    assert first["action"] == "request_program_input"
+    data = vc(client, "project map", code=NAME)
+    assert data["action"] == "deterministic_message"
+    assert "Project map:" in data["speech"]
 
 
 def test_runtime_input_clears_backend_pending_after_success(client):

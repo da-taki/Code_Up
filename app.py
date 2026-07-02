@@ -4017,8 +4017,6 @@ _INPUT_HELP_COMMANDS = {
     "how do inputs work",
     "how does input work",
     "how do i use input",
-    "teach me input",
-    "explain input",
 }
 
 
@@ -4155,8 +4153,19 @@ def _handle_awaiting_program_input(text: str, code: str, mem: Dict[str, Any]) ->
         session_memory.clear_awaiting_program_input(mem)
         msg = "The code changed, so I cleared the old input request. Run again when ready."
         return {"success": True, "action": "deterministic_message", "message": msg, "speech": msg}
+    explicit_values = _extract_input_command_values(text)
+    if explicit_values is None and (
+        concept_qa.classify_concept_question(text)
+        or re.match(r"^(?:project\s+map|give\s+me\s+a\s+project\s+map|summarize\s+project|"
+                    r"analy[sz]e(?:\s+code)?|walk\s+through(?:\s+code)?|explain\s+this\s+code)\b", t)
+    ):
+        return None
     values = list(awaiting.get("values") or [])
-    values.append(_clean_program_input_reply(text)[:1000])
+    if explicit_values is not None:
+        values.extend(str(v)[:1000] for v in explicit_values)
+    else:
+        values.append(_clean_program_input_reply(text)[:1000])
+    values = values[:len(prompts)] if prompts else values
     if len(values) < len(prompts):
         return _request_program_input_response(
             mem, code=code, descriptors=prompts, values=values,
@@ -7705,6 +7714,37 @@ def _ground_concept_answer(answer, required_facts, code, text):
     )
 
 
+def _deterministic_concept_voice_response(
+    text: str, current_code: str, *, allow_unknown: bool = True
+) -> Optional[dict]:
+    t = " ".join(str(text or "").lower().strip().rstrip(".!?").split())
+    if re.match(r"^explain\s+(?:loops?|loop\s+state)\b", t):
+        return None
+    non_code_kind = concept_qa.classify_non_code_query(text)
+    if non_code_kind:
+        msg = concept_qa.non_code_answer(non_code_kind)
+        return {
+            "success": True, "action": "deterministic_message",
+            "message": msg, "speech": msg, "heard": text, "concept": non_code_kind,
+        }
+    concept_kind = concept_qa.classify_concept_question(text)
+    if not concept_kind:
+        return None
+    if concept_kind == concept_qa.UNKNOWN_CONCEPT and not allow_unknown:
+        return None
+    answer, facts = concept_qa.answer_concept(concept_kind, current_code)
+    if not answer:
+        return None
+    if concept_kind in concept_qa.GROUNDED_KINDS:
+        message = _ground_concept_answer(answer, facts, current_code, text)
+    else:
+        message = answer
+    return {
+        "success": True, "action": "deterministic_message",
+        "message": message, "speech": message, "heard": text, "concept": concept_kind,
+    }
+
+
 def _resolve_pending_clarification(pending, text, mem):
     ptype = pending.get("type")
     if ptype == "pattern":
@@ -9162,6 +9202,10 @@ def voice():
                                       "speech": msg, "message": msg, "heard": text,
                                       "intent": "diff_before_after"})
 
+    concept_response = _deterministic_concept_voice_response(text, current_code, allow_unknown=False)
+    if concept_response is not None:
+        return _store_and_return(concept_response)
+
     accessibility_response = _accessibility_command_response(text, storage)
     if accessibility_response is not None:
         accessibility_response.setdefault("heard", text)
@@ -10094,19 +10138,9 @@ def voice():
             "message": msg, "speech": msg, "heard": text, "concept": non_code_kind,
         })
 
-    concept_kind = concept_qa.classify_concept_question(text)
-    if concept_kind:
-        if concept_kind != "range" or re.search(r"\brange\s*\(", current_code or ""):
-            answer, facts = concept_qa.answer_concept(concept_kind, current_code)
-            if answer:
-                if concept_kind in concept_qa.GROUNDED_KINDS:
-                    message = _ground_concept_answer(answer, facts, current_code, text)
-                else:
-                    message = answer
-                return _store_and_return({
-                    "success": True, "action": "deterministic_message",
-                    "message": message, "speech": message, "heard": text, "concept": concept_kind,
-                })
+    concept_response = _deterministic_concept_voice_response(text, current_code)
+    if concept_response is not None:
+        return _store_and_return(concept_response)
 
     pending_clarification = storage.get("pending_orchestrator_clarification")
     orchestrator_text = text

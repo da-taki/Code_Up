@@ -24,7 +24,7 @@ _TRIGGERS = [
 ]
 
 
-GROUNDED_KINDS = {"quotes", "indentation", "colon", "range", "print", "variable"}
+GROUNDED_KINDS = {"quotes", "indentation", "colon"}
 
 UNKNOWN_CONCEPT = "__unknown_concept__"   # concept-form question, topic unknown
 IDENTITY_QUERY = "__identity__"
@@ -88,6 +88,58 @@ _CONCEPTS = {
         "A return value is the result a function sends back using the return keyword. The code "
         "that called the function can then use that value. For example, a function that adds two "
         "numbers can return their sum so you can store or print it."),
+}
+
+_BEGINNER_CONCEPTS = {
+    "print": (
+        "print is how Python shows text or values on the screen.\n\n"
+        "Example:\n"
+        "print(\"Hello\")\n\n"
+        "Beginner note: print does not ask the user for information. It only shows output."),
+    "input": (
+        "input is how Python asks the user to type a value while the program is running.\n\n"
+        "Example:\n"
+        "name = input(\"Enter name: \")\n"
+        "print(name)\n\n"
+        "Beginner note: input receives information from the user, while print shows information to the user."),
+    "range": (
+        "range is how Python makes a simple sequence of numbers, often for a loop.\n\n"
+        "Example:\n"
+        "for number in range(3):\n"
+        "    print(number)\n\n"
+        "Beginner note: range(3) gives 0, 1, and 2, not 1, 2, and 3."),
+    "for_loop": (
+        "A for loop repeats the same block of code once for each value it is given.\n\n"
+        "Example:\n"
+        "for number in range(3):\n"
+        "    print(number)\n\n"
+        "Beginner note: the indented line is inside the loop, so it runs again and again."),
+    "variable": (
+        "A variable is a name that stores a value so your program can use it later.\n\n"
+        "Example:\n"
+        "score = 10\n"
+        "print(score)\n\n"
+        "Beginner note: the variable name is on the left, and the stored value is on the right."),
+    "function": (
+        "A function is a named set of instructions that you can run whenever you need it.\n\n"
+        "Example:\n"
+        "def greet():\n"
+        "    print(\"Hello\")\n"
+        "greet()\n\n"
+        "Beginner note: defining a function saves the instructions; calling it makes them run."),
+    "if_statement": (
+        "An if statement lets Python choose whether to run a block of code based on a condition.\n\n"
+        "Example:\n"
+        "score = 80\n"
+        "if score >= 50:\n"
+        "    print(\"Pass\")\n\n"
+        "Beginner note: the indented line runs only when the condition is true."),
+    "list": (
+        "A list stores several values in one ordered group.\n\n"
+        "Example:\n"
+        "scores = [80, 90, 75]\n"
+        "print(scores[0])\n\n"
+        "Beginner note: Python list positions start at 0, so scores[0] means the first item."),
 }
 
 _UNKNOWN_CONCEPT_MESSAGE = (
@@ -163,6 +215,15 @@ def _weak_command_target(topic: str) -> bool:
     return bool(set(re.findall(r"[a-z]+", t)) & _WEAK_DEFER_WORDS)
 
 _CONCEPT_ALIASES = {
+    "print": ["print", "print function", "print functions", "print statement", "print statements"],
+    "input": ["input", "input function", "input functions", "input statement"],
+    "range": ["range", "range function", "range functions"],
+    "for_loop": ["for loop", "for loops", "loop", "loops"],
+    "variable": ["variable", "variables"],
+    "function": ["function", "functions"],
+    "if_statement": ["if statement", "if statements", "condition", "conditions",
+                     "conditional", "conditionals"],
+    "list": ["list", "lists"],
     "recursion": ["recursion", "recursive function", "recursive functions", "recursive"],
     "inheritance": ["inheritance", "parent class", "child class", "subclass", "superclass", "inherit"],
     "big_o": ["big o", "big-o", "big o notation", "time complexity", "space complexity",
@@ -182,11 +243,10 @@ _CONCEPT_ALIASES = {
 }
 
 _DEFER_ALIASES = [
-    "loop", "loops", "for loop", "for loops", "while loop", "while loops",
-    "list", "lists", "dictionary", "dictionaries", "dict", "dicts",
-    "string", "strings", "function", "functions", "variable", "variables",
-    "boolean", "booleans", "bool", "true false", "range", "print",
-    "if statement", "if statements", "conditional", "conditionals", "indentation", "colon",
+    "while loop", "while loops",
+    "dictionary", "dictionaries", "dict", "dicts",
+    "string", "strings",
+    "boolean", "booleans", "bool", "true false", "indentation", "colon",
 ]
 
 _CONCEPT_BY_ALIAS = {alias: kind for kind, aliases in _CONCEPT_ALIASES.items() for alias in aliases}
@@ -298,21 +358,8 @@ def answer_concept(kind: str, code: str = "") -> Tuple[str, List[str]]:
                     [literal, "text", "variable"])
         return ("Quotes tell Python that the words inside are text, not a variable name.",
                 ["text", "variable"])
-    if kind == "range":
-        count = _first_range_count(code)
-        if count is not None and 0 < count <= 10:
-            times = _COUNT_WORDS.get(count, f"{count} times")
-            return (f"range({count}) gives Python the numbers {_number_list(count)}, "
-                    f"so the loop runs {times}.",
-                    [f"range({count})", str(count)])
-        return ("range(n) gives Python the numbers from 0 up to n minus one, "
-                "so the loop runs n times.", ["range", "0"])
-    if kind == "print":
-        return ("The print statement tells Python to show a message on the screen.",
-                ["print", "message"])
-    if kind == "variable":
-        return ("A variable is a named box that stores a value so you can use it later.",
-                ["variable", "value"])
+    if kind in _BEGINNER_CONCEPTS:
+        return (_BEGINNER_CONCEPTS[kind], [])
     if kind == "indentation":
         return ("Indentation, the spaces at the start of a line, means that line belongs "
                 "inside the block above it.", ["indentation", "block"])

@@ -24,8 +24,10 @@ def client(monkeypatch):
         yield c
 
 
-def _vc(client, text, code=LOOP):
-    return client.post("/voice-command", json={"text": text, "code": code}).get_json()
+def _vc(client, text, code=LOOP, **extra):
+    payload = {"text": text, "code": code}
+    payload.update(extra)
+    return client.post("/voice-command", json=payload).get_json()
 
 
 
@@ -82,6 +84,73 @@ class TestBeginnerConceptsStillWork:
         d = _vc(client, text)
         assert d["action"] in ("deterministic_message", "mentor_chat"), (text, d["action"])
         assert d["action"] not in _MUTATING
+
+
+class TestBeginnerTheoryDemoConcepts:
+
+    @pytest.mark.parametrize("text,kind,expected", [
+        ("what is a print function", "print", "print is how Python shows"),
+        ("what is the print function", "print", "print is how Python shows"),
+        ("what is print", "print", "print is how Python shows"),
+        ("what is print function", "print", "print is how Python shows"),
+        ("what is a print functions", "print", "print is how Python shows"),
+        ("explain print", "print", "print is how Python shows"),
+        ("teach me print", "print", "print is how Python shows"),
+        ("what is an input function", "input", "input is how Python asks"),
+        ("what is input", "input", "input is how Python asks"),
+        ("teach me input", "input", "input is how Python asks"),
+        ("what is a range function", "range", "range is how Python makes"),
+        ("what is a for loop", "for_loop", "A for loop repeats"),
+        ("what is a variable", "variable", "A variable is a name"),
+        ("what is a function", "function", "A function is a named set"),
+        ("what is an if statement", "if_statement", "An if statement lets"),
+        ("what is a condition", "if_statement", "An if statement lets"),
+        ("what is a list", "list", "A list stores"),
+    ])
+    def test_beginner_concepts_are_deterministic_short_explanations(self, client, text, kind, expected, monkeypatch):
+        def fail_ai(*args, **kwargs):
+            raise AssertionError("AI should not be called for beginner concept explanations")
+
+        monkeypatch.setattr(app_module, "call_conversation_orchestrator_ai", fail_ai)
+        d = _vc(client, text, code="")
+        assert d["action"] == "deterministic_message", (text, d)
+        assert d.get("concept") == kind
+        msg = d["message"]
+        assert expected in msg
+        assert "Example:\n" in msg
+        assert "Beginner note:" in msg
+        assert len(msg.split()) <= 85
+        assert d["action"] not in _MUTATING
+
+    def test_unknown_beginner_concept_gets_graceful_fallback(self, client):
+        d = _vc(client, "what is flarbology", code="")
+        assert d["action"] == "deterministic_message"
+        assert d.get("concept") == concept_qa.UNKNOWN_CONCEPT
+        assert "I do not have a prepared explanation" in d["message"]
+
+    def test_existing_analyze_walkthrough_and_project_map_routes_still_win(self, client):
+        assert _vc(client, "analyze", code=LOOP)["action"] == "analyze"
+        assert _vc(client, "walk through code", code=LOOP)["action"] == "walk_through"
+        project = _vc(client, "project map", code=LOOP)
+        assert project["action"] == "deterministic_message"
+        assert "Project map:" in project["speech"]
+
+    def test_beginner_concept_wins_even_with_recent_error_context(self, client, monkeypatch):
+        def fail_mapper(*args, **kwargs):
+            raise AssertionError("Natural command mapper should not handle beginner concept questions")
+
+        monkeypatch.setattr(app_module, "_structured_ai_available", lambda: True)
+        monkeypatch.setattr(app_module, "_call_ai_natural_command_mapper", fail_mapper)
+        d = _vc(
+            client,
+            "what is input",
+            code='marks = float(input("Enter marks: "))\nprint(marks)\n',
+            error="ValueError: could not convert string to float: '80 as input'",
+            source="typed",
+        )
+        assert d["action"] == "deterministic_message"
+        assert d.get("concept") == "input"
+        assert "input is how Python asks" in d["message"]
 
 
 
@@ -164,9 +233,15 @@ class TestClassifierUnit:
     def test_aliases_resolve(self, text, kind):
         assert concept_qa.classify_concept_question(text) == kind
 
-    @pytest.mark.parametrize("text", [
-        "what is a loop", "what is a list", "what is a function", "what is a string",
+    @pytest.mark.parametrize("text,kind", [
+        ("what is a loop", "for_loop"),
+        ("what is a list", "list"),
+        ("what is a function", "function"),
     ])
+    def test_beginner_basics_resolve_locally(self, text, kind):
+        assert concept_qa.classify_concept_question(text) == kind
+
+    @pytest.mark.parametrize("text", ["what is a string"])
     def test_mentor_handled_concepts_defer(self, text):
         assert concept_qa.classify_concept_question(text) is None
 

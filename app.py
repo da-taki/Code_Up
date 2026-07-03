@@ -7736,6 +7736,34 @@ def _ground_concept_answer(answer, required_facts, code, text):
     )
 
 
+def _python_concept_ai_fallback(topic: str) -> str:
+    topic = _safe_text(topic, limit=MAX_LEARNING_TOPIC_SIZE).strip()
+    if not topic or not concept_qa.is_python_related_topic(topic):
+        return ""
+    if not _structured_ai_available():
+        return ""
+    system = (
+        "You are CodeUp's beginner Python concept explainer. Answer only Python or "
+        "programming learning topics. Keep it short, voice-safe, and screen-reader friendly. "
+        "Use exactly this shape: first sentence starts with the topic and explains it simply; "
+        "then a line that starts Example:; then a line that starts Beginner note:. "
+        "Do not use markdown tables, backticks, bullets, unsafe code, personal advice, "
+        "secrets, environment values, or long documentation."
+    )
+    user = f"Python topic: {topic}\nReturn a short beginner explanation."
+    raw = call_conversation_orchestrator_ai(system, user)
+    message = re.sub(r"`+", "", str(raw or "")).strip()
+    if not message or "|" in message:
+        return ""
+    if not re.search(r"\bpython|program|code|function|class|object|module|error|loop|value\b",
+                     message, re.IGNORECASE):
+        return ""
+    words = message.split()
+    if len(words) > 95:
+        message = " ".join(words[:95]).rstrip(" ,;:")
+    return message[:700].strip()
+
+
 def _deterministic_concept_voice_response(
     text: str, current_code: str, *, allow_unknown: bool = True
 ) -> Optional[dict]:
@@ -7755,6 +7783,11 @@ def _deterministic_concept_voice_response(
     if concept_kind == concept_qa.UNKNOWN_CONCEPT and not allow_unknown:
         return None
     answer, facts = concept_qa.answer_concept(concept_kind, current_code)
+    if concept_kind == concept_qa.UNKNOWN_CONCEPT:
+        topic = concept_qa.extract_concept_topic(text) or ""
+        ai_answer = _python_concept_ai_fallback(topic)
+        if ai_answer:
+            answer, facts = ai_answer, []
     if not answer:
         return None
     if concept_kind in concept_qa.GROUNDED_KINDS:

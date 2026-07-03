@@ -241,9 +241,9 @@ class TestClassifierUnit:
     def test_beginner_basics_resolve_locally(self, text, kind):
         assert concept_qa.classify_concept_question(text) == kind
 
-    @pytest.mark.parametrize("text", ["what is a string"])
-    def test_mentor_handled_concepts_defer(self, text):
-        assert concept_qa.classify_concept_question(text) is None
+    @pytest.mark.parametrize("text,kind", [("what is a string", "str"), ("what is a dictionary", "dict")])
+    def test_more_beginner_basics_resolve_locally(self, text, kind):
+        assert concept_qa.classify_concept_question(text) == kind
 
     @pytest.mark.parametrize("text", [
         "explain this code", "what does this function do", "write a program",
@@ -326,6 +326,87 @@ class TestKnownConceptCommandForms:
         d = _vc(text=text, client=client)
         assert d["action"] == "deterministic_message"
         assert d.get("concept") == kind
+
+
+class TestExpandedConceptCatalog:
+
+    @pytest.mark.parametrize("text,kind,keyword", [
+        ("what is len", "len", "count"),
+        ("what is the sorted function", "sorted", "ordered"),
+        ("what does enumerate do", "enumerate", "counter"),
+        ("explain zip", "zip", "pairs"),
+        ("what is open", "open", "file"),
+    ])
+    def test_builtin_concepts_are_deterministic(self, client, text, kind, keyword, monkeypatch):
+        monkeypatch.setattr(app_module, "call_conversation_orchestrator_ai",
+                            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("AI should not run")))
+        d = _vc(client, text, code="")
+        assert d["action"] == "deterministic_message"
+        assert d.get("concept") == kind
+        assert keyword in d["message"].lower()
+        assert "Example:\n" in d["message"]
+        assert "Beginner note:" in d["message"]
+
+    @pytest.mark.parametrize("text,kind,keyword", [
+        ("what is str.strip", "strip", "removing extra spaces"),
+        ("what is append", "append", "end of a list"),
+        ("what is json.loads", "json.loads", "json text"),
+        ("what is math.sqrt", "math.sqrt", "square root"),
+        ("what is random.randint", "random.randint", "random whole number"),
+    ])
+    def test_methods_and_dotted_topics(self, client, text, kind, keyword):
+        d = _vc(client, text, code="")
+        assert d["action"] == "deterministic_message"
+        assert d.get("concept") == kind
+        assert keyword in d["message"].lower()
+        assert "Beginner note:" in d["message"]
+
+    @pytest.mark.parametrize("text,kind,keyword", [
+        ("what is a for loop", "for_loop", "repeats"),
+        ("what is a while loop", "while_loop", "condition"),
+        ("what is recursion", "recursion", "base case"),
+        ("what is list comprehension", "list_comprehension", "compact"),
+        ("what is try except", "exception", "except"),
+        ("what is a decorator", "decorator", "wrap"),
+        ("what is a generator", "generator", "one at a time"),
+        ("what is __init__", "__init__", "setup"),
+    ])
+    def test_theory_topics(self, client, text, kind, keyword):
+        d = _vc(client, text, code="")
+        assert d["action"] == "deterministic_message"
+        assert d.get("concept") == kind
+        assert keyword in d["message"].lower()
+
+    @pytest.mark.parametrize("text,kind,keyword", [
+        ("what is syntax error", "syntax_error", "grammar"),
+        ("what is indentation error", "indentation_error", "spaces"),
+        ("what is type error", "type_error", "wrong kind"),
+        ("what is value error", "value_error", "unusable value"),
+        ("what is index error", "index_error", "position"),
+        ("what is key error", "key_error", "key"),
+    ])
+    def test_error_topics(self, client, text, kind, keyword):
+        d = _vc(client, text, code="")
+        assert d["action"] == "deterministic_message"
+        assert d.get("concept") == kind
+        assert keyword in d["message"].lower()
+
+    @pytest.mark.parametrize("text,kind", [
+        ("what is eval", "eval"),
+        ("what is exec", "exec"),
+    ])
+    def test_dangerous_builtins_include_safety_note(self, client, text, kind):
+        d = _vc(client, text, code="")
+        assert d["action"] == "deterministic_message"
+        assert d.get("concept") == kind
+        assert "unsafe" in d["message"].lower() or "avoid" in d["message"].lower()
+        assert "Beginner note:" in d["message"]
+
+    def test_non_python_what_is_question_is_scoped(self, client):
+        d = _vc(client, "what is the capital of France", code="")
+        assert d["action"] == "deterministic_message"
+        assert d.get("concept") == concept_qa.NON_CODE_QUERY
+        assert "python" in d["message"].lower()
 
 
 

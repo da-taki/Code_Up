@@ -244,6 +244,22 @@ def test_non_edit_commands_do_not_erase_latest_change(client):
     assert review["audio_diff"]["total_changes"] >= 2
 
 
+def test_expanded_concept_question_does_not_erase_latest_change(client):
+    first = vc(client, "make it use a function", code=AGE_PROGRAM)
+    function_code = first["ai_action"]["code"]
+    second = vc(client, "add comments", code=function_code)
+    commented_code = second["ai_action"]["code"]
+
+    concept = vc(client, "what is len", code=commented_code)
+    assert concept["action"] == "deterministic_message"
+    assert concept.get("concept") == "len"
+
+    review = vc(client, "what changed", code=commented_code)
+    assert review["action"] == "deterministic_message"
+    assert "comments" in review["speech"].lower()
+    assert review["audio_diff"]["change_number"] == review["audio_diff"]["total_changes"]
+
+
 def test_fresh_generation_clears_stale_change_review(client):
     edit = vc(client, "add comments", code=LOOP_PROGRAM)
     commented_code = edit["ai_action"]["code"]

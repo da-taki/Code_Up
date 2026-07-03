@@ -154,6 +154,19 @@ def test_project_map_command_while_awaiting_input_routes_normally(client):
     assert "Project map:" in data["speech"]
 
 
+def test_concept_command_while_awaiting_input_preserves_input_state(client):
+    first = client.post("/run", json={"code": NAME_AGE}).get_json()
+    assert first["action"] == "request_program_input"
+
+    concept = vc(client, "what is len", code=NAME_AGE)
+    assert concept["action"] == "deterministic_message"
+    assert concept.get("concept") == "len"
+
+    second = vc(client, "use 80 as input", code=NAME_AGE)
+    assert second["action"] == "request_program_input"
+    assert second["values"] == ["80"]
+
+
 def test_runtime_input_clears_backend_pending_after_success(client):
     client.post("/run", json={"code": NAME})
     data = vc(client, "Taknoor", code=NAME)

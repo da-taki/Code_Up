@@ -428,12 +428,17 @@ def test_mode_palette_add_edit_navigation_and_code_preservation(client):
     "command, block_type",
     [
         ("add print text hello", "print_text"),
+        ("add print block hello", "print_text"),
+        ("add a print block that says hello", "print_text"),
         ("add import math block", "import_module"),
         ("add import numpy as np block", "import_alias"),
         ("add from math import sqrt block", "from_import"),
         ("add print variable total", "print_variable"),
         ("add formatted print block", "print_format"),
         ("add variable total equals 1", "set_number"),
+        ("add variable age equals 16", "set_number"),
+        ("add variable name equals Taki", "set_text"),
+        ("add variable block name equals Taki", "set_text"),
         ("add variable name text Asha", "set_text"),
         ("add variable passed boolean true", "set_boolean"),
         ("add variable scores list 70, 80", "set_list"),
@@ -484,6 +489,7 @@ def test_mode_palette_add_edit_navigation_and_code_preservation(client):
         ("add decimal input block for marks", "ask_decimal_input"),
         ("ask for age as number", "ask_number_input"),
         ("ask for marks as decimal", "ask_decimal_input"),
+        ("add comment block remember to test", "comment_note"),
         ("add comment remember to test", "comment_note"),
     ],
 )
@@ -491,6 +497,58 @@ def test_typed_commands_create_every_block_type(client, command, block_type):
     voice(client, "enter block mode")
     result = voice(client, command)
     assert result["audio_blocks"]["blocks"][-1]["type"] == block_type, result
+
+
+def test_audio_blocks_natural_demo_commands_generate_valid_python(client):
+    typed(client, "open audio blocks")
+    typed(client, "add print block hello")
+    compiled = typed(client, "convert blocks to code")
+    assert compiled["code_preview"] == "print('hello')\n"
+    compile(compiled["code_preview"], "<audio-blocks-demo-print>", "exec")
+
+    typed(client, "clear blocks")
+    typed(client, "add variable name equals Taki")
+    typed(client, "add print variable name")
+    compiled = typed(client, "convert blocks to code")
+    assert compiled["code_preview"] == "name = 'Taki'\nprint(name)\n"
+    compile(compiled["code_preview"], "<audio-blocks-demo-variable>", "exec")
+
+    typed(client, "clear blocks")
+    typed(client, "add for loop range 3")
+    shown = typed(client, "show blocks")
+    assert "Workspace has 2 blocks." in shown["speech"]
+    assert "{" not in shown["speech"]
+    compiled = typed(client, "convert blocks to code")
+    assert compiled["code_preview"] == "for i in range(3):\n    print(i)\n"
+    compile(compiled["code_preview"], "<audio-blocks-demo-loop>", "exec")
+
+    typed(client, "clear blocks")
+    typed(client, "add for loop from 1 to 3")
+    compiled = typed(client, "convert blocks to code")
+    assert compiled["code_preview"] == "for i in range(1, 4):\n    print(i)\n"
+    compile(compiled["code_preview"], "<audio-blocks-demo-loop-from>", "exec")
+
+    typed(client, "clear blocks")
+    typed(client, "add variable age equals 16")
+    typed(client, "add if block age greater than 12")
+    compiled = typed(client, "convert blocks to code")
+    assert compiled["code_preview"] == (
+        "age = 16\nif age > 12:\n    print('Condition is true')\n"
+    )
+    compile(compiled["code_preview"], "<audio-blocks-demo-if>", "exec")
+
+
+def test_audio_blocks_invalid_and_unknown_natural_commands_fail_gracefully(client):
+    typed(client, "open audio blocks")
+    invalid = typed(client, "add variable 123abc equals 5")
+    assert "cannot use 123abc" in invalid["speech"]
+    assert invalid["audio_blocks"]["blocks"] == []
+    assert "ai_action" not in invalid
+
+    unsupported = typed(client, "add turtle block")
+    assert "not available yet" in unsupported["speech"]
+    assert unsupported["audio_blocks"]["blocks"] == []
+    assert "ai_action" not in unsupported
 
 
 def test_source_map_commands_explain_line_and_block(client):
@@ -894,7 +952,20 @@ def test_read_block_map_is_advertised_command_with_deterministic_response(client
     assert "not available yet" not in mapped["speech"].lower()
 
 
-@pytest.mark.parametrize("command", ["add print block", "compile blocks", "run blocks", "list blocks"])
+@pytest.mark.parametrize(
+    "command",
+    [
+        "add print block",
+        "add variable age equals 16",
+        "add print variable name",
+        "add for loop range 3",
+        "compile blocks",
+        "run blocks",
+        "list blocks",
+        "show blocks",
+        "clear blocks",
+    ],
+)
 def test_audio_block_commands_refuse_in_python_mode(client, command):
     typed(client, "switch to python mode")
     response = typed(client, command, code="print('keep')\n")

@@ -822,7 +822,9 @@ def _line_for(block: Dict[str, Any]) -> str:
         ),
         "repeat_times": lambda: f"for i in range({s['times']}):",
         "for_range": lambda: (
-            f"for {s['variable']} in range({s['start']}, {s['stop']}):"
+            f"for {s['variable']} in range({s['stop']}):"
+            if str(s.get("start")) == "0"
+            else f"for {s['variable']} in range({s['start']}, {s['stop']}):"
         ),
         "while_condition": lambda: f"while {s['condition']}:",
         "break_block": lambda: "break",
@@ -1537,31 +1539,41 @@ def _selected_slot_updates(block: Dict[str, Any], field: str, value: str) -> Tup
 
 
 def _parse_add(text: str) -> Tuple[Optional[str], Dict[str, Any]]:
+    variable_match = re.match(
+        r"^add variable(?: block)? (\w+) equals (.+)$", text, flags=re.IGNORECASE
+    )
+    if variable_match:
+        variable, raw_value = variable_match.group(1), variable_match.group(2).strip()
+        ok, normalized_number = _number(raw_value)
+        if ok:
+            return "set_number", {"variable": variable, "value": normalized_number}
+        return "set_text", {"variable": variable, "text": raw_value.strip("\"'")}
+
     patterns = [
         (r"^add import block$", "import_module", {"module": "math"}),
-        (r"^add import (math|random|datetime|string|statistics|json) block$", "import_module", lambda m: {"module": m.group(1)}),
+        (r"^add import (math|random|datetime|string|statistics|json) block$", "import_module", lambda m: {"module": m.group(1).lower()}),
         (
             r"^add import (numpy|pandas) as (\w+) block$",
             "import_alias",
-            lambda m: {"module": m.group(1), "alias": m.group(2)},
+            lambda m: {"module": m.group(1).lower(), "alias": m.group(2)},
         ),
         (
             r"^add from (math|random|datetime|string|statistics|json) import (\w+) block$",
             "from_import",
-            lambda m: {"module": m.group(1), "name": m.group(2)},
+            lambda m: {"module": m.group(1).lower(), "name": m.group(2)},
         ),
         (r"^add print block$", "print_text", {"text": "Hello world"}),
+        (
+            r"^add (?:a )?print block(?: that says)? (.+)$",
+            "print_text",
+            lambda m: {"text": m.group(1).strip()},
+        ),
         (r"^add print text (.+)$", "print_text", lambda m: {"text": m.group(1)}),
         (r"^add formatted print block$", "print_format", {"text": "Value is {value}"}),
         (
             r"^add print variable (\w+)$",
             "print_variable",
             lambda m: {"variable": m.group(1)},
-        ),
-        (
-            r"^add variable (\w+) equals (-?[\d.]+)$",
-            "set_number",
-            lambda m: {"variable": m.group(1), "value": m.group(2)},
         ),
         (r"^add variable block$", "set_number", {"variable": "total", "value": 0}),
         (
@@ -1782,13 +1794,35 @@ def _parse_add(text: str) -> Tuple[Optional[str], Dict[str, Any]]:
             "ask_input",
             lambda m: {"variable": m.group(1), "text": f"Enter {m.group(1)}: "},
         ),
+        (r"^add comment block (.+)$", "comment_note", lambda m: {"text": m.group(1)}),
         (r"^add comment (.+)$", "comment_note", lambda m: {"text": m.group(1)}),
     ]
     for pattern, kind, values in patterns:
-        match = re.match(pattern, text)
+        match = re.match(pattern, text, flags=re.IGNORECASE)
         if match:
             return kind, values(match) if callable(values) else values
     return None, {}
+
+
+def _add_container_shortcut(
+    workspace: Dict[str, Any],
+    block_type: str,
+    slots: Dict[str, Any],
+    child_type: str,
+    child_slots: Dict[str, Any],
+) -> str:
+    parent, error = add_block(workspace, block_type, slots)
+    if not parent:
+        return error
+    child, error = add_block(
+        workspace, child_type, child_slots, parent_id=parent["id"]
+    )
+    if not child:
+        return error
+    return (
+        f"Added block {parent['id']}: {parent['label']}, "
+        f"with child block {child['id']}: {child['label']}."
+    )
 
 
 ENTER_PHRASES = {
@@ -1862,7 +1896,9 @@ PYTHON_MODE_REQUIRED = (
 BLOCK_ONLY_RE = re.compile(
     r"^(?:add .*(?:block|import|function)|compile blocks(?: to python)?|run blocks|"
     r"ask for \w+(?: as (?:number|decimal))?|"
+    r"add (?:variable \w+ equals .+|print variable \w+|for loop .+|if .+)|"
     r"list blocks|read blocks|read selected block|select block .+|edit selected block|"
+    r"show blocks|clear blocks|"
     r"set (?:selected block )?(?:message|variable|import|condition|loop|range|function|parameter|return).+|"
     r"move selected block (?:up|down)|delete selected block|duplicate selected block|"
     r"transfer blocks to python mode|copy blocks to python mode|send blocks to editor)$",
@@ -1890,6 +1926,7 @@ def handles(text: str) -> bool:
         "read block map",
         "read block workspace",
         "read block order",
+        "show blocks",
         "read current block",
         "next block",
         "previous block",
@@ -1906,6 +1943,7 @@ def handles(text: str) -> bool:
         "move selected block up",
         "move selected block down",
         "clear block workspace",
+        "clear blocks",
         "compile blocks to python",
         "compile blocks",
         "convert blocks to code",
@@ -2067,7 +2105,43 @@ def route_command(
             workspace,
         )
 
-    kind, slots = _parse_add(t)
+    match = re.match(r"^add for loop range (-?\d+)$", command_text, flags=re.IGNORECASE)
+    if match:
+        message = _add_container_shortcut(
+            workspace,
+            "for_range",
+            {"variable": "i", "start": 0, "stop": match.group(1)},
+            "print_variable",
+            {"variable": "i"},
+        )
+        return _message(message, workspace)
+
+    match = re.match(r"^add for loop from (-?\d+) to (-?\d+)$", command_text, flags=re.IGNORECASE)
+    if match:
+        start = int(match.group(1))
+        end = int(match.group(2))
+        stop = end + 1 if end >= start else end - 1
+        message = _add_container_shortcut(
+            workspace,
+            "for_range",
+            {"variable": "i", "start": start, "stop": stop},
+            "print_variable",
+            {"variable": "i"},
+        )
+        return _message(message, workspace)
+
+    match = re.match(r"^add if block (.+)$", command_text, flags=re.IGNORECASE)
+    if match:
+        message = _add_container_shortcut(
+            workspace,
+            "if_condition",
+            {"condition": match.group(1)},
+            "print_text",
+            {"text": "Condition is true"},
+        )
+        return _message(message, workspace)
+
+    kind, slots = _parse_add(command_text)
     if kind:
         block, error = add_block(workspace, kind, slots)
         return _message(
@@ -2131,7 +2205,7 @@ def route_command(
             workspace,
         )
 
-    if t in {"list blocks", "read blocks"}:
+    if t in {"list blocks", "read blocks", "show blocks"}:
         t = "read block workspace"
 
     if t in {"project map", "give me a project map", "read block map", "give me a code map", "code map", "summarize structure"}:
@@ -2364,7 +2438,7 @@ def route_command(
         return _message(undo(workspace), workspace)
     if t == "redo block change":
         return _message(redo(workspace), workspace)
-    if t == "clear block workspace":
+    if t in {"clear block workspace", "clear blocks"}:
         _before_change(workspace)
         workspace["blocks"] = []
         workspace["cursor_id"] = None
@@ -2534,4 +2608,6 @@ def route_command(
             "speech": "Preparing a safe Audio Blocks project export.",
             "audio_blocks": public_workspace(workspace),
         }
+    if active_mode(workspace) == "audio_blocks":
+        return _message("That block command is not available yet.", workspace)
     return None

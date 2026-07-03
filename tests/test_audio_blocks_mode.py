@@ -538,6 +538,24 @@ def test_audio_blocks_natural_demo_commands_generate_valid_python(client):
     compile(compiled["code_preview"], "<audio-blocks-demo-if>", "exec")
 
 
+def test_clear_blocks_clears_generated_preview_and_maps(client):
+    typed(client, "open audio blocks")
+    typed(client, "add print block hello")
+    compiled = typed(client, "convert blocks to code")
+    assert compiled["audio_blocks"]["code_preview"] == "print('hello')\n"
+    assert compiled["audio_blocks"]["source_map"]
+    assert compiled["audio_blocks"]["line_map"]
+
+    cleared = typed(client, "clear blocks")
+    workspace = cleared["audio_blocks"]
+    assert workspace["blocks"] == []
+    assert workspace["generated"] is False
+    assert workspace["dirty"] is True
+    assert workspace["code_preview"] == ""
+    assert workspace["source_map"] == {}
+    assert workspace["line_map"] == {}
+
+
 def test_audio_blocks_invalid_and_unknown_natural_commands_fail_gracefully(client):
     typed(client, "open audio blocks")
     invalid = typed(client, "add variable 123abc equals 5")

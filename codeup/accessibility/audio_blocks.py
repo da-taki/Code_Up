@@ -197,6 +197,7 @@ def _before_change(workspace: Dict[str, Any]) -> None:
 def _changed(workspace: Dict[str, Any]) -> None:
     workspace["dirty"] = True
     workspace["generated"] = False
+    workspace["generated_code"] = ""
     workspace["source_map"] = {}
     workspace["line_map"] = {}
 

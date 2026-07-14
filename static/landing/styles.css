@@ -1119,3 +1119,171 @@ footer a:hover { color: var(--ink); }
 .reveal.delay-1 { transition-delay: .08s; }
 .reveal.delay-2 { transition-delay: .16s; }
 .reveal.delay-3 { transition-delay: .24s; }
+
+/* Plain public page used for the Hack Club submission review. */
+body.theme-paper {
+  --bg: #f7f7f7;
+  --bg-2: #eeeeee;
+  --panel: #ffffff;
+  --ink: #111111;
+  --ink-2: #333333;
+  --dim: #555555;
+  --accent: #245ca8;
+  --accent-deep: #174780;
+  --rule: #d0d0d0;
+  --rule-strong: #8a8a8a;
+}
+
+html,
+body {
+  font-family: system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
+  letter-spacing: 0;
+}
+
+body::before,
+.eh::after,
+.hero-grid-bg,
+.eh-marquee,
+.version-pill,
+.lights {
+  display: none !important;
+}
+
+.eh,
+section,
+.cta {
+  padding: 24px 16px;
+  background: var(--bg);
+}
+
+.wrap {
+  max-width: 1180px;
+}
+
+.eh-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.eh-h1 {
+  font-size: 2rem;
+  line-height: 1.1;
+  letter-spacing: 0;
+  margin: 0 0 8px;
+}
+
+.eh-sub,
+.section-head .desc,
+.cta p {
+  font-size: 1rem;
+  max-width: 760px;
+  color: var(--ink-2);
+}
+
+.eh-meta,
+.eh-toolbar,
+.eh-stage,
+.ide,
+.voice-card,
+.sonify-stage,
+.feat,
+.feat-art {
+  border-radius: 2px;
+  box-shadow: none;
+  background: var(--panel);
+}
+
+.eh-meta {
+  min-width: 210px;
+  padding: 10px 12px;
+  border-color: var(--rule);
+}
+
+.eh-toolbar {
+  padding: 8px;
+  border: 1px solid var(--rule-strong);
+  border-bottom: 0;
+}
+
+.eh-btn,
+.btn,
+.nav-cta,
+.eh-pill {
+  border-radius: 2px;
+  box-shadow: none;
+  transform: none;
+  transition: background .12s, color .12s, border-color .12s;
+}
+
+.eh-btn:hover,
+.btn-primary:hover,
+.feat:hover {
+  transform: none;
+  box-shadow: none;
+}
+
+.eh-stage {
+  grid-template-columns: minmax(0, 1.4fr) minmax(280px, 0.8fr);
+}
+
+.eh-editor-bar,
+.eh-output-bar,
+.eh-output-foot,
+.eh-gutter,
+.eh-textarea,
+.eh-output-body,
+.eh-shortcuts,
+.eh-key,
+.eh-meta,
+.eh-lang,
+footer,
+code,
+pre,
+textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.eh-output {
+  background: #111111;
+  color: #f7f7f7;
+}
+
+.start-here {
+  background: var(--panel);
+}
+
+.section-head {
+  display: block;
+  margin-bottom: 18px;
+}
+
+.section-head h2,
+.cta h2 {
+  font-size: 1.5rem;
+  line-height: 1.2;
+  letter-spacing: 0;
+}
+
+footer {
+  padding: 16px;
+  background: var(--bg);
+}
+
+.reveal {
+  opacity: 1;
+  transform: none;
+  transition: none;
+}
+
+@media (max-width: 900px) {
+  .eh-head,
+  .eh-stage {
+    display: block;
+  }
+
+  .eh-meta {
+    margin-top: 12px;
+  }
+}

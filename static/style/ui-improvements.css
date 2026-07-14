@@ -2,22 +2,20 @@
 .modal {
   position: fixed; inset: 0; z-index: 9000;
   display: flex; align-items: center; justify-content: center;
-  background: rgba(21, 10, 2, 0.55);
-  backdrop-filter: blur(4px) saturate(120%);
-  -webkit-backdrop-filter: blur(4px) saturate(120%);
+  background: rgba(0, 0, 0, 0.35);
 }
 .modal[hidden] { display: none; }
 .modal-content {
   background: var(--bg-panel);
   border: 1px solid var(--border-strong);
-  border-radius: 12px;
-  padding: 28px 32px;
+  border-radius: var(--radius-sm, 2px);
+  padding: 20px 22px;
   max-width: 480px; width: 90%;
-  box-shadow: 0 24px 60px -24px rgba(21, 10, 2, 0.45);
+  box-shadow: none;
   color: var(--text-main);
 }
 .modal-content h2 {
-  font-size: 1.4rem; font-weight: 800; letter-spacing: -0.02em;
+  font-size: 1.15rem; font-weight: 700; letter-spacing: 0;
   margin-bottom: 10px; color: var(--text-main);
 }
 .modal-content p {
@@ -25,7 +23,7 @@
 }
 .api-key-input {
   width: 100%; padding: 11px 13px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm, 2px);
   border: 1px solid var(--border-strong);
   border-bottom-width: 2px;
   background: var(--bg-main); color: var(--text-main);
@@ -39,18 +37,16 @@
   position: fixed; inset: 0; z-index: 9500;
   display: flex; align-items: flex-start; justify-content: center;
   padding-top: 12vh;
-  background: rgba(21, 10, 2, 0.55);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
+  background: rgba(0, 0, 0, 0.35);
 }
 .command-palette-overlay[hidden] { display: none; }
 .command-palette-container {
   background: var(--bg-panel);
   border: 1px solid var(--border-strong);
-  border-radius: 12px;
+  border-radius: var(--radius-sm, 2px);
   width: 90%; max-width: 620px;
   overflow: hidden;
-  box-shadow: 0 32px 80px -24px rgba(21, 10, 2, 0.55);
+  box-shadow: none;
 }
 .command-palette-header {
   padding: 11px 16px;
@@ -91,7 +87,7 @@
 #tutorialOverlay {
   background: var(--bg-panel) !important;
   border: 2px solid var(--accent) !important;
-  box-shadow: 0 18px 50px -18px rgba(21, 10, 2, 0.45) !important;
+  box-shadow: none !important;
 }
 #tutorialText {
   font-size: 0.92rem !important;
@@ -100,22 +96,20 @@
 }
 
 #startGate {
-  background: rgba(21, 10, 2, 0.62) !important;
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
+  background: rgba(0, 0, 0, 0.35) !important;
 }
 #startGate > div {
   background: var(--bg-panel) !important;
   border: 1px solid var(--border-strong) !important;
   border-bottom-width: 2px !important;
-  border-radius: 14px !important;
-  padding: 36px !important;
-  box-shadow: 0 28px 70px -20px rgba(21, 10, 2, 0.55) !important;
+  border-radius: var(--radius-sm, 2px) !important;
+  padding: 24px !important;
+  box-shadow: none !important;
 }
 #startGateTitle {
-  font-size: 2.1rem !important;
-  font-weight: 800 !important;
-  letter-spacing: -0.03em !important;
+  font-size: 1.4rem !important;
+  font-weight: 700 !important;
+  letter-spacing: 0 !important;
   color: var(--text-main) !important;
   margin-bottom: 6px !important;
 }
@@ -152,8 +146,8 @@
   display: inline-flex; align-items: center; gap: 6px;
   font-family: var(--font-mono); font-size: 0.78rem; font-weight: 600;
   color: var(--text-dim);
-  padding: 4px 10px; border-radius: 999px;
-  border: 1px solid var(--border-strong); border-bottom-width: 2px;
+  padding: 4px 10px; border-radius: var(--radius-sm, 2px);
+  border: 1px solid var(--border-strong);
   text-decoration: none;
   transition: background .15s, color .15s;
 }
@@ -177,12 +171,10 @@
 .voice-state-listening {
   background: rgba(74, 99, 33, 0.2);
   color: var(--success, #4a6321);
-  animation: voice-pulse 1.5s ease-in-out infinite;
 }
 .voice-state-processing {
   background: rgba(180, 130, 40, 0.2);
   color: var(--warning, #b48228);
-  animation: voice-pulse 0.8s ease-in-out infinite;
 }
 .voice-state-responding {
   background: rgba(50, 120, 180, 0.2);
@@ -210,10 +202,10 @@
   max-width: calc(100vw - 32px);
   background: var(--bg-panel);
   border: 2px solid var(--accent);
-  border-radius: var(--radius-md, 8px);
+  border-radius: var(--radius-sm, 2px);
   padding: 16px;
   z-index: 9000;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+  box-shadow: none;
   color: var(--text-main);
   font-family: var(--font-main);
 }
@@ -233,7 +225,7 @@
   font-size: 0.72rem;
   color: var(--accent);
   border: 1px solid var(--accent);
-  border-radius: 999px;
+  border-radius: var(--radius-sm, 2px);
   padding: 2px 8px;
   white-space: nowrap;
 }
@@ -292,4 +284,4 @@
     bottom: 8px;
   }
 }
-body.theme-reduced-motion .cu-tutorial-panel { box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
+body.theme-reduced-motion .cu-tutorial-panel { box-shadow: none; }

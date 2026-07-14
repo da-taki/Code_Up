@@ -800,6 +800,8 @@ for _kind, _data in _CATALOG.items():
         _ALIASES[str(_alias)] = _kind
 _ALIASES["argument"] = "parameter"
 _ALIASES["arguments"] = "parameter"
+_ALIASES["quote"] = "quotes"
+_ALIASES["quotes"] = "quotes"
 for _name in _BUILTIN_FALLBACKS:
     _ALIASES.setdefault(_name, _name)
 for _name in _DANGEROUS_BUILTINS:

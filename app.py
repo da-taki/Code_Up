@@ -8019,19 +8019,26 @@ def _map_followup_decision(decision, text, mem):
         edit_code = pending_after or str(mem.get("_current_voice_code") or "") or str(mem.get("last_generated_code") or "")
         proposal_before = str((pending_proposal or {}).get("before") or edit_code)
         if edit_code:
-            if pending_proposal is None:
+            normalized_followup_text = " ".join(str(text or "").lower().strip().rstrip(".!?").split())
+            plain_comment_generation_followup = bool(
+                mem.get("last_gen_prompt")
+                and re.fullmatch(r"add(?:\s+(?:a|some))?\s+comments?", normalized_followup_text)
+            )
+            allow_local_followup_edit = not plain_comment_generation_followup
+            if pending_proposal is None and allow_local_followup_edit:
                 template_response = _beginner_template_command_response(text, edit_code, mode="transforms")
                 if template_response is not None:
                     return template_response
-            local = natural_code_editor.local_edit(edit_code, text)
-            if local.get("status") == "edited":
-                return _memory_edit_proposal_response(
-                    text=text,
-                    current_code=proposal_before,
-                    updated_code=str(local.get("updated_code") or ""),
-                    summary=str(local.get("summary") or "Updated the current program."),
-                    mem=mem,
-                )
+            if allow_local_followup_edit:
+                local = natural_code_editor.local_edit(edit_code, text)
+                if local.get("status") == "edited":
+                    return _memory_edit_proposal_response(
+                        text=text,
+                        current_code=proposal_before,
+                        updated_code=str(local.get("updated_code") or ""),
+                        summary=str(local.get("summary") or "Updated the current program."),
+                        mem=mem,
+                    )
         prompt = _ai_modify_prompt(text, mem, params) or params.get("prompt", "")
         return {**base, "action": "generate_code", "prompt": prompt,
                 "source": "memory_followup", "followup_edit": True}
@@ -9218,6 +9225,15 @@ def voice():
             pass
         return jsonify(response_dict), status_code
 
+    if confidence >= 0.75 and intent == "inside_loop":
+        code_map_queries = {
+            "inside_loop": "inside loop",
+        }
+        payload = {"success": True, "action": "code_map", "confidence": confidence}
+        if intent in code_map_queries:
+            payload["query"] = code_map_queries[intent]
+        return _store_and_return(payload)
+
     input_response = _input_command_response(text, mem)
     if input_response is not None:
         input_response.setdefault("heard", text)
@@ -9289,6 +9305,23 @@ def voice():
             return _store_and_return({"success": True, "action": "deterministic_message",
                                       "speech": msg, "message": msg, "heard": text,
                                       "intent": "diff_before_after"})
+
+    if intent in (None, "concept_question") and ask_code.looks_like_code_question(text):
+        result = ask_code.answer_code_question(text, current_code, mem, verbosity)
+        return _store_and_return({"success": True, "heard": text, "ask_my_code": True, **result})
+
+    if (
+        intent == "concept_question"
+        and confidence >= 0.75
+        and re.match(r"^\s*(?:hey|hi|hello)[,\s]+", raw_text, re.IGNORECASE)
+    ):
+        return _store_and_return({
+            "success": True,
+            "action": "mentor_chat",
+            "message": slots.get("message", text),
+            "mode": "concept",
+            "confidence": confidence,
+        })
 
     concept_response = _deterministic_concept_voice_response(text, current_code, allow_unknown=False)
     if concept_response is not None:
@@ -10154,7 +10187,9 @@ def voice():
             or (not str(current_code or "").strip() and mem.get("last_generated_code"))
         )
     )
-    if early_followup_category and generated_target_active:
+    if early_followup_category and (
+        generated_target_active or mem.get("last_gen_prompt") or mem.get("last_generated_code")
+    ):
         early_decision = session_memory.resolve_followup(
             early_followup_category, text, mem, code=current_code, error=error_context,
         )

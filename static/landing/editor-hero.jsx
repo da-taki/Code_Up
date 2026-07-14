@@ -202,39 +202,30 @@ function EditorHero() {
       <div className="wrap eh-wrap">
         <div className="eh-head">
           <div className="eh-headline">
-            <span className="version-pill">
-              <span className="blip"></span> READY. v0.8.0
-            </span>
             <h1 className="eh-h1">
-              Open. <span className="accent">Code.</span> Listen.
+              CodeUp
             </h1>
             <p className="eh-sub">
-              <strong style={{color: 'var(--accent)'}}>Preview only.</strong> A tiny
-              JS interpreter that handles <code>def</code>, <code>print</code>, <code>for</code>,
-              and f-strings. For real Python, <a href="/ide" style={{color: 'var(--accent)', textDecoration: 'underline'}}>open CodeUp</a>
-              &nbsp;<kbd>Ctrl</kbd>+<kbd>Enter</kbd> runs preview.
-              <kbd>Alt</kbd>+<kbd>S</kbd> sonifies.
-              <kbd>Esc</kbd> stops speech.
+              A Python editor with voice commands, spoken output, tutorials,
+              debugging help, variable watch, and project tools. This page has a
+              small preview. For the full app, <a href="/ide" style={{color: 'var(--accent)', textDecoration: 'underline'}}>open CodeUp</a>.
             </p>
           </div>
           <div className="eh-meta" aria-live="polite">
             <div className="eh-meta-row"><span className="lbl">status</span><b className={"val " + (running ? "warn" : "ok")}>{status}</b></div>
-            <div className="eh-meta-row"><span className="lbl">sandbox</span><b className="val">5s · 512MB</b></div>
-            <div className="eh-meta-row"><span className="lbl">tutorial</span><b className="val">step 1 / 6</b></div>
+            <div className="eh-meta-row"><span className="lbl">mode</span><b className="val">Python</b></div>
+            <div className="eh-meta-row"><span className="lbl">tutorial</span><b className="val">available</b></div>
           </div>
         </div>
 
         <div className="eh-toolbar" role="toolbar" aria-label="Coding controls">
           <button className="eh-btn eh-btn-primary" onClick={run} aria-label="Run code. Ctrl+Enter">
-            <svg viewBox="0 0 16 16" aria-hidden="true"><polygon points="3,2 14,8 3,14" fill="currentColor"/></svg>
-            Run <span className="eh-key">⌃↵</span>
+            Run
           </button>
           <button className={"eh-btn" + (voice ? " is-on" : "")} onClick={toggleVoice} aria-label="Toggle voice control. Ctrl+Shift+M" aria-pressed={voice}>
-            <span className={"mic" + (voice ? " is-live" : "")} aria-hidden="true"></span>
             Voice {voice ? "on" : "off"} <span className="eh-key">⌃⇧M</span>
           </button>
           <button className="eh-btn" onClick={sonify} aria-label="Sonify block. Alt+S">
-            <span className="bars" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
             Sonify <span className="eh-key">⌥S</span>
           </button>
           <div className="eh-divider" aria-hidden="true"></div>
@@ -247,9 +238,7 @@ function EditorHero() {
             ? Help <span className="eh-key">⌥H</span>
           </button>
           <span className="eh-spacer"></span>
-          <span className="eh-shortcuts" aria-hidden="true">
-            <kbd>⌃↵</kbd>run. <kbd>⌥S</kbd>sonify. <kbd>⌥V</kbd>vars. <kbd>⌥L</kbd>read line. <kbd>esc</kbd>stop
-          </span>
+          <span className="eh-shortcuts" aria-hidden="true">Ctrl+Enter run. Alt+S sonify. Esc stop.</span>
         </div>
 
         <div className="eh-stage" id="editor-area">
@@ -289,25 +278,12 @@ function EditorHero() {
             </div>
             <pre className="eh-output-body">{out}</pre>
             <div className="eh-output-foot">
-              <span>▸ heartbeat 500ms. sandbox active</span>
+              <span>Preview output</span>
               <span className="speak-hint">screen reader: aria-live=polite</span>
             </div>
           </div>
         </div>
 
-        <div className="eh-marquee" aria-hidden="true" role="presentation">
-          <div className="eh-marquee-track" aria-hidden="true">
-            {["run", "sonify block", "tell the story", "what changed here", "go to line twenty five",
-              "set breakpoint at line 10", "explain simply", "remember this as quick sort",
-              "start tutorial", "read output", "explain this code", "help",
-              "run", "sonify block", "tell the story", "what changed here", "go to line twenty five",
-              "set breakpoint at line 10", "explain simply", "remember this as quick sort",
-              "start tutorial", "read output", "explain this code", "help"
-            ].map((t, i) => (
-              <span key={i}>"{t}"<i>●</i></span>
-            ))}
-          </div>
-        </div>
       </div>
     </section>
   );

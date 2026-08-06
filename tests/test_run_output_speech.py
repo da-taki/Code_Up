@@ -52,7 +52,7 @@ class TestRunOutputSpeechWiring:
         assert "function formatFullOutputSpeech(" in app_js
 
     def test_run_handler_speaks_output_through_the_formatter(self, app_js):
-        assert "speak(formatRunOutputSpeech(data.output))" in app_js
+        assert "speak(formatRunOutputSpeech(data.output), { forceFull: true, speechKind: 'program-output' })" in app_js
         assert "speak('Program output:');" not in app_js
 
     def test_run_handler_still_stores_full_output(self, app_js):
@@ -65,7 +65,7 @@ class TestRunOutputSpeechWiring:
         assert "window.lastRunOutput" in block
 
     def test_error_run_is_spoken(self, app_js):
-        assert "speak(`Error${lineHint}: ${lastLine}`)" in app_js
+        assert "speak(`Error${lineHint}: ${lastLine}`, { sr: false, priority: 'assertive' })" in app_js
 
     def test_dispatch_routes_read_output_to_speak_output(self, app_js):
         assert "action === 'read_output') speakOutput();" in app_js

@@ -66,6 +66,7 @@ const VoiceEngine = (function () {
     streamNarrationMinChars: 140,
     speechRate: 1.0,
     speechPitch: 1.0,
+    voiceName: '',
     language: 'auto',  // 'auto', 'en', 'hi'
     voiceEnabled: true,
   };
@@ -158,6 +159,10 @@ const VoiceEngine = (function () {
   }
 
   function _getVoiceForLang(lang) {
+    if (Config.voiceName) {
+      const selected = _voices.find(v => v.name === Config.voiceName);
+      if (selected) return selected;
+    }
     return _englishVoice;
   }
 

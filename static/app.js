@@ -27,6 +27,7 @@ function currentSpeechEpoch() { return _speechEpoch; }
 function bumpSpeechEpoch() { _speechEpoch = (_speechEpoch + 1) % 1e9; return _speechEpoch; }
 
 let _speechRate = 1.0;
+let _speechVoiceName = '';
 
 // own reasons (idle timeout, transient error).
 let _recognitionStarting = false;
@@ -120,6 +121,7 @@ let _preflightInputPlaceholders = [];
 window.getPreflightInputs = () => _preflightInputs.slice();
 let _liveInputMode = false;
 let _programInputRequest = null;
+let _editorErrorDecorationIds = [];
 
 let _activeStreamRun = null;
 
@@ -291,6 +293,13 @@ const SpeechManager = (function () {
       currentUtterance.rate  = item.rate  || _speechRate || 1;
       currentUtterance.pitch = item.pitch || 1;
       currentUtterance.lang  = (typeof getLanguage === 'function' && getLanguage() === 'hi') ? 'hi-IN' : 'en-US';
+      try {
+        const voiceName = item.voiceName || _speechVoiceName || '';
+        if (voiceName && window.speechSynthesis && window.speechSynthesis.getVoices) {
+          const voice = window.speechSynthesis.getVoices().find(v => v.name === voiceName);
+          if (voice) currentUtterance.voice = voice;
+        }
+      } catch (e) {}
 
       let finished = false;
       let started = false;
@@ -963,8 +972,11 @@ function pasteCode() {
 }
 
 let _browserSpeechEnabled = true;
+let _browserSpeechUserOverride = false;
 let _screenReaderModeEnabled = false;
 let _assistiveTechnologyProfile = 'default';
+const BROWSER_SPEECH_KEY = 'codeupBrowserSpeech';
+const BROWSER_SPEECH_OVERRIDE_KEY = 'codeupBrowserSpeechUserOverride';
 
 function speak(text, opts = {}) {
   // Test anchor for the single speech path: VoiceEngine.speak(text, opts).
@@ -974,7 +986,7 @@ function speak(text, opts = {}) {
   if (!spokenText) return;
   lastSpokenText = spokenText;
   if (!_browserSpeechEnabled) {
-    srAnnounce(spokenText);
+    if (opts.sr !== false) srAnnounce(spokenText, opts.priority || 'polite');
     return;
   }
   if (typeof VoiceEngine !== 'undefined' && VoiceEngine.speak) {
@@ -1167,16 +1179,104 @@ function buildVoiceCommandPayload(text, source = 'typed') {
   };
 }
 
-function applySpeechRate(rate) {
+function applySpeechRate(rate, silent) {
   const r = Math.max(0.5, Math.min(2.0, Number(rate) || 1.0));
   _speechRate = r;
   try { if (typeof VoiceEngine !== 'undefined' && VoiceEngine.configure) VoiceEngine.configure({ speechRate: r }); } catch (e) {}
   try { localStorage.setItem('codeupSpeechRate', String(r)); } catch (e) {}
+  const control = document.getElementById('speechRateControl');
+  const value = document.getElementById('speechRateValue');
+  if (control) control.value = String(r);
+  if (value) value.textContent = r.toFixed(1) + 'x';
+  if (!silent) srAnnounce('Browser speech rate set to ' + r.toFixed(1) + 'x.');
   return r;
 }
 function getStoredSpeechRate() {
   try { const v = parseFloat(localStorage.getItem('codeupSpeechRate')); if (v >= 0.5 && v <= 2.0) return v; } catch (e) {}
   return 1.0;
+}
+function applySpeechVoiceName(name, silent) {
+  _speechVoiceName = String(name || '');
+  try { localStorage.setItem('codeupSpeechVoice', _speechVoiceName); } catch (e) {}
+  try { if (typeof VoiceEngine !== 'undefined' && VoiceEngine.configure) VoiceEngine.configure({ voiceName: _speechVoiceName }); } catch (e) {}
+  const select = document.getElementById('speechVoiceSelect');
+  const label = document.getElementById('speechVoiceValue');
+  if (select) select.value = _speechVoiceName;
+  const readable = _speechVoiceName || 'Default browser voice';
+  if (label) label.textContent = readable;
+  if (!silent) srAnnounce('Browser speech voice set to ' + readable + '.');
+  return _speechVoiceName;
+}
+function getStoredSpeechVoiceName() {
+  try { return localStorage.getItem('codeupSpeechVoice') || ''; } catch (e) {}
+  return '';
+}
+function populateSpeechVoiceSelect() {
+  const select = document.getElementById('speechVoiceSelect');
+  if (!select || !(window.speechSynthesis && window.speechSynthesis.getVoices)) return;
+  const selected = _speechVoiceName;
+  const voices = window.speechSynthesis.getVoices() || [];
+  select.innerHTML = '<option value="">Default browser voice</option>';
+  voices.forEach(voice => {
+    const opt = document.createElement('option');
+    opt.value = voice.name;
+    opt.textContent = voice.name + (voice.lang ? ' (' + voice.lang + ')' : '');
+    select.appendChild(opt);
+  });
+  select.value = selected;
+}
+function updateBrowserSpeechUI() {
+  const speechButton = document.getElementById('browserSpeechToggle');
+  const status = document.getElementById('browserSpeechStatus');
+  const rate = document.getElementById('speechRateControl');
+  const voice = document.getElementById('speechVoiceSelect');
+  const test = document.getElementById('testVoiceBtn');
+  if (speechButton) {
+    speechButton.setAttribute('aria-pressed', String(_browserSpeechEnabled));
+    speechButton.textContent = `Browser Speech (${_browserSpeechEnabled ? 'On' : 'Off'})`;
+  }
+  if (status) {
+    if (_browserSpeechEnabled) {
+      status.textContent = _screenReaderModeEnabled
+        ? 'Browser speech is on by manual choice while Screen Reader Mode is also on.'
+        : 'Browser speech is on.';
+    } else if (_screenReaderModeEnabled && !_browserSpeechUserOverride) {
+      status.textContent = 'Screen Reader Mode is on, so Browser Speech is off by default. ARIA status messages remain available for your screen reader.';
+    } else {
+      status.textContent = 'Browser speech is off. Screen-reader announcements still use ARIA status and alert areas.';
+    }
+  }
+  [rate, voice, test].forEach(el => { if (el) el.disabled = !_browserSpeechEnabled; });
+}
+function reconcileBrowserSpeechDefault() {
+  if (!_browserSpeechUserOverride) {
+    _browserSpeechEnabled = !_screenReaderModeEnabled;
+    try { localStorage.setItem(BROWSER_SPEECH_KEY, String(_browserSpeechEnabled)); } catch (e) {}
+  }
+  updateBrowserSpeechUI();
+}
+function initializeSpeechVoiceControls() {
+  const rate = document.getElementById('speechRateControl');
+  const voice = document.getElementById('speechVoiceSelect');
+  const test = document.getElementById('testVoiceBtn');
+  populateSpeechVoiceSelect();
+  if (window.speechSynthesis && window.speechSynthesis.addEventListener) {
+    try { window.speechSynthesis.addEventListener('voiceschanged', populateSpeechVoiceSelect); } catch (e) {}
+  }
+  if (rate && !rate.dataset.codeupBound) {
+    rate.dataset.codeupBound = 'true';
+    rate.addEventListener('input', function () { applySpeechRate(this.value, true); });
+    rate.addEventListener('change', function () { applySpeechRate(this.value, false); });
+  }
+  if (voice && !voice.dataset.codeupBound) {
+    voice.dataset.codeupBound = 'true';
+    voice.addEventListener('change', function () { applySpeechVoiceName(this.value, false); });
+  }
+  if (test && !test.dataset.codeupBound) {
+    test.dataset.codeupBound = 'true';
+    test.addEventListener('click', function () { speak('This is CodeUp browser speech using your selected voice and speed.', { forceFull: true }); });
+  }
+  updateBrowserSpeechUI();
 }
 function setVerbosity(mode) {
   const allowed = ['concise', 'normal', 'detailed', 'beginner', 'expert'];
@@ -1194,9 +1294,11 @@ function getVerbosity() {
   return 'normal';
 }
 function restoreAccessibilityPreferences() {
-  applySpeechRate(getStoredSpeechRate());
+  applySpeechRate(getStoredSpeechRate(), true);
+  applySpeechVoiceName(getStoredSpeechVoiceName(), true);
   getVerbosity();
-  try { _browserSpeechEnabled = localStorage.getItem('codeupBrowserSpeech') !== 'false'; } catch (e) {}
+  try { _browserSpeechEnabled = localStorage.getItem(BROWSER_SPEECH_KEY) !== 'false'; } catch (e) {}
+  try { _browserSpeechUserOverride = localStorage.getItem(BROWSER_SPEECH_OVERRIDE_KEY) === 'true'; } catch (e) {}
   try { _screenReaderModeEnabled = localStorage.getItem('codeupScreenReaderMode') === 'true'; } catch (e) {}
   try { _assistiveTechnologyProfile = localStorage.getItem('codeupAssistiveProfile') || 'default'; } catch (e) {}
   applyAccessibilitySettings({
@@ -1204,6 +1306,7 @@ function restoreAccessibilityPreferences() {
     screen_reader_profile: _assistiveTechnologyProfile,
   });
   initializeAssistiveTechnologyControls();
+  initializeSpeechVoiceControls();
 }
 
 function applyAccessibilitySettings(settings) {
@@ -1224,6 +1327,7 @@ function applyAccessibilitySettings(settings) {
   }
   const profile = document.getElementById('assistiveTechnologyProfile');
   if (profile) profile.value = _assistiveTechnologyProfile;
+  reconcileBrowserSpeechDefault();
 }
 
 async function persistAccessibilitySettings(patch) {
@@ -1268,17 +1372,18 @@ function initializeAssistiveTechnologyControls() {
     speechButton.dataset.codeupBound = 'true';
     speechButton.addEventListener('click', function () {
       _browserSpeechEnabled = !_browserSpeechEnabled;
-      try { localStorage.setItem('codeupBrowserSpeech', String(_browserSpeechEnabled)); } catch (e) {}
-      this.setAttribute('aria-pressed', String(_browserSpeechEnabled));
-      this.textContent = `Browser Speech (${_browserSpeechEnabled ? 'On' : 'Off'})`;
+      _browserSpeechUserOverride = true;
+      try {
+        localStorage.setItem(BROWSER_SPEECH_KEY, String(_browserSpeechEnabled));
+        localStorage.setItem(BROWSER_SPEECH_OVERRIDE_KEY, 'true');
+      } catch (e) {}
+      updateBrowserSpeechUI();
       srAnnounce(`Browser speech is ${_browserSpeechEnabled ? 'on' : 'off'}.`);
     });
   }
-  if (speechButton) {
-    speechButton.setAttribute('aria-pressed', String(_browserSpeechEnabled));
-    speechButton.textContent = `Browser Speech (${_browserSpeechEnabled ? 'On' : 'Off'})`;
-  }
+  updateBrowserSpeechUI();
   persistAccessibilitySettings({});
+  initializeSpeechVoiceControls();
 }
 
 function offerProjectDownload(url, filename) {
@@ -1466,9 +1571,10 @@ require(['vs/editor/editor.main'], function () {
     theme:                document.body.classList.contains('theme-night') ? 'vs-dark' : 'vs',
     fontSize:             16,
     minimap:              { enabled: false },
+    glyphMargin:          true,
     automaticLayout:      true,
     accessibilitySupport: 'on',
-    ariaLabel:            'Python code editor. Use arrow keys to navigate, type to edit. Press Escape to stop speech, Control Shift M to toggle voice control, F1 for editor commands.',
+    ariaLabel:            'Python code editor. Use arrow keys to navigate and type to edit. Tab indents. Press Escape when speech is quiet, or Control M, to leave the editor. Press Control Enter to run.',
     lineHeight:           24,
     tabSize:              4,
     insertSpaces:         true,
@@ -1477,6 +1583,7 @@ require(['vs/editor/editor.main'], function () {
 
   let _structureDebounce = null;
   editor.onDidChangeModelContent(() => {
+    clearEditorErrorMarkers();
     syncActiveProjectFileLocal();
     clearTimeout(_structureDebounce);
     _structureDebounce = setTimeout(updateStructurePanel, 600);
@@ -1958,6 +2065,7 @@ function out(t, options = {}) {
   const output = document.getElementById('output');
   if (output) output.textContent = t;
   const text = String(t || '').trim();
+  if (options.sr === false) return;
   const isError = options.assertive || /^(?:error\b|found \d+ errors?\b|mentor error\b)/i.test(text) ||
     /\b(?:failed|failure)\.?$/i.test(text);
   srAnnounce(text, isError ? 'assertive' : 'polite');
@@ -2111,9 +2219,14 @@ async function runCode(runFile, codeOverride) {
     }
 
     if (data.success) {
+      const shouldFocusOutputAfterInput = !!(document.activeElement && document.activeElement.id === 'programInputValue');
       _programInputRequest = null;
+      hideProgramInputControl('Program finished. Focus moved to output.');
       clearSrAlert();
+      clearEditorErrorMarkers();
       out(data.output);
+      const outputFocus = document.getElementById('output');
+      try { if (outputFocus && shouldFocusOutputAfterInput) outputFocus.focus(); } catch (e) {}
       cueSuccess();
       ErrorBeaconManager.stop();
       _lastErrorContext = null;
@@ -2127,8 +2240,8 @@ async function runCode(runFile, codeOverride) {
       _previousOutput = _lastOutput;
       _lastOutput = data.output || '';
 
-      if (data.speech_summary) speak(data.speech_summary);
-      speak(formatRunOutputSpeech(data.output));
+      if (data.speech_summary) speak(data.speech_summary, { sr: false });
+      speak(formatRunOutputSpeech(data.output), { forceFull: true, speechKind: 'program-output' });
       if (data.clear_inputs_after_run) {
         _preflightInputs = [];
         _preflightInputPlaceholders = [];
@@ -2150,7 +2263,8 @@ async function runCode(runFile, codeOverride) {
         setTimeout(function () { window._tutorialOnRunSuccess(); }, 2000);
       }
     } else {
-      out('ERROR:\n' + (data.error || ''), { assertive: true });
+      hideProgramInputControl('Run stopped because of an error.');
+      out('ERROR:\n' + (data.error || ''), { assertive: true, sr: false });
       cueError();
       _lastErrorContext = {
         code: codeToCheck,
@@ -2167,7 +2281,8 @@ async function runCode(runFile, codeOverride) {
       const lastLine = errLines[errLines.length - 1] || 'Unknown error';
       const lineMatch = (data.error || '').match(/line (\d+)/);
       const lineHint = lineMatch ? ` on line ${lineMatch[1]}` : '';
-      speak(`Error${lineHint}: ${lastLine}`);
+      setEditorErrorMarkerFromText(data.error || '', lastLine);
+      speak(`Error${lineHint}: ${lastLine}`, { sr: false, priority: 'assertive' });
       srAlert(`Error${lineHint}: ${lastLine}`);
       if (data.explanation) {
         speak(data.explanation);
@@ -2249,18 +2364,13 @@ async function runCodeStreaming() {
       } else if (event.type === 'input_request') {
         const prompt = event.prompt || 'Input requested';
         _activeStreamRun.awaitingPrompt = prompt;
-        speak(`Your code is asking: ${prompt}. Say your answer, or type it in the command box and press Enter.`);
-        srAnnounce('Input requested');
+        const message = `Your code is asking: ${prompt}. Input 1. Expected text. Type your answer in Program inputs and press Enter, or say your answer.`;
+        showProgramInputControl({ prompt, inputIndex: 1, inputCount: 1, expectedType: 'text', streaming: true, message });
+        speak(message, { sr: false });
+        srAnnounce(message);
         SonificationManager.playTone(800, 0.15, 0.1);
-        // Focus the command input so keyboard users can type immediately
-        const cmd = document.getElementById('voiceText');
-        if (cmd) {
-          cmd.placeholder = 'Type your input and press Enter…';
-          cmd.focus();
-        }
       } else if (event.type === 'done') {
-        const cmd = document.getElementById('voiceText');
-        if (cmd) cmd.placeholder = 'Voice & typed commands appear here...';
+        hideProgramInputControl('No program input is being requested.');
         speak('Run complete.');
         srAnnounce('Run complete');
         es.close();
@@ -2962,7 +3072,7 @@ function srAnnounce(msg, priority = 'polite') {
   const cleaned = sanitizeSpeechText(String(msg || '').replace(/<module>/g, 'top-level code'))
     .replace(/\s+/g, ' ').trim().slice(0, 600);
   const now = Date.now();
-  if (!cleaned || (_lastLiveRegionMessages[region] === cleaned && now - (_lastLiveRegionTimes[region] || 0) < 250)) return;
+  if (!cleaned || (_lastLiveRegionMessages[region] === cleaned && now - (_lastLiveRegionTimes[region] || 0) < 1200)) return;
   _lastLiveRegionMessages[region] = cleaned;
   _lastLiveRegionTimes[region] = now;
   clearTimeout(_liveRegionTimers[region]);
@@ -2981,6 +3091,59 @@ function clearSrAlert() {
   el.textContent = '';
   _lastLiveRegionMessages.assertive = '';
   _lastLiveRegionTimes.assertive = 0;
+}
+
+function parseErrorLineNumber(errorText) {
+  const text = String(errorText || '');
+  const matches = Array.from(text.matchAll(/line\s+(\d+)/gi));
+  if (!matches.length) return null;
+  const last = matches[matches.length - 1];
+  const n = Number(last[1]);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+function setEditorErrorMarkerFromText(errorText, fallbackMessage) {
+  const model = getModel();
+  if (!model || typeof monaco === 'undefined' || !monaco.editor) return;
+  const line = Math.min(parseErrorLineNumber(errorText) || 1, model.getLineCount());
+  const message = String(fallbackMessage || errorText || 'Python error').split('\n').filter(Boolean).pop() || 'Python error';
+  const maxColumn = Math.max(1, model.getLineMaxColumn(line));
+  monaco.editor.setModelMarkers(model, 'codeup-runtime', [{
+    severity: monaco.MarkerSeverity.Error,
+    startLineNumber: line,
+    startColumn: 1,
+    endLineNumber: line,
+    endColumn: maxColumn,
+    message: 'CodeUp error marker: ' + message,
+    source: 'CodeUp runtime',
+  }]);
+  try {
+    _editorErrorDecorationIds = editor.deltaDecorations(_editorErrorDecorationIds, [{
+      range: new monaco.Range(line, 1, line, maxColumn),
+      options: {
+        isWholeLine: true,
+        className: 'cu-monaco-error-line',
+        glyphMarginClassName: 'cu-monaco-error-glyph',
+        glyphMarginHoverMessage: { value: 'CodeUp error: ' + message },
+      },
+    }]);
+  } catch (e) {}
+  const summary = document.getElementById('errorSummary');
+  const text = document.getElementById('errorSummaryText');
+  if (summary) summary.hidden = false;
+  if (text) text.textContent = 'Error on line ' + line + ': ' + message;
+}
+function clearEditorErrorMarkers() {
+  const model = getModel();
+  if (model && typeof monaco !== 'undefined' && monaco.editor) {
+    try { monaco.editor.setModelMarkers(model, 'codeup-runtime', []); } catch (e) {}
+  }
+  if (editor && editor.deltaDecorations && _editorErrorDecorationIds.length) {
+    try { _editorErrorDecorationIds = editor.deltaDecorations(_editorErrorDecorationIds, []); } catch (e) { _editorErrorDecorationIds = []; }
+  }
+  const summary = document.getElementById('errorSummary');
+  const text = document.getElementById('errorSummaryText');
+  if (summary) summary.hidden = true;
+  if (text) text.textContent = 'No editor errors.';
 }
 
 async function saveSnippet() {
@@ -3550,6 +3713,54 @@ const _TUTORIAL_EDIT_ACTIONS = new Set([
   'insert_function', 'insert_class', 'append_line', 'insert_line', 'replace_line',
 ]);
 
+function inputRequestMessage(req, fallback) {
+  if (!req) return fallback || 'This program needs input.';
+  const total = req.inputCount && req.inputCount > 1 ? ` of ${req.inputCount}` : '';
+  const type = req.expectedType || 'text';
+  return `Input ${req.inputIndex || 1}${total}. ${req.prompt || 'This program needs input.'} Expected ${type}.`;
+}
+function showProgramInputControl(req) {
+  const section = document.getElementById('programInputSection');
+  const status = document.getElementById('programInputStatus');
+  const label = document.getElementById('programInputLabel');
+  const input = document.getElementById('programInputValue');
+  const submit = document.getElementById('programInputSubmitBtn');
+  const cancel = document.getElementById('programInputCancelBtn');
+  const message = req.message || inputRequestMessage(req);
+  const accessiblePrompt = inputRequestMessage(req);
+  const accessibleName = message.includes(req.prompt || '') ? message : `${accessiblePrompt} ${message}`;
+  if (status) status.textContent = message;
+  if (label) label.textContent = `Program input answer for ${req.prompt || 'input request'}`;
+  if (input) {
+    input.disabled = false;
+    input.value = '';
+    input.placeholder = req.prompt || 'Type the program input and press Enter';
+    input.setAttribute('aria-label', accessibleName + ' Type your answer.');
+  }
+  if (submit) submit.disabled = false;
+  if (cancel) cancel.disabled = false;
+  if (section) section.classList.add('cu-program-input--active');
+  const focusProgramInput = () => {
+    try {
+      if (input && !input.disabled) input.focus();
+    } catch (e) {}
+  };
+  focusProgramInput();
+  requestAnimationFrame(focusProgramInput);
+  setTimeout(focusProgramInput, 80);
+}
+function hideProgramInputControl(message) {
+  const section = document.getElementById('programInputSection');
+  const status = document.getElementById('programInputStatus');
+  const input = document.getElementById('programInputValue');
+  const submit = document.getElementById('programInputSubmitBtn');
+  const cancel = document.getElementById('programInputCancelBtn');
+  if (status) status.textContent = message || 'No program input is being requested.';
+  if (input) { input.disabled = true; input.value = ''; input.placeholder = 'Program input will appear here when needed...'; }
+  if (submit) submit.disabled = true;
+  if (cancel) cancel.disabled = true;
+  if (section) section.classList.remove('cu-program-input--active');
+}
 function handleProgramInputRequest(payload) {
   const prompt = String((payload && payload.prompt) || 'This program needs input.').trim();
   const inputIndex = Number((payload && payload.input_index) || 1);
@@ -3562,11 +3773,38 @@ function handleProgramInputRequest(payload) {
     values: Array.isArray(payload && payload.values) ? payload.values.slice() : [],
     code: getCode(),
   };
-  const position = inputCount > 1 ? `Input ${inputIndex} of ${inputCount}: ` : '';
-  const message = (payload && (payload.speech || payload.message)) || prompt;
-  out(`${position}${message}\nType or say the value now.`);
-  speak(message);
+  const message = (payload && (payload.speech || payload.message)) || inputRequestMessage(_programInputRequest);
+  showProgramInputControl(Object.assign({}, _programInputRequest, { message }));
+  out(`${inputRequestMessage(_programInputRequest)}\nType or say the value now.`);
+  speak(message, { sr: false });
   srAnnounce(message);
+}
+async function submitProgramInputValue() {
+  const input = document.getElementById('programInputValue');
+  const value = input ? input.value.trim() : '';
+  if (!value) { srAnnounce('Type an answer before submitting program input.'); return; }
+  if (_activeStreamRun && _activeStreamRun.runId && _activeStreamRun.awaitingPrompt) {
+    await sendStreamingInput(value);
+    hideProgramInputControl('Program input sent. Waiting for the program.');
+    return;
+  }
+  if (!_programInputRequest) { srAnnounce('No program input is being requested.'); return; }
+  const values = (_programInputRequest.values || []).concat([value]);
+  _preflightInputs = values.slice();
+  _preflightInputPlaceholders = [];
+  updateInputsPanel();
+  await runCode(undefined, _programInputRequest.code || getCode());
+}
+function cancelProgramInputRequest() {
+  _programInputRequest = null;
+  _preflightInputs = [];
+  _preflightInputPlaceholders = [];
+  updateInputsPanel();
+  hideProgramInputControl('Program input cancelled.');
+  out('Program input cancelled.');
+  speak('Program input cancelled.', { sr: false });
+  srAnnounce('Program input cancelled.');
+  focusEditor();
 }
 
 function setPreflightInputs(values, speechMessage) {
@@ -4423,6 +4661,14 @@ async function handleCommandText(txt) {
   // the backend; cockpit commands fall through to the normal /voice-command path.
   if (window.LiveAssistant && window.LiveAssistant.handleMetaCommand(txt)) return;
 
+  if (_activeStreamRun && _activeStreamRun.runId && _activeStreamRun.awaitingPrompt) {
+    await sendStreamingInput(txt);
+    hideProgramInputControl('Program input sent. Waiting for the program.');
+    const field = document.getElementById('voiceText');
+    if (field) field.value = '';
+    return;
+  }
+
   if (window.LiveAssistant) window.LiveAssistant.noteProcessing(true);
   try {
     const res  = await fetch('/voice-command', {
@@ -5074,6 +5320,22 @@ window.addEventListener('DOMContentLoaded', () => {
   try { restoreAccessibilityPreferences(); } catch (e) {}
   try { _wireLiveAssistantButtons(); } catch (e) {}
 
+  const readAgain = document.getElementById('readOutputAgainBtn');
+  if (readAgain) readAgain.addEventListener('click', speakOutput);
+  const stopSpeech = document.getElementById('stopSpeechBtn');
+  if (stopSpeech) stopSpeech.addEventListener('click', () => { SpeechManager.cancelAll(); srAnnounce('Speech stopped.'); });
+  const leaveEditorBtn = document.getElementById('leaveEditorBtn');
+  if (leaveEditorBtn) leaveEditorBtn.addEventListener('click', leaveEditor);
+  const programInput = document.getElementById('programInputValue');
+  if (programInput) programInput.addEventListener('keydown', event => {
+    if (event.key === 'Enter') { event.preventDefault(); submitProgramInputValue(); }
+    if (event.key === 'Escape') { event.preventDefault(); cancelProgramInputRequest(); }
+  });
+  const programSubmit = document.getElementById('programInputSubmitBtn');
+  if (programSubmit) programSubmit.addEventListener('click', submitProgramInputValue);
+  const programCancel = document.getElementById('programInputCancelBtn');
+  if (programCancel) programCancel.addEventListener('click', cancelProgramInputRequest);
+
   const codeModeBtn = document.getElementById('codeModeBtn');
   const audioBlocksModeBtn = document.getElementById('audioBlocksModeBtn');
   if (codeModeBtn) codeModeBtn.addEventListener('click', () => audioBlocksCommand('switch to code mode'));
@@ -5202,6 +5464,15 @@ window.addEventListener('DOMContentLoaded', () => {
   }
 });
 
+function focusEditor() {
+  try { if (editor && editor.focus) editor.focus(); } catch (e) {}
+}
+function leaveEditor() {
+  const next = document.getElementById('runBtn') || document.getElementById('voiceText') || document.getElementById('output');
+  if (next && next.focus) next.focus();
+  srAnnounce('Left editor. Press Tab to continue through CodeUp controls.');
+}
+
 function registerEditorShortcuts() {
   if (window._editorShortcutsRegistered) return;
   if (!editor) return;
@@ -5215,17 +5486,23 @@ function registerEditorShortcuts() {
       ErrorBeaconManager.stop();
       srAnnounce('Speech stopped');
       SonificationManager.playTone(600, 0.05, 0.06);
+    } else {
+      leaveEditor();
     }
   });
+  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyM, () => { leaveEditor(); });
   const editorDom = editor.getDomNode();
   if (editorDom) {
     editorDom.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' &&
-          (AppState.isSpeaking || (window.speechSynthesis && window.speechSynthesis.speaking))) {
-        SpeechManager.cancelAll();
-        ErrorBeaconManager.stop();
-        srAnnounce('Speech stopped');
-        SonificationManager.playTone(600, 0.05, 0.06);
+      if (e.key === 'Escape') {
+        if (AppState.isSpeaking || (window.speechSynthesis && window.speechSynthesis.speaking)) {
+          SpeechManager.cancelAll();
+          ErrorBeaconManager.stop();
+          srAnnounce('Speech stopped');
+          SonificationManager.playTone(600, 0.05, 0.06);
+        } else {
+          leaveEditor();
+        }
       }
     }, true);
   }
@@ -5817,6 +6094,7 @@ async function readStructureOutline() {
 
 
 // ==== SPOKEN-CODE-NORMALIZERS-START (pure; mirrored by tests/spoken_code.test.js) ====
+const CODEUP_SPOKEN_OUTPUT_LIMIT = 4000;
 const SPOKEN_CODE_NUMBERS = Object.freeze({
   zero: '0',
   one: '1',
@@ -5961,21 +6239,24 @@ function spokenConditionPhrase(cond) {
 
 function _outputPeriod(s) { return /[.!?:]$/.test(String(s || '')) ? '' : '.'; }
 const _NO_OUTPUT_PLACEHOLDER = 'Program finished with no output.';
+function shortenOutputForSpeech(text) {
+  const cleaned = String(text || '').replace(/\s+/g, ' ').trim();
+  if (cleaned.length <= CODEUP_SPOKEN_OUTPUT_LIMIT) return { text: cleaned, shortened: false };
+  const clipped = cleaned.slice(0, CODEUP_SPOKEN_OUTPUT_LIMIT).replace(/\s+\S*$/, '').trim();
+  return { text: clipped, shortened: true };
+}
 function formatRunOutputSpeech(output) {
   const raw = String(output == null ? '' : output);
   if (raw.trim() === _NO_OUTPUT_PLACEHOLDER) return 'Program ran successfully with no printed output.';
   const lines = raw.split('\n').map(s => s.trim()).filter(s => s.length > 0);
   if (lines.length === 0) return 'Program ran successfully with no printed output.';
   const joined = lines.join(', ');
-  if (lines.length <= 12 && joined.length <= 240) {
+  if (lines.length <= 50 && joined.length <= CODEUP_SPOKEN_OUTPUT_LIMIT) {
     return 'Program output: ' + joined + _outputPeriod(joined);
   }
-  const lineWord = lines.length === 1 ? 'line' : 'lines';
-  const label = lines.length === 1 ? 'It starts with' : 'First lines';
-  const firstFew = lines.slice(0, 3).join(', ');
-  const preview = firstFew.length > 160 ? firstFew.slice(0, 160).replace(/\s+\S*$/, '') + '...' : firstFew;
-  return 'Program produced ' + lines.length + ' ' + lineWord + ' of output. ' +
-    label + ': ' + preview + '. Say read full output to hear everything.';
+  const limited = shortenOutputForSpeech(joined);
+  return 'Program output shortened for speech after ' + CODEUP_SPOKEN_OUTPUT_LIMIT + ' characters: ' +
+    limited.text + _outputPeriod(limited.text) + ' Use the visible output or read output again for the same speech-limited replay.';
 }
 
 function formatFullOutputSpeech(output) {
@@ -5984,7 +6265,11 @@ function formatFullOutputSpeech(output) {
   const lines = raw.split('\n').map(s => s.trim()).filter(s => s.length > 0);
   if (lines.length === 0) return 'No output available.';
   const joined = lines.join(', ');
-  return 'Program output: ' + joined + _outputPeriod(joined);
+  const limited = shortenOutputForSpeech(joined);
+  const prefix = limited.shortened
+    ? 'Program output shortened for speech after ' + CODEUP_SPOKEN_OUTPUT_LIMIT + ' characters: '
+    : 'Program output: ';
+  return prefix + limited.text + _outputPeriod(limited.text);
 }
 // ==== SPOKEN-CODE-NORMALIZERS-END ====
 

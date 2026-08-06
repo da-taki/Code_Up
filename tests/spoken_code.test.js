@@ -166,24 +166,26 @@ check('empty output is stated plainly, never a dangling label', () => {
   assert.strictEqual(N.formatFullOutputSpeech('Program finished with no output.'),
     'The program finished with no printed output.');
 });
-check('long output is summarized but stays accessible via read full output', () => {
+check('reasonable multi-line output is spoken completely', () => {
   const many = Array.from({ length: 40 }, (_, i) => String(i)).join('\n');
   const spoken = N.formatRunOutputSpeech(many);
-  assert.ok(/Program produced 40 lines of output/.test(spoken), spoken);
-  assert.ok(/First lines: 0, 1, 2/.test(spoken), spoken);
-  assert.ok(/read full output/.test(spoken), spoken);
+  assert.ok(spoken.startsWith('Program output: 0, 1, 2,'), spoken);
+  assert.ok(spoken.includes('39'), 'reasonable output must include the final line');
 });
 check('unicode output is spoken without crashing', () => {
   assert.strictEqual(N.formatRunOutputSpeech('hello नमस्ते'),
     'Program output: hello नमस्ते.');
 });
-check('a single very long line is summarized with correct singular grammar', () => {
-  const spoken = N.formatRunOutputSpeech('x'.repeat(300));
-  assert.ok(/Program produced 1 line of output/.test(spoken), spoken);  // "1 line", not "1 lines"
-  assert.ok(/It starts with:/.test(spoken), spoken);
-  assert.ok(!spoken.includes('x'.repeat(200)), 'preview must be truncated, not dump the whole line');
-  assert.ok(spoken.length < 270, 'preview too long: ' + spoken.length);
-  assert.ok(/read full output/.test(spoken), spoken);
+check('extremely long output is shortened with a clear limit notice', () => {
+  const spoken = N.formatRunOutputSpeech('x'.repeat(5000));
+  assert.ok(/shortened for speech after 4000 characters/.test(spoken), spoken);
+  assert.ok(spoken.length < 4200, 'speech limit should prevent an unbounded queue');
+});
+
+check('prime output through 47 is included in run speech', () => {
+  const primes = ['2','3','5','7','11','13','17','19','23','29','31','37','41','43','47'].join('\n') + '\n';
+  const spoken = N.formatRunOutputSpeech(primes);
+  assert.ok(spoken.includes('47'), spoken);
 });
 check('read full output reads everything, no summarizing', () => {
   const many = Array.from({ length: 40 }, (_, i) => String(i)).join('\n');

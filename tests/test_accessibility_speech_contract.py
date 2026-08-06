@@ -99,6 +99,6 @@ def test_deterministic_message_dispatch_speaks(app_js_text=None):
 def test_run_and_report_dispatch_speak():
     with open(os.path.join(_STATIC, "app.js"), encoding="utf-8") as fh:
         src = fh.read()
-    assert "speak(formatRunOutputSpeech(data.output))" in src
+    assert "speak(formatRunOutputSpeech(data.output), { forceFull: true, speechKind: 'program-output' })" in src
     start = src.index("async function requestProjectReport(")
     assert "speak(" in src[start:start + 1200]

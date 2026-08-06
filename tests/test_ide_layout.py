@@ -84,7 +84,7 @@ def test_command_help_panel_groups_every_category(client):
         "Start", "Run", "Debug", "Navigate", "Edit",
         "Learn", "Audio Blocks", "Accessibility", "Project", "Export",
     ):
-        assert f">{group}</h4>" in html, f"help panel missing the {group} group"
+        assert f">{group}</h3>" in html, f"help panel missing the {group} group"
 
 
 def test_audio_blocks_primary_actions_stay_but_editing_actions_collapse(client):

@@ -181,6 +181,13 @@ check('extremely long output is shortened with a clear limit notice', () => {
   assert.ok(/shortened for speech after 4000 characters/.test(spoken), spoken);
   assert.ok(spoken.length < 4200, 'speech limit should prevent an unbounded queue');
 });
+check('120-line output under the speech cap is not mislabeled as shortened', () => {
+  const many = Array.from({ length: 120 }, (_, i) => `line ${i}`).join('\n');
+  const spoken = N.formatRunOutputSpeech(many);
+  assert.ok(spoken.startsWith('Program output: line 0, line 1,'), spoken);
+  assert.ok(spoken.includes('line 119'), 'automatic narration should include the final line under the cap');
+  assert.ok(!/shortened for speech after 4000 characters/.test(spoken), spoken);
+});
 
 check('prime output through 47 is included in run speech', () => {
   const primes = ['2','3','5','7','11','13','17','19','23','29','31','37','41','43','47'].join('\n') + '\n';

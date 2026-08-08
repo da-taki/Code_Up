@@ -6251,7 +6251,7 @@ function formatRunOutputSpeech(output) {
   const lines = raw.split('\n').map(s => s.trim()).filter(s => s.length > 0);
   if (lines.length === 0) return 'Program ran successfully with no printed output.';
   const joined = lines.join(', ');
-  if (lines.length <= 50 && joined.length <= CODEUP_SPOKEN_OUTPUT_LIMIT) {
+  if (joined.length <= CODEUP_SPOKEN_OUTPUT_LIMIT) {
     return 'Program output: ' + joined + _outputPeriod(joined);
   }
   const limited = shortenOutputForSpeech(joined);

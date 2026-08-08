@@ -190,9 +190,18 @@ check('prime output through 47 is included in run speech', () => {
 check('read full output reads everything, no summarizing', () => {
   const many = Array.from({ length: 40 }, (_, i) => String(i)).join('\n');
   const full = N.formatFullOutputSpeech(many);
-  assert.ok(full.startsWith('Program output: 0, 1, 2,'), full);
+  assert.ok(full.startsWith('Complete program output: 0, 1, 2,'), full);
   assert.ok(full.indexOf('39') !== -1, 'full readback must include the last line');
   assert.strictEqual(N.formatFullOutputSpeech(''), 'No output available.');
+});
+check('explicit output replay is not capped at the automatic speech limit', () => {
+  const many = Array.from({ length: 700 }, (_, i) => `line ${i}`).join('\n');
+  const automatic = N.formatRunOutputSpeech(many);
+  const full = N.formatFullOutputSpeech(many);
+  assert.ok(/shortened for speech after 4000 characters/.test(automatic), automatic);
+  assert.ok(full.startsWith('Complete program output: line 0, line 1,'), full);
+  assert.ok(full.includes('line 699'), 'explicit replay must include the final line');
+  assert.ok(full.length > 4200, 'explicit replay should not reuse the automatic cap');
 });
 
 console.log('spoken_code.test.js: ' + groups + ' groups passed');

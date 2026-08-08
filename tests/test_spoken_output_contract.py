@@ -157,6 +157,7 @@ class TestRunAndReadbackSpeechWiring:
         block = app_js[start:start + 600]
         assert "formatFullOutputSpeech" in block
         assert "window.lastRunOutput" in block
+        assert "speechKind: 'program-output-replay'" in block
 
     def test_read_my_code_is_wired_to_speak(self, app_js):
         assert "action === 'read_code'" in app_js

@@ -63,6 +63,7 @@ class TestRunOutputSpeechWiring:
         block = app_js[start:start + 500]
         assert "formatFullOutputSpeech" in block
         assert "window.lastRunOutput" in block
+        assert "speechKind: 'program-output-replay'" in block
 
     def test_error_run_is_spoken(self, app_js):
         assert "speak(`Error${lineHint}: ${lastLine}`, { sr: false, priority: 'assertive' })" in app_js
@@ -79,3 +80,31 @@ class TestRunOutputSpeechWiring:
 
     def test_stop_speaking_does_not_clear_output(self, app_js):
         assert "function cancelAll()" in app_js
+
+
+class TestRunOutputExecutionCompleteness:
+
+    def test_prime_numbers_through_50_are_preserved_in_run_output(self, client):
+        code = """for n in range(2, 51):
+    prime = True
+    for i in range(2, int(n ** 0.5) + 1):
+        if n % i == 0:
+            prime = False
+            break
+    if prime:
+        print(n)
+"""
+        data = client.post("/run", json={"code": code, "language": "en", "inputs": []}).get_json()
+        assert data["success"] is True
+        assert data["output"].strip().splitlines() == [
+            "2", "3", "5", "7", "11", "13", "17", "19", "23", "29", "31", "37", "41", "43", "47"
+        ]
+
+    def test_long_multiline_output_is_not_truncated_in_run_output(self, client):
+        code = "for i in range(120):\n    print(f'line {i}')\n"
+        data = client.post("/run", json={"code": code, "language": "en", "inputs": []}).get_json()
+        assert data["success"] is True
+        lines = data["output"].strip().splitlines()
+        assert lines[0] == "line 0"
+        assert lines[-1] == "line 119"
+        assert len(lines) == 120

@@ -14,7 +14,7 @@ This report covers the NVDA accessibility review fixes for CodeUp. Automated che
 
 - Screen Reader Mode now turns Browser Speech off by default unless the user manually overrides it. ARIA status and alert regions remain active.
 - Browser Speech has clearer status text, persisted on/off override, persisted speech rate, persisted selected browser voice, and a Test Voice control.
-- Reasonable program output is spoken completely, including the prime-number output through `47`; very long output is shortened with an explicit limit notice.
+- Automatic run narration speaks reasonable program output completely, including the prime-number output through `47`; very long automatic narration is shortened with an explicit limit notice. User-requested Read output again replays the complete stored output through the chunked speech queue.
 - Program output has Stop speech and Read output again controls.
 - Runtime `input()` prompts now use a dedicated Program inputs field. Focus moves there, Enter submits, Escape/Cancel cancels, and successful completion moves focus to Program output when appropriate.
 - Streaming input requests now use the same Program inputs path instead of sending users back to the command box.
@@ -184,3 +184,8 @@ Tejas and the XRCVC team should test with real NVDA on Windows:
 8. Escape, Control+M, Leave editor, Jump to editor, and Jump to output do not conflict with NVDA focus/browse workflows.
 9. Settings wording is concise enough when read by NVDA.
 10. Voice/rate controls are clear but do not imply NVDA users need Browser Speech.
+
+## 2026-08-08 Follow-up
+
+- Separated automatic program-output narration from explicit replay. Automatic run speech remains capped for overwhelming output, while Read output again now uses the complete stored output and lets the speech queue chunk it in order.
+- Added backend regression coverage for the exact prime-number program through 50 and longer multiline output preservation.

@@ -1002,7 +1002,7 @@ function speakOutput() {
   const raw = (typeof window !== 'undefined' && window.lastRunOutput)
     ? window.lastRunOutput
     : (panel ? panel.textContent : '');
-  speak(formatFullOutputSpeech(raw), { forceFull: true });
+  speak(formatFullOutputSpeech(raw), { forceFull: true, speechKind: 'program-output-replay' });
 }
 function repeatLastSpeech() {
   speak(lastSpokenText || 'There is nothing to repeat yet.', { forceFull: true });
@@ -6265,11 +6265,7 @@ function formatFullOutputSpeech(output) {
   const lines = raw.split('\n').map(s => s.trim()).filter(s => s.length > 0);
   if (lines.length === 0) return 'No output available.';
   const joined = lines.join(', ');
-  const limited = shortenOutputForSpeech(joined);
-  const prefix = limited.shortened
-    ? 'Program output shortened for speech after ' + CODEUP_SPOKEN_OUTPUT_LIMIT + ' characters: '
-    : 'Program output: ';
-  return prefix + limited.text + _outputPeriod(limited.text);
+  return 'Complete program output: ' + joined + _outputPeriod(joined);
 }
 // ==== SPOKEN-CODE-NORMALIZERS-END ====
 

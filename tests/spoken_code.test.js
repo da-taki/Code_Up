@@ -179,6 +179,8 @@ check('unicode output is spoken without crashing', () => {
 check('extremely long output is shortened with a clear limit notice', () => {
   const spoken = N.formatRunOutputSpeech('x'.repeat(5000));
   assert.ok(/shortened for speech after 4000 characters/.test(spoken), spoken);
+  assert.ok(spoken.includes('choose Read output again to hear the complete output'), spoken);
+  assert.ok(!spoken.includes('same speech-limited replay'), spoken);
   assert.ok(spoken.length < 4200, 'speech limit should prevent an unbounded queue');
 });
 check('120-line output under the speech cap is not mislabeled as shortened', () => {

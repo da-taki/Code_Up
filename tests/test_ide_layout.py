@@ -122,7 +122,7 @@ def test_code_mode_editor_shell_is_visible_by_default(client):
     assert 'id="codeModeRegion"' in visible
     region = re.search(r'<div[^>]*id="codeModeRegion"[^>]*>', html).group(0)
     assert "hidden" not in region, "Code Mode editor region must be visible on load"
-    panel = re.search(r'<section[^>]*id="audioBlocksPanel"[^>]*>', html).group(0)
+    panel = re.search(r'<[^>]+id="audioBlocksPanel"[^>]*>', html).group(0)
     assert "hidden" in panel, "Audio Blocks panel must be hidden on load"
 
 

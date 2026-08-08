@@ -6256,7 +6256,7 @@ function formatRunOutputSpeech(output) {
   }
   const limited = shortenOutputForSpeech(joined);
   return 'Program output shortened for speech after ' + CODEUP_SPOKEN_OUTPUT_LIMIT + ' characters: ' +
-    limited.text + _outputPeriod(limited.text) + ' Use the visible output or read output again for the same speech-limited replay.';
+    limited.text + _outputPeriod(limited.text) + ' Use the visible output, or choose Read output again to hear the complete output.';
 }
 
 function formatFullOutputSpeech(output) {

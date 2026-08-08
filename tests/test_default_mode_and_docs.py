@@ -31,7 +31,7 @@ def test_ide_starts_in_python_code_mode_by_default(client):
     html = _ide_html(client)
     # The Python editor region is visible and the Audio Blocks panel is hidden.
     assert "hidden" not in _tag(html, "div", "codeModeRegion")
-    assert "hidden" in _tag(html, "section", "audioBlocksPanel")
+    assert "hidden" in _tag(html, "div", "audioBlocksPanel")
     # The Code Mode button is the pressed/active mode on first load.
     code_button = _tag(html, "button", "codeModeBtn")
     assert 'aria-pressed="true"' in code_button

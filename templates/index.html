@@ -191,7 +191,7 @@
       </details>
     </aside>
 
-    <section class="cu-panel cu-editor-wrapper" aria-labelledby="codeEditorHeading">
+    <div class="cu-panel cu-editor-wrapper">
       <h2 id="codeEditorHeading" class="cu-section-heading">Code editor</h2>
 
       <div class="cu-mode-switch" role="group" aria-label="Programming mode">
@@ -203,28 +203,28 @@
         <p id="editorHelp" class="cu-editor-help">Tab indents inside the editor. Press Escape when speech is quiet, or press Control+M, to leave the editor and continue to CodeUp controls.</p>
         <div id="editor" class="cu-editor" aria-label="Python code editor" aria-describedby="editorHelp"></div>
         <button id="leaveEditorBtn" class="cu-button cu-button-secondary cu-leave-editor" type="button" aria-label="Leave editor and move to editor actions">Leave editor</button>
-        <section id="errorSummary" class="cu-error-summary" aria-labelledby="errorSummaryHeading" aria-live="off" hidden>
+        <div id="errorSummary" class="cu-error-summary" aria-live="off" hidden>
           <h3 id="errorSummaryHeading">Editor error</h3>
           <p id="errorSummaryText">No editor errors.</p>
-        </section>
+        </div>
       </div>
 
-      <section id="audioBlocksPanel" class="audio-blocks-panel" aria-label="Audio Blocks Mode" aria-labelledby="audioBlocksHeading" hidden>
+      <div id="audioBlocksPanel" class="audio-blocks-panel" hidden>
         <h3 id="audioBlocksHeading">Audio Blocks Mode</h3>
         <p id="audioBlocksStatus" role="status" aria-live="polite">The block workspace is empty.</p>
-        <section class="audio-blocks-palette" aria-label="Block palette">
+        <div class="audio-blocks-palette">
           <h3>Block palette</h3>
           <button class="cu-button" data-block-command="list block categories" aria-label="List block categories">Categories</button>
           <button class="cu-button" data-block-command="add print block" data-category="output" aria-label="Add print text block">Add print</button>
           <button class="cu-button" data-block-command="add variable total equals 0" data-category="variables" aria-label="Add variable total equals zero">Add variable</button>
           <button class="cu-button" data-block-command="add repeat 3 times block" data-category="loops" aria-label="Add repeat three times block">Add repeat</button>
-        </section>
-        <section class="audio-blocks-workspace" aria-label="Block workspace" tabindex="0" aria-describedby="audioBlocksKeyboardHelp">
+        </div>
+        <div class="audio-blocks-workspace" tabindex="0" aria-describedby="audioBlocksKeyboardHelp">
           <h3>Numbered block workspace</h3>
           <p id="audioBlocksKeyboardHelp">Arrow keys read blocks. Control plus arrows move blocks. Left bracket outdents, right bracket indents, Delete removes, Control Enter compiles, and Control Shift Enter runs.</p>
           <ol id="audioBlocksList" role="list" aria-label="Numbered blocks"></ol>
           <p id="audioBlocksEmptyState" class="audio-blocks-empty">No blocks yet. Say <strong>add print block</strong> or <strong>list block categories</strong> to add your first block.</p>
-        </section>
+        </div>
         <div class="audio-blocks-controls" role="toolbar" aria-label="Audio Blocks controls">
           <button class="cu-button" data-block-command="previous block" aria-label="Read previous block">Previous</button>
           <button class="cu-button" data-block-command="next block" aria-label="Read next block">Next</button>
@@ -241,11 +241,11 @@
             </div>
           </details>
         </div>
-        <section class="audio-blocks-preview" aria-label="Generated code preview">
+        <div class="audio-blocks-preview">
           <h3>Generated Python preview</h3>
           <pre id="audioBlocksCodePreview" tabindex="0">No generated code yet.</pre>
-        </section>
-      </section>
+        </div>
+      </div>
 
       <div class="cu-command-bar" role="toolbar" aria-label="Editor actions">
         <button class="cu-button cu-button-primary" id="runBtn" aria-label="Run Python code (Ctrl+Enter)">Run</button>
@@ -269,7 +269,7 @@
         </details>
       </div>
 
-    </section>
+    </div>
 
     <aside class="cu-panel cu-structure" id="structurePanel" hidden aria-labelledby="structure-heading">
       <h2 class="cu-panel-title" id="structure-heading">Code structure navigator</h2>
@@ -280,7 +280,7 @@
 
   </div>
 
-  <section class="cu-panel cu-output-wrapper" aria-labelledby="programOutputHeading">
+  <div class="cu-panel cu-output-wrapper">
     <h2 id="programOutputHeading" class="cu-section-heading">Program output</h2>
     <div id="output" class="cu-output" role="log" aria-live="polite" aria-label="Program output" tabindex="0"></div>
     <div class="cu-output-actions" role="group" aria-label="Program output speech controls">
@@ -292,7 +292,7 @@
       Idle.
     </div>
 
-    <section id="programInputSection" class="cu-program-input" aria-labelledby="programInputHeading">
+    <div id="programInputSection" class="cu-program-input">
       <h2 id="programInputHeading" class="cu-section-heading">Program inputs</h2>
       <p id="programInputStatus" class="cu-command-tip">No program input is being requested.</p>
       <label id="programInputLabel" for="programInputValue">Program input answer</label>
@@ -307,9 +307,9 @@
       />
       <button class="cu-button cu-button-primary" id="programInputSubmitBtn" type="button" disabled aria-label="Submit program input">Submit input</button>
       <button class="cu-button cu-button-secondary" id="programInputCancelBtn" type="button" disabled aria-label="Cancel program input">Cancel input</button>
-    </section>
+    </div>
 
-    <section class="mentor-transcript-panel" aria-labelledby="mentor-transcript-heading">
+    <div class="mentor-transcript-panel">
       <h3 class="cu-panel-title" id="mentor-transcript-heading">Mentor transcript</h3>
       <div
         id="mentorTranscript"
@@ -321,9 +321,9 @@
       >
         <p class="mentor-transcript-empty">Mentor transcript will appear here.</p>
       </div>
-    </section>
+    </div>
 
-    <section class="cu-voice-console" aria-labelledby="command-input-label">
+    <div class="cu-voice-console">
       <h2 class="cu-panel-title" id="command-input-label">Commands</h2>
       <input
         id="voiceText"
@@ -350,7 +350,7 @@
         <div><span class="cu-command-understanding-label">Next action:</span> <span id="nextCommandAction">None yet.</span></div>
       </div>
 
-      <section id="liveAssistantPanel" class="cu-live-assistant" hidden aria-label="Live Assistant">
+      <div id="liveAssistantPanel" class="cu-live-assistant" hidden>
         <p id="liveAssistantStatus" class="cu-live-assistant-status" role="status" aria-live="polite" aria-atomic="true">Live Assistant: off</p>
         <p id="liveAssistantHeard" class="cu-live-assistant-line">You said: (nothing yet)</p>
         <p id="liveAssistantResponse" class="cu-live-assistant-line">CodeUp said: (nothing yet)</p>
@@ -360,58 +360,58 @@
           <button type="button" id="liveAssistantStopSpeakBtn" aria-label="Stop speaking">Stop speaking</button>
           <button type="button" id="liveAssistantRepeatBtn" aria-label="Repeat last response">Repeat last response</button>
         </div>
-      </section>
+      </div>
 
       <details id="cuHelpPanel" class="cu-disclosure cu-help-disclosure">
         <summary class="cu-disclosure-summary">Show commands &amp; help</summary>
         <div class="cu-help-content">
           <p class="cu-help-intro">Everything works by voice or by typing a command here. You do not need buttons. Say or type any command below, or say <strong>&quot;what can I do here&quot;</strong>.</p>
           <div class="cu-help-grid">
-            <section class="cu-help-group" aria-label="Start commands">
+            <div class="cu-help-group">
               <h3>Start</h3>
               <ul><li>what can I do here</li><li>start tutorial</li><li>start learning path</li></ul>
-            </section>
-            <section class="cu-help-group" aria-label="Run commands">
+            </div>
+            <div class="cu-help-group">
               <h3>Run</h3>
               <ul><li>run</li><li>read last output</li><li>read last error</li></ul>
-            </section>
-            <section class="cu-help-group" aria-label="Debug commands">
+            </div>
+            <div class="cu-help-group">
               <h3>Debug</h3>
               <ul><li>read errors only</li><li>preflight check</li><li>run with step narration</li></ul>
-            </section>
-            <section class="cu-help-group" aria-label="Navigate commands">
+            </div>
+            <div class="cu-help-group">
               <h3>Navigate</h3>
               <ul><li>where is my cursor</li><li>read around me</li><li>give me a code map</li></ul>
-            </section>
-            <section class="cu-help-group" aria-label="Edit commands">
+            </div>
+            <div class="cu-help-group">
               <h3>Edit</h3>
               <ul><li>insert print hello world</li><li>comment this line</li><li>rename total to score</li></ul>
-            </section>
-            <section class="cu-help-group" aria-label="Learn commands">
+            </div>
+            <div class="cu-help-group">
               <h3>Learn</h3>
               <ul><li>next lesson</li><li>give lesson hint</li><li>start error practice</li></ul>
-            </section>
-            <section class="cu-help-group" aria-label="Audio Blocks commands">
+            </div>
+            <div class="cu-help-group">
               <h3>Audio Blocks</h3>
               <ul><li>open audio blocks (voice only)</li><li>add print block</li><li>list block categories</li></ul>
-            </section>
-            <section class="cu-help-group" aria-label="Accessibility commands">
+            </div>
+            <div class="cu-help-group">
               <h3>Accessibility</h3>
               <ul><li>enable screen reader mode</li><li>show keyboard shortcuts</li><li>set screen reader to NVDA</li></ul>
-            </section>
-            <section class="cu-help-group" aria-label="Project commands">
+            </div>
+            <div class="cu-help-group">
               <h3>Project</h3>
               <ul><li>show requirements</li><li>check missing files</li><li>show code stats</li></ul>
-            </section>
-            <section class="cu-help-group" aria-label="Export commands">
+            </div>
+            <div class="cu-help-group">
               <h3>Export</h3>
               <ul><li>export project</li><li>export blocks and python</li><li>generate teacher report</li></ul>
-            </section>
+            </div>
           </div>
         </div>
       </details>
-    </section>
-  </section>
+    </div>
+  </div>
   </main>
 
   <div

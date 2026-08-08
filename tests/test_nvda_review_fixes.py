@@ -52,9 +52,11 @@ class LandmarkParser(HTMLParser):
 
     def handle_starttag(self, tag, attrs):
         attr = dict(attrs)
-        role = attr.get("role", "")
-        if tag in self.LANDMARK_TAGS or role in self.LANDMARK_ROLES:
-            label = attr.get("aria-label") or attr.get("aria-labelledby") or ""
+        explicit_role = attr.get("role", "")
+        label = attr.get("aria-label") or attr.get("aria-labelledby") or ""
+        implicit_region = tag == "section" and bool(label)
+        if tag in self.LANDMARK_TAGS or explicit_role in self.LANDMARK_ROLES or implicit_region:
+            role = "region" if implicit_region and not explicit_role else explicit_role
             self.landmarks.append((tag, role, label))
 
 
@@ -127,6 +129,35 @@ def test_landmark_labels_are_unique_and_regions_are_limited(client):
     assert region_labels == [], region_labels
 
 
+
+def test_named_sections_count_as_implicit_region_landmarks():
+    parser = LandmarkParser()
+    parser.feed('<section aria-label="Start commands"><h3>Start</h3></section>')
+    assert ("section", "region", "Start commands") in parser.landmarks
+
+
+def test_command_help_groups_keep_headings_without_implicit_regions(client):
+    html = ide_html(client)
+    forbidden_named_sections = [
+        "Start commands", "Run commands", "Debug commands", "Navigate commands", "Edit commands",
+        "Learn commands", "Audio Blocks commands", "Accessibility commands", "Project commands", "Export commands",
+    ]
+    for label in forbidden_named_sections:
+        assert f'<section class="cu-help-group" aria-label="{label}">' not in html
+        assert f'aria-label="{label}"' not in html
+    assert '<div class="cu-help-group">' in html
+
+    parser = LandmarkParser()
+    parser.feed(html)
+    region_labels = [label for _, role, label in parser.landmarks if role == "region"]
+    for label in forbidden_named_sections + ["Commands"]:
+        assert label not in region_labels
+
+    heading_parser = HeadingParser()
+    heading_parser.feed(html)
+    heading_names = [name for _, name in heading_parser.headings]
+    for heading in ["Commands", "Start", "Run", "Debug", "Navigate", "Edit", "Learn", "Audio Blocks", "Accessibility", "Project", "Export"]:
+        assert heading in heading_names
 def test_editor_escape_path_and_skip_links_exist(client):
     html = ide_html(client)
     assert 'href="#editor">Jump to editor' in html

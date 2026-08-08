@@ -748,11 +748,13 @@ def test_no_ai_provider_is_called(client, monkeypatch):
 def test_frontend_has_labeled_regions_buttons_keyboard_and_actions(client):
     html = client.get("/ide").get_data(as_text=True)
     for token in (
-        'aria-label="Audio Blocks Mode"',
+        '<h3 id="audioBlocksHeading">Audio Blocks Mode</h3>',
         'aria-label="Open Audio Blocks Mode"',
-        'aria-label="Block palette"',
-        'aria-label="Block workspace"',
-        'aria-label="Generated code preview"',
+        '<h3>Block palette</h3>',
+        '<h3>Numbered block workspace</h3>',
+        'aria-describedby="audioBlocksKeyboardHelp"',
+        'aria-label="Numbered blocks"',
+        '<h3>Generated Python preview</h3>',
         'aria-label="Move current block up"',
         'aria-label="Compile and run blocks"',
     ):

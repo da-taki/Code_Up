@@ -44,8 +44,8 @@ def test_live_assistant_module_is_self_contained():
 def test_index_html_keeps_live_assistant_hooks_but_hides_demo_panel():
     html = _read("templates/index.html")
     assert 'id="liveAssistantPanel"' in html
-    panel_start = html.index('<section id="liveAssistantPanel"')
-    panel_end = html.index("</section>", panel_start) + len("</section>")
+    panel_start = html.index('<div id="liveAssistantPanel"')
+    panel_end = html.index("</div>", panel_start) + len("</div>")
     panel_open_tag = html[panel_start:html.index(">", panel_start)]
     visible_html = html[:panel_start] + html[panel_end:]
     assert " hidden" in panel_open_tag
@@ -59,7 +59,8 @@ def test_index_html_keeps_live_assistant_hooks_but_hides_demo_panel():
         "Repeat last response",
     ):
         assert phrase not in visible_html
-    assert 'aria-label="Live Assistant"' in html
+    assert 'aria-label="Live Assistant"' not in panel_open_tag
+    assert 'aria-label="Live Assistant controls"' in html
     # Status uses a polite live region (not assertive).
     assert 'id="liveAssistantStatus"' in html and 'aria-live="polite"' in html
     for token in (

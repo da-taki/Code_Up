@@ -29,7 +29,6 @@ from codeup.commands.input_concierge import build_input_plan, concierge_request_
 from codeup.runtime import session_memory
 from codeup.commands import command_clarifier
 from codeup.integrations import grounded_ai
-from codeup.integrations import groq_key_manager
 from codeup.commands import clarification_flow
 from codeup.learning import concept_qa
 from codeup.commands import intent_repair
@@ -84,6 +83,11 @@ from codeup.learning import accessible_learning
 from codeup.accessibility import audio_blocks
 from codeup.commands.command_normalization import normalize_command_transcript
 from codeup.accessibility.speech_output import sanitize_speech_text
+from codeup.providers import groq_pool
+from codeup.classroom import ai_policy as classroom_ai_policy
+from codeup.classroom import concepts as classroom_concepts
+from codeup.classroom import db as classroom_db
+from codeup.classroom.routes import classroom_bp, LEARNER_COOKIE as CLASSROOM_LEARNER_COOKIE
 
 load_dotenv(override=True)
 
@@ -236,15 +240,64 @@ def start_background_services():
         _cleanup_thread.start()
         return _cleanup_thread
 
+
+_groq_startup_health_check_done = False
+_groq_startup_health_check_lock = threading.Lock()
+
+
+def _maybe_run_groq_startup_health_check():
+    """Opt-in only (GROQ_HEALTH_CHECK_ON_STARTUP=1) - a real health check
+    costs one real request per configured key, so it never runs by default.
+    Runs at most once per process, in the background, and never blocks
+    startup or a request. Prefer `python scripts/check_groq_keys.py` for an
+    on-demand check that doesn't require restarting the server."""
+    global _groq_startup_health_check_done
+    if not _truthy_env("GROQ_HEALTH_CHECK_ON_STARTUP"):
+        return
+    with _groq_startup_health_check_lock:
+        if _groq_startup_health_check_done:
+            return
+        _groq_startup_health_check_done = True
+
+    def _run():
+        try:
+            results = groq_pool.health_check_all(env=_groq_failover_env())
+            healthy = sum(1 for r in results.values() if r == "healthy")
+            _debug_log(f"Groq startup health check: {healthy}/{len(results)} key(s) healthy")
+        except Exception as e:
+            _debug_log(f"Groq startup health check failed: {e}")
+
+    threading.Thread(target=_run, name="codeup-groq-startup-healthcheck", daemon=True).start()
+
 _gemini_executor = None
 _gemini_executor_lock = threading.Lock()
+
+_GEMINI_EXECUTOR_MIN_WORKERS = 3
+_GEMINI_EXECUTOR_MAX_WORKERS = 64
+
+
+def _gemini_executor_size() -> int:
+    """The old hardcoded max_workers=3 made this executor - not the pool -
+    the real concurrency ceiling: even with 15 keys and no cooldowns, only 3
+    Groq calls could ever run at once, because every call (whichever key the
+    pool picked) still has to wait for a free executor thread. Size it to
+    the pool's own real capacity instead, so the executor is never a
+    smaller bottleneck than the pool it's supposed to just be timing-out."""
+    try:
+        configured = len(groq_pool.load_pool_key_values(_groq_failover_env()))
+    except Exception:
+        configured = 1
+    capacity = max(1, configured) * groq_pool.max_concurrency_per_key()
+    return max(_GEMINI_EXECUTOR_MIN_WORKERS, min(_GEMINI_EXECUTOR_MAX_WORKERS, capacity))
 
 
 def _get_gemini_executor():
     global _gemini_executor
     with _gemini_executor_lock:
         if _gemini_executor is None:
-            _gemini_executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="gemini")
+            _gemini_executor = ThreadPoolExecutor(
+                max_workers=_gemini_executor_size(), thread_name_prefix="gemini"
+            )
         return _gemini_executor
 
 
@@ -296,6 +349,7 @@ else:
 
 app = Flask(__name__)
 _configure_secret_key(app)
+app.register_blueprint(classroom_bp)
 
 SESSION_COOKIE_NAME = 'codeup_session'
 SESSION_COOKIE_MAX_AGE = 3600 * 24 * 7  # 7 days
@@ -311,6 +365,7 @@ SESSION_COOKIE_SAMESITE = None if os.environ.get("FLASK_TESTING", "false").lower
 def ensure_background_services_started():
     if not _is_testing_mode():
         start_background_services()
+        _maybe_run_groq_startup_health_check()
 
 @app.after_request
 def set_session_cookie(response):
@@ -799,9 +854,14 @@ def _configured_cloud_api_key():
     extra = _configured_extra_cloud_keys()
     if extra:
         return extra[0]
-    records = groq_key_manager.load_groq_api_keys(_groq_failover_env())
-    if records:
-        return records[0].key
+    # groq_pool.load_pool_key_values merges GROQ_API_KEYS (comma-separated)
+    # with the numbered GROQ_API_KEY/GROQ_API_KEY_2..15 scheme -
+    # groq_key_manager.load_groq_api_keys alone only sees the numbered form,
+    # so a CSV-only deployment would look unconfigured here and never even
+    # reach the pool.
+    values = groq_pool.load_pool_key_values(_groq_failover_env())
+    if values:
+        return values[0]
     return ""
 
 def _env_flag_disabled(name: str) -> bool:
@@ -815,7 +875,7 @@ def _cloud_ai_disabled_for_request(key: str) -> bool:
     if (
         _env_flag_disabled("GEMINI_ENABLED")
         and not _configured_extra_cloud_keys()
-        and not _usable_cloud_key(os.environ.get("GROQ_API_KEY", ""))
+        and not groq_pool.load_pool_key_values(_groq_failover_env())
     ):
         return True
     if _env_flag_disabled("GEMINI_ENABLED") and not key:
@@ -929,6 +989,15 @@ def _call_ollama(system_prompt, user_prompt, temperature=0.2, max_tokens=None):
         return None
 
 
+def _gemini_busy_threshold() -> int:
+    try:
+        configured = len(groq_pool.load_pool_key_values(_groq_failover_env()))
+    except Exception:
+        configured = 1
+    capacity = max(1, configured) * groq_pool.max_concurrency_per_key()
+    return max(8, capacity + groq_pool.queue_max_size())
+
+
 def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en", max_tokens=None):
     max_tokens = _normalize_ai_max_tokens(max_tokens)
     key = _configured_cloud_api_key()
@@ -964,9 +1033,12 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en", max_
             if language == "hi":
                 sp = f"आप एक सहायक हैं जो हिंदी में सहायता प्रदान करते हैं। {system_prompt}"
 
-            def _request_with_key(api_key, key_index):
+            def _request_with_key(api_key, internal_id):
                 from groq import Groq
-                client = Groq(api_key=api_key)
+                # max_retries=0: the pool - not the SDK - decides whether and
+                # how to retry, so every attempt is visible for fair
+                # selection, cooldown and rate-limit-header accounting.
+                client = Groq(api_key=api_key, timeout=MAX_GEMINI_TIMEOUT, max_retries=0)
                 response = client.chat.completions.create(
                     model=GEMINI_MODEL,
                     messages=[
@@ -983,12 +1055,13 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en", max_
                         return content
                 return "AI service returned an empty response. Please try again."
 
-            return groq_key_manager.get_groq_key_manager().call_with_failover(
+            return groq_pool.call_with_pool(
                 _request_with_key,
+                timeout=groq_pool.queue_wait_timeout(),
                 env=_groq_failover_env(),
                 extra_keys=extra_keys,
             )
-        except groq_key_manager.GroqFailoverError as e:
+        except groq_pool.GroqPoolError as e:
             local = _try_ollama_fallback()
             if local:
                 return f"[offline mode] {local}"
@@ -1016,7 +1089,12 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en", max_
         current_active = _gemini_active_requests
         current_queued = _gemini_queued_requests
 
-    if current_active + current_queued >= 8:
+    # A coarse outer circuit-breaker only - the real admission control (fair
+    # per-key selection, bounded FIFO queue, per-key concurrency) now lives
+    # in groq_pool underneath _request_with_key, so this threshold is sized
+    # generously to that pool's own capacity rather than a fixed "8": it
+    # should essentially never fire before the pool's own queue would.
+    if current_active + current_queued >= _gemini_busy_threshold():
         local = _try_ollama_fallback()
         if local:
             return f"[offline mode] {local}"
@@ -1081,24 +1159,54 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en", max_
         return "AI service is currently unavailable. Core CodeUp features still work."
 
 
+def _ai_capability_check(capability: str) -> Tuple[bool, Dict[str, bool], str]:
+    """Resolve the caller's capability settings and check one against it.
+
+    Reads the assignment context from the request (cookie set when a learner
+    opens an assignment, or an explicit ``assignment_id`` JSON field) with no
+    assignment context resolving to "everything allowed" - anonymous,
+    non-cohort IDE usage is never restricted by the classroom layer.
+    """
+    body = request.get_json(silent=True) if has_request_context() else None
+    body = body if isinstance(body, dict) else {}
+
+    def _get_cookie(name):
+        return request.cookies.get(name) if has_request_context() else None
+
+    def _get_json_field(name):
+        return body.get(name)
+
+    settings = classroom_ai_policy.resolve_settings_for_request(
+        _get_cookie, _get_json_field, classroom_db.get_assignment
+    )
+    allowed = classroom_ai_policy.is_allowed(capability, settings)
+    message = "" if allowed else classroom_ai_policy.blocked_message(capability, settings)
+    return allowed, settings, message
+
+
+def call_gemini_capability(capability, system_prompt, user_prompt, temperature=0.2, language="en", max_tokens=None):
+    """Same as call_gemini, gated by the instructor's AI policy for this capability."""
+    allowed, _policy, message = _ai_capability_check(capability)
+    if not allowed:
+        return message
+    return call_gemini(system_prompt, user_prompt, temperature=temperature, language=language, max_tokens=max_tokens)
+
+
 def call_conversation_orchestrator_ai(system_prompt: str, user_prompt: str) -> str:
     if _env_flag_disabled("CODEUP_AI_ENABLED") or _env_flag_disabled("AI_ENABLED") or _env_flag_disabled("GROQ_ENABLED"):
         return ""
     extra_keys = _configured_extra_cloud_keys()
-    if (
-        _env_flag_disabled("GEMINI_ENABLED")
-        and not extra_keys
-        and not _usable_cloud_key(os.environ.get("GROQ_API_KEY", ""))
-    ):
-        return ""
-    manager = groq_key_manager.get_groq_key_manager()
-    if not manager.has_keys(env=_groq_failover_env(), extra_keys=extra_keys):
+    # A single pool-aware check (CSV GROQ_API_KEYS + the numbered scheme +
+    # any session key) - a raw os.environ.get("GROQ_API_KEY") check here
+    # previously made a CSV-only deployment (GROQ_API_KEYS set, GROQ_API_KEY
+    # unset) look unconfigured and return "" before ever trying the pool.
+    if not groq_pool.has_configured_keys(env=_groq_failover_env(), extra_keys=extra_keys):
         return ""
 
     def _do_call():
-        def _request_with_key(api_key, key_index):
+        def _request_with_key(api_key, internal_id):
             from groq import Groq
-            client = Groq(api_key=api_key)
+            client = Groq(api_key=api_key, timeout=MAX_GEMINI_TIMEOUT, max_retries=0)
             response = client.chat.completions.create(
                 model=os.environ.get("GROQ_ORCHESTRATOR_MODEL", GEMINI_MODEL),
                 messages=[
@@ -1115,8 +1223,9 @@ def call_conversation_orchestrator_ai(system_prompt: str, user_prompt: str) -> s
                     return content
             return ""
 
-        return manager.call_with_failover(
+        return groq_pool.call_with_pool(
             _request_with_key,
+            timeout=groq_pool.queue_wait_timeout(),
             env=_groq_failover_env(),
             extra_keys=extra_keys,
         )
@@ -1132,14 +1241,7 @@ def _structured_ai_available() -> bool:
     if _env_flag_disabled("CODEUP_AI_ENABLED") or _env_flag_disabled("AI_ENABLED") or _env_flag_disabled("GROQ_ENABLED"):
         return False
     extra_keys = _configured_extra_cloud_keys()
-    if (
-        _env_flag_disabled("GEMINI_ENABLED")
-        and not extra_keys
-        and not _usable_cloud_key(os.environ.get("GROQ_API_KEY", ""))
-    ):
-        return False
-    manager = groq_key_manager.get_groq_key_manager()
-    return manager.has_keys(env=_groq_failover_env(), extra_keys=extra_keys)
+    return groq_pool.has_configured_keys(env=_groq_failover_env(), extra_keys=extra_keys)
 
 
 _COACH_CONCEPT_VOCAB = (
@@ -1430,6 +1532,40 @@ def get_demo_preset(preset_id):
 
 
 
+_TUTORIAL_MODULE_CONCEPTS = {
+    "print": "print output",
+    "variables": "variables",
+    "if": "conditionals (if/else)",
+    "for": "loops",
+    "while": "loops",
+}
+
+
+def _record_classroom_lesson_progress(module_id: str, code: str, passed: bool) -> None:
+    """Best-effort: persist tutorial progress + concept evidence for a cohort
+    learner. Silently does nothing for anonymous (non-cohort) IDE usage, and
+    never lets a persistence hiccup break the tutorial itself."""
+    try:
+        learner = classroom_db.get_learner_by_token(request.cookies.get(CLASSROOM_LEARNER_COOKIE))
+        if not learner:
+            return
+        status = "completed" if passed else "in_progress"
+        classroom_db.upsert_lesson_progress(learner["id"], module_id, status, last_code=code)
+        classroom_db.touch_learner_active(learner["id"])
+        if passed:
+            concept = _TUTORIAL_MODULE_CONCEPTS.get(module_id)
+            if concept:
+                classroom_concepts.record_lesson_passed(learner["id"], learner["cohort_id"], concept)
+            if module_id == "while":  # last module in the built-in onboarding tutorial
+                classroom_db.mark_onboarding_completed(learner["id"])
+        classroom_db.log_event(
+            learner["id"], learner["cohort_id"], "lesson_progress",
+            {"module": module_id, "passed": passed},
+        )
+    except Exception:
+        pass
+
+
 @app.route("/tutorial/modules", methods=["GET"])
 def tutorial_modules():
     return jsonify({"success": True, **tutorial_engine.module_pack()})
@@ -1451,6 +1587,7 @@ def tutorial_validate():
     result = tutorial_engine.validate_attempt(
         module_id, code, ran_ok=ran_ok, output=output
     )
+    _record_classroom_lesson_progress(module_id, code, result["passed"])
     return jsonify({
         "success": True,
         "module": module_id,
@@ -1540,7 +1677,7 @@ def api_config():
 def sanitize_traceback(traceback_str: str) -> str:
     text = str(traceback_str or "")
     try:
-        text = groq_key_manager.redact_known_keys(text, extra_keys=_configured_extra_cloud_keys())
+        text = groq_pool.redact_known_keys(text, extra_keys=_configured_extra_cloud_keys())  # always sees the real env - redaction must never be test-mode-gated
     except Exception:
         pass
     text = re.sub(r'gsk_[A-Za-z0-9_-]{16,}', '<redacted-api-key>', text)
@@ -1765,7 +1902,7 @@ def explain_error(code: str, err_text: str, language="en", beginner=False) -> st
     if "indentationerror" in safe_error.lower():
         return local_explanation
     user = f"Code:\n```python\n{code}\n```\n\nError:\n```\n{safe_error}\n```"
-    ai_explanation = call_gemini(system, user, language=language)
+    ai_explanation = call_gemini_capability("error_help", system, user, language=language)
     if _is_ai_service_message(ai_explanation) or _ai_unavailable(ai_explanation):
         return local_explanation
     return ai_explanation
@@ -2208,6 +2345,10 @@ def _hinglish_code_map_summary(code: str) -> str:
 
 @app.route("/audio-code-map", methods=["POST"])
 def audio_code_map():
+    _allowed, _settings, _blocked_msg = _ai_capability_check("audio_code_map")
+    if not _allowed:
+        return jsonify({"success": False, "error": _blocked_msg, "message": _blocked_msg, "speech": _blocked_msg})
+
     body = safejson()
     code = safe(body.get("code"), "")
     query = safe(body.get("query"), "")
@@ -2252,7 +2393,7 @@ def audio_code_map():
                 "Do not use markdown."
             )
             user = f"Structural facts:\n{deterministic_summary}"
-            ai_reply = call_gemini(system, user, temperature=0.2, language=language)
+            ai_reply = call_gemini_capability("audio_code_map", system, user, temperature=0.2, language=language)
             if not _ai_unavailable(ai_reply):
                 reply = ai_reply
             else:
@@ -2959,6 +3100,10 @@ def audio_breakpoints_route():
 
 @app.route("/step-narration", methods=["POST"])
 def step_narration():
+    _allowed, _settings, _blocked_msg = _ai_capability_check("step_narration")
+    if not _allowed:
+        return jsonify({"success": False, "error": _blocked_msg, "message": _blocked_msg, "speech": _blocked_msg})
+
     body = safejson()
     code = safe(body.get("code"), "")
     language = safe(body.get("language"), "en")
@@ -3038,7 +3183,7 @@ def step_narration():
                 "Mention loop iterations when relevant. Under 10 sentences. No markdown."
             )
             user = f"Code:\n```python\n{code}\n```\n\nExecution events:\n" + "\n".join(result["narration"])
-            ai_text = call_gemini(system, user, temperature=0.2, language=language)
+            ai_text = call_gemini_capability("step_narration", system, user, temperature=0.2, language=language)
             if not _ai_unavailable(ai_text):
                 narration_text = ai_text
 
@@ -3089,6 +3234,10 @@ def watch_variable_route():
         if watched:
             msg += f" Still watching: {', '.join(watched)}."
         return jsonify({"success": True, "watched": watched, "speech": msg, "auto_speak": True})
+
+    _allowed, _settings, _blocked_msg = _ai_capability_check("watch_variable")
+    if not _allowed:
+        return jsonify({"success": False, "error": _blocked_msg, "speech": _blocked_msg, "auto_speak": True})
 
     if not variable:
         return jsonify({"success": False, "error": "No variable name provided."}), 400
@@ -3289,7 +3438,7 @@ def mistake_replay():
                 f"Before code:\n```python\n{error_code}\n```\n\n"
                 f"After code:\n```python\n{success_code}\n```"
             )
-            ai_reply = call_gemini(system, user, temperature=0.2, language=language)
+            ai_reply = call_gemini_capability("error_help", system, user, temperature=0.2, language=language)
             if not _ai_unavailable(ai_reply):
                 reply = ai_reply
             else:
@@ -3597,6 +3746,11 @@ def mentor_chat():
     if not message and mode not in {"repeat", "shorter", "simpler", "slow_walkthrough"}:
         return jsonify({"success": False, "error": "Message is required", "reply": "Please ask the mentor a question.", "speech": "Please ask the mentor a question.", "auto_speak": True}), 400
 
+    _capability = classroom_ai_policy.classify_chat_capability(message)
+    _allowed, _policy, _blocked_msg = _ai_capability_check(_capability)
+    if not _allowed:
+        return jsonify({"success": True, "reply": _blocked_msg, "speech": _blocked_msg, "auto_speak": True})
+
     system = (
         "You are CodeUp Mentor, a conversational Python tutor inside a blind-first IDE.\n"
         "Keep replies warm, short, and screen-reader friendly.\n"
@@ -3674,6 +3828,14 @@ def mentor_chat_stream():
     if not message and mode not in {"repeat", "shorter", "simpler", "slow_walkthrough"}:
         return jsonify({"success": False, "error": "Message is required"}), 400
 
+    _capability = classroom_ai_policy.classify_chat_capability(message)
+    _allowed, _policy, _blocked_msg = _ai_capability_check(_capability)
+    if not _allowed:
+        def _blocked_stream():
+            yield f"data: {json.dumps({'chunk': _blocked_msg})}\n\n"
+            yield "data: [DONE]\n\n"
+        return Response(stream_with_context(_blocked_stream()), mimetype="text/event-stream")
+
     system = (
         "You are CodeUp Mentor, a conversational Python tutor inside a blind-first IDE.\n"
         "Keep replies warm, short, and screen-reader friendly.\n"
@@ -3729,10 +3891,22 @@ def mentor_chat_stream():
 
             extra_keys = _configured_extra_cloud_keys()
 
-            def _stream_with_key(api_key, key_index):
+            # A held Groq key slot must stay ACTIVE for the whole stream, not
+            # just for obtaining the stream object - groq_pool.acquire() is a
+            # context manager for exactly that: it releases on normal
+            # completion, on any exception, and on the generator being
+            # closed early (client disconnect), via GeneratorExit below.
+            # Only one key is tried for starting the stream (no per-key
+            # retry loop here, since retrying after any content has already
+            # streamed to the client would duplicate output) - the existing
+            # except-Exception fallback to non-streaming call_gemini() just
+            # below already gets its own one-alternate-key retry.
+            with groq_pool.acquire(
+                timeout=groq_pool.queue_wait_timeout(), env=_groq_failover_env(), extra_keys=extra_keys,
+            ) as lease:
                 from groq import Groq
-                client = Groq(api_key=api_key)
-                return client.chat.completions.create(
+                client = Groq(api_key=lease.key, timeout=MAX_GEMINI_TIMEOUT, max_retries=0)
+                stream = client.chat.completions.create(
                     model=GEMINI_MODEL,
                     messages=[
                         {"role": "system", "content": sp},
@@ -3743,18 +3917,12 @@ def mentor_chat_stream():
                     stream=True,
                 )
 
-            stream = groq_key_manager.get_groq_key_manager().call_with_failover(
-                _stream_with_key,
-                env=_groq_failover_env(),
-                extra_keys=extra_keys,
-            )
-
-            for chunk in stream:
-                for choice in getattr(chunk, "choices", []) or []:
-                    delta = getattr(choice, "delta", None)
-                    content = getattr(delta, "content", None)
-                    if content:
-                        yield f"data: {json.dumps({'chunk': content})}\n\n"
+                for chunk in stream:
+                    for choice in getattr(chunk, "choices", []) or []:
+                        delta = getattr(choice, "delta", None)
+                        content = getattr(delta, "content", None)
+                        if content:
+                            yield f"data: {json.dumps({'chunk': content})}\n\n"
 
             yield "data: [DONE]\n\n"
         except GeneratorExit:
@@ -3815,7 +3983,7 @@ def mentor_check_progress():
         f"Current output:\n{current_output or '(none)'}\n"
         f"Current error:\n{current_error or '(none)'}"
     )
-    reply = call_gemini(system, user, temperature=0.2, language=language)
+    reply = call_gemini_capability("assessment", system, user, temperature=0.2, language=language)
     if _ai_unavailable(reply):
         fallback = "I cannot check with AI right now. If the latest run has no error and shows the expected output, your first issue may be fixed. Run once more and ask for a code map."
         return jsonify({"success": False, "error": reply, "reply": fallback, "speech": fallback, "auto_speak": True})
@@ -4630,7 +4798,7 @@ def analyze():
         )
 
     user = f"Python code:\n```python\n{code}\n```"
-    analysis = call_gemini(system, user, language=language)
+    analysis = call_gemini_capability("explain", system, user, language=language)
 
     analyzer = CodeAnalyzer()
     structure = analyzer.analyze(code)
@@ -4690,7 +4858,7 @@ def analyze_deep():
         )
 
     user = f"Python code:\n```python\n{code}\n```"
-    analysis = call_gemini(system, user, language=language, max_tokens=4096)
+    analysis = call_gemini_capability("explain", system, user, language=language, max_tokens=4096)
     return jsonify({"analysis": analysis, "speech": analysis, "auto_speak": True})
 
 
@@ -4876,7 +5044,7 @@ def walkthrough():
     explanation = _canonical_loop_walkthrough(code, language)
     if not explanation:
         user = f"Python code:\n```python\n{code}\n```"
-        explanation = call_gemini(system, user, temperature=0.2, language=language)
+        explanation = call_gemini_capability("explain", system, user, temperature=0.2, language=language)
 
     if _ai_unavailable(explanation):
         explanation = _deterministic_walkthrough(code, language)
@@ -4924,7 +5092,7 @@ def advise():
         )
 
     user = f"Code:\n```python\n{code}\n```"
-    advice = call_gemini(system, user, language=language)
+    advice = call_gemini_capability("hint", system, user, language=language)
     return jsonify({"advice": advice})
 
 
@@ -4962,7 +5130,7 @@ def debug_suggestions():
         )
 
     user = f"Code:\n```python\n{code}\n```"
-    suggestions = call_gemini(system, user, language=language)
+    suggestions = call_gemini_capability("error_help", system, user, language=language)
 
     lines = suggestions.split('\n')
     parsed_suggestions = []
@@ -5015,7 +5183,7 @@ def describe():
         )
 
     user = f"Code context:\n{context}\nTarget line: {line}"
-    desc = call_gemini(system, user, language=language)
+    desc = call_gemini_capability("explain", system, user, language=language)
     return jsonify({"success": True, "description": desc})
 
 
@@ -5585,6 +5753,10 @@ def fix():
         _record_fixed_snapshot(code, fixed, error, explanation)
         return jsonify({"success": True, "code": fixed, "explanation": explanation, "speech": explanation})
 
+    _allowed, _policy, _blocked_msg = _ai_capability_check("fix")
+    if not _allowed:
+        return jsonify({"success": False, "error": _blocked_msg, "explanation": _blocked_msg, "speech": _blocked_msg})
+
     if language == "hi":
         system = (
             "आप एक expert Python debugger हैं जो blind-first IDE में काम करते हैं।\n"
@@ -5618,7 +5790,7 @@ def fix():
         )
 
     user = f"Fix this code:\n```python\n{code}\n```"
-    raw = call_gemini(system, user, temperature=0.1, language=language)
+    raw = call_gemini_capability("fix", system, user, temperature=0.1, language=language)
     fixed = extract_code(raw)
     if not fixed and raw and not _is_ai_service_message(raw):
         fixed = raw.strip()
@@ -5628,7 +5800,7 @@ def fix():
         ratio = difflib.SequenceMatcher(None, code, fixed).ratio()
         if ratio < 0.3:
             retry_system = system + "\n\nCRITICAL: Your previous answer was rejected because it was too different from the user's original code. Make MINIMAL changes — preserve variable names, structure, and overall approach. Only fix the specific bugs."
-            raw_retry = call_gemini(retry_system, user, temperature=0.05, language=language)
+            raw_retry = call_gemini_capability("fix", retry_system, user, temperature=0.05, language=language)
             retry_fixed = extract_code(raw_retry) or (raw_retry.strip() if raw_retry and not _is_ai_service_message(raw_retry) else "")
             if retry_fixed:
                 retry_ratio = difflib.SequenceMatcher(None, code, retry_fixed).ratio()
@@ -5724,6 +5896,10 @@ def generate_code():
                 pass
             return jsonify({"success": True, "project": True, "source": "template", **project})
 
+        _allowed, _policy, _blocked_msg = _ai_capability_check("generate")
+        if not _allowed:
+            return jsonify({"success": False, "error": _blocked_msg, "code": ""})
+
         system = (
             "You generate accessible multi-file Python projects for CodeUp, a blind-first IDE.\n"
             "Return only JSON with keys: name, entry, active_file, requirements, speech, files.\n"
@@ -5737,7 +5913,7 @@ def generate_code():
             "Avoid visual-only phrases like 'look at the left pane'; describe files by name and keyboard or command actions."
         )
         user = f"Create this as a CodeUp multi-file project:\n{prompt}"
-        raw = call_gemini(system, user, temperature=0.2, language=language, max_tokens=4096)
+        raw = call_gemini_capability("generate", system, user, temperature=0.2, language=language, max_tokens=4096)
         parsed_project = extract_project_json(raw)
         if not parsed_project:
             if _is_ai_service_message(raw):
@@ -5789,6 +5965,10 @@ def generate_code():
             "explanation": speech,
         })
 
+    _allowed, _policy, _blocked_msg = _ai_capability_check("generate")
+    if not _allowed:
+        return jsonify({"success": False, "error": _blocked_msg, "code": ""})
+
     if language == "hi":
         system = (
             "आप एक beginner-friendly, blind-first Python IDE (CodeUp) के लिए code generator हैं।\n"
@@ -5827,7 +6007,7 @@ def generate_code():
     if constraints:
         constraint_text = "Important exact constraints:\n" + "\n".join(f"- {item}" for item in constraints) + "\n\n"
     user = f"{constraint_text}Task description:\n{prompt}"
-    raw = call_gemini(system, user, temperature=0.2, language=language)
+    raw = call_gemini_capability("generate", system, user, temperature=0.2, language=language)
     code = extract_code(raw)
     if not code and raw and not _is_ai_service_message(raw):
         code = raw.strip()
@@ -5860,7 +6040,7 @@ def generate_code():
             return jsonify({"success": False, "error": safety_error, "code": ""})
     except SyntaxError:
         retry_system = system + "\n\nIMPORTANT: Return ONLY syntactically valid Python. No prose. No markdown."
-        raw_retry = call_gemini(retry_system, user, temperature=0.1, language=language)
+        raw_retry = call_gemini_capability("generate", retry_system, user, temperature=0.1, language=language)
         retry_code = extract_code(raw_retry) or (raw_retry.strip() if raw_retry and not _is_ai_service_message(raw_retry) else "")
         try:
             compile(retry_code, "<generated>", "exec")
@@ -6784,7 +6964,7 @@ def _route_conversational_voice_action(
         f"Most recent error, if any:\n{error_context or '(none)'}"
     )
 
-    raw = call_gemini(system, user, temperature=0.05, language=language, max_tokens=700)
+    raw = call_gemini_capability("generate", system, user, temperature=0.05, language=language, max_tokens=700)
     if not _ai_unavailable(raw):
         parsed = _extract_json_object(raw)
         routed = _validate_conversational_action(
@@ -6856,7 +7036,7 @@ def narrate_file():
         )
 
     user = f"Narrate this code:\n```python\n{code_to_narrate}\n```"
-    narration = call_gemini(system, user, temperature=0.2, language=language, max_tokens=4096)
+    narration = call_gemini_capability("explain", system, user, temperature=0.2, language=language, max_tokens=4096)
 
     line_count = len(code_lines_full)
 
@@ -6905,7 +7085,7 @@ def summarize():
         )
 
     user = f"Code:\n```python\n{code}\n```"
-    summary = call_gemini(system, user, language=language)
+    summary = call_gemini_capability("explain", system, user, language=language)
     return jsonify({"summary": summary})
 
 
@@ -6939,7 +7119,7 @@ def diff_explain():
         )
 
     user = f"BEFORE:\n```python\n{before}\n```\n\nAFTER:\n```python\n{after}\n```"
-    explanation = call_gemini(system, user, language=language)
+    explanation = call_gemini_capability("explain", system, user, language=language)
     return jsonify({"explanation": explanation})
 
 
@@ -6983,7 +7163,7 @@ def suggest_next():
     user = f"Code context (cursor after line {line}):\n{context}\nCurrent line: {current_line}"
 
     try:
-        raw = call_gemini(system, user, temperature=0.2, language=language)
+        raw = call_gemini_capability("hint", system, user, temperature=0.2, language=language)
         if _is_ai_service_message(raw):
             return jsonify({"success": False, "suggestions": [], "error": raw})
         clean = re.sub(r'```(?:json)?\s*|\s*```', '', raw).strip()
@@ -7782,6 +7962,12 @@ def _deterministic_concept_voice_response(
         return None
     if concept_kind == concept_qa.UNKNOWN_CONCEPT and not allow_unknown:
         return None
+    _allowed, _settings, _blocked_msg = _ai_capability_check("concept_qa")
+    if not _allowed:
+        return {
+            "success": True, "action": "deterministic_message",
+            "message": _blocked_msg, "speech": _blocked_msg, "heard": text, "concept": concept_kind,
+        }
     answer, facts = concept_qa.answer_concept(concept_kind, current_code)
     if concept_kind == concept_qa.UNKNOWN_CONCEPT:
         topic = concept_qa.extract_concept_topic(text) or ""
@@ -8657,7 +8843,7 @@ def _ai_mapper_clarification(text: str, *, confidence: float = 0.0,
                              mapped_intent: str = "unknown_clarify",
                              reason: str = "") -> dict:
     message = natural_command_mapper.MAPPER_FALLBACK_CLARIFICATION
-    safe_reason = groq_key_manager.redact_known_keys(reason)[:80]
+    safe_reason = groq_pool.redact_known_keys(reason)[:80]  # always sees the real env - redaction must never be test-mode-gated
     return {
         "success": True,
         "action": "clarify",
@@ -8758,7 +8944,7 @@ def _natural_code_edit_clarification(
     mapped_intent: str = "edit_current_code",
     source: str = "natural_code_editor",
 ) -> dict:
-    safe_reason = groq_key_manager.redact_known_keys(reason)[:80]
+    safe_reason = groq_pool.redact_known_keys(reason)[:80]  # always sees the real env - redaction must never be test-mode-gated
     return {
         "success": True,
         "action": "clarify",
@@ -8939,6 +9125,12 @@ def _route_ai_code_edit_planner(
     body: Dict[str, Any],
     mapping: Optional[Dict[str, Any]] = None,
 ) -> dict:
+    _allowed, _policy, _blocked_msg = _ai_capability_check("generate")
+    if not _allowed:
+        return _natural_code_edit_clarification(
+            text, _blocked_msg, reason="ai_policy_blocked",
+            mapped_intent=str((mapping or {}).get("intent") or "edit_current_code"),
+        )
     if not str(current_code or "").strip():
         message = 'I can edit code after you create some. Try saying "generate code for..." first.'
         return _natural_code_edit_clarification(
@@ -11743,7 +11935,7 @@ def execution_story():
         )
 
     user = f"Code:\n```python\n{code}\n```\n\nExecution trace:\n{trace_text}"
-    story = call_gemini(system, user, temperature=0.3, language=language)
+    story = call_gemini_capability("explain", system, user, temperature=0.3, language=language)
     if _is_ai_service_message(story) or _ai_unavailable(story):
         story = _local_execution_story(trace)
     return jsonify({"success": True, "story": story})
@@ -11813,7 +12005,7 @@ def mentor_quiz():
         )
 
     user = f"Topic: {topic}"
-    raw = call_gemini(system, user, temperature=0.4, language=language)
+    raw = call_gemini_capability("assessment", system, user, temperature=0.4, language=language)
 
     if _is_ai_service_message(raw):
         return jsonify({
@@ -11865,7 +12057,7 @@ def mentor_explain():
         )
 
     user = f"Concept: {concept}"
-    explanation = call_gemini(system, user, temperature=0.2, language=language)
+    explanation = call_gemini_capability("explain", system, user, temperature=0.2, language=language)
 
     if not explanation or not explanation.strip() or len(explanation.strip()) < 20:
         return jsonify({
@@ -11911,7 +12103,7 @@ def explain_diff():
         f"Current output:\n{current_output[:4000]}\n\n"
         f"Diff summary: {diff.get('summary', '')}"
     )
-    explanation = call_gemini(system, user, temperature=0.2, language=language)
+    explanation = call_gemini_capability("explain", system, user, temperature=0.2, language=language)
     if _is_ai_service_message(explanation):
         explanation = (
             f"{diff.get('summary', 'The output changed.')} "
@@ -11964,7 +12156,7 @@ def mentor_bug_challenge():
         )
 
     user = "Generate a bug challenge"
-    raw = call_gemini(system, user, temperature=0.5, language=language)
+    raw = call_gemini_capability("assessment", system, user, temperature=0.5, language=language)
 
     if _is_ai_service_message(raw):
         return jsonify({

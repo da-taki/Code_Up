@@ -1,0 +1,55 @@
+{% extends "classroom/_base.html" %}
+{% block title %}Course - CodeUp Classroom{% endblock %}
+{% block header_title %}Python Foundations{% endblock %}
+{% block header_nav %}
+  <a class="cu-button cu-button-secondary" href="{{ url_for('classroom.learner_home') }}">Back to my work</a>
+{% endblock %}
+{% block content %}
+  {% if continue_module %}
+  <section class="cu-panel" aria-labelledby="continueHeading">
+    <h2 id="continueHeading">Continue learning</h2>
+    <p>
+      Continue: {{ continue_module.title }}.
+      Module {{ continue_module.completed_count + 1 }} of {{ continue_module.total_count }}.
+      {% if continue_module.last_activity_at %}Last activity: {{ continue_module.last_activity_at }}.{% endif %}
+    </p>
+    <a class="cu-button cu-button-primary" href="{{ url_for('classroom.open_module', module_id=continue_module.module_id) }}">Continue where I left off</a>
+  </section>
+  {% endif %}
+
+  {% if not onboarding_completed %}
+  <section class="cu-panel" aria-labelledby="onboardingHeading">
+    <h2 id="onboardingHeading">New to CodeUp?</h2>
+    <p>Try the short guided tutorial in the editor first - it covers finding the editor, running code, and hearing output.</p>
+    <a class="cu-button cu-button-secondary" href="/ide">Start the guided tutorial</a>
+  </section>
+  {% endif %}
+
+  <section class="cu-panel" aria-labelledby="browseHeading">
+    <h2 id="browseHeading">All modules</h2>
+    <table class="cu-table">
+      <caption class="sr-only">Course modules and your progress</caption>
+      <thead><tr><th scope="col">Module</th><th scope="col">Status</th><th scope="col">Open</th><th scope="col">Restart</th></tr></thead>
+      <tbody>
+        {% for m in modules %}
+        <tr>
+          <td>{{ m.title }}{% if m.is_custom %} (from your instructor){% endif %}</td>
+          <td><span class="cu-badge cu-badge--{{ m.status }}">{{ m.status.replace('_', ' ') }}</span></td>
+          <td><a class="cu-button cu-button-secondary" href="{{ url_for('classroom.open_module', module_id=m.id) }}">Open</a></td>
+          <td>
+            {% if m.status != 'not_started' %}
+            <a class="cu-button cu-button-secondary" href="{{ url_for('classroom.restart_module_confirm', module_id=m.id) }}">Restart</a>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section class="cu-panel" aria-labelledby="startOverHeading">
+    <h2 id="startOverHeading">Start over</h2>
+    <p><a class="cu-button cu-button-secondary" href="{{ url_for('classroom.open_module', module_id=modules[0].id) }}">Start from the beginning</a></p>
+    <p><a class="cu-button cu-button-secondary" href="{{ url_for('classroom.restart_course_confirm') }}">Restart the entire course</a></p>
+  </section>
+{% endblock %}

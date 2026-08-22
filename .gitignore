@@ -25,3 +25,6 @@ Thumbs.db
 # Per-session storage
 snippets_*.json
 macros_*.json
+
+# Classroom SQLite database (runtime data, not source)
+classroom.db

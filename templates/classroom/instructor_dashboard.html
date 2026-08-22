@@ -1,0 +1,62 @@
+{% extends "classroom/_base.html" %}
+{% block title %}Instructor dashboard - CodeUp Classroom{% endblock %}
+{% block header_title %}Welcome, {{ instructor.display_name }}{% endblock %}
+{% block header_nav %}
+  <a class="cu-button cu-button-secondary" href="{{ groq_status_url }}">AI service status</a>
+  <form method="post" action="{{ url_for('classroom.instructor_logout') }}" class="cu-inline-form">
+    <button type="submit" class="cu-button cu-button-secondary">Sign out</button>
+  </form>
+{% endblock %}
+{% block content %}
+  <section class="cu-panel" aria-labelledby="newCohortHeading">
+    <h2 id="newCohortHeading">Create a cohort</h2>
+    <form method="post" action="{{ url_for('classroom.create_cohort') }}" novalidate>
+      <div class="cu-field">
+        <label for="cohort_name">Cohort name</label>
+        <input type="text" id="cohort_name" name="name" maxlength="120" required placeholder="e.g. Python Beginners">
+      </div>
+      <button type="submit" class="cu-button cu-button-primary">Create cohort</button>
+    </form>
+  </section>
+
+  <section class="cu-panel" aria-labelledby="cohortsHeading">
+    <h2 id="cohortsHeading">Your cohorts</h2>
+    {% if cohorts %}
+      <table class="cu-table">
+        <caption class="sr-only">Your cohorts and their join codes</caption>
+        <thead>
+          <tr>
+            <th scope="col">Cohort</th>
+            <th scope="col">Join code</th>
+            <th scope="col">Learners</th>
+            <th scope="col">Status</th>
+            <th scope="col">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for cohort in cohorts %}
+          <tr>
+            <td><a href="{{ url_for('classroom.cohort_dashboard', cohort_id=cohort.id) }}">{{ cohort.name }}</a></td>
+            <td><span class="cu-join-code">{{ cohort.join_code }}</span></td>
+            <td>{{ cohort.learner_count }}</td>
+            <td><span class="cu-badge">{{ cohort.status }}</span></td>
+            <td>
+              {% if cohort.status == 'active' %}
+              <form method="post" action="{{ url_for('classroom.archive_cohort', cohort_id=cohort.id) }}" class="cu-inline-form">
+                <button type="submit" class="cu-button cu-button-secondary">Archive</button>
+              </form>
+              {% else %}
+              <form method="post" action="{{ url_for('classroom.activate_cohort', cohort_id=cohort.id) }}" class="cu-inline-form">
+                <button type="submit" class="cu-button cu-button-secondary">Reactivate</button>
+              </form>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p>You have not created any cohorts yet.</p>
+    {% endif %}
+  </section>
+{% endblock %}

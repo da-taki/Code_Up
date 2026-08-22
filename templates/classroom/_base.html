@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>{% block title %}CodeUp Classroom{% endblock %}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" href="data:,">
+
+  <link rel="stylesheet" href="/static/style/fonts.css">
+  <link rel="stylesheet" href="/static/style/core.css">
+  <link rel="stylesheet" href="/static/style/accessibility.css">
+  <link rel="stylesheet" href="/static/style/ui-improvements.css">
+  <link rel="stylesheet" href="/static/style/classroom.css">
+</head>
+<body class="cu-body">
+
+  <nav class="cu-skip-links" aria-label="Skip links">
+    <a class="skip-link" href="#mainContent">Skip to main content</a>
+  </nav>
+
+  <div id="srAnnouncer" role="status" aria-live="polite" aria-atomic="true"
+       style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;"></div>
+  <div id="srAlert" role="alert" aria-live="assertive" aria-atomic="true"
+       style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;"></div>
+
+  <header class="cu-header" role="banner">
+    <div class="cu-header-top">
+      <h1 id="pageTitle" class="cu-title">{% block header_title %}CodeUp Classroom{% endblock %}</h1>
+      {% block header_nav %}{% endblock %}
+    </div>
+  </header>
+
+  <main id="mainContent" class="cu-classroom-main" aria-labelledby="pageTitle">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

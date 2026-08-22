@@ -2262,6 +2262,9 @@ async function runCode(runFile, codeOverride) {
       if (typeof window._tutorialOnRunSuccess === 'function') {
         setTimeout(function () { window._tutorialOnRunSuccess(); }, 2000);
       }
+      if (typeof window._classroomOnRunResult === 'function') {
+        window._classroomOnRunResult(codeToCheck, true, '');
+      }
     } else {
       hideProgramInputControl('Run stopped because of an error.');
       out('ERROR:\n' + (data.error || ''), { assertive: true, sr: false });
@@ -2293,6 +2296,9 @@ async function runCode(runFile, codeOverride) {
       maybeOfferSlowWalkthroughAfterErrors();
       if (typeof window._tutorialOnRunError === 'function') {
         setTimeout(function () { window._tutorialOnRunError(); }, 1500);
+      }
+      if (typeof window._classroomOnRunResult === 'function') {
+        window._classroomOnRunResult(codeToCheck, false, data.error || '');
       }
     }
   } catch (e) {
@@ -2346,6 +2352,8 @@ async function runCodeStreaming() {
     _activeStreamRun.eventSource = es;
 
     let buffer = '';
+    let streamHadError = false;
+    const streamCode = getCode();
     let outputElement = document.getElementById('output');
 
     es.onmessage = (evt) => {
@@ -2359,6 +2367,7 @@ async function runCodeStreaming() {
       } else if (event.type === 'stderr') {
         buffer += '[error] ' + event.text;
         outputElement.textContent = buffer;
+        streamHadError = true;
         const chunk = event.text.trim();
         if (chunk) speak('Error: ' + chunk);
       } else if (event.type === 'input_request') {
@@ -2379,6 +2388,9 @@ async function runCodeStreaming() {
         hideAI();
         _lastOutput = buffer;
         _activeStreamRun = null;
+        if (typeof window._classroomOnRunResult === 'function') {
+          window._classroomOnRunResult(streamCode, !streamHadError, streamHadError ? buffer : '');
+        }
       } else if (event.type === 'error') {
         speak('Stream error.');
         es.close();
@@ -2702,16 +2714,33 @@ async function fixCode() {
     });
     const data = await res.json();
     if (data.success) {
-      setCode(data.code);
-      const fixedSpeech = data.speech || data.explanation || 'Code has been fixed.';
-      out(fixedSpeech); speak(fixedSpeech);
-      const diffRes  = await fetch('/diff-explain', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ before, after: data.code, language: getLanguage() }),
-      });
-      const diffData = await diffRes.json();
-      if (diffData.explanation) { out(diffData.explanation); speak(diffData.explanation); }
+      if (typeof window._classroomReviewFix === 'function') {
+        // In a classroom assignment context: show an accessible review
+        // (apply/reject/explain) before touching the learner's code,
+        // instead of applying it immediately.
+        let explanation = data.speech || data.explanation || '';
+        try {
+          const diffRes = await fetch('/diff-explain', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ before, after: data.code, language: getLanguage() }),
+          });
+          const diffData = await diffRes.json();
+          if (diffData.explanation) explanation = diffData.explanation;
+        } catch (e) { /* review still works without the extra explanation */ }
+        await window._classroomReviewFix(before, data.code, explanation);
+      } else {
+        setCode(data.code);
+        const fixedSpeech = data.speech || data.explanation || 'Code has been fixed.';
+        out(fixedSpeech); speak(fixedSpeech);
+        const diffRes  = await fetch('/diff-explain', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ before, after: data.code, language: getLanguage() }),
+        });
+        const diffData = await diffRes.json();
+        if (diffData.explanation) { out(diffData.explanation); speak(diffData.explanation); }
+      }
     } else {
       out('Fix failed.'); speak('Fix failed.');
     }
@@ -5527,6 +5556,9 @@ function registerEditorShortcuts() {
   try { recoverAutosaveDraft(); } catch (e) { console.warn('autosave recover failed', e); }
   updateInputModeUI();
   updateInputsPanel();
+  if (typeof window._classroomInit === 'function') {
+    try { window._classroomInit(); } catch (e) { console.warn('classroom init failed', e); }
+  }
   _debugLog('All accessibility features loaded.');
 }
 
@@ -5549,6 +5581,9 @@ function startAutosave() {
         app: 'codeup-python',
       }));
       _autosaveLastCode = code;
+      if (typeof window._classroomOnAutosave === 'function') {
+        window._classroomOnAutosave(code);
+      }
     } catch (e) { /* localStorage full or disabled — silent fail */ }
   }, AUTOSAVE_INTERVAL_MS);
 }

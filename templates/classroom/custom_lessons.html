@@ -1,0 +1,39 @@
+{% extends "classroom/_base.html" %}
+{% block title %}Lessons - {{ cohort.name }}{% endblock %}
+{% block header_title %}Your lessons - {{ cohort.name }}{% endblock %}
+{% block content %}
+  <p class="cu-crumb"><a href="{{ url_for('classroom.cohort_dashboard', cohort_id=cohort.id) }}">{{ cohort.name }}</a></p>
+
+  <section class="cu-panel" aria-labelledby="newLessonHeading">
+    <h2 id="newLessonHeading">Create a lesson</h2>
+    <p>Learners see this using the same lesson screen as the built-in course.</p>
+    <form method="post" action="{{ url_for('classroom.create_custom_lesson', cohort_id=cohort.id) }}" novalidate>
+      <div class="cu-field"><label for="l_title">Title</label><input type="text" id="l_title" name="title" required></div>
+      <div class="cu-field"><label for="l_objective">Learning objective</label><input type="text" id="l_objective" name="objective"></div>
+      <div class="cu-field"><label for="l_explanation">Explanation</label><textarea id="l_explanation" name="explanation" rows="4"></textarea></div>
+      <div class="cu-field"><label for="l_starter">Starter code</label><textarea id="l_starter" name="starter_code" rows="5"></textarea></div>
+      <div class="cu-field"><label for="l_instructions">Instructions</label><textarea id="l_instructions" name="instructions" rows="3"></textarea></div>
+      <div class="cu-field"><label for="l_concepts">Expected concepts (comma separated)</label><input type="text" id="l_concepts" name="expected_concepts" placeholder="variables, loops"></div>
+      <div class="cu-field"><label for="l_challenge">Optional challenge</label><textarea id="l_challenge" name="challenge" rows="2"></textarea></div>
+      <div class="cu-field"><label for="l_expected_output">Optional expected output (reference only, not auto-graded)</label><input type="text" id="l_expected_output" name="expected_output"></div>
+      <h3>Optional quiz question</h3>
+      <div class="cu-field"><label for="l_quiz_q">Question</label><input type="text" id="l_quiz_q" name="quiz_question"></div>
+      <div class="cu-field"><label for="l_quiz_choices">Choices (one per line)</label><textarea id="l_quiz_choices" name="quiz_choices" rows="4" placeholder="Only numbers&#10;Key-value pairs&#10;Functions&#10;Loops"></textarea></div>
+      <div class="cu-field"><label for="l_quiz_answer">Correct choice number (0 = first line)</label><input type="number" id="l_quiz_answer" name="quiz_answer_index" min="0"></div>
+      <button type="submit" class="cu-button cu-button-primary">Create lesson</button>
+    </form>
+  </section>
+
+  <section class="cu-panel" aria-labelledby="lessonsHeading">
+    <h2 id="lessonsHeading">Your lessons ({{ lessons|length }})</h2>
+    {% if lessons %}
+    <ul>
+      {% for lesson in lessons %}
+      <li>{{ lesson.title }} - {{ lesson.expected_concepts|join(', ') if lesson.expected_concepts else 'no concepts set' }}</li>
+      {% endfor %}
+    </ul>
+    {% else %}
+      <p>You haven't created any lessons yet.</p>
+    {% endif %}
+  </section>
+{% endblock %}

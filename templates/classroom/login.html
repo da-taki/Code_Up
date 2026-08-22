@@ -1,0 +1,46 @@
+{% extends "classroom/_base.html" %}
+{% block title %}Instructor sign in - CodeUp Classroom{% endblock %}
+{% block header_title %}Instructor sign in{% endblock %}
+{% block content %}
+  {% if error %}
+    <p class="cu-notice cu-notice--error" role="alert">{{ error }}</p>
+  {% endif %}
+
+  <section class="cu-panel" aria-labelledby="loginHeading">
+    <h2 id="loginHeading">Sign in</h2>
+    <form method="post" action="{{ url_for('classroom.instructor_login_submit') }}" novalidate>
+      <div class="cu-field">
+        <label for="login_username">Username</label>
+        <input type="text" id="login_username" name="username" autocomplete="username" required>
+      </div>
+      <div class="cu-field">
+        <label for="login_password">Password</label>
+        <input type="password" id="login_password" name="password" autocomplete="current-password" required>
+      </div>
+      <button type="submit" class="cu-button cu-button-primary">Sign in</button>
+    </form>
+  </section>
+
+  <section class="cu-panel" aria-labelledby="registerHeading">
+    <h2 id="registerHeading">Create an instructor account</h2>
+    <form method="post" action="{{ url_for('classroom.instructor_register_submit') }}" novalidate>
+      <div class="cu-field">
+        <label for="reg_display_name">Your name</label>
+        <input type="text" id="reg_display_name" name="display_name" autocomplete="name" required>
+      </div>
+      <div class="cu-field">
+        <label for="reg_username">Choose a username</label>
+        <input type="text" id="reg_username" name="username" autocomplete="username" required>
+      </div>
+      <div class="cu-field">
+        <label for="reg_password">Choose a password</label>
+        <input type="password" id="reg_password" name="password" autocomplete="new-password"
+               minlength="8" required aria-describedby="regPasswordHelp">
+        <span id="regPasswordHelp" class="sr-only">At least 8 characters.</span>
+      </div>
+      <button type="submit" class="cu-button cu-button-secondary">Create account</button>
+    </form>
+  </section>
+
+  <p><a href="{{ url_for('classroom.join_page') }}">I am a learner joining a cohort</a></p>
+{% endblock %}

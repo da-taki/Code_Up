@@ -1,0 +1,94 @@
+{% extends "classroom/_base.html" %}
+{% block title %}Help queue - {{ cohort.name }}{% endblock %}
+{% block header_title %}Help queue - {{ cohort.name }}{% endblock %}
+{% block content %}
+  <p class="cu-crumb"><a href="{{ url_for('classroom.cohort_dashboard', cohort_id=cohort.id) }}">{{ cohort.name }}</a></p>
+
+  <section class="cu-panel" aria-labelledby="openHeading">
+    <h2 id="openHeading">Open requests ({{ open_requests|length }})</h2>
+    {% if open_requests %}
+    <table class="cu-table">
+      <caption class="sr-only">Open help requests, longest-waiting first</caption>
+      <thead>
+        <tr>
+          <th scope="col">Learner</th>
+          <th scope="col">Assignment</th>
+          <th scope="col">Message</th>
+          <th scope="col">Waiting</th>
+          <th scope="col">Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for hr in open_requests %}
+        <tr>
+          <td>
+            <a href="{{ url_for('classroom.learner_detail', cohort_id=cohort.id, learner_id=hr.learner_id) }}">{{ hr.display_name }}</a>
+          </td>
+          <td>
+            {% if hr.assignment %}
+            <a href="{{ url_for('classroom.view_submission', assignment_id=hr.assignment.id, learner_id=hr.learner_id) }}">{{ hr.assignment.title }}</a>
+            {% else %}-{% endif %}
+          </td>
+          <td>{{ hr.message or '(no message)' }}</td>
+          <td>{{ hr.waiting_minutes }} min</td>
+          <td>
+            <form method="post" action="{{ url_for('classroom.start_helping', help_request_id=hr.id) }}" class="cu-inline-form">
+              <button type="submit" class="cu-button cu-button-secondary">Mark as helping</button>
+            </form>
+            <form method="post" action="{{ url_for('classroom.resolve_help_request', help_request_id=hr.id) }}" class="cu-inline-form">
+              <button type="submit" class="cu-button cu-button-primary">Mark resolved</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+      <p>No open help requests.</p>
+    {% endif %}
+  </section>
+
+  <section class="cu-panel" aria-labelledby="helpingHeading">
+    <h2 id="helpingHeading">Currently helping ({{ helping_requests|length }})</h2>
+    {% if helping_requests %}
+    <table class="cu-table">
+      <caption class="sr-only">Requests you are currently helping with</caption>
+      <thead><tr><th scope="col">Learner</th><th scope="col">Message</th><th scope="col">Waiting</th><th scope="col">Note</th><th scope="col">Action</th></tr></thead>
+      <tbody>
+        {% for hr in helping_requests %}
+        <tr>
+          <td><a href="{{ url_for('classroom.learner_detail', cohort_id=cohort.id, learner_id=hr.learner_id) }}">{{ hr.display_name }}</a></td>
+          <td>{{ hr.message or '(no message)' }}</td>
+          <td>{{ hr.waiting_minutes }} min</td>
+          <td>{{ hr.note or '-' }}</td>
+          <td>
+            <form method="post" action="{{ url_for('classroom.resolve_help_request', help_request_id=hr.id) }}">
+              <div class="cu-field">
+                <label for="note_{{ hr.id }}" class="sr-only">Resolution note</label>
+                <input type="text" id="note_{{ hr.id }}" name="note" placeholder="Optional note">
+              </div>
+              <button type="submit" class="cu-button cu-button-primary">Mark resolved</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+      <p>No requests currently in progress.</p>
+    {% endif %}
+  </section>
+
+  <section class="cu-panel" aria-labelledby="resolvedHeading">
+    <h2 id="resolvedHeading">Recently resolved</h2>
+    {% if resolved_requests %}
+    <ul>
+      {% for hr in resolved_requests %}
+      <li>{{ hr.display_name }} - {{ hr.message or '(no message)' }} - resolved {{ hr.resolved_at }}{% if hr.note %} - note: {{ hr.note }}{% endif %}</li>
+      {% endfor %}
+    </ul>
+    {% else %}
+      <p>Nothing resolved yet.</p>
+    {% endif %}
+  </section>
+{% endblock %}

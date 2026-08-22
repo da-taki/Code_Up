@@ -1,0 +1,13 @@
+{% extends "classroom/_base.html" %}
+{% block title %}Report - {{ cohort.name }}{% endblock %}
+{% block header_title %}Report - {{ cohort.name }}{% endblock %}
+{% block header_nav %}
+  <a class="cu-button cu-button-secondary" href="{{ url_for('classroom.cohort_report_csv', cohort_id=cohort.id) }}">Download CSV</a>
+{% endblock %}
+{% block content %}
+  <p class="cu-crumb"><a href="{{ url_for('classroom.cohort_dashboard', cohort_id=cohort.id) }}">{{ cohort.name }}</a></p>
+  <section class="cu-panel" aria-labelledby="reportHeading">
+    <h2 id="reportHeading">Cohort report</h2>
+    <pre class="cu-code-view">{{ report.report_md }}</pre>
+  </section>
+{% endblock %}

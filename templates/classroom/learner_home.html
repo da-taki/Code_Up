@@ -1,0 +1,80 @@
+{% extends "classroom/_base.html" %}
+{% block title %}{{ cohort.name }} - CodeUp Classroom{% endblock %}
+{% block header_title %}{{ cohort.name }}{% endblock %}
+{% block header_nav %}
+  <form method="post" action="{{ url_for('classroom.leave_cohort') }}" class="cu-inline-form">
+    <button type="submit" class="cu-button cu-button-secondary">Leave / switch learner</button>
+  </form>
+{% endblock %}
+{% block content %}
+  <p>Hi {{ learner.display_name }}. Here is your work for {{ cohort.name }}.</p>
+
+  <section class="cu-panel" aria-labelledby="assignmentsHeading">
+    <h2 id="assignmentsHeading">Assignments</h2>
+    {% if assignments %}
+    <table class="cu-table">
+      <caption class="sr-only">Your assignments and their status</caption>
+      <thead><tr><th scope="col">Title</th><th scope="col">Status</th><th scope="col">Due</th><th scope="col">Open</th></tr></thead>
+      <tbody>
+        {% for a in assignments %}
+        <tr>
+          <td>{{ a.title }}</td>
+          <td><span class="cu-badge cu-badge--{{ a.my_status }}">{{ a.my_status.replace('_', ' ') }}</span></td>
+          <td>{{ a.due_date or '-' }}</td>
+          <td><a class="cu-button cu-button-primary" href="{{ url_for('classroom.open_assignment', assignment_id=a.id) }}">Open in editor</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+      <p>No assignments have been published yet.</p>
+    {% endif %}
+  </section>
+
+  <section class="cu-panel" aria-labelledby="lessonsHeading">
+    <h2 id="lessonsHeading">Lessons</h2>
+    <p><a class="cu-button cu-button-secondary" href="/ide">Open the CodeUp editor and start the guided tutorial</a></p>
+  </section>
+
+  <section class="cu-panel" aria-labelledby="projectsHeading">
+    <h2 id="projectsHeading">Guided projects</h2>
+    {% if projects %}
+    <table class="cu-table">
+      <caption class="sr-only">Guided projects and your checkpoint progress</caption>
+      <thead><tr><th scope="col">Project</th><th scope="col">Checkpoints</th><th scope="col">Open</th></tr></thead>
+      <tbody>
+        {% for p in projects %}
+        <tr>
+          <td>{{ p.title }}</td>
+          <td>{{ p.completed_checkpoints }} / {{ p.total_checkpoints }}</td>
+          <td><a class="cu-button cu-button-primary" href="{{ url_for('classroom.open_project', project_id=p.id) }}">Open in editor</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </section>
+
+  <section class="cu-panel" aria-labelledby="helpHeading">
+    <h2 id="helpHeading">Ask your instructor for help</h2>
+    {% if open_help %}
+      <ul>
+        {% for hr in open_help %}
+        <li>
+          {{ hr.message or '(no message)' }} - requested {{ hr.created_at }}
+          <form method="post" action="{{ url_for('classroom.cancel_help_request', help_request_id=hr.id) }}" class="cu-inline-form">
+            <button type="submit" class="cu-button cu-button-secondary">Cancel request</button>
+          </form>
+        </li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+    <form method="post" action="{{ url_for('classroom.create_help_request') }}" novalidate>
+      <div class="cu-field">
+        <label for="help_message">What do you need help with? (optional)</label>
+        <textarea id="help_message" name="message" rows="3"></textarea>
+      </div>
+      <button type="submit" class="cu-button cu-button-primary">Request help</button>
+    </form>
+  </section>
+{% endblock %}

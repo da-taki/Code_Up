@@ -1,0 +1,69 @@
+{% extends "classroom/_base.html" %}
+{% block title %}{{ assignment.title }} - CodeUp Classroom{% endblock %}
+{% block header_title %}{{ assignment.title }}{% endblock %}
+{% block content %}
+  <p class="cu-crumb">
+    <a href="{{ url_for('classroom.instructor_dashboard') }}">Instructor dashboard</a> /
+    <a href="{{ url_for('classroom.cohort_dashboard', cohort_id=cohort.id) }}">{{ cohort.name }}</a>
+  </p>
+
+  <section class="cu-panel" aria-labelledby="assignmentInfoHeading">
+    <h2 id="assignmentInfoHeading">Assignment details</h2>
+    <p>Status: <span class="cu-badge cu-badge--{{ assignment.status }}">{{ assignment.status }}</span></p>
+    {% if assignment.status == 'draft' %}
+    <form method="post" action="{{ url_for('classroom.publish_assignment', assignment_id=assignment.id) }}">
+      <button type="submit" class="cu-button cu-button-primary">Publish assignment</button>
+    </form>
+    {% endif %}
+    <p>{{ assignment.instructions }}</p>
+    {% if assignment.due_date %}<p>Due: {{ assignment.due_date }}</p>{% endif %}
+    {% if assignment.expected_concepts %}
+      <p>Expected concepts: {{ assignment.expected_concepts|join(', ') }}</p>
+    {% endif %}
+
+    <form method="post" action="{{ url_for('classroom.set_assignment_policy', assignment_id=assignment.id) }}" novalidate>
+      <div class="cu-field">
+        <label for="policy_select">AI policy</label>
+        <select id="policy_select" name="ai_policy">
+          {% for policy in ai_policies %}
+          <option value="{{ policy }}" {% if policy == assignment.ai_policy %}selected{% endif %}>{{ policy }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <button type="submit" class="cu-button cu-button-secondary">Update AI policy</button>
+    </form>
+  </section>
+
+  <section class="cu-panel" aria-labelledby="submissionsHeading">
+    <h2 id="submissionsHeading">Submissions</h2>
+    <table class="cu-table">
+      <caption class="sr-only">Learner submission status for this assignment</caption>
+      <thead>
+        <tr>
+          <th scope="col">Learner</th>
+          <th scope="col">Status</th>
+          <th scope="col">Runs</th>
+          <th scope="col">Successful runs</th>
+          <th scope="col">Submitted</th>
+          <th scope="col">Code</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in progress_rows %}
+        <tr>
+          <td>{{ row.display_name }}</td>
+          <td><span class="cu-badge cu-badge--{{ row.status }}">{{ row.status.replace('_', ' ') }}</span></td>
+          <td>{{ row.run_count }}</td>
+          <td>{{ row.success_run_count }}</td>
+          <td>{{ row.submitted_at or '-' }}</td>
+          <td>
+            {% if row.status != 'not_started' %}
+            <a href="{{ url_for('classroom.view_submission', assignment_id=assignment.id, learner_id=row.learner_id) }}">Inspect</a>
+            {% else %}-{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+{% endblock %}

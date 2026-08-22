@@ -1,0 +1,132 @@
+/* Classroom (cohort/instructor/assignment) pages. Reuses core.css's design
+   tokens (--bg-panel, --text-main, --accent, etc.) so these pages match the
+   rest of CodeUp instead of introducing a second visual language. */
+
+.cu-classroom-main {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: var(--gap-lg);
+  color: var(--text-main);
+  font-family: var(--font-main);
+}
+
+.cu-classroom-main h2 {
+  margin-top: var(--gap-lg);
+  font-size: 1.15rem;
+}
+
+.cu-classroom-main h3 {
+  font-size: 1rem;
+}
+
+.cu-crumb {
+  font-size: 0.9rem;
+  margin-bottom: var(--gap-md);
+}
+
+.cu-crumb a { color: var(--accent); }
+
+.cu-notice {
+  background: var(--accent-soft);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  padding: var(--gap-sm) var(--gap-md);
+  margin-bottom: var(--gap-md);
+}
+
+.cu-notice--error {
+  background: transparent;
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+table.cu-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: var(--gap-lg);
+}
+
+table.cu-table caption {
+  text-align: left;
+  font-weight: 700;
+  margin-bottom: var(--gap-sm);
+}
+
+table.cu-table th,
+table.cu-table td {
+  text-align: left;
+  padding: var(--gap-sm);
+  border-bottom: 1px solid var(--border-soft);
+  vertical-align: top;
+}
+
+table.cu-table th { background: var(--bg-soft); }
+
+.cu-field {
+  display: block;
+  margin-bottom: var(--gap-md);
+}
+
+.cu-field label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.cu-field input,
+.cu-field textarea,
+.cu-field select {
+  width: 100%;
+  max-width: 480px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+  color: var(--text-main);
+  font-family: inherit;
+  font-size: 1rem;
+}
+
+.cu-field textarea { max-width: 640px; }
+
+.cu-inline-form {
+  display: inline;
+}
+
+.cu-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: var(--radius-lg);
+  font-size: 0.85rem;
+  border: 1px solid var(--border-soft);
+}
+
+.cu-badge--not_started { color: var(--text-dim); }
+.cu-badge--in_progress { color: var(--warning); border-color: var(--warning); }
+.cu-badge--submitted,
+.cu-badge--demonstrated,
+.cu-badge--completed { color: var(--success); border-color: var(--success); }
+.cu-badge--needs_practice,
+.cu-badge--open { color: var(--danger); border-color: var(--danger); }
+
+.cu-panel {
+  margin-bottom: var(--gap-lg);
+}
+
+.cu-code-view {
+  background: var(--bg-soft);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  padding: var(--gap-md);
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+}
+
+.cu-join-code {
+  font-family: var(--font-mono);
+  font-size: 1.4rem;
+  letter-spacing: 0.15em;
+  font-weight: 700;
+}

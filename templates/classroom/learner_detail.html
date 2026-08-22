@@ -1,0 +1,76 @@
+{% extends "classroom/_base.html" %}
+{% block title %}{{ learner.display_name }} - CodeUp Classroom{% endblock %}
+{% block header_title %}{{ learner.display_name }}{% endblock %}
+{% block content %}
+  <p class="cu-crumb">
+    <a href="{{ url_for('classroom.instructor_dashboard') }}">Instructor dashboard</a> /
+    <a href="{{ url_for('classroom.cohort_dashboard', cohort_id=cohort.id) }}">{{ cohort.name }}</a>
+  </p>
+
+  <section class="cu-panel" aria-labelledby="assignmentsProgressHeading">
+    <h2 id="assignmentsProgressHeading">Assignments</h2>
+    {% if progress_rows %}
+    <table class="cu-table">
+      <caption class="sr-only">This learner's assignment progress</caption>
+      <thead>
+        <tr>
+          <th scope="col">Assignment</th>
+          <th scope="col">Status</th>
+          <th scope="col">Runs</th>
+          <th scope="col">Code</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in progress_rows %}
+        <tr>
+          <td>{{ row.assignment.title if row.assignment else 'Unknown assignment' }}</td>
+          <td><span class="cu-badge cu-badge--{{ row.status }}">{{ row.status.replace('_', ' ') }}</span></td>
+          <td>{{ row.run_count }} ({{ row.success_run_count }} successful)</td>
+          <td>
+            {% if row.status != 'not_started' %}
+            <a href="{{ url_for('classroom.view_submission', assignment_id=row.assignment_id, learner_id=learner.id) }}">Inspect</a>
+            {% else %}-{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+      <p>No assignments started yet.</p>
+    {% endif %}
+  </section>
+
+  <section class="cu-panel" aria-labelledby="conceptsHeading">
+    <h2 id="conceptsHeading">Concept progress</h2>
+    <table class="cu-table">
+      <caption class="sr-only">This learner's concept mastery</caption>
+      <thead><tr><th scope="col">Concept</th><th scope="col">State</th></tr></thead>
+      <tbody>
+        {% for concept, state in concept_states.items() %}
+        <tr>
+          <td>{{ concept }}</td>
+          <td><span class="cu-badge cu-badge--{{ state }}">{{ state.replace('_', ' ') }}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section class="cu-panel" aria-labelledby="activityHeading">
+    <h2 id="activityHeading">Recent activity</h2>
+    {% if events %}
+    <ul>
+      {% for event in events %}
+      <li>{{ event.created_at }}: {{ event.kind.replace('_', ' ') }}</li>
+      {% endfor %}
+    </ul>
+    {% else %}
+      <p>No recorded activity yet.</p>
+    {% endif %}
+  </section>
+
+  <section class="cu-panel" aria-labelledby="fullReportHeading">
+    <h2 id="fullReportHeading">Full report</h2>
+    <pre class="cu-code-view">{{ report.report_md }}</pre>
+  </section>
+{% endblock %}

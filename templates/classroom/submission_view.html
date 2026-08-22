@@ -1,0 +1,23 @@
+{% extends "classroom/_base.html" %}
+{% block title %}{{ learner.display_name }}'s submission - CodeUp Classroom{% endblock %}
+{% block header_title %}{{ learner.display_name }}'s code - {{ assignment.title }}{% endblock %}
+{% block content %}
+  <p class="cu-crumb">
+    <a href="{{ url_for('classroom.instructor_dashboard') }}">Instructor dashboard</a> /
+    <a href="{{ url_for('classroom.cohort_dashboard', cohort_id=cohort.id) }}">{{ cohort.name }}</a> /
+    <a href="{{ url_for('classroom.assignment_detail', assignment_id=assignment.id) }}">{{ assignment.title }}</a>
+  </p>
+
+  <section class="cu-panel" aria-labelledby="submissionHeading">
+    <h2 id="submissionHeading">Submission status</h2>
+    <p>Status: <span class="cu-badge cu-badge--{{ progress.status or 'not_started' }}">{{ (progress.status or 'not_started').replace('_', ' ') }}</span></p>
+    {% if progress.submitted_at %}<p>Submitted: {{ progress.submitted_at }}</p>{% endif %}
+    <p>Runs: {{ progress.run_count or 0 }} ({{ progress.success_run_count or 0 }} successful)</p>
+    {% if progress.last_error %}<p>Most recent error: {{ progress.last_error }}</p>{% endif %}
+  </section>
+
+  <section class="cu-panel" aria-labelledby="codeHeading">
+    <h2 id="codeHeading">Code (read-only)</h2>
+    <pre class="cu-code-view" tabindex="0" aria-label="Learner's submitted code">{{ progress.submitted_code or progress.code or '(no code yet)' }}</pre>
+  </section>
+{% endblock %}

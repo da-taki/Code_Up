@@ -1,0 +1,23 @@
+{% extends "classroom/_base.html" %}
+{% block title %}Join a cohort - CodeUp Classroom{% endblock %}
+{% block header_title %}Join a CodeUp cohort{% endblock %}
+{% block content %}
+  {% if error %}
+    <p class="cu-notice cu-notice--error" role="alert">{{ error }}</p>
+  {% endif %}
+  <p>Enter the join code your instructor gave you, and the name you want your instructor to see.</p>
+  <form method="post" action="{{ url_for('classroom.join_submit') }}" novalidate>
+    <div class="cu-field">
+      <label for="join_code">Join code</label>
+      <input type="text" id="join_code" name="join_code" autocomplete="off" autocapitalize="characters"
+             maxlength="8" required aria-describedby="joinCodeHelp">
+      <span id="joinCodeHelp" class="sr-only">A short code your instructor shared, for example AB12CD.</span>
+    </div>
+    <div class="cu-field">
+      <label for="display_name">Your name</label>
+      <input type="text" id="display_name" name="display_name" autocomplete="name" maxlength="80" required>
+    </div>
+    <button type="submit" class="cu-button cu-button-primary">Join cohort</button>
+  </form>
+  <p><a href="{{ url_for('classroom.instructor_login') }}">I am an instructor</a></p>
+{% endblock %}

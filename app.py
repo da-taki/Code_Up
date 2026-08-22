@@ -84,6 +84,10 @@ from codeup.learning import accessible_learning
 from codeup.accessibility import audio_blocks
 from codeup.commands.command_normalization import normalize_command_transcript
 from codeup.accessibility.speech_output import sanitize_speech_text
+from codeup.classroom import ai_policy as classroom_ai_policy
+from codeup.classroom import concepts as classroom_concepts
+from codeup.classroom import db as classroom_db
+from codeup.classroom.routes import classroom_bp, LEARNER_COOKIE as CLASSROOM_LEARNER_COOKIE
 
 load_dotenv(override=True)
 
@@ -296,6 +300,7 @@ else:
 
 app = Flask(__name__)
 _configure_secret_key(app)
+app.register_blueprint(classroom_bp)
 
 SESSION_COOKIE_NAME = 'codeup_session'
 SESSION_COOKIE_MAX_AGE = 3600 * 24 * 7  # 7 days
@@ -1081,6 +1086,39 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en", max_
         return "AI service is currently unavailable. Core CodeUp features still work."
 
 
+def _ai_capability_check(capability: str) -> Tuple[bool, str, str]:
+    """Resolve the caller's AI policy and check one capability against it.
+
+    Reads the assignment context from the request (cookie set when a learner
+    opens an assignment, or an explicit ``assignment_id`` JSON field) with no
+    assignment context defaulting to FULL - anonymous, non-cohort IDE usage
+    is never restricted by the classroom layer.
+    """
+    body = request.get_json(silent=True) if has_request_context() else None
+    body = body if isinstance(body, dict) else {}
+
+    def _get_cookie(name):
+        return request.cookies.get(name) if has_request_context() else None
+
+    def _get_json_field(name):
+        return body.get(name)
+
+    policy = classroom_ai_policy.resolve_policy_for_request(
+        _get_cookie, _get_json_field, classroom_db.get_assignment
+    )
+    allowed = classroom_ai_policy.is_allowed(capability, policy)
+    message = "" if allowed else classroom_ai_policy.blocked_message(capability, policy)
+    return allowed, policy, message
+
+
+def call_gemini_capability(capability, system_prompt, user_prompt, temperature=0.2, language="en", max_tokens=None):
+    """Same as call_gemini, gated by the instructor's AI policy for this capability."""
+    allowed, _policy, message = _ai_capability_check(capability)
+    if not allowed:
+        return message
+    return call_gemini(system_prompt, user_prompt, temperature=temperature, language=language, max_tokens=max_tokens)
+
+
 def call_conversation_orchestrator_ai(system_prompt: str, user_prompt: str) -> str:
     if _env_flag_disabled("CODEUP_AI_ENABLED") or _env_flag_disabled("AI_ENABLED") or _env_flag_disabled("GROQ_ENABLED"):
         return ""
@@ -1430,6 +1468,38 @@ def get_demo_preset(preset_id):
 
 
 
+_TUTORIAL_MODULE_CONCEPTS = {
+    "print": "print output",
+    "variables": "variables",
+    "if": "conditionals (if/else)",
+    "for": "loops",
+    "while": "loops",
+}
+
+
+def _record_classroom_lesson_progress(module_id: str, code: str, passed: bool) -> None:
+    """Best-effort: persist tutorial progress + concept evidence for a cohort
+    learner. Silently does nothing for anonymous (non-cohort) IDE usage, and
+    never lets a persistence hiccup break the tutorial itself."""
+    try:
+        learner = classroom_db.get_learner_by_token(request.cookies.get(CLASSROOM_LEARNER_COOKIE))
+        if not learner:
+            return
+        status = "completed" if passed else "in_progress"
+        classroom_db.upsert_lesson_progress(learner["id"], module_id, status, last_code=code)
+        classroom_db.touch_learner_active(learner["id"])
+        if passed:
+            concept = _TUTORIAL_MODULE_CONCEPTS.get(module_id)
+            if concept:
+                classroom_concepts.record_lesson_passed(learner["id"], learner["cohort_id"], concept)
+        classroom_db.log_event(
+            learner["id"], learner["cohort_id"], "lesson_progress",
+            {"module": module_id, "passed": passed},
+        )
+    except Exception:
+        pass
+
+
 @app.route("/tutorial/modules", methods=["GET"])
 def tutorial_modules():
     return jsonify({"success": True, **tutorial_engine.module_pack()})
@@ -1451,6 +1521,7 @@ def tutorial_validate():
     result = tutorial_engine.validate_attempt(
         module_id, code, ran_ok=ran_ok, output=output
     )
+    _record_classroom_lesson_progress(module_id, code, result["passed"])
     return jsonify({
         "success": True,
         "module": module_id,
@@ -1765,7 +1836,7 @@ def explain_error(code: str, err_text: str, language="en", beginner=False) -> st
     if "indentationerror" in safe_error.lower():
         return local_explanation
     user = f"Code:\n```python\n{code}\n```\n\nError:\n```\n{safe_error}\n```"
-    ai_explanation = call_gemini(system, user, language=language)
+    ai_explanation = call_gemini_capability("error_help", system, user, language=language)
     if _is_ai_service_message(ai_explanation) or _ai_unavailable(ai_explanation):
         return local_explanation
     return ai_explanation
@@ -2252,7 +2323,7 @@ def audio_code_map():
                 "Do not use markdown."
             )
             user = f"Structural facts:\n{deterministic_summary}"
-            ai_reply = call_gemini(system, user, temperature=0.2, language=language)
+            ai_reply = call_gemini_capability("explain", system, user, temperature=0.2, language=language)
             if not _ai_unavailable(ai_reply):
                 reply = ai_reply
             else:
@@ -3038,7 +3109,7 @@ def step_narration():
                 "Mention loop iterations when relevant. Under 10 sentences. No markdown."
             )
             user = f"Code:\n```python\n{code}\n```\n\nExecution events:\n" + "\n".join(result["narration"])
-            ai_text = call_gemini(system, user, temperature=0.2, language=language)
+            ai_text = call_gemini_capability("explain", system, user, temperature=0.2, language=language)
             if not _ai_unavailable(ai_text):
                 narration_text = ai_text
 
@@ -3289,7 +3360,7 @@ def mistake_replay():
                 f"Before code:\n```python\n{error_code}\n```\n\n"
                 f"After code:\n```python\n{success_code}\n```"
             )
-            ai_reply = call_gemini(system, user, temperature=0.2, language=language)
+            ai_reply = call_gemini_capability("error_help", system, user, temperature=0.2, language=language)
             if not _ai_unavailable(ai_reply):
                 reply = ai_reply
             else:
@@ -3597,6 +3668,11 @@ def mentor_chat():
     if not message and mode not in {"repeat", "shorter", "simpler", "slow_walkthrough"}:
         return jsonify({"success": False, "error": "Message is required", "reply": "Please ask the mentor a question.", "speech": "Please ask the mentor a question.", "auto_speak": True}), 400
 
+    _capability = classroom_ai_policy.classify_chat_capability(message)
+    _allowed, _policy, _blocked_msg = _ai_capability_check(_capability)
+    if not _allowed:
+        return jsonify({"success": True, "reply": _blocked_msg, "speech": _blocked_msg, "auto_speak": True})
+
     system = (
         "You are CodeUp Mentor, a conversational Python tutor inside a blind-first IDE.\n"
         "Keep replies warm, short, and screen-reader friendly.\n"
@@ -3673,6 +3749,14 @@ def mentor_chat_stream():
 
     if not message and mode not in {"repeat", "shorter", "simpler", "slow_walkthrough"}:
         return jsonify({"success": False, "error": "Message is required"}), 400
+
+    _capability = classroom_ai_policy.classify_chat_capability(message)
+    _allowed, _policy, _blocked_msg = _ai_capability_check(_capability)
+    if not _allowed:
+        def _blocked_stream():
+            yield f"data: {json.dumps({'chunk': _blocked_msg})}\n\n"
+            yield "data: [DONE]\n\n"
+        return Response(stream_with_context(_blocked_stream()), mimetype="text/event-stream")
 
     system = (
         "You are CodeUp Mentor, a conversational Python tutor inside a blind-first IDE.\n"
@@ -3815,7 +3899,7 @@ def mentor_check_progress():
         f"Current output:\n{current_output or '(none)'}\n"
         f"Current error:\n{current_error or '(none)'}"
     )
-    reply = call_gemini(system, user, temperature=0.2, language=language)
+    reply = call_gemini_capability("assessment", system, user, temperature=0.2, language=language)
     if _ai_unavailable(reply):
         fallback = "I cannot check with AI right now. If the latest run has no error and shows the expected output, your first issue may be fixed. Run once more and ask for a code map."
         return jsonify({"success": False, "error": reply, "reply": fallback, "speech": fallback, "auto_speak": True})
@@ -4630,7 +4714,7 @@ def analyze():
         )
 
     user = f"Python code:\n```python\n{code}\n```"
-    analysis = call_gemini(system, user, language=language)
+    analysis = call_gemini_capability("explain", system, user, language=language)
 
     analyzer = CodeAnalyzer()
     structure = analyzer.analyze(code)
@@ -4690,7 +4774,7 @@ def analyze_deep():
         )
 
     user = f"Python code:\n```python\n{code}\n```"
-    analysis = call_gemini(system, user, language=language, max_tokens=4096)
+    analysis = call_gemini_capability("explain", system, user, language=language, max_tokens=4096)
     return jsonify({"analysis": analysis, "speech": analysis, "auto_speak": True})
 
 
@@ -4876,7 +4960,7 @@ def walkthrough():
     explanation = _canonical_loop_walkthrough(code, language)
     if not explanation:
         user = f"Python code:\n```python\n{code}\n```"
-        explanation = call_gemini(system, user, temperature=0.2, language=language)
+        explanation = call_gemini_capability("explain", system, user, temperature=0.2, language=language)
 
     if _ai_unavailable(explanation):
         explanation = _deterministic_walkthrough(code, language)
@@ -4924,7 +5008,7 @@ def advise():
         )
 
     user = f"Code:\n```python\n{code}\n```"
-    advice = call_gemini(system, user, language=language)
+    advice = call_gemini_capability("hint", system, user, language=language)
     return jsonify({"advice": advice})
 
 
@@ -4962,7 +5046,7 @@ def debug_suggestions():
         )
 
     user = f"Code:\n```python\n{code}\n```"
-    suggestions = call_gemini(system, user, language=language)
+    suggestions = call_gemini_capability("error_help", system, user, language=language)
 
     lines = suggestions.split('\n')
     parsed_suggestions = []
@@ -5015,7 +5099,7 @@ def describe():
         )
 
     user = f"Code context:\n{context}\nTarget line: {line}"
-    desc = call_gemini(system, user, language=language)
+    desc = call_gemini_capability("explain", system, user, language=language)
     return jsonify({"success": True, "description": desc})
 
 
@@ -5585,6 +5669,10 @@ def fix():
         _record_fixed_snapshot(code, fixed, error, explanation)
         return jsonify({"success": True, "code": fixed, "explanation": explanation, "speech": explanation})
 
+    _allowed, _policy, _blocked_msg = _ai_capability_check("generate")
+    if not _allowed:
+        return jsonify({"success": False, "error": _blocked_msg, "explanation": _blocked_msg, "speech": _blocked_msg})
+
     if language == "hi":
         system = (
             "आप एक expert Python debugger हैं जो blind-first IDE में काम करते हैं।\n"
@@ -5618,7 +5706,7 @@ def fix():
         )
 
     user = f"Fix this code:\n```python\n{code}\n```"
-    raw = call_gemini(system, user, temperature=0.1, language=language)
+    raw = call_gemini_capability("generate", system, user, temperature=0.1, language=language)
     fixed = extract_code(raw)
     if not fixed and raw and not _is_ai_service_message(raw):
         fixed = raw.strip()
@@ -5628,7 +5716,7 @@ def fix():
         ratio = difflib.SequenceMatcher(None, code, fixed).ratio()
         if ratio < 0.3:
             retry_system = system + "\n\nCRITICAL: Your previous answer was rejected because it was too different from the user's original code. Make MINIMAL changes — preserve variable names, structure, and overall approach. Only fix the specific bugs."
-            raw_retry = call_gemini(retry_system, user, temperature=0.05, language=language)
+            raw_retry = call_gemini_capability("generate", retry_system, user, temperature=0.05, language=language)
             retry_fixed = extract_code(raw_retry) or (raw_retry.strip() if raw_retry and not _is_ai_service_message(raw_retry) else "")
             if retry_fixed:
                 retry_ratio = difflib.SequenceMatcher(None, code, retry_fixed).ratio()
@@ -5724,6 +5812,10 @@ def generate_code():
                 pass
             return jsonify({"success": True, "project": True, "source": "template", **project})
 
+        _allowed, _policy, _blocked_msg = _ai_capability_check("generate")
+        if not _allowed:
+            return jsonify({"success": False, "error": _blocked_msg, "code": ""})
+
         system = (
             "You generate accessible multi-file Python projects for CodeUp, a blind-first IDE.\n"
             "Return only JSON with keys: name, entry, active_file, requirements, speech, files.\n"
@@ -5737,7 +5829,7 @@ def generate_code():
             "Avoid visual-only phrases like 'look at the left pane'; describe files by name and keyboard or command actions."
         )
         user = f"Create this as a CodeUp multi-file project:\n{prompt}"
-        raw = call_gemini(system, user, temperature=0.2, language=language, max_tokens=4096)
+        raw = call_gemini_capability("generate", system, user, temperature=0.2, language=language, max_tokens=4096)
         parsed_project = extract_project_json(raw)
         if not parsed_project:
             if _is_ai_service_message(raw):
@@ -5789,6 +5881,10 @@ def generate_code():
             "explanation": speech,
         })
 
+    _allowed, _policy, _blocked_msg = _ai_capability_check("generate")
+    if not _allowed:
+        return jsonify({"success": False, "error": _blocked_msg, "code": ""})
+
     if language == "hi":
         system = (
             "आप एक beginner-friendly, blind-first Python IDE (CodeUp) के लिए code generator हैं।\n"
@@ -5827,7 +5923,7 @@ def generate_code():
     if constraints:
         constraint_text = "Important exact constraints:\n" + "\n".join(f"- {item}" for item in constraints) + "\n\n"
     user = f"{constraint_text}Task description:\n{prompt}"
-    raw = call_gemini(system, user, temperature=0.2, language=language)
+    raw = call_gemini_capability("generate", system, user, temperature=0.2, language=language)
     code = extract_code(raw)
     if not code and raw and not _is_ai_service_message(raw):
         code = raw.strip()
@@ -5860,7 +5956,7 @@ def generate_code():
             return jsonify({"success": False, "error": safety_error, "code": ""})
     except SyntaxError:
         retry_system = system + "\n\nIMPORTANT: Return ONLY syntactically valid Python. No prose. No markdown."
-        raw_retry = call_gemini(retry_system, user, temperature=0.1, language=language)
+        raw_retry = call_gemini_capability("generate", retry_system, user, temperature=0.1, language=language)
         retry_code = extract_code(raw_retry) or (raw_retry.strip() if raw_retry and not _is_ai_service_message(raw_retry) else "")
         try:
             compile(retry_code, "<generated>", "exec")
@@ -6784,7 +6880,7 @@ def _route_conversational_voice_action(
         f"Most recent error, if any:\n{error_context or '(none)'}"
     )
 
-    raw = call_gemini(system, user, temperature=0.05, language=language, max_tokens=700)
+    raw = call_gemini_capability("generate", system, user, temperature=0.05, language=language, max_tokens=700)
     if not _ai_unavailable(raw):
         parsed = _extract_json_object(raw)
         routed = _validate_conversational_action(
@@ -6856,7 +6952,7 @@ def narrate_file():
         )
 
     user = f"Narrate this code:\n```python\n{code_to_narrate}\n```"
-    narration = call_gemini(system, user, temperature=0.2, language=language, max_tokens=4096)
+    narration = call_gemini_capability("explain", system, user, temperature=0.2, language=language, max_tokens=4096)
 
     line_count = len(code_lines_full)
 
@@ -6905,7 +7001,7 @@ def summarize():
         )
 
     user = f"Code:\n```python\n{code}\n```"
-    summary = call_gemini(system, user, language=language)
+    summary = call_gemini_capability("explain", system, user, language=language)
     return jsonify({"summary": summary})
 
 
@@ -6939,7 +7035,7 @@ def diff_explain():
         )
 
     user = f"BEFORE:\n```python\n{before}\n```\n\nAFTER:\n```python\n{after}\n```"
-    explanation = call_gemini(system, user, language=language)
+    explanation = call_gemini_capability("explain", system, user, language=language)
     return jsonify({"explanation": explanation})
 
 
@@ -6983,7 +7079,7 @@ def suggest_next():
     user = f"Code context (cursor after line {line}):\n{context}\nCurrent line: {current_line}"
 
     try:
-        raw = call_gemini(system, user, temperature=0.2, language=language)
+        raw = call_gemini_capability("hint", system, user, temperature=0.2, language=language)
         if _is_ai_service_message(raw):
             return jsonify({"success": False, "suggestions": [], "error": raw})
         clean = re.sub(r'```(?:json)?\s*|\s*```', '', raw).strip()
@@ -8939,6 +9035,12 @@ def _route_ai_code_edit_planner(
     body: Dict[str, Any],
     mapping: Optional[Dict[str, Any]] = None,
 ) -> dict:
+    _allowed, _policy, _blocked_msg = _ai_capability_check("generate")
+    if not _allowed:
+        return _natural_code_edit_clarification(
+            text, _blocked_msg, reason="ai_policy_blocked",
+            mapped_intent=str((mapping or {}).get("intent") or "edit_current_code"),
+        )
     if not str(current_code or "").strip():
         message = 'I can edit code after you create some. Try saying "generate code for..." first.'
         return _natural_code_edit_clarification(
@@ -11743,7 +11845,7 @@ def execution_story():
         )
 
     user = f"Code:\n```python\n{code}\n```\n\nExecution trace:\n{trace_text}"
-    story = call_gemini(system, user, temperature=0.3, language=language)
+    story = call_gemini_capability("explain", system, user, temperature=0.3, language=language)
     if _is_ai_service_message(story) or _ai_unavailable(story):
         story = _local_execution_story(trace)
     return jsonify({"success": True, "story": story})
@@ -11813,7 +11915,7 @@ def mentor_quiz():
         )
 
     user = f"Topic: {topic}"
-    raw = call_gemini(system, user, temperature=0.4, language=language)
+    raw = call_gemini_capability("assessment", system, user, temperature=0.4, language=language)
 
     if _is_ai_service_message(raw):
         return jsonify({
@@ -11865,7 +11967,7 @@ def mentor_explain():
         )
 
     user = f"Concept: {concept}"
-    explanation = call_gemini(system, user, temperature=0.2, language=language)
+    explanation = call_gemini_capability("explain", system, user, temperature=0.2, language=language)
 
     if not explanation or not explanation.strip() or len(explanation.strip()) < 20:
         return jsonify({
@@ -11911,7 +12013,7 @@ def explain_diff():
         f"Current output:\n{current_output[:4000]}\n\n"
         f"Diff summary: {diff.get('summary', '')}"
     )
-    explanation = call_gemini(system, user, temperature=0.2, language=language)
+    explanation = call_gemini_capability("explain", system, user, temperature=0.2, language=language)
     if _is_ai_service_message(explanation):
         explanation = (
             f"{diff.get('summary', 'The output changed.')} "
@@ -11964,7 +12066,7 @@ def mentor_bug_challenge():
         )
 
     user = "Generate a bug challenge"
-    raw = call_gemini(system, user, temperature=0.5, language=language)
+    raw = call_gemini_capability("assessment", system, user, temperature=0.5, language=language)
 
     if _is_ai_service_message(raw):
         return jsonify({

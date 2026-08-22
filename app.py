@@ -84,6 +84,7 @@ from codeup.learning import accessible_learning
 from codeup.accessibility import audio_blocks
 from codeup.commands.command_normalization import normalize_command_transcript
 from codeup.accessibility.speech_output import sanitize_speech_text
+from codeup.providers import groq_pool
 from codeup.classroom import ai_policy as classroom_ai_policy
 from codeup.classroom import concepts as classroom_concepts
 from codeup.classroom import db as classroom_db
@@ -240,6 +241,35 @@ def start_background_services():
         _cleanup_thread.start()
         return _cleanup_thread
 
+
+_groq_startup_health_check_done = False
+_groq_startup_health_check_lock = threading.Lock()
+
+
+def _maybe_run_groq_startup_health_check():
+    """Opt-in only (GROQ_HEALTH_CHECK_ON_STARTUP=1) - a real health check
+    costs one real request per configured key, so it never runs by default.
+    Runs at most once per process, in the background, and never blocks
+    startup or a request. Prefer `python scripts/check_groq_keys.py` for an
+    on-demand check that doesn't require restarting the server."""
+    global _groq_startup_health_check_done
+    if not _truthy_env("GROQ_HEALTH_CHECK_ON_STARTUP"):
+        return
+    with _groq_startup_health_check_lock:
+        if _groq_startup_health_check_done:
+            return
+        _groq_startup_health_check_done = True
+
+    def _run():
+        try:
+            results = groq_pool.health_check_all(env=_groq_failover_env())
+            healthy = sum(1 for r in results.values() if r == "healthy")
+            _debug_log(f"Groq startup health check: {healthy}/{len(results)} key(s) healthy")
+        except Exception as e:
+            _debug_log(f"Groq startup health check failed: {e}")
+
+    threading.Thread(target=_run, name="codeup-groq-startup-healthcheck", daemon=True).start()
+
 _gemini_executor = None
 _gemini_executor_lock = threading.Lock()
 
@@ -316,6 +346,7 @@ SESSION_COOKIE_SAMESITE = None if os.environ.get("FLASK_TESTING", "false").lower
 def ensure_background_services_started():
     if not _is_testing_mode():
         start_background_services()
+        _maybe_run_groq_startup_health_check()
 
 @app.after_request
 def set_session_cookie(response):
@@ -934,6 +965,15 @@ def _call_ollama(system_prompt, user_prompt, temperature=0.2, max_tokens=None):
         return None
 
 
+def _gemini_busy_threshold() -> int:
+    try:
+        configured = len(groq_pool.load_pool_key_values(_groq_failover_env()))
+    except Exception:
+        configured = 1
+    capacity = max(1, configured) * groq_pool.max_concurrency_per_key()
+    return max(8, capacity + groq_pool.queue_max_size())
+
+
 def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en", max_tokens=None):
     max_tokens = _normalize_ai_max_tokens(max_tokens)
     key = _configured_cloud_api_key()
@@ -969,9 +1009,12 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en", max_
             if language == "hi":
                 sp = f"आप एक सहायक हैं जो हिंदी में सहायता प्रदान करते हैं। {system_prompt}"
 
-            def _request_with_key(api_key, key_index):
+            def _request_with_key(api_key, internal_id):
                 from groq import Groq
-                client = Groq(api_key=api_key)
+                # max_retries=0: the pool - not the SDK - decides whether and
+                # how to retry, so every attempt is visible for fair
+                # selection, cooldown and rate-limit-header accounting.
+                client = Groq(api_key=api_key, timeout=MAX_GEMINI_TIMEOUT, max_retries=0)
                 response = client.chat.completions.create(
                     model=GEMINI_MODEL,
                     messages=[
@@ -988,12 +1031,13 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en", max_
                         return content
                 return "AI service returned an empty response. Please try again."
 
-            return groq_key_manager.get_groq_key_manager().call_with_failover(
+            return groq_pool.call_with_pool(
                 _request_with_key,
+                timeout=groq_pool.queue_wait_timeout(),
                 env=_groq_failover_env(),
                 extra_keys=extra_keys,
             )
-        except groq_key_manager.GroqFailoverError as e:
+        except groq_pool.GroqPoolError as e:
             local = _try_ollama_fallback()
             if local:
                 return f"[offline mode] {local}"
@@ -1021,7 +1065,12 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en", max_
         current_active = _gemini_active_requests
         current_queued = _gemini_queued_requests
 
-    if current_active + current_queued >= 8:
+    # A coarse outer circuit-breaker only - the real admission control (fair
+    # per-key selection, bounded FIFO queue, per-key concurrency) now lives
+    # in groq_pool underneath _request_with_key, so this threshold is sized
+    # generously to that pool's own capacity rather than a fixed "8": it
+    # should essentially never fire before the pool's own queue would.
+    if current_active + current_queued >= _gemini_busy_threshold():
         local = _try_ollama_fallback()
         if local:
             return f"[offline mode] {local}"
@@ -1129,14 +1178,13 @@ def call_conversation_orchestrator_ai(system_prompt: str, user_prompt: str) -> s
         and not _usable_cloud_key(os.environ.get("GROQ_API_KEY", ""))
     ):
         return ""
-    manager = groq_key_manager.get_groq_key_manager()
-    if not manager.has_keys(env=_groq_failover_env(), extra_keys=extra_keys):
+    if not groq_pool.has_configured_keys(env=_groq_failover_env(), extra_keys=extra_keys):
         return ""
 
     def _do_call():
-        def _request_with_key(api_key, key_index):
+        def _request_with_key(api_key, internal_id):
             from groq import Groq
-            client = Groq(api_key=api_key)
+            client = Groq(api_key=api_key, timeout=MAX_GEMINI_TIMEOUT, max_retries=0)
             response = client.chat.completions.create(
                 model=os.environ.get("GROQ_ORCHESTRATOR_MODEL", GEMINI_MODEL),
                 messages=[
@@ -1153,8 +1201,9 @@ def call_conversation_orchestrator_ai(system_prompt: str, user_prompt: str) -> s
                     return content
             return ""
 
-        return manager.call_with_failover(
+        return groq_pool.call_with_pool(
             _request_with_key,
+            timeout=groq_pool.queue_wait_timeout(),
             env=_groq_failover_env(),
             extra_keys=extra_keys,
         )
@@ -3827,10 +3876,22 @@ def mentor_chat_stream():
 
             extra_keys = _configured_extra_cloud_keys()
 
-            def _stream_with_key(api_key, key_index):
+            # A held Groq key slot must stay ACTIVE for the whole stream, not
+            # just for obtaining the stream object - groq_pool.acquire() is a
+            # context manager for exactly that: it releases on normal
+            # completion, on any exception, and on the generator being
+            # closed early (client disconnect), via GeneratorExit below.
+            # Only one key is tried for starting the stream (no per-key
+            # retry loop here, since retrying after any content has already
+            # streamed to the client would duplicate output) - the existing
+            # except-Exception fallback to non-streaming call_gemini() just
+            # below already gets its own one-alternate-key retry.
+            with groq_pool.acquire(
+                timeout=groq_pool.queue_wait_timeout(), env=_groq_failover_env(), extra_keys=extra_keys,
+            ) as lease:
                 from groq import Groq
-                client = Groq(api_key=api_key)
-                return client.chat.completions.create(
+                client = Groq(api_key=lease.key, timeout=MAX_GEMINI_TIMEOUT, max_retries=0)
+                stream = client.chat.completions.create(
                     model=GEMINI_MODEL,
                     messages=[
                         {"role": "system", "content": sp},
@@ -3841,18 +3902,12 @@ def mentor_chat_stream():
                     stream=True,
                 )
 
-            stream = groq_key_manager.get_groq_key_manager().call_with_failover(
-                _stream_with_key,
-                env=_groq_failover_env(),
-                extra_keys=extra_keys,
-            )
-
-            for chunk in stream:
-                for choice in getattr(chunk, "choices", []) or []:
-                    delta = getattr(choice, "delta", None)
-                    content = getattr(delta, "content", None)
-                    if content:
-                        yield f"data: {json.dumps({'chunk': content})}\n\n"
+                for chunk in stream:
+                    for choice in getattr(chunk, "choices", []) or []:
+                        delta = getattr(choice, "delta", None)
+                        content = getattr(delta, "content", None)
+                        if content:
+                            yield f"data: {json.dumps({'chunk': content})}\n\n"
 
             yield "data: [DONE]\n\n"
         except GeneratorExit:

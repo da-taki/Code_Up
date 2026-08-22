@@ -1,0 +1,75 @@
+{% extends "classroom/_base.html" %}
+{% block title %}AI service status - CodeUp Classroom{% endblock %}
+{% block header_title %}Groq AI pool status{% endblock %}
+{% block header_nav %}
+  <a class="cu-button cu-button-secondary" href="{{ url_for('classroom.instructor_dashboard') }}">Instructor dashboard</a>
+{% endblock %}
+{% block content %}
+  <p>Read-only. Refresh the page for current numbers - this does not auto-update.</p>
+
+  <section class="cu-panel" aria-labelledby="summaryHeading">
+    <h2 id="summaryHeading">Pool summary</h2>
+    <ul>
+      <li>Configured: {{ pool.configured }}</li>
+      <li>Healthy: {{ pool.counts.healthy }}</li>
+      <li>Busy: {{ pool.counts.busy }}</li>
+      <li>Cooldown: {{ pool.counts.cooldown }}</li>
+      <li>Unhealthy: {{ pool.counts.unhealthy }}</li>
+      <li>Disabled: {{ pool.counts.disabled }}</li>
+      <li>Active requests: {{ pool.active_requests }}</li>
+      <li>Queued requests: {{ pool.queued_requests }}</li>
+      <li>Max concurrency per key: {{ pool.max_concurrency_per_key }}</li>
+      <li>Queue max size: {{ pool.queue_max_size }}</li>
+      <li>Queue wait timeout: {{ pool.queue_wait_timeout }}s</li>
+      {% if pool.pool_cooldown_remaining_seconds > 0 %}
+      <li>Whole pool cooling down: {{ pool.pool_cooldown_remaining_seconds }}s remaining ({{ pool.pool_cooldown_reason }})</li>
+      {% endif %}
+      <li>Shared organization/project rate limit suspected: {{ 'yes' if pool.shared_limit_suspected else 'no' }}</li>
+    </ul>
+  </section>
+
+  <section class="cu-panel" aria-labelledby="keysHeading">
+    <h2 id="keysHeading">Keys</h2>
+    {% if pool.key_rows %}
+    <table class="cu-table">
+      <caption class="sr-only">Per-key Groq pool status - no key values are ever shown</caption>
+      <thead>
+        <tr>
+          <th scope="col">Key</th>
+          <th scope="col">State</th>
+          <th scope="col">Active</th>
+          <th scope="col">Total requests</th>
+          <th scope="col">Successful</th>
+          <th scope="col">Transient failures</th>
+          <th scope="col">Cooldown remaining</th>
+          <th scope="col">Last failure</th>
+          <th scope="col">Last health check</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for key in pool.key_rows %}
+        <tr>
+          <td>{{ key.id }}</td>
+          <td><span class="cu-badge cu-badge--{{ key.state|lower }}">{{ key.state }}</span></td>
+          <td>{{ key.active }}</td>
+          <td>{{ key.total_requests }}</td>
+          <td>{{ key.successful_requests }}</td>
+          <td>{{ key.transient_failures }}</td>
+          <td>{{ key.cooldown_remaining_seconds }}s</td>
+          <td>{{ key.last_failure_type or '-' }}</td>
+          <td>{{ key.last_health_check_result or 'not checked' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+      <p>No Groq keys are configured.</p>
+    {% endif %}
+  </section>
+
+  <section class="cu-panel" aria-labelledby="helpHeading">
+    <h2 id="helpHeading">Run a real health check</h2>
+    <p>This page only reflects state observed from real traffic and any startup check. To actively test every configured key right now, run on the server:</p>
+    <pre class="cu-code-view">python scripts/check_groq_keys.py</pre>
+  </section>
+{% endblock %}

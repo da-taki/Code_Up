@@ -389,7 +389,7 @@ def test_call_gemini_uses_session_api_config_key(monkeypatch):
             )
 
     class FakeGroq:
-        def __init__(self, api_key):
+        def __init__(self, api_key, **kwargs):
             seen_keys.append(api_key)
             self.chat = types.SimpleNamespace(completions=FakeCompletions())
 
@@ -423,7 +423,7 @@ def test_legacy_gemini_disabled_does_not_block_configured_key(monkeypatch):
             )
 
     class FakeGroq:
-        def __init__(self, api_key):
+        def __init__(self, api_key, **kwargs):
             seen["keys"].append(api_key)
             self.chat = types.SimpleNamespace(completions=FakeCompletions())
 
@@ -467,7 +467,7 @@ def test_call_gemini_whitespace_response_is_not_empty_string(monkeypatch):
             )
 
     class FakeGroq:
-        def __init__(self, api_key):
+        def __init__(self, api_key, **kwargs):
             self.chat = types.SimpleNamespace(completions=FakeCompletions())
 
     monkeypatch.setitem(sys.modules, "groq", types.SimpleNamespace(Groq=FakeGroq))
@@ -501,7 +501,7 @@ def test_api_config_key_persists_to_generate_code(client, monkeypatch):
             )
 
     class FakeGroq:
-        def __init__(self, api_key):
+        def __init__(self, api_key, **kwargs):
             seen_keys.append(api_key)
             self.chat = types.SimpleNamespace(completions=FakeCompletions())
 

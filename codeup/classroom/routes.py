@@ -24,6 +24,7 @@ from flask import Blueprint, Response, jsonify, redirect, render_template, reque
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from codeup.classroom import ai_policy, concepts as concepts_mod, curriculum, db, guided_projects, reports
+from codeup.providers import groq_pool
 
 classroom_bp = Blueprint("classroom", __name__, url_prefix="/classroom")
 
@@ -153,7 +154,20 @@ def instructor_dashboard(instructor):
     cohorts = db.list_cohorts_for_instructor(instructor["id"])
     for cohort in cohorts:
         cohort["learner_count"] = len(db.list_learners_for_cohort(cohort["id"]))
-    return render_template("classroom/instructor_dashboard.html", instructor=instructor, cohorts=cohorts)
+    return render_template(
+        "classroom/instructor_dashboard.html", instructor=instructor, cohorts=cohorts,
+        groq_status_url=url_for("classroom.groq_status"),
+    )
+
+
+@classroom_bp.route("/admin/groq-status", methods=["GET"])
+@require_instructor
+def groq_status(instructor):
+    """Read-only diagnostic: pool health/load, never a secret. Any signed-in
+    instructor can view it (there is no separate super-admin tier in
+    CodeUp) - learners cannot reach this, since @require_instructor
+    redirects them to the instructor login page."""
+    return render_template("classroom/groq_status.html", instructor=instructor, pool=groq_pool.status())
 
 
 @classroom_bp.route("/cohorts", methods=["POST"])

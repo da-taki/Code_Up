@@ -109,6 +109,12 @@ table.cu-table th { background: var(--bg-soft); }
 .cu-badge--needs_practice,
 .cu-badge--open { color: var(--danger); border-color: var(--danger); }
 
+.cu-badge--healthy { color: var(--success); border-color: var(--success); }
+.cu-badge--busy,
+.cu-badge--cooldown { color: var(--warning); border-color: var(--warning); }
+.cu-badge--unhealthy,
+.cu-badge--disabled { color: var(--danger); border-color: var(--danger); }
+
 .cu-panel {
   margin-bottom: var(--gap-lg);
 }

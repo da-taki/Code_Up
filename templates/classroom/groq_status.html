@@ -11,7 +11,8 @@
     <h2 id="summaryHeading">Pool summary</h2>
     <ul>
       <li>Configured: {{ pool.configured }}</li>
-      <li>Healthy: {{ pool.counts.healthy }}</li>
+      <li>Healthy (proven working): {{ pool.counts.healthy }}</li>
+      <li>Unverified (configured, never tried): {{ pool.counts.unverified }}</li>
       <li>Busy: {{ pool.counts.busy }}</li>
       <li>Cooldown: {{ pool.counts.cooldown }}</li>
       <li>Unhealthy: {{ pool.counts.unhealthy }}</li>

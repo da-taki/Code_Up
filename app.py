@@ -29,7 +29,6 @@ from codeup.commands.input_concierge import build_input_plan, concierge_request_
 from codeup.runtime import session_memory
 from codeup.commands import command_clarifier
 from codeup.integrations import grounded_ai
-from codeup.integrations import groq_key_manager
 from codeup.commands import clarification_flow
 from codeup.learning import concept_qa
 from codeup.commands import intent_repair
@@ -273,12 +272,32 @@ def _maybe_run_groq_startup_health_check():
 _gemini_executor = None
 _gemini_executor_lock = threading.Lock()
 
+_GEMINI_EXECUTOR_MIN_WORKERS = 3
+_GEMINI_EXECUTOR_MAX_WORKERS = 64
+
+
+def _gemini_executor_size() -> int:
+    """The old hardcoded max_workers=3 made this executor - not the pool -
+    the real concurrency ceiling: even with 15 keys and no cooldowns, only 3
+    Groq calls could ever run at once, because every call (whichever key the
+    pool picked) still has to wait for a free executor thread. Size it to
+    the pool's own real capacity instead, so the executor is never a
+    smaller bottleneck than the pool it's supposed to just be timing-out."""
+    try:
+        configured = len(groq_pool.load_pool_key_values(_groq_failover_env()))
+    except Exception:
+        configured = 1
+    capacity = max(1, configured) * groq_pool.max_concurrency_per_key()
+    return max(_GEMINI_EXECUTOR_MIN_WORKERS, min(_GEMINI_EXECUTOR_MAX_WORKERS, capacity))
+
 
 def _get_gemini_executor():
     global _gemini_executor
     with _gemini_executor_lock:
         if _gemini_executor is None:
-            _gemini_executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="gemini")
+            _gemini_executor = ThreadPoolExecutor(
+                max_workers=_gemini_executor_size(), thread_name_prefix="gemini"
+            )
         return _gemini_executor
 
 
@@ -835,9 +854,14 @@ def _configured_cloud_api_key():
     extra = _configured_extra_cloud_keys()
     if extra:
         return extra[0]
-    records = groq_key_manager.load_groq_api_keys(_groq_failover_env())
-    if records:
-        return records[0].key
+    # groq_pool.load_pool_key_values merges GROQ_API_KEYS (comma-separated)
+    # with the numbered GROQ_API_KEY/GROQ_API_KEY_2..15 scheme -
+    # groq_key_manager.load_groq_api_keys alone only sees the numbered form,
+    # so a CSV-only deployment would look unconfigured here and never even
+    # reach the pool.
+    values = groq_pool.load_pool_key_values(_groq_failover_env())
+    if values:
+        return values[0]
     return ""
 
 def _env_flag_disabled(name: str) -> bool:
@@ -851,7 +875,7 @@ def _cloud_ai_disabled_for_request(key: str) -> bool:
     if (
         _env_flag_disabled("GEMINI_ENABLED")
         and not _configured_extra_cloud_keys()
-        and not _usable_cloud_key(os.environ.get("GROQ_API_KEY", ""))
+        and not groq_pool.load_pool_key_values(_groq_failover_env())
     ):
         return True
     if _env_flag_disabled("GEMINI_ENABLED") and not key:
@@ -1172,12 +1196,10 @@ def call_conversation_orchestrator_ai(system_prompt: str, user_prompt: str) -> s
     if _env_flag_disabled("CODEUP_AI_ENABLED") or _env_flag_disabled("AI_ENABLED") or _env_flag_disabled("GROQ_ENABLED"):
         return ""
     extra_keys = _configured_extra_cloud_keys()
-    if (
-        _env_flag_disabled("GEMINI_ENABLED")
-        and not extra_keys
-        and not _usable_cloud_key(os.environ.get("GROQ_API_KEY", ""))
-    ):
-        return ""
+    # A single pool-aware check (CSV GROQ_API_KEYS + the numbered scheme +
+    # any session key) - a raw os.environ.get("GROQ_API_KEY") check here
+    # previously made a CSV-only deployment (GROQ_API_KEYS set, GROQ_API_KEY
+    # unset) look unconfigured and return "" before ever trying the pool.
     if not groq_pool.has_configured_keys(env=_groq_failover_env(), extra_keys=extra_keys):
         return ""
 
@@ -1219,14 +1241,7 @@ def _structured_ai_available() -> bool:
     if _env_flag_disabled("CODEUP_AI_ENABLED") or _env_flag_disabled("AI_ENABLED") or _env_flag_disabled("GROQ_ENABLED"):
         return False
     extra_keys = _configured_extra_cloud_keys()
-    if (
-        _env_flag_disabled("GEMINI_ENABLED")
-        and not extra_keys
-        and not _usable_cloud_key(os.environ.get("GROQ_API_KEY", ""))
-    ):
-        return False
-    manager = groq_key_manager.get_groq_key_manager()
-    return manager.has_keys(env=_groq_failover_env(), extra_keys=extra_keys)
+    return groq_pool.has_configured_keys(env=_groq_failover_env(), extra_keys=extra_keys)
 
 
 _COACH_CONCEPT_VOCAB = (
@@ -1662,7 +1677,7 @@ def api_config():
 def sanitize_traceback(traceback_str: str) -> str:
     text = str(traceback_str or "")
     try:
-        text = groq_key_manager.redact_known_keys(text, extra_keys=_configured_extra_cloud_keys())
+        text = groq_pool.redact_known_keys(text, extra_keys=_configured_extra_cloud_keys())  # always sees the real env - redaction must never be test-mode-gated
     except Exception:
         pass
     text = re.sub(r'gsk_[A-Za-z0-9_-]{16,}', '<redacted-api-key>', text)
@@ -8828,7 +8843,7 @@ def _ai_mapper_clarification(text: str, *, confidence: float = 0.0,
                              mapped_intent: str = "unknown_clarify",
                              reason: str = "") -> dict:
     message = natural_command_mapper.MAPPER_FALLBACK_CLARIFICATION
-    safe_reason = groq_key_manager.redact_known_keys(reason)[:80]
+    safe_reason = groq_pool.redact_known_keys(reason)[:80]  # always sees the real env - redaction must never be test-mode-gated
     return {
         "success": True,
         "action": "clarify",
@@ -8929,7 +8944,7 @@ def _natural_code_edit_clarification(
     mapped_intent: str = "edit_current_code",
     source: str = "natural_code_editor",
 ) -> dict:
-    safe_reason = groq_key_manager.redact_known_keys(reason)[:80]
+    safe_reason = groq_pool.redact_known_keys(reason)[:80]  # always sees the real env - redaction must never be test-mode-gated
     return {
         "success": True,
         "action": "clarify",

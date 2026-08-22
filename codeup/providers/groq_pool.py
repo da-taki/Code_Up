@@ -50,6 +50,7 @@ _log = logging.getLogger("codeup.groq_pool")
 
 CSV_KEYS_ENV_NAME = "GROQ_API_KEYS"
 _HEALTH_CHECK_MODEL_DEFAULT = "openai/gpt-oss-120b"
+HEALTH_CHECK_TIMEOUT_SECONDS = 10
 
 DEFAULT_MAX_CONCURRENCY_PER_KEY = 1
 DEFAULT_QUEUE_MAX_SIZE = 100
@@ -175,6 +176,8 @@ class KeyState:
     disabled_reason: str = ""
     rate_limit: Dict[str, Any] = field(default_factory=dict)
     seq: int = 0  # fairness tie-break; bumped on each selection (round-robin)
+    verified: bool = False  # True only after a REAL success or a passing health check -
+    # never assumed just because a key hasn't failed yet (see UNVERIFIED state)
 
     def __repr__(self) -> str:  # never let an accidental print/log leak the key
         return f"KeyState(id={self.internal_id!r}, active={self.active}, disabled={self.disabled})"
@@ -352,6 +355,12 @@ class GroqKeyPool:
             return "UNHEALTHY"
         if key.active >= max_concurrency:
             return "BUSY"
+        if not key.verified:
+            # Configured, never failed, but never actually proven to work
+            # either - a fresh key defaults here, NOT to HEALTHY, so
+            # "healthy" always means "has demonstrably worked," never
+            # "hasn't been tried yet."
+            return "UNVERIFIED"
         return "HEALTHY"
 
     # -- public: acquire / release --------------------------------------------------
@@ -451,6 +460,7 @@ class GroqKeyPool:
             if success is True:
                 key.successful_requests += 1
                 key.consecutive_failures = 0
+                key.verified = True
                 key.last_success_at = now
                 _log.debug("%s request completed", key.internal_id)
             elif success is False:
@@ -527,7 +537,11 @@ class GroqKeyPool:
         exc_seen: Optional[BaseException] = None
         try:
             from groq import Groq
-            client = Groq(api_key=key_value)
+            # Explicit short timeout + max_retries=0: a health check must
+            # fail fast and make EXACTLY one request - the SDK's own hidden
+            # retry (DEFAULT_MAX_RETRIES=2) or its default (longer) timeout
+            # would both make "one tiny request per key" a lie.
+            client = Groq(api_key=key_value, timeout=HEALTH_CHECK_TIMEOUT_SECONDS, max_retries=0)
             client.chat.completions.create(
                 model=health_check_model(),
                 messages=[{"role": "user", "content": "hi"}],
@@ -555,6 +569,7 @@ class GroqKeyPool:
                 key.cooldown_until = 0.0
                 key.consecutive_failures = 0
                 key.last_failure_type = ""
+                key.verified = True
             elif result == "invalid":
                 key.disabled = True
                 key.disabled_reason = "authentication_failed"
@@ -603,7 +618,7 @@ class GroqKeyPool:
             states = self._sync_and_get_locked(values) if values else []
             now = self._time_fn()
             max_concurrency = max_concurrency_per_key()
-            counts = {"healthy": 0, "busy": 0, "cooldown": 0, "unhealthy": 0, "disabled": 0}
+            counts = {"healthy": 0, "busy": 0, "cooldown": 0, "unhealthy": 0, "disabled": 0, "unverified": 0}
             rows = []
             for key in states:
                 label = self._state_label(key, now, max_concurrency)
@@ -676,3 +691,14 @@ def health_check_all(*, env=None, extra_keys=None):
 
 def has_configured_keys(*, env=None, extra_keys=None) -> bool:
     return bool(_pool._resolve_values(env=env, extra_keys=extra_keys))
+
+
+def redact_known_keys(text: Any, *, env=None, extra_keys=None) -> str:
+    """Same purpose as groq_key_manager.redact_known_keys, but sourced from
+    every currently-configured key (CSV GROQ_API_KEYS + the numbered scheme
+    + any session key) so a CSV-only key can't slip through un-redacted."""
+    value = str(text or "")
+    for key in _pool._resolve_values(env=env, extra_keys=extra_keys):
+        if key:
+            value = value.replace(key, "<redacted-api-key>")
+    return value

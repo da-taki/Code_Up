@@ -114,6 +114,7 @@ table.cu-table th { background: var(--bg-soft); }
 .cu-badge--cooldown { color: var(--warning); border-color: var(--warning); }
 .cu-badge--unhealthy,
 .cu-badge--disabled { color: var(--danger); border-color: var(--danger); }
+.cu-badge--unverified { color: var(--text-dim); }
 
 .cu-panel {
   margin-bottom: var(--gap-lg);

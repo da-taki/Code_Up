@@ -95,6 +95,70 @@ def test_health_check_success_marks_healthy(pool, monkeypatch):
     assert pool.status(env={"GROQ_API_KEY": "k1"})["key_rows"][0]["state"] == "HEALTHY"
 
 
+def test_health_check_uses_short_timeout_and_no_retries(pool, monkeypatch):
+    """The health checker must make EXACTLY one bounded-time request per
+    key - the SDK's own default timeout/retry behavior would silently
+    violate that."""
+    seen_kwargs = {}
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            seen_kwargs.update(kwargs)
+            self.chat = self
+
+        @property
+        def completions(self):
+            return self
+
+        def create(self, **kwargs):
+            return object()
+
+    monkeypatch.setattr("groq.Groq", FakeClient)
+    pool.health_check_one("k1")
+    assert seen_kwargs.get("max_retries") == 0
+    assert seen_kwargs.get("timeout") == gp.HEALTH_CHECK_TIMEOUT_SECONDS
+    assert seen_kwargs["timeout"] <= 15  # explicitly short, not the SDK default
+
+
+def test_fresh_key_is_unverified_not_healthy(pool):
+    """A key that has never been used or checked must not be reported as
+    HEALTHY just because it hasn't failed yet - that's an unverified
+    assumption, not a fact."""
+    with pool._cv:
+        pool._sync_and_get_locked(["k1"])
+    st = pool.status(env={"GROQ_API_KEY": "k1"})
+    assert st["key_rows"][0]["state"] == "UNVERIFIED"
+    assert st["counts"]["unverified"] == 1
+    assert st["counts"]["healthy"] == 0
+
+
+def test_key_becomes_healthy_only_after_a_real_success(pool):
+    env = {"GROQ_API_KEY": "k1"}
+    assert pool.status(env=env)["key_rows"][0]["state"] == "UNVERIFIED"
+    with pool.acquire(timeout=1, env=env):
+        pass  # normal completion = a real success
+    assert pool.status(env=env)["key_rows"][0]["state"] == "HEALTHY"
+
+
+def test_key_becomes_healthy_after_passing_health_check(pool, monkeypatch):
+    class FakeClient:
+        def __init__(self, **kwargs):
+            self.chat = self
+
+        @property
+        def completions(self):
+            return self
+
+        def create(self, **kwargs):
+            return object()
+
+    monkeypatch.setattr("groq.Groq", FakeClient)
+    env = {"GROQ_API_KEY": "k1"}
+    assert pool.status(env=env)["key_rows"][0]["state"] == "UNVERIFIED"
+    pool.health_check_one("k1")
+    assert pool.status(env=env)["key_rows"][0]["state"] == "HEALTHY"
+
+
 def test_health_check_401_disables_key(pool, monkeypatch):
     class FakeClient:
         def __init__(self, **kwargs):
@@ -534,7 +598,10 @@ def test_streaming_generator_close_releases_without_penalty(pool):
     g.close()
     st = pool.status(env=env)
     assert st["key_rows"][0]["active"] == 0
-    assert st["key_rows"][0]["state"] == "HEALTHY"
+    # A generator close is neither a proven success nor a failure - not
+    # penalized (no cooldown/failure), but also not promoted to HEALTHY,
+    # since nothing ever actually completed on this key.
+    assert st["key_rows"][0]["state"] == "UNVERIFIED"
     assert st["key_rows"][0]["transient_failures"] == 0
 
 

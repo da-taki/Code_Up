@@ -11,9 +11,10 @@ from __future__ import annotations
 
 import csv
 import io
+from datetime import datetime, timezone
 from typing import Any, Dict, List
 
-from codeup.classroom import db, concepts as concepts_mod
+from codeup.classroom import curriculum, db, concepts as concepts_mod, guided_projects
 
 _CONCEPT_STATE_LABEL = {
     "not_started": "Not started",
@@ -39,6 +40,7 @@ def build_learner_report(learner_id: int) -> Dict[str, Any]:
 
     concept_states = concepts_mod.summary_for_learner(learner_id)
     lesson_rows = db.list_lesson_progress(learner_id)
+    module_rows = db.list_module_progress(learner_id)
     project_rows = db.list_project_progress(learner_id)
     assignment_counts = _assignment_progress_summary(learner_id)
     events = db.list_events_for_learner(learner_id, limit=15)
@@ -53,13 +55,22 @@ def build_learner_report(learner_id: int) -> Dict[str, Any]:
     )
     lines.append("")
 
-    lines.append("## Lessons")
+    completed_modules = sum(1 for m in module_rows if m["status"] == "completed")
+    lines.append("## Course modules (Python Foundations)")
+    lines.append(f"Completed: {completed_modules} / {len(curriculum.MODULE_ORDER)}")
+    if module_rows:
+        for row in module_rows:
+            quiz = f", quiz {row['quiz_score']}/{row['quiz_total']}" if row.get("quiz_total") else ""
+            lines.append(f"- {row['module_id']}: {row['status']} ({row['attempts']} attempt(s)){quiz}")
+    else:
+        lines.append("No course modules started yet.")
+    lines.append("")
+
     if lesson_rows:
+        lines.append("## Onboarding tutorial")
         for row in lesson_rows:
             lines.append(f"- {row['lesson_id']}: {row['status']} ({row['attempts']} attempt(s))")
-    else:
-        lines.append("No lessons attempted yet.")
-    lines.append("")
+        lines.append("")
 
     lines.append("## Guided projects")
     if project_rows:
@@ -177,3 +188,83 @@ def cohort_report_csv(cohort_id: int) -> str:
             row["concepts_needs_practice"],
         ])
     return buf.getvalue()
+
+
+_ACTIVE_WINDOW_DAYS = 7
+
+
+def _is_recently_active(last_active_at: Any) -> bool:
+    if not last_active_at:
+        return False
+    try:
+        last = datetime.fromisoformat(last_active_at)
+    except (TypeError, ValueError):
+        return False
+    if last.tzinfo is None:
+        last = last.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - last).days < _ACTIVE_WINDOW_DAYS
+
+
+def _project_checkpoint_total(project_id: str) -> int:
+    if project_id.startswith("custom:"):
+        try:
+            project = db.get_custom_project(int(project_id.split(":", 1)[1]))
+        except ValueError:
+            return 0
+        return len(project.get("checkpoints") or []) if project else 0
+    return len(guided_projects.all_checkpoint_ids(project_id))
+
+
+def build_cohort_impact_summary(cohort_id: int) -> Dict[str, Any]:
+    """Real, stored-data-only headline numbers for a cohort - no charts, no
+    invented analytics. Every field here is a plain count over rows that
+    already exist for other reasons (progress, events, submissions)."""
+    learners = db.list_learners_for_cohort(cohort_id)
+    active_learners = sum(1 for row in learners if _is_recently_active(row.get("last_active_at")))
+
+    lessons_completed = 0
+    course_completions = 0
+    projects_completed = 0
+    programs_run = 0
+    successful_runs = 0
+    total_builtin_modules = len(curriculum.MODULE_ORDER)
+
+    for learner in learners:
+        module_rows = db.list_module_progress(learner["id"])
+        completed_here = sum(1 for m in module_rows if m["status"] == "completed")
+        lessons_completed += completed_here
+        builtin_completed = sum(
+            1 for m in module_rows if m["status"] == "completed" and not m["module_id"].startswith("custom:")
+        )
+        if builtin_completed >= total_builtin_modules:
+            course_completions += 1
+
+        for project_row in db.list_project_progress(learner["id"]):
+            total_cp = _project_checkpoint_total(project_row["project_id"])
+            if total_cp and len(project_row.get("checkpoints_completed") or []) >= total_cp:
+                projects_completed += 1
+
+        events = db.list_events_for_learner(learner["id"], limit=1000)
+        programs_run += sum(1 for e in events if e["kind"] in ("run_success", "run_failure"))
+        successful_runs += sum(1 for e in events if e["kind"] == "run_success")
+
+    assignments = db.list_assignments_for_cohort(cohort_id)
+    assignments_submitted = 0
+    for assignment in assignments:
+        for row in db.list_progress_for_assignment(assignment["id"]):
+            if row["status"] == "submitted":
+                assignments_submitted += 1
+
+    help_requests = db.list_help_requests(cohort_id)
+
+    return {
+        "learners_enrolled": len(learners),
+        "active_learners": active_learners,
+        "lessons_completed": lessons_completed,
+        "assignments_submitted": assignments_submitted,
+        "projects_completed": projects_completed,
+        "programs_run": programs_run,
+        "successful_runs": successful_runs,
+        "help_requests": len(help_requests),
+        "course_completions": course_completions,
+    }

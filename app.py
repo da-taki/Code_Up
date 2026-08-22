@@ -1086,13 +1086,13 @@ def call_gemini(system_prompt, user_prompt, temperature=0.2, language="en", max_
         return "AI service is currently unavailable. Core CodeUp features still work."
 
 
-def _ai_capability_check(capability: str) -> Tuple[bool, str, str]:
-    """Resolve the caller's AI policy and check one capability against it.
+def _ai_capability_check(capability: str) -> Tuple[bool, Dict[str, bool], str]:
+    """Resolve the caller's capability settings and check one against it.
 
     Reads the assignment context from the request (cookie set when a learner
     opens an assignment, or an explicit ``assignment_id`` JSON field) with no
-    assignment context defaulting to FULL - anonymous, non-cohort IDE usage
-    is never restricted by the classroom layer.
+    assignment context resolving to "everything allowed" - anonymous,
+    non-cohort IDE usage is never restricted by the classroom layer.
     """
     body = request.get_json(silent=True) if has_request_context() else None
     body = body if isinstance(body, dict) else {}
@@ -1103,12 +1103,12 @@ def _ai_capability_check(capability: str) -> Tuple[bool, str, str]:
     def _get_json_field(name):
         return body.get(name)
 
-    policy = classroom_ai_policy.resolve_policy_for_request(
+    settings = classroom_ai_policy.resolve_settings_for_request(
         _get_cookie, _get_json_field, classroom_db.get_assignment
     )
-    allowed = classroom_ai_policy.is_allowed(capability, policy)
-    message = "" if allowed else classroom_ai_policy.blocked_message(capability, policy)
-    return allowed, policy, message
+    allowed = classroom_ai_policy.is_allowed(capability, settings)
+    message = "" if allowed else classroom_ai_policy.blocked_message(capability, settings)
+    return allowed, settings, message
 
 
 def call_gemini_capability(capability, system_prompt, user_prompt, temperature=0.2, language="en", max_tokens=None):
@@ -1492,6 +1492,8 @@ def _record_classroom_lesson_progress(module_id: str, code: str, passed: bool) -
             concept = _TUTORIAL_MODULE_CONCEPTS.get(module_id)
             if concept:
                 classroom_concepts.record_lesson_passed(learner["id"], learner["cohort_id"], concept)
+            if module_id == "while":  # last module in the built-in onboarding tutorial
+                classroom_db.mark_onboarding_completed(learner["id"])
         classroom_db.log_event(
             learner["id"], learner["cohort_id"], "lesson_progress",
             {"module": module_id, "passed": passed},
@@ -2279,6 +2281,10 @@ def _hinglish_code_map_summary(code: str) -> str:
 
 @app.route("/audio-code-map", methods=["POST"])
 def audio_code_map():
+    _allowed, _settings, _blocked_msg = _ai_capability_check("audio_code_map")
+    if not _allowed:
+        return jsonify({"success": False, "error": _blocked_msg, "message": _blocked_msg, "speech": _blocked_msg})
+
     body = safejson()
     code = safe(body.get("code"), "")
     query = safe(body.get("query"), "")
@@ -2323,7 +2329,7 @@ def audio_code_map():
                 "Do not use markdown."
             )
             user = f"Structural facts:\n{deterministic_summary}"
-            ai_reply = call_gemini_capability("explain", system, user, temperature=0.2, language=language)
+            ai_reply = call_gemini_capability("audio_code_map", system, user, temperature=0.2, language=language)
             if not _ai_unavailable(ai_reply):
                 reply = ai_reply
             else:
@@ -3030,6 +3036,10 @@ def audio_breakpoints_route():
 
 @app.route("/step-narration", methods=["POST"])
 def step_narration():
+    _allowed, _settings, _blocked_msg = _ai_capability_check("step_narration")
+    if not _allowed:
+        return jsonify({"success": False, "error": _blocked_msg, "message": _blocked_msg, "speech": _blocked_msg})
+
     body = safejson()
     code = safe(body.get("code"), "")
     language = safe(body.get("language"), "en")
@@ -3109,7 +3119,7 @@ def step_narration():
                 "Mention loop iterations when relevant. Under 10 sentences. No markdown."
             )
             user = f"Code:\n```python\n{code}\n```\n\nExecution events:\n" + "\n".join(result["narration"])
-            ai_text = call_gemini_capability("explain", system, user, temperature=0.2, language=language)
+            ai_text = call_gemini_capability("step_narration", system, user, temperature=0.2, language=language)
             if not _ai_unavailable(ai_text):
                 narration_text = ai_text
 
@@ -3160,6 +3170,10 @@ def watch_variable_route():
         if watched:
             msg += f" Still watching: {', '.join(watched)}."
         return jsonify({"success": True, "watched": watched, "speech": msg, "auto_speak": True})
+
+    _allowed, _settings, _blocked_msg = _ai_capability_check("watch_variable")
+    if not _allowed:
+        return jsonify({"success": False, "error": _blocked_msg, "speech": _blocked_msg, "auto_speak": True})
 
     if not variable:
         return jsonify({"success": False, "error": "No variable name provided."}), 400
@@ -5669,7 +5683,7 @@ def fix():
         _record_fixed_snapshot(code, fixed, error, explanation)
         return jsonify({"success": True, "code": fixed, "explanation": explanation, "speech": explanation})
 
-    _allowed, _policy, _blocked_msg = _ai_capability_check("generate")
+    _allowed, _policy, _blocked_msg = _ai_capability_check("fix")
     if not _allowed:
         return jsonify({"success": False, "error": _blocked_msg, "explanation": _blocked_msg, "speech": _blocked_msg})
 
@@ -5706,7 +5720,7 @@ def fix():
         )
 
     user = f"Fix this code:\n```python\n{code}\n```"
-    raw = call_gemini_capability("generate", system, user, temperature=0.1, language=language)
+    raw = call_gemini_capability("fix", system, user, temperature=0.1, language=language)
     fixed = extract_code(raw)
     if not fixed and raw and not _is_ai_service_message(raw):
         fixed = raw.strip()
@@ -5716,7 +5730,7 @@ def fix():
         ratio = difflib.SequenceMatcher(None, code, fixed).ratio()
         if ratio < 0.3:
             retry_system = system + "\n\nCRITICAL: Your previous answer was rejected because it was too different from the user's original code. Make MINIMAL changes — preserve variable names, structure, and overall approach. Only fix the specific bugs."
-            raw_retry = call_gemini_capability("generate", retry_system, user, temperature=0.05, language=language)
+            raw_retry = call_gemini_capability("fix", retry_system, user, temperature=0.05, language=language)
             retry_fixed = extract_code(raw_retry) or (raw_retry.strip() if raw_retry and not _is_ai_service_message(raw_retry) else "")
             if retry_fixed:
                 retry_ratio = difflib.SequenceMatcher(None, code, retry_fixed).ratio()
@@ -7878,6 +7892,12 @@ def _deterministic_concept_voice_response(
         return None
     if concept_kind == concept_qa.UNKNOWN_CONCEPT and not allow_unknown:
         return None
+    _allowed, _settings, _blocked_msg = _ai_capability_check("concept_qa")
+    if not _allowed:
+        return {
+            "success": True, "action": "deterministic_message",
+            "message": _blocked_msg, "speech": _blocked_msg, "heard": text, "concept": concept_kind,
+        }
     answer, facts = concept_qa.answer_concept(concept_kind, current_code)
     if concept_kind == concept_qa.UNKNOWN_CONCEPT:
         topic = concept_qa.extract_concept_topic(text) or ""

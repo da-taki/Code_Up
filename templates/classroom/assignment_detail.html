@@ -9,29 +9,79 @@
 
   <section class="cu-panel" aria-labelledby="assignmentInfoHeading">
     <h2 id="assignmentInfoHeading">Assignment details</h2>
-    <p>Status: <span class="cu-badge cu-badge--{{ assignment.status }}">{{ assignment.status }}</span></p>
+    <p>
+      Status: <span class="cu-badge cu-badge--{{ assignment.status }}">{{ assignment.status }}</span>
+      {% if assignment.is_assessment %} <span class="cu-badge">assessment</span>{% endif %}
+      {% if assignment.locked %} <span class="cu-badge cu-badge--needs_practice">locked</span>{% endif %}
+    </p>
     {% if assignment.status == 'draft' %}
     <form method="post" action="{{ url_for('classroom.publish_assignment', assignment_id=assignment.id) }}">
       <button type="submit" class="cu-button cu-button-primary">Publish assignment</button>
     </form>
     {% endif %}
     <p>{{ assignment.instructions }}</p>
-    {% if assignment.due_date %}<p>Due: {{ assignment.due_date }}</p>{% endif %}
     {% if assignment.expected_concepts %}
       <p>Expected concepts: {{ assignment.expected_concepts|join(', ') }}</p>
     {% endif %}
 
+    <form method="post" action="{{ url_for('classroom.set_assignment_schedule', assignment_id=assignment.id) }}" novalidate>
+      <div class="cu-field"><label for="start_at">Start (optional)</label><input type="datetime-local" id="start_at" name="start_at" value="{{ assignment.start_at or '' }}" {% if assignment.locked %}disabled{% endif %}></div>
+      <div class="cu-field"><label for="due_date">Due (optional)</label><input type="date" id="due_date" name="due_date" value="{{ assignment.due_date or '' }}" {% if assignment.locked %}disabled{% endif %}></div>
+      <div class="cu-field"><label for="end_at">End / close (optional)</label><input type="datetime-local" id="end_at" name="end_at" value="{{ assignment.end_at or '' }}" {% if assignment.locked %}disabled{% endif %}></div>
+      <button type="submit" class="cu-button cu-button-secondary" {% if assignment.locked %}disabled{% endif %}>Save schedule</button>
+    </form>
+
+    <form method="post" action="{{ url_for('classroom.duplicate_assignment', assignment_id=assignment.id) }}" novalidate>
+      <div class="cu-field">
+        <input type="checkbox" id="dup_assessment" name="as_assessment">
+        <label for="dup_assessment" style="display:inline;font-weight:normal;">Duplicate as a strict assessment (starts with everything off)</label>
+      </div>
+      <button type="submit" class="cu-button cu-button-secondary">Duplicate this assignment</button>
+    </form>
+
+    {% if assignment.locked %}
+    <form method="post" action="{{ url_for('classroom.unlock_assignment', assignment_id=assignment.id) }}">
+      <p>Permissions are locked. Unlock to make further changes.</p>
+      <button type="submit" class="cu-button cu-button-secondary">Unlock permissions</button>
+    </form>
+    {% else %}
+    <form method="post" action="{{ url_for('classroom.lock_assignment', assignment_id=assignment.id) }}">
+      <button type="submit" class="cu-button cu-button-secondary">Lock permissions (prevents further changes once the assessment begins)</button>
+    </form>
+    {% endif %}
+  </section>
+
+  <section class="cu-panel" aria-labelledby="permissionsHeading">
+    <h2 id="permissionsHeading">AI and tool permissions</h2>
+    <p id="policySummary">{{ policy_summary }}</p>
+
+    <h3>Apply a starting preset</h3>
     <form method="post" action="{{ url_for('classroom.set_assignment_policy', assignment_id=assignment.id) }}" novalidate>
       <div class="cu-field">
-        <label for="policy_select">AI policy</label>
-        <select id="policy_select" name="ai_policy">
+        <label for="policy_select">Preset</label>
+        <select id="policy_select" name="ai_policy" {% if assignment.locked %}disabled{% endif %}>
           {% for policy in ai_policies %}
           <option value="{{ policy }}" {% if policy == assignment.ai_policy %}selected{% endif %}>{{ policy }}</option>
           {% endfor %}
         </select>
       </div>
-      <button type="submit" class="cu-button cu-button-secondary">Update AI policy</button>
+      <button type="submit" class="cu-button cu-button-secondary" {% if assignment.locked %}disabled{% endif %}>Apply preset</button>
     </form>
+
+    <h3>Fine-tune individual permissions</h3>
+    <form method="post" action="{{ url_for('classroom.update_assignment_settings', assignment_id=assignment.id) }}" novalidate>
+      <fieldset {% if assignment.locked %}disabled{% endif %}>
+        <legend class="sr-only">Individual AI and tool permissions</legend>
+        {% for cap in capabilities %}
+        <div class="cu-field" style="margin-bottom:4px;">
+          <input type="checkbox" id="cap_{{ cap }}" name="cap_{{ cap }}" {% if capability_settings.get(cap, True) %}checked{% endif %}>
+          <label for="cap_{{ cap }}" style="display:inline;font-weight:normal;">{{ capability_labels[cap] }}</label>
+        </div>
+        {% endfor %}
+      </fieldset>
+      <button type="submit" class="cu-button cu-button-primary" {% if assignment.locked %}disabled{% endif %}>Save permissions</button>
+    </form>
+    <p>Accessibility features (screen reader access, keyboard navigation, output access, focus management, program input) are never affected by these settings.</p>
   </section>
 
   <section class="cu-panel" aria-labelledby="submissionsHeading">

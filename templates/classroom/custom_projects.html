@@ -1,0 +1,54 @@
+{% extends "classroom/_base.html" %}
+{% block title %}Guided projects - {{ cohort.name }}{% endblock %}
+{% block header_title %}Your guided projects - {{ cohort.name }}{% endblock %}
+{% block content %}
+  <p class="cu-crumb"><a href="{{ url_for('classroom.cohort_dashboard', cohort_id=cohort.id) }}">{{ cohort.name }}</a></p>
+
+  <section class="cu-panel" aria-labelledby="newProjectHeading">
+    <h2 id="newProjectHeading">Create a guided project</h2>
+    <p>Checkpoints are checked automatically from the learner's real code (not judged by AI). Leave a checkpoint's title blank to skip it.</p>
+    <form method="post" action="{{ url_for('classroom.create_custom_project', cohort_id=cohort.id) }}" novalidate>
+      <div class="cu-field"><label for="p_title">Title</label><input type="text" id="p_title" name="title" required></div>
+      <div class="cu-field"><label for="p_instructions">Instructions</label><textarea id="p_instructions" name="instructions" rows="3"></textarea></div>
+      <div class="cu-field"><label for="p_starter">Starter code</label><textarea id="p_starter" name="starter_code" rows="4"></textarea></div>
+      <div class="cu-field"><label for="p_concepts">Expected concepts (comma separated)</label><input type="text" id="p_concepts" name="expected_concepts"></div>
+
+      <h3>Checkpoints</h3>
+      {% for i in range(5) %}
+      <fieldset style="margin-bottom:10px;">
+        <legend>Checkpoint {{ i + 1 }}</legend>
+        <div class="cu-field">
+          <label for="cp_label_{{ i }}">Title</label>
+          <input type="text" id="cp_label_{{ i }}" name="checkpoint_label" placeholder="e.g. Add the numbers">
+        </div>
+        <div class="cu-field">
+          <label for="cp_type_{{ i }}">Check type</label>
+          <select id="cp_type_{{ i }}" name="checkpoint_type">
+            {% for t in check_types %}
+            <option value="{{ t }}">{{ t.replace('_', ' ') }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="cu-field">
+          <label for="cp_config_{{ i }}">Check detail (name/keyword/operator/comma-separated names, as relevant)</label>
+          <input type="text" id="cp_config_{{ i }}" name="checkpoint_config" placeholder="e.g. a, b   or   +   or   for">
+        </div>
+      </fieldset>
+      {% endfor %}
+      <button type="submit" class="cu-button cu-button-primary">Create project</button>
+    </form>
+  </section>
+
+  <section class="cu-panel" aria-labelledby="projectsHeading">
+    <h2 id="projectsHeading">Your guided projects ({{ projects|length }})</h2>
+    {% if projects %}
+    <ul>
+      {% for p in projects %}
+      <li>{{ p.title }}</li>
+      {% endfor %}
+    </ul>
+    {% else %}
+      <p>You haven't created any guided projects yet.</p>
+    {% endif %}
+  </section>
+{% endblock %}

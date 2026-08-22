@@ -2714,16 +2714,33 @@ async function fixCode() {
     });
     const data = await res.json();
     if (data.success) {
-      setCode(data.code);
-      const fixedSpeech = data.speech || data.explanation || 'Code has been fixed.';
-      out(fixedSpeech); speak(fixedSpeech);
-      const diffRes  = await fetch('/diff-explain', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ before, after: data.code, language: getLanguage() }),
-      });
-      const diffData = await diffRes.json();
-      if (diffData.explanation) { out(diffData.explanation); speak(diffData.explanation); }
+      if (typeof window._classroomReviewFix === 'function') {
+        // In a classroom assignment context: show an accessible review
+        // (apply/reject/explain) before touching the learner's code,
+        // instead of applying it immediately.
+        let explanation = data.speech || data.explanation || '';
+        try {
+          const diffRes = await fetch('/diff-explain', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ before, after: data.code, language: getLanguage() }),
+          });
+          const diffData = await diffRes.json();
+          if (diffData.explanation) explanation = diffData.explanation;
+        } catch (e) { /* review still works without the extra explanation */ }
+        await window._classroomReviewFix(before, data.code, explanation);
+      } else {
+        setCode(data.code);
+        const fixedSpeech = data.speech || data.explanation || 'Code has been fixed.';
+        out(fixedSpeech); speak(fixedSpeech);
+        const diffRes  = await fetch('/diff-explain', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ before, after: data.code, language: getLanguage() }),
+        });
+        const diffData = await diffRes.json();
+        if (diffData.explanation) { out(diffData.explanation); speak(diffData.explanation); }
+      }
     } else {
       out('Fix failed.'); speak('Fix failed.');
     }

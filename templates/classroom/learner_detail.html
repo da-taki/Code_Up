@@ -7,6 +7,39 @@
     <a href="{{ url_for('classroom.cohort_dashboard', cohort_id=cohort.id) }}">{{ cohort.name }}</a>
   </p>
 
+  <section class="cu-panel" aria-labelledby="curriculumHeading">
+    <h2 id="curriculumHeading">Course: Python Foundations</h2>
+    <p>
+      Current module: {{ current_module_title or 'Not started yet' }}.
+      Completed: {{ modules_completed }} / {{ modules_total }} modules.
+      Onboarding tutorial: {{ 'completed' if onboarding_completed else 'not completed yet' }}.
+      {% if curriculum_state and curriculum_state.last_activity_at %}Last curriculum activity: {{ curriculum_state.last_activity_at }}.{% endif %}
+    </p>
+    {% if module_rows %}
+    <table class="cu-table">
+      <caption class="sr-only">Module-by-module progress</caption>
+      <thead><tr><th scope="col">Module</th><th scope="col">Status</th><th scope="col">Quiz</th><th scope="col">Reset</th></tr></thead>
+      <tbody>
+        {% for m in module_rows %}
+        <tr>
+          <td>{{ m.title }}</td>
+          <td><span class="cu-badge cu-badge--{{ m.status }}">{{ m.status.replace('_', ' ') }}</span></td>
+          <td>{% if m.quiz_total %}{{ m.quiz_score }} / {{ m.quiz_total }}{% else %}-{% endif %}</td>
+          <td>
+            <form method="post" action="{{ url_for('classroom.reset_learner_module', cohort_id=cohort.id, learner_id=learner.id) }}" class="cu-inline-form">
+              <input type="hidden" name="module_id" value="{{ m.module_id }}">
+              <button type="submit" class="cu-button cu-button-secondary">Reset</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+      <p>No modules started yet.</p>
+    {% endif %}
+  </section>
+
   <section class="cu-panel" aria-labelledby="assignmentsProgressHeading">
     <h2 id="assignmentsProgressHeading">Assignments</h2>
     {% if progress_rows %}

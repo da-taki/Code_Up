@@ -32,8 +32,16 @@
   </section>
 
   <section class="cu-panel" aria-labelledby="lessonsHeading">
-    <h2 id="lessonsHeading">Lessons</h2>
-    <p><a class="cu-button cu-button-secondary" href="/ide">Open the CodeUp editor and start the guided tutorial</a></p>
+    <h2 id="lessonsHeading">Course</h2>
+    {% if curriculum_state and curriculum_state.current_module_id %}
+      <p>You were last working on: {{ curriculum_state.current_module_id }}.</p>
+    {% endif %}
+    <p><a class="cu-button cu-button-primary" href="{{ url_for('classroom.curriculum_home') }}">
+      {% if curriculum_state and curriculum_state.current_module_id %}Continue where I left off{% else %}Start the course{% endif %}
+    </a></p>
+    {% if not onboarding_completed %}
+    <p><a class="cu-button cu-button-secondary" href="/ide">New here? Start the short guided tutorial</a></p>
+    {% endif %}
   </section>
 
   <section class="cu-panel" aria-labelledby="projectsHeading">
@@ -47,7 +55,7 @@
         <tr>
           <td>{{ p.title }}</td>
           <td>{{ p.completed_checkpoints }} / {{ p.total_checkpoints }}</td>
-          <td><a class="cu-button cu-button-primary" href="{{ url_for('classroom.open_project', project_id=p.id) }}">Open in editor</a></td>
+          <td><a class="cu-button cu-button-primary" href="{{ p.open_url }}">Open in editor</a></td>
         </tr>
         {% endfor %}
       </tbody>
@@ -61,7 +69,8 @@
       <ul>
         {% for hr in open_help %}
         <li>
-          {{ hr.message or '(no message)' }} - requested {{ hr.created_at }}
+          {{ hr.message or '(no message)' }} - requested {{ hr.created_at }}.
+          {% if hr.status == 'helping' %}Your instructor is reviewing your request.{% endif %}
           <form method="post" action="{{ url_for('classroom.cancel_help_request', help_request_id=hr.id) }}" class="cu-inline-form">
             <button type="submit" class="cu-button cu-button-secondary">Cancel request</button>
           </form>

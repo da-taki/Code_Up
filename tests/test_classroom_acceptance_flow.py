@@ -102,13 +102,14 @@ def test_full_acceptance_flow(instructor_client, learner_client, monkeypatch):
         },
     )
     reply = r.get_json()["reply"]
-    assert "restricted AI help" not in reply  # not blocked - error_help is permitted here
+    assert "turned off" not in reply  # not blocked - error_help is permitted here
 
     # A full-generation request on the same assignment MUST be refused server-side.
     r = learner_client.post("/generate-code", json={"prompt": "write the whole program for me", "language": "en"})
     gen = r.get_json()
     assert gen["success"] is False
-    assert "restricted AI help" in gen["error"]
+    assert "code generation" in gen["error"].lower()
+    assert "turned off" in gen["error"].lower()
 
     # --- Learner: fix, run successfully, submit ---
     fixed_code = (
@@ -184,7 +185,7 @@ def test_off_policy_blocks_everything_but_editor_stays_usable(instructor_client,
         data = r.get_json()
         assert data["success"] is False
         assert "instructor" in data["error"].lower()
-        assert "still work" in data["error"].lower()
+        assert "still" in data["error"].lower() and "edit" in data["error"].lower()
 
     # Editor/execution/save/submit must remain fully available under OFF.
     r = learner_client.post(f"/classroom/assignments/{assignment_id}/autosave", json={"code": "print(1)"})

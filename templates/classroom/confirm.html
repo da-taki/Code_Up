@@ -1,0 +1,12 @@
+{% extends "classroom/_base.html" %}
+{% block title %}Confirm - CodeUp Classroom{% endblock %}
+{% block header_title %}{{ heading }}{% endblock %}
+{% block content %}
+  <section class="cu-panel" aria-labelledby="pageTitle">
+    <p>{{ body }}</p>
+    <form method="post" action="{{ confirm_action }}">
+      <button type="submit" class="cu-button cu-button-primary">{{ confirm_label }}</button>
+      <a class="cu-button cu-button-secondary" href="{{ cancel_url }}" autofocus>Cancel</a>
+    </form>
+  </section>
+{% endblock %}

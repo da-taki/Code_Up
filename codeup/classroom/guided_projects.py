@@ -144,3 +144,104 @@ def all_checkpoint_ids(project_id: str) -> List[str]:
     if not project:
         return []
     return [c["id"] for c in project["checkpoints"]]
+
+
+# ---- instructor-authored (custom) project checkpoints ---------------------------------
+#
+# A small, deliberately limited deterministic DSL so instructors can define
+# checkpoints without writing Python: each checkpoint has a `check_type` and
+# a `check_config` dict. This reuses the same AST-over-real-code philosophy
+# as the built-in projects above and tutorial_engine's validators - never an
+# LLM judging completion.
+
+def _check_contains_print(code: str, config: Dict) -> bool:
+    tree = _parse(code)
+    if tree is None:
+        return False
+    return any(
+        isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "print" and n.args
+        for n in ast.walk(tree)
+    )
+
+
+def _check_contains_call(code: str, config: Dict) -> bool:
+    tree = _parse(code)
+    if tree is None:
+        return False
+    name = str(config.get("name") or "")
+    if not name:
+        return False
+    return any(
+        isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == name
+        for n in ast.walk(tree)
+    )
+
+
+def _check_contains_assignment_named(code: str, config: Dict) -> bool:
+    tree = _parse(code)
+    if tree is None:
+        return False
+    names = config.get("names")
+    names = [names] if isinstance(names, str) else list(names or [])
+    if not names:
+        return True  # any assignment at all
+    assigned = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Assign):
+            assigned |= {t.id for t in n.targets if isinstance(t, ast.Name)}
+        elif isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name):
+            assigned.add(n.target.id)
+    return all(name in assigned for name in names)
+
+
+def _check_contains_keyword(code: str, config: Dict) -> bool:
+    tree = _parse(code)
+    if tree is None:
+        return False
+    keyword = str(config.get("keyword") or "").lower()
+    node_types = {
+        "for": ast.For, "while": ast.While, "if": ast.If, "def": ast.FunctionDef,
+        "try": ast.Try, "class": ast.ClassDef,
+    }
+    node_type = node_types.get(keyword)
+    if node_type is None:
+        return False
+    return any(isinstance(n, node_type) for n in ast.walk(tree))
+
+
+def _check_contains_operator(code: str, config: Dict) -> bool:
+    tree = _parse(code)
+    if tree is None:
+        return False
+    op_map = {"+": ast.Add, "-": ast.Sub, "*": ast.Mult, "/": ast.Div, "//": ast.FloorDiv, "%": ast.Mod}
+    op_type = op_map.get(str(config.get("op") or ""))
+    if op_type is None:
+        return False
+    return any(isinstance(n, ast.BinOp) and isinstance(n.op, op_type) for n in ast.walk(tree))
+
+
+_CUSTOM_CHECKS: Dict[str, Callable[[str, Dict], bool]] = {
+    "contains_print": _check_contains_print,
+    "contains_call": _check_contains_call,
+    "contains_assignment_named": _check_contains_assignment_named,
+    "contains_keyword": _check_contains_keyword,
+    "contains_operator": _check_contains_operator,
+}
+
+CUSTOM_CHECK_TYPES = tuple(_CUSTOM_CHECKS.keys())
+
+
+def evaluate_custom(checkpoints: List[Dict], code: str) -> Dict[int, bool]:
+    """checkpoints: rows from db.get_custom_project(...)['checkpoints'], each
+    with 'id', 'check_type', 'check_config'."""
+    results = {}
+    for cp in checkpoints or []:
+        check = _CUSTOM_CHECKS.get(cp.get("check_type"))
+        results[cp["id"]] = bool(check(code, cp.get("check_config") or {})) if check else False
+    return results
+
+
+def newly_completed_custom(checkpoints: List[Dict], code: str, previously_completed: List[int]) -> List[int]:
+    results = evaluate_custom(checkpoints, code)
+    previous = set(previously_completed or [])
+    return [cid for cid, passed in results.items() if passed and cid not in previous]

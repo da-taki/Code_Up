@@ -1008,6 +1008,28 @@ function repeatLastSpeech() {
   speak(lastSpokenText || 'There is nothing to repeat yet.', { forceFull: true });
 }
 
+// Moves real keyboard focus to a classroom/IDE landmark (not just an
+// announcement) - see codeup/classroom/ide_commands.py NAV_TARGETS, which
+// supplies the target id ("go to editor" / "go to output" / etc.).
+function focusNamedTarget(targetId) {
+  if (!targetId) return;
+  if (targetId === '__editor__') {
+    if (typeof editor !== 'undefined' && editor && editor.focus) {
+      editor.focus();
+      srAnnounce('Editor');
+    }
+    return;
+  }
+  const el = document.getElementById(targetId);
+  if (!el) {
+    srAnnounce('That part of the classroom panel is not open right now.');
+    return;
+  }
+  if (!el.hasAttribute('tabindex')) el.setAttribute('tabindex', '-1');
+  el.focus();
+  srAnnounce((el.textContent || '').trim().slice(0, 60) || 'Focused.');
+}
+
 // Store the spoken continuation for the next "say more". Sanitized so no raw
 function setSayMoreContinuation(text) {
   _sayMoreContinuation = text ? sanitizeSpeechText(text) : '';
@@ -3480,6 +3502,12 @@ async function handleConfirmedAction(action, payload) {
     const message = (payload && (payload.message || payload.speech)) || 'Assistive technology settings updated.';
     out(message);
     speak(message);
+  }
+  else if (action === 'focus_target') focusNamedTarget(payload && payload.target);
+  else if (action === 'navigate') {
+    const msg = (payload && payload.speech) || (payload && payload.message) || '';
+    if (msg) speak(msg);
+    if (payload && payload.url) window.location.href = payload.url;
   }
   else if (action === 'generate_code') await generateCode(payload && payload.prompt ? payload.prompt : '', payload || {});
   else if (action === 'exact_symbol_clarification' || action === 'orchestrator_clarification' || action === 'deterministic_message' || action === 'clarify') {

@@ -12,9 +12,12 @@
   const assignmentId = params.get('assignment');
   const projectId = params.get('project');
   const moduleId = params.get('module');
-  if (!assignmentId && !projectId && !moduleId) return;
-
-  const mode = assignmentId ? 'assignment' : (projectId ? 'project' : 'module');
+  // No query param -> the IDE is being opened plainly (or a joined learner
+  // just navigated back to it). This is now the primary learner workflow
+  // (see spec "IDE should be the learner home"): render the always-on
+  // Classroom panel (join form, or the classroom dashboard) instead of a
+  // no-op, while the item-specific flows below stay exactly as they were.
+  const mode = assignmentId ? 'assignment' : (projectId ? 'project' : (moduleId ? 'module' : 'dashboard'));
   const id = assignmentId || projectId || moduleId;
   let contextData = null;
   let submitting = false;
@@ -133,8 +136,10 @@
 
   // ---- help widget (shared by assignment/project/module panels) ----------
 
-  function appendHelpWidget(panel) {
+  function appendHelpWidget(panel, opts) {
+    opts = opts || {};
     const heading = el('h3', { textContent: 'Ask your instructor for help' });
+    if (opts.headingId) heading.id = opts.headingId;
     const label = el('label', { htmlFor: 'classroomHelpMessage', textContent: 'What do you need help with? (optional)' });
     const textarea = el('textarea', { id: 'classroomHelpMessage', rows: 2 });
     const status = el('p', { id: 'classroomHelpStatus', className: 'sr-only' });
@@ -165,7 +170,27 @@
           status.textContent = 'Could not send the help request. You can still keep working.';
         });
     });
-    panel.appendChild(el('div', { className: 'cu-field' }, [heading, label, textarea, button, status]));
+    const children = [heading];
+    if (opts.currentHelpRequest) {
+      const hr = opts.currentHelpRequest;
+      const stateText = hr.status === 'helping' ? 'Your instructor is helping you now.' : 'Your help request is waiting for your instructor.';
+      const hrStatus = el('p', { textContent: stateText });
+      const cancelBtn = el('button', { type: 'button', className: 'cu-button cu-button-secondary', textContent: 'Cancel help request' });
+      cancelBtn.addEventListener('click', function () {
+        fetch('/classroom/help-requests/' + hr.id + '/cancel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+          .then(function (res) { return res.json(); })
+          .then(function (data) {
+            if (data && data.success) {
+              announce('Your help request was cancelled.');
+              if (typeof window._classroomRefreshDashboard === 'function') window._classroomRefreshDashboard();
+            }
+          });
+      });
+      children.push(hrStatus, cancelBtn);
+    } else {
+      children.push(label, textarea, button, status);
+    }
+    panel.appendChild(el('div', { className: 'cu-field' }, children));
   }
 
   // ---- guided AI learning (hint ladder) - only when the capability allows it ----
@@ -376,6 +401,7 @@
     panel.innerHTML = '';
     panel.appendChild(el('h2', { id: 'classroomPanelHeading', textContent: 'Guided project: ' + project.title }));
     panel.appendChild(el('p', { textContent: project.description || '' }));
+    panel.appendChild(el('p', { id: 'classroomProjectIntro', textContent: data.intro || '' }));
 
     const list = el('ul', { id: 'classroomCheckpointList' });
     const completed = (progress.checkpoints_completed || []);
@@ -394,22 +420,30 @@
     if (code && typeof window.setCode === 'function') {
       window.setCode(code, { preserveSpeech: true, allowNonPython: false });
     }
+
+    // Introduction/returning-progress speech - once per panel load, not
+    // repeated on every checkpoint save. "repeat the project introduction"
+    // (see ide_commands.py) re-fetches and re-speaks the same text on demand.
+    if (data.intro) announce(data.intro);
   }
 
+  // Visual-only checkpoint list refresh. Deliberately does NOT speak -
+  // autosave (fired on every debounced keystroke save) must stay silent;
+  // only a real Run announces progress, via speakProjectFeedback below.
   function updateCheckpointList(newlyCompleted, allCompleted) {
-    if (!newlyCompleted || !newlyCompleted.length) return;
     const list = document.getElementById('classroomCheckpointList');
-    if (list && contextData && contextData.project) {
-      const items = list.querySelectorAll('li');
-      contextData.project.checkpoints.forEach(function (cp, idx) {
-        const done = allCompleted.indexOf(cp.id) !== -1;
-        if (items[idx]) items[idx].textContent = (done ? 'Done: ' : 'Not yet: ') + cp.label;
-      });
-    }
-    newlyCompleted.forEach(function (cpId) {
-      const cp = (contextData.project.checkpoints || []).find(function (c) { return c.id === cpId; });
-      if (cp) announce('Checkpoint complete: ' + cp.label, { priority: 'polite' });
+    if (!list || !contextData || !contextData.project) return;
+    const items = list.querySelectorAll('li');
+    contextData.project.checkpoints.forEach(function (cp, idx) {
+      const done = (allCompleted || []).indexOf(cp.id) !== -1;
+      if (items[idx]) items[idx].textContent = (done ? 'Done: ' : 'Not yet: ') + cp.label;
     });
+  }
+
+  // Humane, deterministic checkpoint feedback (see
+  // codeup.classroom.learner_context) - spoken once, right after a Run.
+  function speakProjectFeedback(feedback) {
+    if (feedback) announce(feedback, { priority: 'polite' });
   }
 
   // ---- curriculum module / instructor lesson panel ---------------------------
@@ -597,10 +631,184 @@
         code: code, ran_ok: !!ranOk, error: errorText || '',
       }).catch(function () {});
     } else if (mode === 'project') {
-      onAutosave(code);
+      // Same save endpoint as onAutosave, but a real Run also speaks the
+      // returned humane feedback - autosave-while-typing stays silent.
+      postJsonWithRetry('/classroom/projects/' + encodeURIComponent(id) + '/save', { code: code })
+        .then(function (res) { return res.json(); })
+        .then(function (data) {
+          if (data && data.success) {
+            updateCheckpointList(data.newly_completed, data.checkpoints_completed);
+            speakProjectFeedback(data.feedback);
+          }
+        })
+        .catch(function () {});
     } else if (mode === 'module') {
       const statusEl = document.getElementById('classroomAttemptStatus');
       if (statusEl) checkAttempt(statusEl);
+    }
+  }
+
+  // ---- classroom dashboard (plain /ide entry - the primary learner workflow) --
+  //
+  // Renders one of two states, depending on /classroom/ide/summary:
+  //   joined: false  -> an accessible Join Classroom form (native inputs,
+  //                      reaches the same learner_actions.join_cohort_by_code
+  //                      the classic /classroom/join page and the "join
+  //                      <code>" voice/typed command both use)
+  //   joined: true   -> a compact classroom panel (current learning,
+  //                      assignments, guided projects, help) - never a
+  //                      second, competing "classroom page"
+  //
+  // Welcome/orientation text is spoken from data.welcome_message /
+  // data.orientation_message, computed server-side in
+  // codeup.classroom.learner_context, so the panel's visible text and
+  // CodeUp's spoken announcement share the exact same wording.
+
+  function describeAssignmentCounts(counts) {
+    if (!counts || !counts.remaining) return 'You have no assignments left.';
+    let text = 'You have ' + counts.remaining + ' assignment' + (counts.remaining === 1 ? '' : 's') + ' left';
+    const extras = [];
+    if (counts.new) extras.push(counts.new + ' new');
+    if (counts.overdue) extras.push(counts.overdue + ' overdue');
+    if (extras.length) text += ', including ' + extras.join(' and ');
+    return text + '.';
+  }
+
+  function renderJoinPanel(panel, data) {
+    panel.innerHTML = '';
+    panel.appendChild(el('h2', { id: 'classroomPanelHeading', textContent: 'Classroom' }));
+    panel.appendChild(el('p', { textContent: 'Not currently in a classroom. You can still use CodeUp normally.' }));
+
+    const status = el('p', { id: 'classroomJoinStatus' });
+    status.setAttribute('role', 'status');
+    status.setAttribute('aria-live', 'polite');
+
+    const heading = el('h3', { id: 'classroomJoinHeading', textContent: 'Join your classroom' });
+    const intro = el('p', { textContent: "Enter the code your instructor gave you." });
+    const codeLabel = el('label', { htmlFor: 'classroomJoinCode', textContent: 'Classroom code' });
+    const codeInput = el('input', { id: 'classroomJoinCode', type: 'text', autocomplete: 'off' });
+    const nameLabel = el('label', { htmlFor: 'classroomJoinName', textContent: 'Your name' });
+    const nameInput = el('input', { id: 'classroomJoinName', type: 'text', autocomplete: 'name' });
+    const joinBtn = el('button', { type: 'button', className: 'cu-button cu-button-primary', textContent: 'Join classroom' });
+
+    function doJoin() {
+      const code = codeInput.value.trim();
+      const name = nameInput.value.trim();
+      if (!code || !name) {
+        status.textContent = 'Enter a classroom code and your name.';
+        announce(status.textContent);
+        return;
+      }
+      status.textContent = 'Joining...';
+      fetch('/classroom/join-api', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ join_code: code, display_name: name }),
+      })
+        .then(function (res) { return res.json(); })
+        .then(function (result) {
+          if (result && result.success) {
+            announce(result.message || 'Joined.');
+            fetchContextAndRender();
+          } else {
+            status.textContent = (result && result.message) || 'Could not join. Check the code and try again.';
+            announce(status.textContent);
+          }
+        })
+        .catch(function () {
+          status.textContent = 'Could not join right now. Check your connection and try again.';
+          announce(status.textContent);
+        });
+    }
+    joinBtn.addEventListener('click', doJoin);
+    [codeInput, nameInput].forEach(function (input) {
+      input.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); doJoin(); }
+      });
+    });
+
+    panel.appendChild(el('div', { className: 'cu-field' }, [
+      heading, intro, codeLabel, codeInput, nameLabel, nameInput, joinBtn, status,
+    ]));
+    panel.appendChild(el('p', {
+      className: 'cu-command-tip',
+      textContent: 'You can also type or say "join" followed by your code once your name is filled in above.',
+    }));
+
+    if (!sessionStorage.getItem('codeupIdeNoCohortOrientationSpoken')) {
+      sessionStorage.setItem('codeupIdeNoCohortOrientationSpoken', '1');
+      announce(data.orientation_message || '');
+    }
+  }
+
+  function renderDashboardPanel(panel, data) {
+    panel.innerHTML = '';
+    const cohortName = data.cohort ? data.cohort.name : '';
+    const headingRow = el('div', { className: 'cu-classroom-heading-row' });
+    headingRow.appendChild(el('h2', { id: 'classroomPanelHeading', textContent: 'Classroom: ' + (cohortName || data.learner.display_name) }));
+    headingRow.appendChild(el('a', { className: 'cu-button cu-button-secondary', href: '/classroom/leave/confirm', textContent: 'Leave this classroom' }));
+    panel.appendChild(headingRow);
+
+    panel.appendChild(el('h3', { id: 'classroomCourseHeading', textContent: 'Current learning' }));
+    if (data.module) {
+      const progText = (data.module.index && data.module.total)
+        ? ('Module ' + data.module.index + ' of ' + data.module.total + ': ' + data.module.title)
+        : data.module.title;
+      panel.appendChild(el('p', { textContent: progText }));
+      panel.appendChild(el('p', {}, [el('a', {
+        className: 'cu-button cu-button-secondary',
+        href: '/classroom/curriculum/' + encodeURIComponent(data.module.module_id) + '/open',
+        textContent: 'Continue',
+      })]));
+    } else {
+      panel.appendChild(el('p', { textContent: "You haven't started the course yet." }));
+      panel.appendChild(el('p', {}, [el('a', { className: 'cu-button cu-button-secondary', href: '/classroom/curriculum', textContent: 'Start the course' })]));
+    }
+
+    panel.appendChild(el('h3', { id: 'classroomAssignmentsHeading', textContent: 'Assignments' }));
+    panel.appendChild(el('p', { textContent: describeAssignmentCounts(data.assignment_counts) }));
+    if (data.assignments && data.assignments.length) {
+      const details = el('details');
+      details.appendChild(el('summary', { textContent: 'Show all assignments (' + data.assignments.length + ')' }));
+      const list = el('ul');
+      data.assignments.forEach(function (a) {
+        const item = el('li');
+        item.appendChild(el('a', { href: a.open_url, textContent: a.title + ' — ' + a.state.replace(/_/g, ' ') }));
+        list.appendChild(item);
+      });
+      details.appendChild(list);
+      details.addEventListener('toggle', function () {
+        if (details.open) {
+          fetch('/classroom/ide/assignments-seen', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).catch(function () {});
+        }
+      });
+      panel.appendChild(details);
+    } else {
+      panel.appendChild(el('p', { textContent: 'No assignments yet.' }));
+    }
+
+    panel.appendChild(el('h3', { id: 'classroomProjectsHeading', textContent: 'Guided projects' }));
+    if (data.projects && data.projects.length) {
+      const list = el('ul');
+      data.projects.forEach(function (p) {
+        const item = el('li');
+        const progress = p.total_checkpoints ? (p.done_checkpoints + ' of ' + p.total_checkpoints + ' checkpoints') : '';
+        item.appendChild(el('a', { href: p.open_url, textContent: p.title + (progress ? ' — ' + progress : '') }));
+        list.appendChild(item);
+      });
+      panel.appendChild(list);
+    } else {
+      panel.appendChild(el('p', { textContent: 'No guided projects available yet.' }));
+    }
+
+    appendHelpWidget(panel, { headingId: 'classroomHelpHeading', currentHelpRequest: data.help_request });
+
+    window._classroomRefreshDashboard = fetchContextAndRender;
+
+    if (!data.ide_orientation_shown) {
+      fetch('/classroom/ide/orientation-seen', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).catch(function () {});
+      announce(data.orientation_message || data.welcome_message || '');
+    } else {
+      announce(data.welcome_message || '');
     }
   }
 
@@ -611,6 +819,32 @@
     if (!panel) return;
     panel.innerHTML = '';
     panel.appendChild(el('p', { textContent: 'Loading...' }));
+
+    if (mode === 'dashboard') {
+      fetch('/classroom/ide/summary')
+        .then(function (res) { return res.json(); })
+        .then(function (data) {
+          if (!data || !data.success) {
+            panel.innerHTML = '';
+            panel.appendChild(el('p', {
+              className: 'cu-notice cu-notice--error',
+              textContent: 'Could not load the classroom panel. You can still use CodeUp normally.',
+            }));
+            return;
+          }
+          contextData = data;
+          if (data.joined) renderDashboardPanel(panel, data);
+          else renderJoinPanel(panel, data);
+        })
+        .catch(function () {
+          panel.innerHTML = '';
+          panel.appendChild(el('p', {
+            className: 'cu-notice cu-notice--error',
+            textContent: 'Could not load the classroom panel. You can still use CodeUp normally.',
+          }));
+        });
+      return;
+    }
 
     const url = mode === 'assignment' ? '/classroom/assignments/' + encodeURIComponent(id) + '/context'
       : mode === 'project' ? '/classroom/projects/' + encodeURIComponent(id) + '/context'

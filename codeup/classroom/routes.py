@@ -18,12 +18,15 @@ from __future__ import annotations
 
 import functools
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from flask import Blueprint, Response, jsonify, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from codeup.classroom import ai_policy, concepts as concepts_mod, curriculum, db, guided_projects, reports
+from codeup.classroom import (
+    ai_policy, concepts as concepts_mod, curriculum, db, guided_projects,
+    learner_actions, learner_context, reports,
+)
 from codeup.providers import groq_pool
 
 classroom_bp = Blueprint("classroom", __name__, url_prefix="/classroom")
@@ -575,23 +578,77 @@ def join_page():
 def join_submit():
     code = (request.form.get("join_code") or "").strip().upper()
     display_name = (request.form.get("display_name") or "").strip()
-    if not code or not display_name:
-        return redirect(url_for("classroom.join_page", error="Enter a join code and your name."))
-    cohort = db.get_cohort_by_join_code(code)
-    if not cohort:
-        return redirect(url_for("classroom.join_page", error="That join code was not found."))
-    learner = db.join_cohort(cohort["id"], display_name)
+    result = learner_actions.join_cohort_by_code(code, display_name)
+    if not result["success"]:
+        error = "Enter a join code and your name." if result["error"] == "missing_fields" else "That join code was not found."
+        return redirect(url_for("classroom.join_page", error=error))
     resp = redirect(url_for("classroom.learner_home"))
     resp.set_cookie(
-        LEARNER_COOKIE, learner["token"], max_age=LEARNER_COOKIE_MAX_AGE,
+        LEARNER_COOKIE, result["learner"]["token"], max_age=LEARNER_COOKIE_MAX_AGE,
         httponly=True, samesite="Lax",
     )
     return resp
 
 
+@classroom_bp.route("/join-api", methods=["POST"])
+def join_api():
+    """JSON join endpoint used by the in-IDE "Join Classroom" panel and by
+    typed/spoken join commands (``codeup.classroom.ide_commands``). Uses the
+    exact same ``learner_actions.join_cohort_by_code`` as the classic HTML
+    join form above - one join implementation, two entry points."""
+    existing = current_learner()
+    if existing:
+        # Already joined: never create a second learner row for the same
+        # browser/device. The learner must leave (see /classroom/leave)
+        # before joining a different cohort.
+        cohort = db.get_cohort(existing["cohort_id"])
+        return jsonify({
+            "success": False, "error": "already_joined",
+            "message": f"You're already in {cohort['name'] if cohort else 'a classroom'}. "
+                       "Leave that classroom first if you want to join a different one.",
+        }), 409
+    body = request.get_json(silent=True) or {}
+    code = str(body.get("join_code") or body.get("code") or "")
+    display_name = str(body.get("display_name") or body.get("name") or "")
+    result = learner_actions.join_cohort_by_code(code, display_name)
+    if not result["success"]:
+        message = (
+            "Enter a join code and your name." if result["error"] == "missing_fields"
+            else "I couldn't find a classroom with that code. Check the code and try again."
+        )
+        return jsonify({"success": False, "error": result["error"], "message": message}), 400
+    resp = jsonify({
+        "success": True,
+        "cohort": {"id": result["cohort"]["id"], "name": result["cohort"]["name"]},
+        "learner": {"id": result["learner"]["id"], "display_name": result["learner"]["display_name"]},
+        "message": f"You joined {result['cohort']['name']}.",
+    })
+    resp.set_cookie(
+        LEARNER_COOKIE, result["learner"]["token"], max_age=LEARNER_COOKIE_MAX_AGE,
+        httponly=True, samesite="Lax",
+    )
+    return resp
+
+
+@classroom_bp.route("/leave/confirm", methods=["GET"])
+@require_learner
+def leave_confirm(learner):
+    cohort = db.get_cohort(learner["cohort_id"])
+    return render_template(
+        "classroom/confirm.html",
+        heading="Leave this classroom?",
+        body=f"You will stop seeing {cohort['name'] if cohort else 'this'} assignments, projects and course "
+             "position until you join again with a code. Nothing is deleted.",
+        confirm_action=url_for("classroom.leave_cohort"),
+        cancel_url=url_for("ide"),
+        confirm_label="Yes, leave this classroom",
+    )
+
+
 @classroom_bp.route("/leave", methods=["POST"])
 def leave_cohort():
-    resp = redirect(url_for("classroom.join_page"))
+    is_json = request.is_json
+    resp = jsonify({"success": True}) if is_json else redirect(url_for("classroom.join_page"))
     resp.delete_cookie(LEARNER_COOKIE)
     resp.delete_cookie(ASSIGNMENT_COOKIE)
     resp.delete_cookie(PROJECT_COOKIE)
@@ -638,6 +695,139 @@ def learner_home(learner):
         open_help=my_help, curriculum_state=curriculum_state,
         onboarding_completed=db.onboarding_completed(learner["id"]),
     )
+
+
+# ---- learner: IDE classroom panel (the primary learner workflow) -----------
+#
+# Everything below powers the always-on classroom panel inside /ide (see
+# static/classroom.js) and the typed/spoken classroom commands (see
+# codeup.classroom.ide_commands, wired into /voice-command in app.py).
+# Deliberately returns {"success": False, "joined": False} instead of
+# redirecting on no-cohort, since it is always called via fetch() from a
+# page the learner is already on - a redirect would just be swallowed.
+
+def _current_module_lookup(learner: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    state = db.get_curriculum_state(learner["id"])
+    if not state or not state.get("current_module_id"):
+        return None
+    module_id = state["current_module_id"]
+    lesson = _lesson_context(module_id)
+    if not lesson:
+        return None
+    index = None
+    if module_id in curriculum.MODULE_ORDER:
+        index = curriculum.MODULE_ORDER.index(module_id) + 1
+    return {
+        "module_id": module_id, "title": lesson["title"],
+        "index": index, "total": len(curriculum.MODULE_ORDER),
+    }
+
+
+def _learner_projects_with_progress(learner: Dict[str, Any]) -> List[Dict[str, Any]]:
+    projects = guided_projects.list_projects()
+    for p in projects:
+        prog = db.get_or_create_project_progress(learner["id"], p["id"])
+        p["completed_checkpoints"] = list(prog.get("checkpoints_completed") or [])
+        p["updated_at"] = prog.get("updated_at")
+    for custom_summary in db.list_custom_projects(learner["cohort_id"]):
+        custom = db.get_custom_project(custom_summary["id"])
+        pid = f"custom:{custom['id']}"
+        prog = db.get_or_create_project_progress(learner["id"], pid)
+        projects.append({
+            "id": pid, "title": custom["title"],
+            "checkpoints": [{"id": str(c["id"]), "label": c["label"]} for c in custom.get("checkpoints") or []],
+            "completed_checkpoints": list(prog.get("checkpoints_completed") or []),
+            "updated_at": prog.get("updated_at"),
+        })
+    return projects
+
+
+def build_ide_summary(learner: Dict[str, Any]) -> Dict[str, Any]:
+    """The full learner classroom snapshot: cohort, assignments (classified),
+    current module, and guided-project progress. Shared by the JSON summary
+    endpoint below and by ``ide_commands`` (typed/spoken classroom
+    commands) so the panel and the voice/text answers never disagree."""
+    cohort = db.get_cohort(learner["cohort_id"])
+    assignments = db.list_assignments_for_cohort(learner["cohort_id"], published_only=True)
+    progress_rows = {r["assignment_id"]: r for r in db.list_progress_for_learner(learner["id"])}
+    progress_status = {aid: row["status"] for aid, row in progress_rows.items()}
+    seen_at = db.get_assignments_seen_at(learner["id"])
+    classified = learner_context.classify_assignments(assignments, progress_status, seen_at)
+    for a in classified:
+        a["updated_at"] = (progress_rows.get(a["id"]) or {}).get("updated_at")
+        a["open_url"] = url_for("classroom.open_assignment", assignment_id=a["id"])
+    counts = learner_context.summarize_assignment_states(classified)
+
+    module = _current_module_lookup(learner)
+    projects = _learner_projects_with_progress(learner)
+    for p in projects:
+        p["total_checkpoints"] = len(p["checkpoints"])
+        p["done_checkpoints"] = len(p["completed_checkpoints"])
+        p["open_url"] = (
+            url_for("classroom.open_custom_project", project_id=int(p["id"].split(":", 1)[1]))
+            if str(p["id"]).startswith("custom:") else url_for("classroom.open_project", project_id=p["id"])
+        )
+
+    help_request = learner_actions.current_help_request(learner)
+
+    module_phrase = (
+        learner_context.format_module_progress(module["title"], module["index"], module["total"])
+        if module else ""
+    )
+    active_project = next(
+        (p for p in projects if 0 < p["done_checkpoints"] < p["total_checkpoints"]), None,
+    )
+    project_phrase = (
+        learner_context.format_project_progress(
+            active_project["title"], active_project["done_checkpoints"], active_project["total_checkpoints"],
+        ) if active_project else ""
+    )
+    cohort_name = cohort["name"] if cohort else ""
+    welcome_message = learner_context.welcome_back_summary(
+        learner["display_name"], cohort_name, counts, module_phrase, project_phrase, bool(active_project),
+    )
+    orientation_shown = bool(db.get_ide_orientation_shown_at(learner["id"]))
+
+    return {
+        "success": True, "joined": True,
+        "learner": {"id": learner["id"], "display_name": learner["display_name"]},
+        "cohort": {"id": cohort["id"], "name": cohort_name} if cohort else None,
+        "assignments": classified, "assignment_counts": counts,
+        "module": module, "projects": projects,
+        "help_request": help_request,
+        "onboarding_completed": db.onboarding_completed(learner["id"]),
+        "ide_orientation_shown": orientation_shown,
+        "welcome_message": welcome_message,
+        "orientation_message": learner_context.joined_orientation(cohort_name) if cohort_name else "",
+    }
+
+
+@classroom_bp.route("/ide/summary", methods=["GET"])
+def ide_summary():
+    learner = current_learner()
+    if not learner:
+        return jsonify({
+            "success": True, "joined": False,
+            "orientation_message": learner_context.no_cohort_orientation(),
+        })
+    db.touch_learner_active(learner["id"])
+    return jsonify(build_ide_summary(learner))
+
+
+@classroom_bp.route("/ide/assignments-seen", methods=["POST"])
+@require_learner
+def ide_mark_assignments_seen(learner):
+    db.mark_assignments_seen(learner["id"])
+    return jsonify({"success": True})
+
+
+@classroom_bp.route("/ide/orientation-seen", methods=["POST"])
+def ide_mark_orientation_seen():
+    learner = current_learner()
+    if not learner:
+        return jsonify({"success": False, "error": "not_joined"}), 401
+    db.mark_ide_orientation_shown(learner["id"])
+    return jsonify({"success": True})
 
 
 # ---- learner: assignments (opened inside the IDE) ---------------------------------
@@ -733,17 +923,9 @@ def submit_assignment(learner, assignment_id):
     body = request.get_json(silent=True) or {}
     code = str(body.get("code") or "")
     try:
-        progress = db.submit_assignment(assignment_id, learner["id"], code)
+        progress = learner_actions.submit_current_assignment(learner, assignment, code)
     except Exception:
         return jsonify({"success": False, "error": "submit_failed"}), 200
-    try:
-        concepts_mod.record_assignment_submitted(
-            learner["id"], learner["cohort_id"], code, assignment.get("expected_concepts") or [],
-        )
-        db.log_event(learner["id"], learner["cohort_id"], "assignment_submitted", {"assignment_id": assignment_id})
-        db.touch_learner_active(learner["id"])
-    except Exception:
-        pass  # the submission itself already succeeded; progress tracking is best-effort
     return jsonify({"success": True, "status": progress["status"], "submitted_at": progress["submitted_at"]})
 
 
@@ -800,7 +982,12 @@ def project_context(learner, project_id):
     if not project:
         return jsonify({"success": False, "error": "not_found"}), 404
     progress = db.get_or_create_project_progress(learner["id"], project_id)
-    return jsonify({"success": True, "project": project, "progress": progress})
+    completed = progress.get("checkpoints_completed") or []
+    intro = (
+        learner_context.project_returning_intro(project, completed) if completed
+        else learner_context.project_intro(project)
+    )
+    return jsonify({"success": True, "project": project, "progress": progress, "intro": intro})
 
 
 @classroom_bp.route("/projects/<path:project_id>/save", methods=["POST"])
@@ -824,9 +1011,18 @@ def save_project(learner, project_id):
                 {"project_id": project_id, "checkpoints": newly},
             )
         db.touch_learner_active(learner["id"])
+        # Humane feedback (see learner_context.py) is always computed here so
+        # it stays available to the caller, but the IDE only speaks it after
+        # a Run - see static/classroom.js onRunResult vs. plain onAutosave -
+        # so ordinary autosaves-while-typing stay silent per the spec.
+        feedback = (
+            learner_context.checkpoint_completion_feedback(project, newly) if newly
+            else learner_context.checkpoint_incomplete_feedback(project, completed)
+        )
         return jsonify({
             "success": True, "newly_completed": newly,
             "checkpoints_completed": progress["checkpoints_completed"],
+            "feedback": feedback,
         })
     except Exception:
         return jsonify({"success": False, "error": "save_failed"}), 200
@@ -846,8 +1042,7 @@ def create_help_request(learner):
         assignment_id = int(assignment_id) if assignment_id else None
     except (TypeError, ValueError):
         assignment_id = None
-    hr = db.create_help_request(learner["cohort_id"], learner["id"], assignment_id, message)
-    db.log_event(learner["id"], learner["cohort_id"], "help_requested", {"help_request_id": hr["id"]})
+    hr = learner_actions.send_help_request(learner, message, assignment_id)
     if is_json:
         return jsonify({"success": True, "help_request": hr})
     return redirect(url_for("classroom.learner_home"))
@@ -856,7 +1051,7 @@ def create_help_request(learner):
 @classroom_bp.route("/help-requests/<int:help_request_id>/cancel", methods=["POST"])
 @require_learner
 def cancel_help_request(learner, help_request_id):
-    hr = db.cancel_help_request(help_request_id, learner["id"])
+    hr = learner_actions.cancel_help_request_for_learner(learner, help_request_id)
     if request.get_json(silent=True) is not None:
         return jsonify({"success": bool(hr)})
     return redirect(url_for("classroom.learner_home"))

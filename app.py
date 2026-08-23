@@ -87,7 +87,15 @@ from codeup.providers import groq_pool
 from codeup.classroom import ai_policy as classroom_ai_policy
 from codeup.classroom import concepts as classroom_concepts
 from codeup.classroom import db as classroom_db
-from codeup.classroom.routes import classroom_bp, LEARNER_COOKIE as CLASSROOM_LEARNER_COOKIE
+from codeup.classroom import ide_commands as classroom_ide_commands
+from codeup.classroom.routes import (
+    ASSIGNMENT_COOKIE as CLASSROOM_ASSIGNMENT_COOKIE,
+    MODULE_COOKIE as CLASSROOM_MODULE_COOKIE,
+    PROJECT_COOKIE as CLASSROOM_PROJECT_COOKIE,
+    build_ide_summary as classroom_build_ide_summary,
+    classroom_bp,
+    LEARNER_COOKIE as CLASSROOM_LEARNER_COOKIE,
+)
 
 load_dotenv(override=True)
 
@@ -1182,6 +1190,48 @@ def _ai_capability_check(capability: str) -> Tuple[bool, Dict[str, bool], str]:
     allowed = classroom_ai_policy.is_allowed(capability, settings)
     message = "" if allowed else classroom_ai_policy.blocked_message(capability, settings)
     return allowed, settings, message
+
+
+def _classroom_command_response(raw_text: str, normalized_text: str, current_code: str):
+    """Deterministic classroom-command short-circuit for /voice-command.
+
+    Tried on both the raw and normalized transcript (a join code like
+    "ABC123" must survive un-lowercased for matching, even though the rest
+    of the pipeline normalizes text). Returns None to fall through to the
+    existing pipeline completely unchanged when nothing classroom-related is
+    recognized - this never affects any other command. Never calls Groq.
+    """
+    if not has_request_context():
+        return None
+    matched = classroom_ide_commands.match(raw_text) or classroom_ide_commands.match(normalized_text)
+    if not matched:
+        return None
+    intent, slots = matched
+    token = request.cookies.get(CLASSROOM_LEARNER_COOKIE)
+    learner = classroom_db.get_learner_by_token(token) if token else None
+    summary = classroom_build_ide_summary(learner) if learner else None
+    body = request.get_json(silent=True) if request.is_json else None
+    body = body if isinstance(body, dict) else {}
+    ctx = {
+        "learner": learner,
+        "summary": summary,
+        "current_code": current_code,
+        "assignment_cookie_id": _as_optional_int(request.cookies.get(CLASSROOM_ASSIGNMENT_COOKIE)),
+        "project_cookie_id": request.cookies.get(CLASSROOM_PROJECT_COOKIE),
+        "module_cookie_id": request.cookies.get(CLASSROOM_MODULE_COOKIE),
+        "join_name": body.get("join_name") or "",
+    }
+    response_dict = classroom_ide_commands.handle(intent, slots, ctx)
+    if response_dict is None:
+        # handle() decided this phrase belongs to an unrelated, pre-existing
+        # feature after all (e.g. "give me a hint" with no classroom project
+        # open, or "open <name>" that matches no assignment/project) -
+        # fall through to the normal pipeline rather than shadowing it.
+        return None
+    new_learner_token = response_dict.pop("_classroom_token", None)
+    response_dict.setdefault("heard", raw_text)
+    response_dict.setdefault("confidence", 0.99)
+    return response_dict, new_learner_token
 
 
 def call_gemini_capability(capability, system_prompt, user_prompt, temperature=0.2, language="en", max_tokens=None):
@@ -9416,6 +9466,20 @@ def voice():
         except Exception:
             pass
         return jsonify(response_dict), status_code
+
+    # Classroom commands (join/assignments/curriculum/projects/help/navigation)
+    # are matched deterministically and never reach Groq or the general NLU
+    # pipeline below - see codeup/classroom/ide_commands.py.
+    classroom_result = _classroom_command_response(raw_text, text, current_code)
+    if classroom_result is not None:
+        classroom_response, new_learner_token = classroom_result
+        resp, status_code = _store_and_return(classroom_response)
+        if new_learner_token:
+            resp.set_cookie(
+                CLASSROOM_LEARNER_COOKIE, new_learner_token,
+                max_age=3600 * 24 * 180, httponly=True, samesite="Lax",
+            )
+        return resp, status_code
 
     if confidence >= 0.75 and intent == "inside_loop":
         code_map_queries = {

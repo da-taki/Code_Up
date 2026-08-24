@@ -29,7 +29,7 @@
   <div id="srAlert" role="alert" aria-live="assertive" aria-atomic="true"
        style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;"></div>
 
-  <header class="cu-header" role="banner">
+  <header class="cu-header">
     <div class="cu-header-top">
       <h1 id="pageTitle" class="cu-title">CodeUp</h1>
       <span id="cuModeStatus" class="cu-mode-badge" role="status" aria-live="polite" aria-label="Current mode">Python Code Mode</span>
@@ -192,7 +192,7 @@
       </details>
     </aside>
 
-    <div class="cu-panel cu-editor-wrapper">
+    <section class="cu-panel cu-editor-wrapper" aria-labelledby="codeEditorHeading">
       <h2 id="codeEditorHeading" class="cu-section-heading">Code editor</h2>
 
       <div class="cu-mode-switch" role="group" aria-label="Programming mode">
@@ -270,7 +270,7 @@
         </details>
       </div>
 
-    </div>
+    </section>
 
     <aside class="cu-panel cu-structure" id="structurePanel" hidden aria-labelledby="structure-heading">
       <h2 class="cu-panel-title" id="structure-heading">Code structure navigator</h2>
@@ -282,16 +282,18 @@
   </div>
 
   <div class="cu-panel cu-output-wrapper">
-    <h2 id="programOutputHeading" class="cu-section-heading">Program output</h2>
-    <div id="output" class="cu-output" role="log" aria-live="polite" aria-label="Program output" tabindex="0"></div>
-    <div class="cu-output-actions" role="group" aria-label="Program output speech controls">
-      <button class="cu-button cu-button-secondary" id="readOutputAgainBtn" type="button" aria-label="Read output again">Read output again</button>
-      <button class="cu-button cu-button-secondary" id="stopSpeechBtn" type="button" aria-label="Stop speech">Stop speech</button>
-    </div>
+    <section class="cu-output-section" aria-labelledby="programOutputHeading">
+      <h2 id="programOutputHeading" class="cu-section-heading">Program output</h2>
+      <div id="output" class="cu-output" role="log" aria-live="polite" aria-label="Program output" tabindex="0"></div>
+      <div class="cu-output-actions" role="group" aria-label="Program output speech controls">
+        <button class="cu-button cu-button-secondary" id="readOutputAgainBtn" type="button" aria-label="Read output again">Read output again</button>
+        <button class="cu-button cu-button-secondary" id="stopSpeechBtn" type="button" aria-label="Stop speech">Stop speech</button>
+      </div>
 
-    <div id="aiBubble" class="ai-bubble" hidden role="status" aria-live="polite">
-      Idle.
-    </div>
+      <div id="aiBubble" class="ai-bubble" hidden role="status" aria-live="polite">
+        Idle.
+      </div>
+    </section>
 
     <div id="programInputSection" class="cu-program-input">
       <h2 id="programInputHeading" class="cu-section-heading">Program inputs</h2>
@@ -311,7 +313,7 @@
     </div>
 
     <div class="mentor-transcript-panel">
-      <h3 class="cu-panel-title" id="mentor-transcript-heading">Mentor transcript</h3>
+      <h2 class="cu-panel-title" id="mentor-transcript-heading">Mentor transcript</h2>
       <div
         id="mentorTranscript"
         class="mentor-transcript"
@@ -324,7 +326,7 @@
       </div>
     </div>
 
-    <div class="cu-voice-console">
+    <section class="cu-voice-console" aria-labelledby="command-input-label">
       <h2 class="cu-panel-title" id="command-input-label">Commands</h2>
       <input
         id="voiceText"
@@ -411,7 +413,7 @@
           </div>
         </div>
       </details>
-    </div>
+    </section>
   </div>
   </main>
 
@@ -495,7 +497,7 @@
   </div>
 
   <aside id="tutorialOverlay" hidden
-       role="complementary" aria-labelledby="tutorialTopic"
+       aria-labelledby="tutorialTopic"
        class="cu-tutorial-panel">
     <div class="cu-tutorial-head">
       <span id="tutorialTopic" class="cu-tutorial-topic">Guided tutorial</span>

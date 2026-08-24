@@ -135,12 +135,22 @@ class TestDirectToIdeNoGate:
         assert 'id="sendCommandBtn"' in html
 
     def test_non_blocking_banner_and_first_use_hint_exist(self):
+        """#cuStartBanner is a one-time, dismissible getting-started tip, not
+        a landmark: there is exactly one of it, it is encountered naturally
+        as the first thing in <main>'s normal reading order, and it never
+        changes after load - giving it role="region" would only add a
+        low-value entry to NVDA's landmark list (see the accessibility
+        semantic-placement audit). It is correctly plain content with a
+        properly labelled Dismiss button, and is not a dialog."""
         html = _index_html()
         assert 'id="cuStartBanner"' in html
         assert 'id="cuFirstUseHint"' in html
         m = re.search(r'<div id="cuStartBanner"[^>]*>', html)
-        assert m and 'role="region"' in m.group(0)
+        assert m
+        assert 'role="region"' not in m.group(0)
         assert 'aria-modal' not in m.group(0)
+        dismiss = re.search(r'<button id="cuStartBannerDismiss"[^>]*>', html)
+        assert dismiss and 'aria-label="Dismiss getting-started banner"' in dismiss.group(0)
 
 
 class TestNoStartupSpeech:

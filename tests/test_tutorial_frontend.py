@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import subprocess
 
@@ -142,7 +143,14 @@ class TestIndexHtmlPanel:
             assert el in src, f"missing element: {el}"
 
     def test_panel_is_semantic_and_live(self, src):
-        assert 'role="complementary"' in src
+        """Updated by the accessibility semantic-placement audit: the panel
+        is a top-level <aside> (not nested inside article/main/nav/section),
+        which already computes to the complementary landmark natively - an
+        explicit role="complementary" on top of that was redundant ARIA and
+        has been removed, not the landmark itself."""
+        overlay = re.search(r'<aside id="tutorialOverlay"[^>]*>', src)
+        assert overlay, "tutorialOverlay must be a native <aside>"
+        assert 'role="complementary"' not in overlay.group(0)
         assert 'aria-live="polite"' in src
 
     def test_loads_tutorial_js(self, src):

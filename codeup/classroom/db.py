@@ -173,6 +173,12 @@ CREATE TABLE IF NOT EXISTS onboarding_progress (
     completed_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS learner_notification_state (
+    learner_id INTEGER PRIMARY KEY REFERENCES learners(id),
+    assignments_seen_at TEXT,
+    ide_orientation_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS lesson_progress (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     learner_id INTEGER NOT NULL REFERENCES learners(id),
@@ -237,6 +243,7 @@ _MIGRATIONS = (
     "ALTER TABLE assignments ADD COLUMN end_at TEXT",
     "ALTER TABLE assignments ADD COLUMN locked INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE help_requests ADD COLUMN note TEXT",
+    "ALTER TABLE assignments ADD COLUMN published_at TEXT",
 )
 
 
@@ -501,9 +508,14 @@ def list_assignments_for_cohort(cohort_id: int, *, published_only: bool = False)
 
 def publish_assignment(assignment_id: int) -> Optional[Dict[str, Any]]:
     with connect() as conn:
+        ts = now_iso()
+        # published_at is set only the first time (COALESCE) so re-saving an
+        # already-published assignment never makes it look newly published
+        # to a learner who already saw it.
         conn.execute(
-            "UPDATE assignments SET status = 'published', updated_at = ? WHERE id = ?",
-            (now_iso(), assignment_id),
+            "UPDATE assignments SET status = 'published', updated_at = ?, "
+            "published_at = COALESCE(published_at, ?) WHERE id = ?",
+            (ts, ts, assignment_id),
         )
     return get_assignment(assignment_id)
 
@@ -1310,4 +1322,49 @@ def mark_onboarding_completed(learner_id: int) -> None:
             "INSERT INTO onboarding_progress (learner_id, completed, completed_at) VALUES (?, 1, ?) "
             "ON CONFLICT(learner_id) DO UPDATE SET completed = 1, completed_at = excluded.completed_at",
             (learner_id, now_iso()),
+        )
+
+
+# ---- learner notification state (IDE "new" tracking, orientation) ----------
+#
+# Deliberately a separate tiny table from onboarding_progress: onboarding is
+# about the curriculum tutorial, this is about the IDE classroom panel's own
+# "have they seen this yet" state (assignment list, first-run orientation).
+
+def _get_notification_row(learner_id: int) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        return _row(
+            conn.execute(
+                "SELECT * FROM learner_notification_state WHERE learner_id = ?", (learner_id,)
+            ).fetchone()
+        )
+
+
+def get_assignments_seen_at(learner_id: int) -> Optional[str]:
+    row = _get_notification_row(learner_id)
+    return row["assignments_seen_at"] if row else None
+
+
+def mark_assignments_seen(learner_id: int, when: Optional[str] = None) -> None:
+    ts = when or now_iso()
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO learner_notification_state (learner_id, assignments_seen_at) VALUES (?, ?) "
+            "ON CONFLICT(learner_id) DO UPDATE SET assignments_seen_at = excluded.assignments_seen_at",
+            (learner_id, ts),
+        )
+
+
+def get_ide_orientation_shown_at(learner_id: int) -> Optional[str]:
+    row = _get_notification_row(learner_id)
+    return row["ide_orientation_at"] if row else None
+
+
+def mark_ide_orientation_shown(learner_id: int, when: Optional[str] = None) -> None:
+    ts = when or now_iso()
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO learner_notification_state (learner_id, ide_orientation_at) VALUES (?, ?) "
+            "ON CONFLICT(learner_id) DO UPDATE SET ide_orientation_at = excluded.ide_orientation_at",
+            (learner_id, ts),
         )

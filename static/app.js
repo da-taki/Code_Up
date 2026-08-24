@@ -1008,6 +1008,28 @@ function repeatLastSpeech() {
   speak(lastSpokenText || 'There is nothing to repeat yet.', { forceFull: true });
 }
 
+// Moves real keyboard focus to a classroom/IDE landmark (not just an
+// announcement) - see codeup/classroom/ide_commands.py NAV_TARGETS, which
+// supplies the target id ("go to editor" / "go to output" / etc.).
+function focusNamedTarget(targetId) {
+  if (!targetId) return;
+  if (targetId === '__editor__') {
+    if (typeof editor !== 'undefined' && editor && editor.focus) {
+      editor.focus();
+      srAnnounce('Editor');
+    }
+    return;
+  }
+  const el = document.getElementById(targetId);
+  if (!el) {
+    srAnnounce('That part of the classroom panel is not open right now.');
+    return;
+  }
+  if (!el.hasAttribute('tabindex')) el.setAttribute('tabindex', '-1');
+  el.focus();
+  srAnnounce((el.textContent || '').trim().slice(0, 60) || 'Focused.');
+}
+
 // Store the spoken continuation for the next "say more". Sanitized so no raw
 function setSayMoreContinuation(text) {
   _sayMoreContinuation = text ? sanitizeSpeechText(text) : '';
@@ -1176,6 +1198,8 @@ function buildVoiceCommandPayload(text, source = 'typed') {
     screen_reader_mode: _screenReaderModeEnabled,
     screen_reader_profile: _assistiveTechnologyProfile,
     active_file: (typeof ProjectState !== 'undefined' && ProjectState.activeFile) || '',
+    // classroomJoinName is the Join Classroom panel's Name field, if rendered.
+    join_name: ((document.getElementById('classroomJoinName') || {}).value || '').trim(),
   };
 }
 
@@ -3481,6 +3505,12 @@ async function handleConfirmedAction(action, payload) {
     out(message);
     speak(message);
   }
+  else if (action === 'focus_target') focusNamedTarget(payload && payload.target);
+  else if (action === 'navigate') {
+    const msg = (payload && payload.speech) || (payload && payload.message) || '';
+    if (msg) speak(msg);
+    if (payload && payload.url) window.location.href = payload.url;
+  }
   else if (action === 'generate_code') await generateCode(payload && payload.prompt ? payload.prompt : '', payload || {});
   else if (action === 'exact_symbol_clarification' || action === 'orchestrator_clarification' || action === 'deterministic_message' || action === 'clarify') {
     const message = (payload && (payload.message || payload.speech)) || 'No guidance available.';
@@ -3734,6 +3764,31 @@ async function handleConfirmedAction(action, payload) {
       window.TutorialController && window.TutorialController.active &&
       typeof window.TutorialController.onInsert === 'function') {
     try { window.TutorialController.onInsert(action); } catch (e) { console.error('Tutorial onInsert error:', e); }
+  }
+
+  // Generic, action-independent: a typed/spoken join just succeeded -
+  // refresh the classroom panel from the Join form straight to the joined
+  // dashboard, the same way the panel's own Join button already does.
+  if (payload && payload.classroom_refresh && typeof window._classroomRefreshDashboard === 'function') {
+    window._classroomRefreshDashboard();
+  }
+
+  // Generic, action-independent: a conversational join response ("join
+  // ABC123", no name yet) reflects the code it captured into the visible
+  // Classroom code field, so the visual form and the spoken conversation
+  // never disagree about which code is in play.
+  if (payload && payload.join_code_hint) {
+    const codeField = document.getElementById('classroomJoinCode');
+    if (codeField) codeField.value = payload.join_code_hint;
+  }
+
+  // Generic, action-independent: some classroom responses (e.g. "join
+  // ABC123" while WAITING_FOR_NAME) carry a focus_hint alongside their
+  // normal action/message - move real keyboard focus there too, silently
+  // (no extra announcement; the response's own speech already covers it).
+  if (payload && payload.focus_hint) {
+    const target = document.getElementById(payload.focus_hint);
+    if (target) { try { target.focus(); } catch (e) {} }
   }
 }
 

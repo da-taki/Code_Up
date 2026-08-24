@@ -691,7 +691,9 @@
     const nameInput = el('input', { id: 'classroomJoinName', type: 'text', autocomplete: 'name' });
     const joinBtn = el('button', { type: 'button', className: 'cu-button cu-button-primary', textContent: 'Join classroom' });
 
+    let joining = false;
     function doJoin() {
+      if (joining) return; // guards double-click / repeated Enter
       const code = codeInput.value.trim();
       const name = nameInput.value.trim();
       if (!code || !name) {
@@ -699,6 +701,8 @@
         announce(status.textContent);
         return;
       }
+      joining = true;
+      joinBtn.disabled = true;
       status.textContent = 'Joining...';
       fetch('/classroom/join-api', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -708,13 +712,17 @@
         .then(function (result) {
           if (result && result.success) {
             announce(result.message || 'Joined.');
-            fetchContextAndRender();
+            fetchContextAndRender(); // panel re-renders as joined; no need to re-enable the old button
           } else {
+            joining = false;
+            joinBtn.disabled = false;
             status.textContent = (result && result.message) || 'Could not join. Check the code and try again.';
             announce(status.textContent);
           }
         })
         .catch(function () {
+          joining = false;
+          joinBtn.disabled = false;
           status.textContent = 'Could not join right now. Check your connection and try again.';
           announce(status.textContent);
         });
@@ -802,8 +810,6 @@
 
     appendHelpWidget(panel, { headingId: 'classroomHelpHeading', currentHelpRequest: data.help_request });
 
-    window._classroomRefreshDashboard = fetchContextAndRender;
-
     if (!data.ide_orientation_shown) {
       fetch('/classroom/ide/orientation-seen', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).catch(function () {});
       announce(data.orientation_message || data.welcome_message || '');
@@ -821,6 +827,11 @@
     panel.appendChild(el('p', { textContent: 'Loading...' }));
 
     if (mode === 'dashboard') {
+      // Registered unconditionally (not just once joined) so a classroom
+      // command that succeeds while the Join panel is still showing (e.g.
+      // typed/spoken "join ABC123") can refresh straight to the joined
+      // dashboard - see app.js's generic `classroom_refresh` check.
+      window._classroomRefreshDashboard = fetchContextAndRender;
       fetch('/classroom/ide/summary')
         .then(function (res) { return res.json(); })
         .then(function (data) {

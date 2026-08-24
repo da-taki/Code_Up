@@ -1198,6 +1198,8 @@ function buildVoiceCommandPayload(text, source = 'typed') {
     screen_reader_mode: _screenReaderModeEnabled,
     screen_reader_profile: _assistiveTechnologyProfile,
     active_file: (typeof ProjectState !== 'undefined' && ProjectState.activeFile) || '',
+    // classroomJoinName is the Join Classroom panel's Name field, if rendered.
+    join_name: ((document.getElementById('classroomJoinName') || {}).value || '').trim(),
   };
 }
 
@@ -3762,6 +3764,31 @@ async function handleConfirmedAction(action, payload) {
       window.TutorialController && window.TutorialController.active &&
       typeof window.TutorialController.onInsert === 'function') {
     try { window.TutorialController.onInsert(action); } catch (e) { console.error('Tutorial onInsert error:', e); }
+  }
+
+  // Generic, action-independent: a typed/spoken join just succeeded -
+  // refresh the classroom panel from the Join form straight to the joined
+  // dashboard, the same way the panel's own Join button already does.
+  if (payload && payload.classroom_refresh && typeof window._classroomRefreshDashboard === 'function') {
+    window._classroomRefreshDashboard();
+  }
+
+  // Generic, action-independent: a conversational join response ("join
+  // ABC123", no name yet) reflects the code it captured into the visible
+  // Classroom code field, so the visual form and the spoken conversation
+  // never disagree about which code is in play.
+  if (payload && payload.join_code_hint) {
+    const codeField = document.getElementById('classroomJoinCode');
+    if (codeField) codeField.value = payload.join_code_hint;
+  }
+
+  // Generic, action-independent: some classroom responses (e.g. "join
+  // ABC123" while WAITING_FOR_NAME) carry a focus_hint alongside their
+  // normal action/message - move real keyboard focus there too, silently
+  // (no extra announcement; the response's own speech already covers it).
+  if (payload && payload.focus_hint) {
+    const target = document.getElementById(payload.focus_hint);
+    if (target) { try { target.focus(); } catch (e) {} }
   }
 }
 

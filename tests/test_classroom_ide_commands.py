@@ -125,8 +125,9 @@ def test_handle_requires_learner_for_gated_intents():
 
 def test_handle_join_with_code_needs_name_first():
     resp = ic.handle("join_with_code", {"code": "ABC123"}, _ctx(learner=None, join_name=""))
-    assert resp["action_hint"] == "need_name"
-    assert resp["code"] == "ABC123"
+    assert "what name should i use" in resp["message"].lower()
+    assert resp["join_code_hint"] == "ABC123"
+    assert resp["_join_pending"] == {"state": "waiting_for_name", "code": "ABC123"}
 
 
 def test_handle_already_joined_join_attempt_is_rejected():

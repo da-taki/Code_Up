@@ -1192,7 +1192,10 @@ def _ai_capability_check(capability: str) -> Tuple[bool, Dict[str, bool], str]:
     return allowed, settings, message
 
 
-def _classroom_command_response(raw_text: str, normalized_text: str, current_code: str):
+_PENDING_JOIN_KEY = "_classroom_pending_join"
+
+
+def _classroom_command_response(raw_text: str, normalized_text: str, current_code: str, mem: dict):
     """Deterministic classroom-command short-circuit for /voice-command.
 
     Tried on both the raw and normalized transcript (a join code like
@@ -1200,27 +1203,51 @@ def _classroom_command_response(raw_text: str, normalized_text: str, current_cod
     of the pipeline normalizes text). Returns None to fall through to the
     existing pipeline completely unchanged when nothing classroom-related is
     recognized - this never affects any other command. Never calls Groq.
+
+    ``mem`` is the caller's existing per-session memory dict (the same one
+    session_memory.get_memory() already returns) - pending-join
+    conversational state ("what name should I use?" -> the next utterance)
+    lives there, never in the classroom database, so it can never outlive
+    the session and a stale conversation can never leave a learner stuck.
     """
     if not has_request_context():
         return None
-    matched = classroom_ide_commands.match(raw_text) or classroom_ide_commands.match(normalized_text)
-    if not matched:
-        return None
-    intent, slots = matched
     token = request.cookies.get(CLASSROOM_LEARNER_COOKIE)
     learner = classroom_db.get_learner_by_token(token) if token else None
-    summary = classroom_build_ide_summary(learner) if learner else None
     body = request.get_json(silent=True) if request.is_json else None
     body = body if isinstance(body, dict) else {}
     ctx = {
         "learner": learner,
-        "summary": summary,
+        "summary": None,
         "current_code": current_code,
         "assignment_cookie_id": _as_optional_int(request.cookies.get(CLASSROOM_ASSIGNMENT_COOKIE)),
         "project_cookie_id": request.cookies.get(CLASSROOM_PROJECT_COOKIE),
         "module_cookie_id": request.cookies.get(CLASSROOM_MODULE_COOKIE),
         "join_name": body.get("join_name") or "",
     }
+
+    pending = mem.get(_PENDING_JOIN_KEY) if isinstance(mem, dict) else None
+    if pending and learner:
+        # Somehow already joined (e.g. joined via the visual form mid-
+        # conversation) while a pending conversational join was still
+        # tracked - never resurface a stale "what name should I use?".
+        mem[_PENDING_JOIN_KEY] = None
+        pending = None
+    if pending:
+        pending_response, new_pending = classroom_ide_commands.handle_pending_join(raw_text, pending, ctx)
+        mem[_PENDING_JOIN_KEY] = new_pending
+        if pending_response is not None:
+            return _finish_classroom_response(pending_response, raw_text)
+        # Not consumed as part of the join conversation (e.g. "run the
+        # code", "cancel" already handled above) - fall through and
+        # process raw_text normally below, exactly as if nothing were
+        # pending.
+
+    matched = classroom_ide_commands.match(raw_text) or classroom_ide_commands.match(normalized_text)
+    if not matched:
+        return None
+    intent, slots = matched
+    ctx["summary"] = classroom_build_ide_summary(learner) if learner else None
     response_dict = classroom_ide_commands.handle(intent, slots, ctx)
     if response_dict is None:
         # handle() decided this phrase belongs to an unrelated, pre-existing
@@ -1228,7 +1255,24 @@ def _classroom_command_response(raw_text: str, normalized_text: str, current_cod
         # open, or "open <name>" that matches no assignment/project) -
         # fall through to the normal pipeline rather than shadowing it.
         return None
+    new_pending = response_dict.pop("_join_pending", None)
+    mem[_PENDING_JOIN_KEY] = new_pending
+    return _finish_classroom_response(response_dict, raw_text)
+
+
+def _finish_classroom_response(response_dict: dict, raw_text: str):
+    # focus_hint (e.g. "classroomJoinName") is left as a plain field on the
+    # response, not popped - handleConfirmedAction() in app.js checks it
+    # generically after dispatching on `action`, so a plain informational
+    # message can still move focus into the join code/name field.
     new_learner_token = response_dict.pop("_classroom_token", None)
+    if new_learner_token:
+        # A typed/spoken "join <code>" just succeeded - the IDE classroom
+        # panel (still showing the Join form) needs to re-fetch and switch
+        # to the joined dashboard, exactly as the visual Join button already
+        # does after its own successful fetch. See static/classroom.js's
+        # window._classroomRefreshDashboard and app.js's generic check.
+        response_dict["classroom_refresh"] = True
     response_dict.setdefault("heard", raw_text)
     response_dict.setdefault("confidence", 0.99)
     return response_dict, new_learner_token
@@ -9470,7 +9514,7 @@ def voice():
     # Classroom commands (join/assignments/curriculum/projects/help/navigation)
     # are matched deterministically and never reach Groq or the general NLU
     # pipeline below - see codeup/classroom/ide_commands.py.
-    classroom_result = _classroom_command_response(raw_text, text, current_code)
+    classroom_result = _classroom_command_response(raw_text, text, current_code, mem)
     if classroom_result is not None:
         classroom_response, new_learner_token = classroom_result
         resp, status_code = _store_and_return(classroom_response)

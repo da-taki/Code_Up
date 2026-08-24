@@ -41,7 +41,6 @@ NAV_TARGETS = {
     "join classroom": "classroomJoinHeading",
 }
 
-_JOIN_CODE_RE = re.compile(r"[A-Z0-9]{4,8}")
 _JOIN_STOPWORDS = {"JOIN", "MY", "CLASS", "CODE", "IS", "A", "CLASSROOM", "COHORT", "ENTER", "THE", "WITH"}
 
 
@@ -69,6 +68,118 @@ def extract_join_code(text: str) -> Optional[str]:
         if has_digit or follows_join_word:
             return upper
     return None
+
+
+# ---- pending-join conversational state machine -------------------------------
+#
+# IDLE -> "join a cohort" -----------------> WAITING_FOR_CODE
+# IDLE -> "join ABC123", no known name -----> WAITING_FOR_NAME(code=ABC123)
+# IDLE -> "join ABC123", known name --------> attempt join immediately
+# WAITING_FOR_CODE -> code-shaped utterance -> known name? attempt : WAITING_FOR_NAME
+# WAITING_FOR_CODE -> anything else --------> abandoned (None, None): the caller
+#                                              re-processes the utterance normally
+# WAITING_FOR_NAME -> plausible free-text --> attempt join
+# WAITING_FOR_NAME -> a recognized command,
+#   a code-shaped utterance, or empty text --> abandoned, same as above
+# any state -> "cancel"/"never mind"/etc. --> cleared, "cancelled" message
+#
+# "JOINED" is never a value of this state machine - it's simply the learner
+# cookie/context, exactly as everywhere else in this file. Pending state is
+# kept entirely in the caller's per-session memory dict (never the classroom
+# database - see app.py's _classroom_command_response), so it can never
+# outlive the session and never needs a migration.
+
+_JOIN_CANCEL_PHRASES = {"cancel", "cancel joining", "never mind", "nevermind", "stop joining"}
+
+
+def is_join_cancel_phrase(text: str) -> bool:
+    return _norm(text) in {_norm(p) for p in _JOIN_CANCEL_PHRASES}
+
+
+def looks_like_join_code(text: str) -> bool:
+    return bool(re.fullmatch(r"[A-Za-z0-9]{4,8}", (text or "").strip()))
+
+
+def _attempt_join(code: str, name: str) -> Dict[str, Any]:
+    """One authoritative join attempt + outcome classification. Any
+    exception (DB/IO hiccup, not just an invalid code) is caught here and
+    reported as a temporary failure - never a raw traceback, and never
+    mistaken for "that code doesn't exist"."""
+    try:
+        result = learner_actions.join_cohort_by_code(code, name)
+    except Exception:
+        return {"outcome": "failed"}
+    if result["success"]:
+        return {"outcome": "success", "cohort_name": result["cohort"]["name"], "token": result["learner"]["token"]}
+    if result["error"] == "not_found":
+        return {"outcome": "not_found"}
+    return {"outcome": "failed"}
+
+
+def handle_pending_join(raw_text: str, pending: Optional[Dict[str, Any]], ctx: Dict[str, Any]):
+    """Consumes one utterance against in-progress pending-join state.
+
+    Returns (response_or_None, new_pending):
+      - response is a full command response dict (same shape as handle()'s
+        return value) when this utterance was consumed as part of the join
+        conversation - the caller returns it directly.
+      - response is None when the utterance was NOT part of the join
+        conversation (not code-shaped, not a plausible name, or itself a
+        recognized command) - the caller must fall through and process
+        raw_text through the normal match()/handle() pipeline. new_pending
+        is what the session should remember either way (None clears it).
+    """
+    if not pending:
+        return None, pending
+
+    if is_join_cancel_phrase(raw_text):
+        return _msg("Classroom joining cancelled."), None
+
+    state = pending.get("state")
+    remembered_name = str(pending.get("name") or "").strip()
+
+    if state == "waiting_for_code":
+        # Accept either an explicit "join <code>"/"code is <code>" phrase
+        # (extract_join_code) or a bare code-shaped token, since we already
+        # asked specifically for a code - unlike the name prompt below,
+        # there's no ambiguity to worry about here.
+        code = extract_join_code(raw_text) or (
+            raw_text.strip().upper() if looks_like_join_code(raw_text) else None
+        )
+        if not code:
+            return None, None  # doesn't look like a code - abandon, let it fall through
+        name = str(ctx.get("join_name") or "").strip() or remembered_name
+        if not name:
+            return (_msg("What name should I use?", focus_hint="classroomJoinName", join_code_hint=code),
+                    {"state": "waiting_for_name", "code": code})
+        return _resolve_join_attempt(code, name)
+
+    if state == "waiting_for_name":
+        code = pending.get("code")
+        text = raw_text.strip()
+        # Deliberately NOT disqualified by looks_like_join_code: a name like
+        # "Amir" is indistinguishable from a bare code by shape alone, and
+        # we just explicitly asked for a name, so a bare word is trusted as
+        # the name. Only an utterance that is ITSELF a recognized classroom
+        # command (a fresh "join <code>", "cancel", "go to editor", ...) is
+        # treated as abandonment instead.
+        if not text or match(text) is not None:
+            return None, None  # not a plausible name - abandon, let it fall through
+        return _resolve_join_attempt(code, text[:80], remembered_name=text[:80])
+
+    return None, None
+
+
+def _resolve_join_attempt(code: str, name: str, remembered_name: Optional[str] = None):
+    outcome = _attempt_join(code, name)
+    if outcome["outcome"] == "success":
+        return (_msg(learner_context.join_success_message(outcome["cohort_name"]),
+                      _classroom_token=outcome["token"]), None)
+    if outcome["outcome"] == "not_found":
+        return (_msg(learner_context.join_not_found_message(), focus_hint="classroomJoinCode"),
+                {"state": "waiting_for_code", "name": remembered_name or name})
+    return (_msg("Could not join right now. Try again."),
+            {"state": "waiting_for_code", "name": remembered_name or name})
 
 
 def match(text: str) -> Optional[Tuple[str, Dict[str, Any]]]:
@@ -257,20 +368,21 @@ def handle(intent: str, slots: Dict[str, Any], ctx: Dict[str, Any]) -> Optional[
             return _msg(f"You're already in {(summary or {}).get('cohort', {}).get('name', 'a classroom')}. "
                         "Say leave this class if you want to switch.")
         return _msg("Tell me your class code. You can say, join, followed by the code - "
-                     "for example, join A B C 1 2 3.")
+                     "for example, join A B C 1 2 3.", _join_pending={"state": "waiting_for_code"},
+                     focus_hint="classroomJoinCode")
 
     if intent == "join_with_code":
         if learner:
             return _msg("You're already in a classroom. Say leave this class if you want to switch.")
         name = str(ctx.get("join_name") or "").strip()
         if not name:
-            return _msg("Almost there. Type or say your name in the Join Classroom panel, then say join again.",
-                        action_hint="need_name", code=slots["code"])
-        result = learner_actions.join_cohort_by_code(slots["code"], name)
-        if not result["success"]:
-            return _msg(learner_context.join_not_found_message())
-        return _msg(learner_context.join_success_message(result["cohort"]["name"]),
-                    _classroom_token=result["learner"]["token"])
+            return _msg("What name should I use?", focus_hint="classroomJoinName",
+                        join_code_hint=slots["code"],
+                        _join_pending={"state": "waiting_for_name", "code": slots["code"]})
+        response, pending = _resolve_join_attempt(slots["code"], name)
+        if pending is not None:
+            response = {**response, "_join_pending": pending}
+        return response
 
     if intent == "current_class":
         if not learner:

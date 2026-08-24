@@ -120,13 +120,26 @@ def test_heading_hierarchy_does_not_skip_levels(client):
 
 
 def test_landmark_labels_are_unique_and_regions_are_limited(client):
+    """Updated by the accessibility semantic-placement audit
+    (feature/accessibility-semantic-placement-audit): a prior pass here
+    asserted ZERO regions at all. That was too blunt - Code editor, Program
+    output, and Commands are three of the IDE's primary interaction areas
+    in a voice-first tool, and jumping straight to them via NVDA/JAWS
+    region navigation (the 'd' key) is a genuine, common need, not landmark
+    spam. The bounded, deliberate set asserted below matches this audit's
+    reasoned target list (see its final report) - it is NOT "add regions
+    freely": every individual toolbar, card, checkpoint, and help-group
+    category (Start/Run/Debug/...) explicitly stays un-landmarked, still
+    enforced immediately below by
+    test_command_help_groups_keep_headings_without_implicit_regions."""
     parser = LandmarkParser()
     parser.feed(ide_html(client))
     labels = [label for _, _, label in parser.landmarks if label]
     assert len(labels) == len(set(labels)), labels
     assert sum(1 for tag, _, _ in parser.landmarks if tag == "main") == 1
     region_labels = [label for _, role, label in parser.landmarks if role == "region"]
-    assert region_labels == [], region_labels
+    assert set(region_labels) == {"codeEditorHeading", "programOutputHeading", "command-input-label"}, region_labels
+    assert len(region_labels) == 3, "exactly one region each - no duplicates, no extras"
 
 
 

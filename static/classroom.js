@@ -142,9 +142,11 @@
     if (opts.headingId) heading.id = opts.headingId;
     const label = el('label', { htmlFor: 'classroomHelpMessage', textContent: 'What do you need help with? (optional)' });
     const textarea = el('textarea', { id: 'classroomHelpMessage', rows: 2 });
+    // No local live region here: this paragraph was sr-only (nothing visible
+    // to justify keeping it) and every branch already calls the centralized
+    // announce() below - a second aria-live region on invisible text would
+    // only double the announcement, never add information.
     const status = el('p', { id: 'classroomHelpStatus', className: 'sr-only' });
-    status.setAttribute('role', 'status');
-    status.setAttribute('aria-live', 'polite');
     const button = el('button', {
       type: 'button', className: 'cu-button cu-button-secondary', textContent: 'Request help',
     });
@@ -168,6 +170,7 @@
         })
         .catch(function () {
           status.textContent = 'Could not send the help request. You can still keep working.';
+          announce(status.textContent);
         });
     });
     const children = [heading];
@@ -207,9 +210,9 @@
     if (!actions.length) return;
 
     const heading = el('h3', { textContent: 'Ask for guidance' });
+    // Visible status text, but not an independent live region: the reply is
+    // already announced once via the centralized announce() below.
     const status = el('p', { id: 'classroomGuidedStatus' });
-    status.setAttribute('role', 'status');
-    status.setAttribute('aria-live', 'polite');
     const buttonRow = el('div', { role: 'group', ariaLabel: 'Guided AI learning actions' });
     actions.forEach(function (a) {
       const btn = el('button', { type: 'button', className: 'cu-button cu-button-secondary', textContent: a.label });
@@ -236,7 +239,10 @@
         statusEl.textContent = reply;
         announce(reply);
       })
-      .catch(function () { statusEl.textContent = 'Could not reach the AI mentor right now.'; });
+      .catch(function () {
+        statusEl.textContent = 'Could not reach the AI mentor right now.';
+        announce(statusEl.textContent);
+      });
   }
 
   // ---- AI change review + undo + lightweight version history --------------
@@ -353,9 +359,11 @@
     panel.innerHTML = '';
     panel.appendChild(el('h2', { id: 'classroomPanelHeading', textContent: 'Assignment: ' + a.title }));
 
+    // Plain text, not a live region: this is set once at render time and
+    // never mutated afterward, so role="status" here would never actually
+    // announce anything - it's read naturally in document order instead.
     const statusText = 'Status: ' + String(p.status || 'not_started').replace(/_/g, ' ') + (a.due_date ? ('. Due ' + a.due_date) : '');
     const statusEl = el('p', { id: 'classroomStatus', textContent: statusText });
-    statusEl.setAttribute('role', 'status');
     panel.appendChild(statusEl);
 
     const details = el('details', { open: true });
@@ -368,9 +376,9 @@
     }
     applyCapabilitySettings(a.capability_settings);
 
+    // Visible status text, but not an independent live region: submit
+    // outcomes are already announced once via the centralized announce().
     const submitStatus = el('p', { id: 'classroomSubmitStatus' });
-    submitStatus.setAttribute('role', 'status');
-    submitStatus.setAttribute('aria-live', 'polite');
 
     const submitBtn = el('button', {
       type: 'button', className: 'cu-button cu-button-primary',
@@ -454,8 +462,9 @@
     panel.innerHTML = '';
     panel.appendChild(el('h2', { id: 'classroomPanelHeading', textContent: lesson.title }));
 
+    // Plain text, not a live region - same reasoning as the assignment
+    // panel's status line above: set once, never mutated afterward.
     const statusEl = el('p', { id: 'classroomStatus', textContent: 'Status: ' + (progress.status || 'not_started').replace(/_/g, ' ') });
-    statusEl.setAttribute('role', 'status');
     panel.appendChild(statusEl);
 
     panel.appendChild(el('h3', { textContent: 'Concept' }));
@@ -485,9 +494,9 @@
       panel.appendChild(hintDetails);
     }
 
+    // Visible status text, but not an independent live region: feedback is
+    // already announced once via the centralized announce() below.
     const attemptStatus = el('p', { id: 'classroomAttemptStatus' });
-    attemptStatus.setAttribute('role', 'status');
-    attemptStatus.setAttribute('aria-live', 'polite');
     const checkBtn = el('button', { type: 'button', className: 'cu-button cu-button-primary', textContent: 'Check my attempt' });
     checkBtn.addEventListener('click', function () { checkAttempt(attemptStatus); });
     panel.appendChild(checkBtn);
@@ -498,8 +507,6 @@
       panel.appendChild(el('h3', { textContent: 'Challenge' }));
       panel.appendChild(el('p', { textContent: lesson.challenge }));
       const challengeStatus = el('p', { id: 'classroomChallengeStatus' });
-      challengeStatus.setAttribute('role', 'status');
-      challengeStatus.setAttribute('aria-live', 'polite');
       const challengeBtn = el('button', { type: 'button', className: 'cu-button cu-button-secondary', textContent: 'Check challenge' });
       challengeBtn.addEventListener('click', function () { checkChallenge(challengeStatus); });
       panel.appendChild(challengeBtn);
@@ -552,7 +559,10 @@
           fetchContextAndRender();
         }
       })
-      .catch(function () { statusEl.textContent = 'Could not check your attempt right now.'; });
+      .catch(function () {
+        statusEl.textContent = 'Could not check your attempt right now.';
+        announce(statusEl.textContent);
+      });
   }
 
   function checkChallenge(statusEl) {
@@ -569,7 +579,10 @@
         statusEl.textContent = feedback;
         announce(feedback);
       })
-      .catch(function () { statusEl.textContent = 'Could not check the challenge right now.'; });
+      .catch(function () {
+        statusEl.textContent = 'Could not check the challenge right now.';
+        announce(statusEl.textContent);
+      });
   }
 
   // ---- submit / autosave / run hooks ---------------------------------------
@@ -598,6 +611,7 @@
       .catch(function () {
         submitting = false;
         statusEl.textContent = 'Could not submit. Your work is still saved; you can try again.';
+        announce(statusEl.textContent);
       });
   }
 
@@ -679,9 +693,9 @@
     panel.appendChild(el('h2', { id: 'classroomPanelHeading', textContent: 'Classroom' }));
     panel.appendChild(el('p', { textContent: 'Not currently in a classroom. You can still use CodeUp normally.' }));
 
+    // Visible status text, but not an independent live region: every branch
+    // below already calls the centralized announce() with the same message.
     const status = el('p', { id: 'classroomJoinStatus' });
-    status.setAttribute('role', 'status');
-    status.setAttribute('aria-live', 'polite');
 
     const heading = el('h3', { id: 'classroomJoinHeading', textContent: 'Join your classroom' });
     const intro = el('p', { textContent: "Enter the code your instructor gave you." });

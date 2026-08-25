@@ -280,6 +280,56 @@ def cohort_dashboard(instructor, cohort_id):
     )
 
 
+@classroom_bp.route("/cohorts/<int:cohort_id>/live-summary", methods=["GET"])
+@require_instructor
+def cohort_live_summary(instructor, cohort_id):
+    """Lightweight JSON poll target for the instructor dashboard's near-live
+    sync (static/instructor-sync.js) - reuses exactly the same DB reads as
+    cohort_dashboard above, just serialized for a targeted DOM patch instead
+    of a full page render. No new infrastructure: plain polling, same data,
+    same authorization."""
+    cohort = _own_cohort_or_404(instructor, cohort_id)
+    if not cohort:
+        return jsonify({"success": False, "error": "not_found"}), 404
+
+    learners = db.list_learners_for_cohort(cohort_id)
+    assignments = db.list_assignments_for_cohort(cohort_id)
+    open_help = db.list_help_requests(cohort_id, status="open")
+    helping_help = db.list_help_requests(cohort_id, status="helping")
+    help_status_by_learner = {hr["learner_id"]: "open" for hr in open_help}
+    help_status_by_learner.update({hr["learner_id"]: "helping" for hr in helping_help})
+
+    learner_rows = []
+    for learner in learners:
+        progress_rows = db.list_progress_for_learner(learner["id"])
+        submitted = sum(1 for r in progress_rows if r["status"] == "submitted")
+        concept_states = concepts_mod.summary_for_learner(learner["id"])
+        demonstrated = sum(1 for s in concept_states.values() if s == "demonstrated")
+        events = db.list_events_for_learner(learner["id"], limit=5)
+        module_rows = db.list_module_progress(learner["id"])
+        modules_completed = sum(1 for m in module_rows if m["status"] == "completed")
+        learner_rows.append({
+            "id": learner["id"],
+            "display_name": learner["display_name"],
+            "detail_url": url_for("classroom.learner_detail", cohort_id=cohort_id, learner_id=learner["id"]),
+            "live_status": _derive_live_status(learner, events, help_status_by_learner.get(learner["id"])),
+            "last_active_at": learner.get("last_active_at") or "Never",
+            "modules_completed": modules_completed,
+            "modules_total": len(curriculum.MODULE_ORDER),
+            "assignments_submitted": submitted,
+            "assignments_total": len(assignments),
+            "concepts_demonstrated": demonstrated,
+            "concepts_total": len(concepts_mod.CURRICULUM_CONCEPTS),
+        })
+
+    return jsonify({
+        "success": True,
+        "learner_count": len(learners),
+        "learners": learner_rows,
+        "open_help_count": len(open_help),
+    })
+
+
 @classroom_bp.route("/cohorts/<int:cohort_id>/learners/<int:learner_id>", methods=["GET"])
 @require_instructor
 def learner_detail(instructor, cohort_id, learner_id):

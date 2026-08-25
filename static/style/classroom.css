@@ -138,10 +138,18 @@ table.cu-table th { background: var(--bg-soft); }
   font-weight: 700;
 }
 
-/* Compact classroom summary shown above the "Open classroom" disclosure on
-   /ide - see static/classroom.js renderDashboardPanel. */
-.cu-classroom-summary { margin: 0.2rem 0 0.6rem; }
-.cu-classroom-summary p { margin: 2px 0; }
-.cu-classroom-cohort { font-weight: 700; font-size: 1.05rem; color: var(--text-main); }
-.cu-classroom-pending,
-.cu-classroom-current { color: var(--text-dim); font-size: 0.88rem; }
+/* Single Classroom disclosure on /ide - see static/classroom.js
+   renderJoinPanel/renderDashboardPanel. The compact status line ("Classroom"
+   / "Classroom · <cohort> · N pending") is the <summary> text itself
+   (styled by .cu-disclosure-summary in core.css), so there is no separate
+   always-visible heading/summary block to style here. */
+
+/* The Join button always sits on its own row below the code/name fields -
+   never crammed beside the name input. */
+.cu-classroom-join-actions {
+  margin: var(--gap-sm) 0 var(--gap-md);
+}
+
+.cu-classroom-leave {
+  margin-bottom: var(--gap-md);
+}

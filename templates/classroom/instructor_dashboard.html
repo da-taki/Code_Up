@@ -3,6 +3,7 @@
 {% block header_title %}Welcome, {{ instructor.display_name }}{% endblock %}
 {% block header_nav %}
   <a class="cu-button cu-button-secondary" href="{{ groq_status_url }}">AI service status</a>
+  <a class="cu-button cu-button-secondary" href="{{ storage_status_url }}">Storage status</a>
   <form method="post" action="{{ url_for('classroom.instructor_logout') }}" class="cu-inline-form">
     <button type="submit" class="cu-button cu-button-secondary">Sign out</button>
   </form>

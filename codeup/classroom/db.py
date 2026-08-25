@@ -1,278 +1,34 @@
-"""SQLite persistence for the classroom (cohort/instructor/assignment) layer.
+"""Persistence for the classroom (cohort/instructor/assignment) layer.
+
+Backend selection (SQLite locally, PostgreSQL in production when
+``DATABASE_URL`` is set) lives entirely in :mod:`codeup.classroom._storage`.
+This module only ever calls ``_storage.connect()`` and writes SQL using
+``?`` placeholders; every function below is backend-agnostic by
+construction - see ``_storage.py`` for how that is made to work.
 
 Design notes:
-  - One small file, ``classroom.db``, under ``DATA_DIR`` (same env var the
-    rest of the app already uses for per-session JSON files). Resolved fresh
-    on every call rather than cached at import time, so tests that
-    monkeypatch ``DATA_DIR`` per-test get an isolated database.
-  - A new connection is opened per call and closed immediately; at this
-    scale (a single classroom, occasional writes) that is simpler and safer
-    than sharing one connection across threads.
-  - Schema is created with ``CREATE TABLE IF NOT EXISTS`` on every connect,
-    which is idempotent and avoids a separate migration step.
+  - A connection is acquired per call (SQLite: opened and closed; Postgres:
+    borrowed from and returned to a small pool) and closed/returned
+    immediately - simpler and safer than sharing one connection across
+    threads.
+  - Callers should not need to know or care which backend is active;
+    conditionals on backend type belong in ``_storage.py``, not here.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import secrets
-import sqlite3
 import string
-from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, List, Optional
+
+from codeup.classroom import _storage
+from codeup.classroom._storage import ClassroomStorageError, connect  # re-exported
 
 _JOIN_CODE_ALPHABET = "".join(
     ch for ch in (string.ascii_uppercase + string.digits) if ch not in "O0I1"
 )
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS instructors (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT UNIQUE NOT NULL,
-    password_hash TEXT NOT NULL,
-    display_name TEXT NOT NULL,
-    created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS cohorts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    instructor_id INTEGER NOT NULL REFERENCES instructors(id),
-    name TEXT NOT NULL,
-    join_code TEXT UNIQUE NOT NULL,
-    status TEXT NOT NULL DEFAULT 'active',
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS learners (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    cohort_id INTEGER NOT NULL REFERENCES cohorts(id),
-    display_name TEXT NOT NULL,
-    token TEXT UNIQUE NOT NULL,
-    joined_at TEXT NOT NULL,
-    last_active_at TEXT
-);
-
-CREATE TABLE IF NOT EXISTS assignments (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    cohort_id INTEGER NOT NULL REFERENCES cohorts(id),
-    title TEXT NOT NULL,
-    instructions TEXT NOT NULL DEFAULT '',
-    starter_code TEXT NOT NULL DEFAULT '',
-    due_date TEXT,
-    expected_concepts TEXT NOT NULL DEFAULT '[]',
-    ai_policy TEXT NOT NULL DEFAULT 'FULL',
-    capability_settings TEXT,
-    is_assessment INTEGER NOT NULL DEFAULT 0,
-    start_at TEXT,
-    end_at TEXT,
-    locked INTEGER NOT NULL DEFAULT 0,
-    status TEXT NOT NULL DEFAULT 'draft',
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS assignment_progress (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    assignment_id INTEGER NOT NULL REFERENCES assignments(id),
-    learner_id INTEGER NOT NULL REFERENCES learners(id),
-    status TEXT NOT NULL DEFAULT 'not_started',
-    code TEXT NOT NULL DEFAULT '',
-    submitted_code TEXT,
-    run_count INTEGER NOT NULL DEFAULT 0,
-    success_run_count INTEGER NOT NULL DEFAULT 0,
-    last_error TEXT,
-    last_saved_at TEXT,
-    submitted_at TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    UNIQUE(assignment_id, learner_id)
-);
-
-CREATE TABLE IF NOT EXISTS help_requests (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    cohort_id INTEGER NOT NULL REFERENCES cohorts(id),
-    learner_id INTEGER NOT NULL REFERENCES learners(id),
-    assignment_id INTEGER REFERENCES assignments(id),
-    message TEXT NOT NULL DEFAULT '',
-    status TEXT NOT NULL DEFAULT 'open',
-    note TEXT,
-    created_at TEXT NOT NULL,
-    resolved_at TEXT
-);
-
-CREATE TABLE IF NOT EXISTS curriculum_progress (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    learner_id INTEGER NOT NULL UNIQUE REFERENCES learners(id),
-    course_id TEXT NOT NULL DEFAULT 'python_foundations',
-    current_module_id TEXT,
-    current_stage TEXT,
-    started_at TEXT,
-    last_activity_at TEXT
-);
-
-CREATE TABLE IF NOT EXISTS module_progress (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    learner_id INTEGER NOT NULL REFERENCES learners(id),
-    module_id TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'not_started',
-    completed_stages TEXT NOT NULL DEFAULT '[]',
-    attempts INTEGER NOT NULL DEFAULT 0,
-    quiz_score INTEGER,
-    quiz_total INTEGER,
-    completed_at TEXT,
-    updated_at TEXT NOT NULL,
-    UNIQUE(learner_id, module_id)
-);
-
-CREATE TABLE IF NOT EXISTS custom_lessons (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    cohort_id INTEGER NOT NULL REFERENCES cohorts(id),
-    instructor_id INTEGER NOT NULL REFERENCES instructors(id),
-    title TEXT NOT NULL,
-    objective TEXT NOT NULL DEFAULT '',
-    explanation TEXT NOT NULL DEFAULT '',
-    starter_code TEXT NOT NULL DEFAULT '',
-    instructions TEXT NOT NULL DEFAULT '',
-    expected_concepts TEXT NOT NULL DEFAULT '[]',
-    challenge TEXT NOT NULL DEFAULT '',
-    expected_output TEXT,
-    quiz_question TEXT,
-    quiz_choices TEXT NOT NULL DEFAULT '[]',
-    quiz_answer_index INTEGER,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS custom_projects (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    cohort_id INTEGER NOT NULL REFERENCES cohorts(id),
-    instructor_id INTEGER NOT NULL REFERENCES instructors(id),
-    title TEXT NOT NULL,
-    instructions TEXT NOT NULL DEFAULT '',
-    starter_code TEXT NOT NULL DEFAULT '',
-    expected_concepts TEXT NOT NULL DEFAULT '[]',
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS custom_project_checkpoints (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id INTEGER NOT NULL REFERENCES custom_projects(id),
-    order_index INTEGER NOT NULL DEFAULT 0,
-    label TEXT NOT NULL,
-    check_type TEXT NOT NULL,
-    check_config TEXT NOT NULL DEFAULT '{}'
-);
-
-CREATE TABLE IF NOT EXISTS onboarding_progress (
-    learner_id INTEGER PRIMARY KEY REFERENCES learners(id),
-    completed INTEGER NOT NULL DEFAULT 0,
-    completed_at TEXT
-);
-
-CREATE TABLE IF NOT EXISTS learner_notification_state (
-    learner_id INTEGER PRIMARY KEY REFERENCES learners(id),
-    assignments_seen_at TEXT,
-    ide_orientation_at TEXT
-);
-
-CREATE TABLE IF NOT EXISTS lesson_progress (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    learner_id INTEGER NOT NULL REFERENCES learners(id),
-    lesson_id TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'not_started',
-    attempts INTEGER NOT NULL DEFAULT 0,
-    last_code TEXT,
-    updated_at TEXT NOT NULL,
-    UNIQUE(learner_id, lesson_id)
-);
-
-CREATE TABLE IF NOT EXISTS project_progress (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    learner_id INTEGER NOT NULL REFERENCES learners(id),
-    project_id TEXT NOT NULL,
-    checkpoints_completed TEXT NOT NULL DEFAULT '[]',
-    code TEXT,
-    active_file TEXT,
-    files TEXT,
-    updated_at TEXT NOT NULL,
-    UNIQUE(learner_id, project_id)
-);
-
-CREATE TABLE IF NOT EXISTS concept_progress (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    learner_id INTEGER NOT NULL REFERENCES learners(id),
-    concept TEXT NOT NULL,
-    state TEXT NOT NULL DEFAULT 'not_started',
-    evidence_count INTEGER NOT NULL DEFAULT 0,
-    last_evidence_at TEXT,
-    UNIQUE(learner_id, concept)
-);
-
-CREATE TABLE IF NOT EXISTS progress_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    learner_id INTEGER NOT NULL REFERENCES learners(id),
-    cohort_id INTEGER,
-    kind TEXT NOT NULL,
-    payload TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_learners_cohort ON learners(cohort_id);
-CREATE INDEX IF NOT EXISTS idx_assignments_cohort ON assignments(cohort_id);
-CREATE INDEX IF NOT EXISTS idx_progress_events_learner ON progress_events(learner_id);
-CREATE INDEX IF NOT EXISTS idx_progress_events_cohort ON progress_events(cohort_id, created_at);
-CREATE INDEX IF NOT EXISTS idx_help_requests_cohort ON help_requests(cohort_id, status);
-CREATE INDEX IF NOT EXISTS idx_module_progress_learner ON module_progress(learner_id);
-CREATE INDEX IF NOT EXISTS idx_custom_lessons_cohort ON custom_lessons(cohort_id);
-CREATE INDEX IF NOT EXISTS idx_custom_projects_cohort ON custom_projects(cohort_id);
-CREATE INDEX IF NOT EXISTS idx_custom_project_checkpoints_project ON custom_project_checkpoints(project_id);
-"""
-
-# Columns added after the initial release of a table, applied defensively so
-# a classroom.db created by an older version of this module keeps working
-# without a separate migration step (SQLite has no "ADD COLUMN IF NOT
-# EXISTS", so each is attempted and a "duplicate column" failure is normal
-# and ignored).
-_MIGRATIONS = (
-    "ALTER TABLE assignments ADD COLUMN capability_settings TEXT",
-    "ALTER TABLE assignments ADD COLUMN is_assessment INTEGER NOT NULL DEFAULT 0",
-    "ALTER TABLE assignments ADD COLUMN start_at TEXT",
-    "ALTER TABLE assignments ADD COLUMN end_at TEXT",
-    "ALTER TABLE assignments ADD COLUMN locked INTEGER NOT NULL DEFAULT 0",
-    "ALTER TABLE help_requests ADD COLUMN note TEXT",
-    "ALTER TABLE assignments ADD COLUMN published_at TEXT",
-)
-
-
-def _db_path() -> str:
-    data_dir = os.environ.get("DATA_DIR", ".")
-    try:
-        os.makedirs(data_dir, exist_ok=True)
-    except OSError:
-        pass
-    return os.path.join(data_dir, "classroom.db")
-
-
-@contextmanager
-def connect() -> Iterator[sqlite3.Connection]:
-    conn = sqlite3.connect(_db_path(), timeout=10)
-    try:
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.executescript(SCHEMA)
-        for statement in _MIGRATIONS:
-            try:
-                conn.execute(statement)
-            except sqlite3.OperationalError:
-                pass  # column already exists
-        yield conn
-        conn.commit()
-    finally:
-        conn.close()
 
 
 def now_iso() -> str:
@@ -283,7 +39,7 @@ def new_token() -> str:
     return secrets.token_urlsafe(24)
 
 
-def new_join_code(conn: sqlite3.Connection, length: int = 6) -> str:
+def new_join_code(conn: Any, length: int = 6) -> str:
     for _ in range(50):
         code = "".join(secrets.choice(_JOIN_CODE_ALPHABET) for _ in range(length))
         existing = conn.execute("SELECT 1 FROM cohorts WHERE join_code = ?", (code,)).fetchone()
@@ -292,11 +48,11 @@ def new_join_code(conn: sqlite3.Connection, length: int = 6) -> str:
     raise RuntimeError("Could not generate a unique join code")
 
 
-def _row(row: Optional[sqlite3.Row]) -> Optional[Dict[str, Any]]:
+def _row(row: Optional[Any]) -> Optional[Dict[str, Any]]:
     return dict(row) if row is not None else None
 
 
-def _rows(rows: List[sqlite3.Row]) -> List[Dict[str, Any]]:
+def _rows(rows: List[Any]) -> List[Dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
@@ -327,15 +83,30 @@ def get_instructor_by_username(username: str) -> Optional[Dict[str, Any]]:
 # ---- cohorts ---------------------------------------------------------------
 
 def create_cohort(instructor_id: int, name: str) -> Dict[str, Any]:
-    with connect() as conn:
-        code = new_join_code(conn)
-        ts = now_iso()
-        cur = conn.execute(
-            "INSERT INTO cohorts (instructor_id, name, join_code, status, created_at, updated_at) "
-            "VALUES (?, ?, ?, 'active', ?, ?)",
-            (instructor_id, name.strip(), code, ts, ts),
-        )
-        return _row(conn.execute("SELECT * FROM cohorts WHERE id = ?", (cur.lastrowid,)).fetchone())
+    # new_join_code() only checks-then-inserts, which is a TOCTOU race under
+    # concurrent instructors creating cohorts at the same instant. The
+    # UNIQUE(join_code) constraint is the real source of truth; if a rare
+    # collision slips past the pre-check, retry with a fresh code instead
+    # of surfacing a 500. Each attempt uses its own connection/transaction
+    # so a failed insert never leaves a half-open one behind.
+    last_error: Optional[Exception] = None
+    for _ in range(5):
+        try:
+            with connect() as conn:
+                code = new_join_code(conn)
+                ts = now_iso()
+                cur = conn.execute(
+                    "INSERT INTO cohorts (instructor_id, name, join_code, status, created_at, updated_at) "
+                    "VALUES (?, ?, ?, 'active', ?, ?)",
+                    (instructor_id, name.strip(), code, ts, ts),
+                )
+                return _row(
+                    conn.execute("SELECT * FROM cohorts WHERE id = ?", (cur.lastrowid,)).fetchone()
+                )
+        except _storage.UNIQUE_VIOLATION_EXCEPTIONS as exc:
+            last_error = exc
+            continue
+    raise RuntimeError("Could not create cohort with a unique join code") from last_error
 
 
 def get_cohort(cohort_id: int) -> Optional[Dict[str, Any]]:
@@ -418,7 +189,7 @@ def list_learners_for_cohort(cohort_id: int) -> List[Dict[str, Any]]:
     with connect() as conn:
         return _rows(
             conn.execute(
-                "SELECT * FROM learners WHERE cohort_id = ? ORDER BY display_name COLLATE NOCASE",
+                "SELECT * FROM learners WHERE cohort_id = ? ORDER BY LOWER(display_name)",
                 (cohort_id,),
             ).fetchall()
         )
@@ -597,15 +368,22 @@ def get_or_create_progress(assignment_id: int, learner_id: int) -> Dict[str, Any
             "SELECT starter_code FROM assignments WHERE id = ?", (assignment_id,)
         ).fetchone()
         starter = assignment["starter_code"] if assignment else ""
-        cur = conn.execute(
+        # ON CONFLICT DO NOTHING (not "insert if row was None above") closes
+        # the race where two requests for the same learner/assignment both
+        # see no row and both try to initialize it - only one insert wins,
+        # the loser's INSERT is a no-op, and the unconditional re-SELECT
+        # below returns the winner's row either way.
+        conn.execute(
             "INSERT INTO assignment_progress "
             "(assignment_id, learner_id, status, code, created_at, updated_at) "
-            "VALUES (?, ?, 'not_started', ?, ?, ?)",
+            "VALUES (?, ?, 'not_started', ?, ?, ?) "
+            "ON CONFLICT (assignment_id, learner_id) DO NOTHING",
             (assignment_id, learner_id, starter, ts, ts),
         )
         return dict(
             conn.execute(
-                "SELECT * FROM assignment_progress WHERE id = ?", (cur.lastrowid,)
+                "SELECT * FROM assignment_progress WHERE assignment_id = ? AND learner_id = ?",
+                (assignment_id, learner_id),
             ).fetchone()
         )
 
@@ -696,7 +474,7 @@ def list_progress_for_assignment(assignment_id: int) -> List[Dict[str, Any]]:
             conn.execute(
                 "SELECT ap.*, l.display_name FROM assignment_progress ap "
                 "JOIN learners l ON l.id = ap.learner_id WHERE ap.assignment_id = ? "
-                "ORDER BY l.display_name COLLATE NOCASE",
+                "ORDER BY LOWER(l.display_name)",
                 (assignment_id,),
             ).fetchall()
         )
@@ -840,14 +618,18 @@ def get_or_create_project_progress(learner_id: int, project_id: str) -> Dict[str
             data = dict(row)
         else:
             ts = now_iso()
-            cur = conn.execute(
+            # ON CONFLICT DO NOTHING: see get_or_create_progress() above for
+            # why this closes the concurrent-double-initialization race.
+            conn.execute(
                 "INSERT INTO project_progress (learner_id, project_id, checkpoints_completed, "
-                "updated_at) VALUES (?, ?, '[]', ?)",
+                "updated_at) VALUES (?, ?, '[]', ?) "
+                "ON CONFLICT (learner_id, project_id) DO NOTHING",
                 (learner_id, project_id, ts),
             )
             data = dict(
                 conn.execute(
-                    "SELECT * FROM project_progress WHERE id = ?", (cur.lastrowid,)
+                    "SELECT * FROM project_progress WHERE learner_id = ? AND project_id = ?",
+                    (learner_id, project_id),
                 ).fetchone()
             )
     try:
@@ -1147,9 +929,12 @@ def get_or_create_module_progress_row(learner_id: int, module_id: str) -> Dict[s
             row = dict(existing)
         else:
             ts = now_iso()
+            # ON CONFLICT DO NOTHING: see get_or_create_progress() above for
+            # why this closes the concurrent-double-initialization race.
             conn.execute(
                 "INSERT INTO module_progress (learner_id, module_id, status, completed_stages, "
-                "attempts, updated_at) VALUES (?, ?, 'not_started', '[]', 0, ?)",
+                "attempts, updated_at) VALUES (?, ?, 'not_started', '[]', 0, ?) "
+                "ON CONFLICT (learner_id, module_id) DO NOTHING",
                 (learner_id, module_id, ts),
             )
             row = dict(
@@ -1369,3 +1154,24 @@ def mark_ide_orientation_shown(learner_id: int, when: Optional[str] = None) -> N
             "ON CONFLICT(learner_id) DO UPDATE SET ide_orientation_at = excluded.ide_orientation_at",
             (learner_id, ts),
         )
+
+
+# ---- storage diagnostic ------------------------------------------------------------
+#
+# Safe for an authenticated instructor/admin screen: never returns
+# DATABASE_URL, host, username, password, tokens, or learner data - only
+# which backend is active and whether it is currently reachable.
+
+def storage_status() -> Dict[str, Any]:
+    backend = _storage.backend_name()
+    if backend != "postgres":
+        return {"backend": "sqlite", "healthy": True, "database_path_configured": True}
+    try:
+        version = _storage.schema_version()
+    except ClassroomStorageError:
+        return {
+            "backend": "postgres",
+            "healthy": False,
+            "error": "PostgreSQL classroom storage unavailable - see server logs.",
+        }
+    return {"backend": "postgres", "healthy": True, "schema_version": version}

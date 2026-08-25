@@ -162,6 +162,7 @@ def _render_instructor_dashboard(instructor, *, cohort_name_error=None, cohort_n
     return render_template(
         "classroom/instructor_dashboard.html", instructor=instructor, cohorts=cohorts,
         groq_status_url=url_for("classroom.groq_status"),
+        storage_status_url=url_for("classroom.storage_status"),
         cohort_name_error=cohort_name_error, cohort_name_value=cohort_name_value,
     )
 
@@ -180,6 +181,18 @@ def groq_status(instructor):
     CodeUp) - learners cannot reach this, since @require_instructor
     redirects them to the instructor login page."""
     return render_template("classroom/groq_status.html", instructor=instructor, pool=groq_pool.status())
+
+
+@classroom_bp.route("/admin/storage-status", methods=["GET"])
+@require_instructor
+def storage_status(instructor):
+    """Read-only classroom storage diagnostic - confirms which persistence
+    backend is active and whether it is reachable, without ever exposing
+    DATABASE_URL, host, credentials, or any learner data. Any signed-in
+    instructor can view it (same access model as groq_status above)."""
+    return render_template(
+        "classroom/storage_status.html", instructor=instructor, status=db.storage_status()
+    )
 
 
 @classroom_bp.route("/cohorts", methods=["POST"])

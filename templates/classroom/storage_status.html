@@ -1,0 +1,31 @@
+{% extends "classroom/_base.html" %}
+{% block title %}Storage status - CodeUp Classroom{% endblock %}
+{% block header_title %}Classroom storage status{% endblock %}
+{% block header_nav %}
+  <a class="cu-button cu-button-secondary" href="{{ url_for('classroom.instructor_dashboard') }}">Instructor dashboard</a>
+{% endblock %}
+{% block content %}
+  <p>Read-only. Confirms which storage backend is active for cohort/learner data and whether it is reachable. Never shows a connection string, host, username, password, or any learner data. Refresh the page for current status - this does not auto-update.</p>
+
+  <section class="cu-panel" aria-labelledby="storageHeading">
+    <h2 id="storageHeading">Backend</h2>
+    {% if status.backend == 'postgres' %}
+      <ul>
+        <li>Storage backend: PostgreSQL</li>
+        {% if status.healthy %}
+          <li>Database connection: <span class="cu-badge cu-badge--healthy">healthy</span></li>
+          <li>Schema version: {{ status.schema_version }}</li>
+        {% else %}
+          <li>Database connection: <span class="cu-badge cu-badge--unhealthy">unreachable</span></li>
+          <li>{{ status.error }}</li>
+        {% endif %}
+      </ul>
+    {% else %}
+      <ul>
+        <li>Storage backend: SQLite</li>
+        <li>Database path configured: {{ 'yes' if status.database_path_configured else 'no' }}</li>
+      </ul>
+      <p>SQLite is fine for local development, but its file lives on the web service's local disk and is not durable on most hosting platforms. Set the <code>DATABASE_URL</code> environment variable to a managed PostgreSQL database before running a real institutional cohort - see <code>docs/CLASSROOM_PRODUCTION_STORAGE.md</code>.</p>
+    {% endif %}
+  </section>
+{% endblock %}

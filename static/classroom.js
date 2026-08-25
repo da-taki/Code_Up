@@ -90,6 +90,23 @@
     if (typeof window.srAnnounce === 'function') window.srAnnounce(text, opts.priority || 'polite');
   }
 
+  // Progressive disclosure lives entirely in native <details>/<summary>
+  // (matches the existing .cu-disclosure pattern already used elsewhere in
+  // the IDE - see core.css). Commands that focus a target inside a collapsed
+  // section (NAV_TARGETS / focus_hint in ide_commands.py) still need that
+  // target to actually be focusable, so this walks up from the target and
+  // opens every collapsed <details> ancestor before app.js calls .focus().
+  window._classroomReveal = function (targetId) {
+    const target = document.getElementById(targetId);
+    if (!target) return false;
+    let node = target.parentElement;
+    while (node) {
+      if (node.tagName === 'DETAILS' && !node.open) node.open = true;
+      node = node.parentElement;
+    }
+    return true;
+  };
+
   function el(tag, props, children) {
     const node = document.createElement(tag);
     Object.assign(node, props || {});
@@ -140,6 +157,32 @@
     opts = opts || {};
     const heading = el('h3', { textContent: 'Ask your instructor for help' });
     if (opts.headingId) heading.id = opts.headingId;
+
+    if (opts.currentHelpRequest) {
+      // Already compact (heading + one status line + a cancel button) -
+      // nothing to collapse further.
+      const hr = opts.currentHelpRequest;
+      const stateText = hr.status === 'helping' ? 'Your instructor is helping you now.' : 'Your help request is waiting for your instructor.';
+      const hrStatus = el('p', { textContent: stateText });
+      const cancelBtn = el('button', { type: 'button', className: 'cu-button cu-button-secondary', textContent: 'Cancel help request' });
+      cancelBtn.addEventListener('click', function () {
+        fetch('/classroom/help-requests/' + hr.id + '/cancel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+          .then(function (res) { return res.json(); })
+          .then(function (data) {
+            if (data && data.success) {
+              announce('Your help request was cancelled.');
+              if (typeof window._classroomRefreshDashboard === 'function') window._classroomRefreshDashboard();
+            }
+          });
+      });
+      panel.appendChild(el('div', { className: 'cu-field' }, [heading, hrStatus, cancelBtn]));
+      return;
+    }
+
+    // No request in flight: the form defaults to collapsed behind a single
+    // compact "Request instructor help" control (see the accessibility
+    // audit's progressive-disclosure pass) - the permanent textarea used to
+    // take up a lot of vertical space for something rarely used.
     const label = el('label', { htmlFor: 'classroomHelpMessage', textContent: 'What do you need help with? (optional)' });
     const textarea = el('textarea', { id: 'classroomHelpMessage', rows: 2 });
     // No local live region here: this paragraph was sr-only (nothing visible
@@ -147,10 +190,9 @@
     // announce() below - a second aria-live region on invisible text would
     // only double the announcement, never add information.
     const status = el('p', { id: 'classroomHelpStatus', className: 'sr-only' });
-    const button = el('button', {
-      type: 'button', className: 'cu-button cu-button-secondary', textContent: 'Request help',
-    });
-    button.addEventListener('click', function () {
+    const sendBtn = el('button', { type: 'button', className: 'cu-button cu-button-primary', textContent: 'Send' });
+    const cancelBtn = el('button', { type: 'button', className: 'cu-button cu-button-secondary', textContent: 'Cancel' });
+    sendBtn.addEventListener('click', function () {
       const message = textarea.value;
       fetch('/classroom/help-requests', {
         method: 'POST',
@@ -173,27 +215,21 @@
           announce(status.textContent);
         });
     });
-    const children = [heading];
-    if (opts.currentHelpRequest) {
-      const hr = opts.currentHelpRequest;
-      const stateText = hr.status === 'helping' ? 'Your instructor is helping you now.' : 'Your help request is waiting for your instructor.';
-      const hrStatus = el('p', { textContent: stateText });
-      const cancelBtn = el('button', { type: 'button', className: 'cu-button cu-button-secondary', textContent: 'Cancel help request' });
-      cancelBtn.addEventListener('click', function () {
-        fetch('/classroom/help-requests/' + hr.id + '/cancel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
-          .then(function (res) { return res.json(); })
-          .then(function (data) {
-            if (data && data.success) {
-              announce('Your help request was cancelled.');
-              if (typeof window._classroomRefreshDashboard === 'function') window._classroomRefreshDashboard();
-            }
-          });
-      });
-      children.push(hrStatus, cancelBtn);
-    } else {
-      children.push(label, textarea, button, status);
-    }
-    panel.appendChild(el('div', { className: 'cu-field' }, children));
+
+    const details = el('details', { className: 'cu-disclosure' });
+    const summary = el('summary', { className: 'cu-disclosure-summary', textContent: 'Request instructor help' });
+    const actions = el('div', { role: 'group', ariaLabel: 'Help request actions' }, [sendBtn, cancelBtn]);
+    const body = el('div', { className: 'cu-disclosure-body' }, [label, textarea, actions, status]);
+    cancelBtn.addEventListener('click', function () {
+      textarea.value = '';
+      status.textContent = '';
+      details.open = false;
+      summary.focus();
+    });
+    details.appendChild(summary);
+    details.appendChild(body);
+
+    panel.appendChild(el('div', { className: 'cu-field' }, [heading, details]));
   }
 
   // ---- guided AI learning (hint ladder) - only when the capability allows it ----
@@ -332,12 +368,17 @@
     let container = document.getElementById('classroomVersionHistory');
     const panel = document.getElementById('classroomPanel');
     if (!panel) return;
+    let body;
     if (!container) {
-      container = el('details', { id: 'classroomVersionHistory' });
-      container.appendChild(el('summary', { textContent: 'Recent versions' }));
+      container = el('details', { id: 'classroomVersionHistory', className: 'cu-disclosure' });
+      container.appendChild(el('summary', { className: 'cu-disclosure-summary', textContent: 'Recent versions' }));
+      body = el('div', { className: 'cu-disclosure-body' });
+      container.appendChild(body);
       panel.appendChild(container);
+    } else {
+      body = container.querySelector('.cu-disclosure-body');
     }
-    const list = container.querySelector('ul');
+    const list = body.querySelector('ul');
     if (list) list.remove();
     const ul = el('ul');
     versionHistory.slice().reverse().forEach(function (v, idx) {
@@ -348,7 +389,7 @@
       });
       ul.appendChild(el('li', {}, [btn]));
     });
-    container.appendChild(ul);
+    body.appendChild(ul);
   }
 
   // ---- assignment panel ----------------------------------------------------
@@ -366,9 +407,11 @@
     const statusEl = el('p', { id: 'classroomStatus', textContent: statusText });
     panel.appendChild(statusEl);
 
-    const details = el('details', { open: true });
-    details.appendChild(el('summary', { textContent: 'Instructions' }));
-    details.appendChild(el('p', { textContent: a.instructions || '(no instructions given)' }));
+    const details = el('details', { className: 'cu-disclosure', open: true });
+    details.appendChild(el('summary', { className: 'cu-disclosure-summary', textContent: 'Instructions' }));
+    details.appendChild(el('div', { className: 'cu-disclosure-body' }, [
+      el('p', { textContent: a.instructions || '(no instructions given)' }),
+    ]));
     panel.appendChild(details);
 
     if (a.policy_summary) {
@@ -471,26 +514,28 @@
     panel.appendChild(el('p', { textContent: lesson.concept || '' }));
 
     if (lesson.example_code) {
-      const exDetails = el('details', { open: true });
-      exDetails.appendChild(el('summary', { textContent: 'Example' }));
-      exDetails.appendChild(el('pre', { className: 'cu-code-view', textContent: lesson.example_code }));
+      const exDetails = el('details', { className: 'cu-disclosure', open: true });
+      exDetails.appendChild(el('summary', { className: 'cu-disclosure-summary', textContent: 'Example' }));
       const loadBtn = el('button', { type: 'button', className: 'cu-button cu-button-secondary', textContent: 'Load example into the editor' });
       loadBtn.addEventListener('click', function () {
         if (typeof window.setCode === 'function') window.setCode(lesson.example_code, { preserveSpeech: true });
         announce('Example loaded into the editor.');
       });
-      exDetails.appendChild(loadBtn);
+      exDetails.appendChild(el('div', { className: 'cu-disclosure-body' }, [
+        el('pre', { className: 'cu-code-view', textContent: lesson.example_code }),
+        loadBtn,
+      ]));
       panel.appendChild(exDetails);
     }
 
     panel.appendChild(el('h3', { textContent: 'Your turn' }));
     panel.appendChild(el('p', { textContent: lesson.instructions || '' }));
     if (lesson.hints && lesson.hints.length) {
-      const hintDetails = el('details');
-      hintDetails.appendChild(el('summary', { textContent: 'Hints' }));
+      const hintDetails = el('details', { className: 'cu-disclosure' });
+      hintDetails.appendChild(el('summary', { className: 'cu-disclosure-summary', textContent: 'Hints' }));
       const hl = el('ul');
       lesson.hints.forEach(function (h) { hl.appendChild(el('li', { textContent: h })); });
-      hintDetails.appendChild(hl);
+      hintDetails.appendChild(el('div', { className: 'cu-disclosure-body' }, [hl]));
       panel.appendChild(hintDetails);
     }
 
@@ -688,21 +733,109 @@
     return text + '.';
   }
 
+  // The compact label doubles as the single Classroom disclosure's <summary>
+  // text (see renderJoinPanel/renderDashboardPanel below) and is refreshed
+  // in place by patchDashboardPanel() during background sync - anonymous
+  // "Classroom", joined "Classroom · <cohort> · N pending"/"All caught up".
+  function summaryLineText(data) {
+    if (!data || !data.joined) return 'Classroom';
+    const cohortName = (data.cohort && data.cohort.name) || (data.learner && data.learner.display_name) || '';
+    const remaining = (data.assignment_counts && data.assignment_counts.remaining) || 0;
+    const countText = remaining ? (remaining + ' pending') : 'All caught up';
+    return 'Classroom · ' + cohortName + ' · ' + countText;
+  }
+
+  function fillContainer(container, nodes) {
+    container.innerHTML = '';
+    nodes.forEach(function (n) { container.appendChild(n); });
+  }
+
+  function buildCourseBodyNodes(data) {
+    if (data.module) {
+      const progText = (data.module.index && data.module.total)
+        ? ('Module ' + data.module.index + ' of ' + data.module.total + ': ' + data.module.title)
+        : data.module.title;
+      return [
+        el('p', { textContent: progText }),
+        el('p', {}, [el('a', {
+          className: 'cu-button cu-button-secondary',
+          href: '/classroom/curriculum/' + encodeURIComponent(data.module.module_id) + '/open',
+          textContent: 'Continue',
+        })]),
+      ];
+    }
+    return [
+      el('p', { textContent: "You haven't started the course yet." }),
+      el('p', {}, [el('a', { className: 'cu-button cu-button-secondary', href: '/classroom/curriculum', textContent: 'Start the course' })]),
+    ];
+  }
+
+  function buildAssignmentsBodyNodes(data, keepOpen) {
+    const nodes = [el('p', { textContent: describeAssignmentCounts(data.assignment_counts) })];
+    if (data.assignments && data.assignments.length) {
+      const assignmentDetails = el('details', { className: 'cu-disclosure', open: !!keepOpen });
+      assignmentDetails.appendChild(el('summary', { className: 'cu-disclosure-summary', textContent: 'Show all assignments (' + data.assignments.length + ')' }));
+      const list = el('ul');
+      data.assignments.forEach(function (a) {
+        const item = el('li');
+        item.appendChild(el('a', { href: a.open_url, textContent: a.title + ' — ' + a.state.replace(/_/g, ' ') }));
+        list.appendChild(item);
+      });
+      assignmentDetails.appendChild(el('div', { className: 'cu-disclosure-body' }, [list]));
+      assignmentDetails.addEventListener('toggle', function () {
+        if (assignmentDetails.open) {
+          fetch('/classroom/ide/assignments-seen', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).catch(function () {});
+        }
+      });
+      nodes.push(assignmentDetails);
+    } else {
+      nodes.push(el('p', { textContent: 'No assignments yet.' }));
+    }
+    return nodes;
+  }
+
+  function buildProjectsBodyNodes(data) {
+    if (data.projects && data.projects.length) {
+      const list = el('ul');
+      data.projects.forEach(function (p) {
+        const item = el('li');
+        const progress = p.total_checkpoints ? (p.done_checkpoints + ' of ' + p.total_checkpoints + ' checkpoints') : '';
+        item.appendChild(el('a', { href: p.open_url, textContent: p.title + (progress ? ' — ' + progress : '') }));
+        list.appendChild(item);
+      });
+      return [list];
+    }
+    return [el('p', { textContent: 'No guided projects available yet.' })];
+  }
+
   function renderJoinPanel(panel, data) {
     panel.innerHTML = '';
-    panel.appendChild(el('h2', { id: 'classroomPanelHeading', textContent: 'Classroom' }));
-    panel.appendChild(el('p', { textContent: 'Not currently in a classroom. You can still use CodeUp normally.' }));
+
+    // One compact Classroom disclosure, collapsed by default - matches the
+    // existing "CodeUp display and accessibility settings" disclosure
+    // pattern (.cu-disclosure/.cu-disclosure-summary) instead of a second
+    // visual language. Anonymous + collapsed shows nothing but this label;
+    // "join a classroom"/"join a cohort" and the classroomJoinHeading/Code/
+    // Name focus targets in ide_commands.py open it via window._classroomReveal.
+    const details = el('details', { id: 'classroomDetails', className: 'cu-disclosure' });
+    const summary = el('summary', { id: 'classroomPanelHeading', className: 'cu-disclosure-summary', textContent: summaryLineText(data) });
+    details.appendChild(summary);
 
     // Visible status text, but not an independent live region: every branch
     // below already calls the centralized announce() with the same message.
     const status = el('p', { id: 'classroomJoinStatus' });
 
-    const heading = el('h3', { id: 'classroomJoinHeading', textContent: 'Join your classroom' });
-    const intro = el('p', { textContent: "Enter the code your instructor gave you." });
-    const codeLabel = el('label', { htmlFor: 'classroomJoinCode', textContent: 'Classroom code' });
-    const codeInput = el('input', { id: 'classroomJoinCode', type: 'text', autocomplete: 'off' });
-    const nameLabel = el('label', { htmlFor: 'classroomJoinName', textContent: 'Your name' });
-    const nameInput = el('input', { id: 'classroomJoinName', type: 'text', autocomplete: 'name' });
+    const heading = el('h2', { id: 'classroomJoinHeading', textContent: 'Join a classroom' });
+    const codeField = el('div', { className: 'cu-field' }, [
+      el('label', { htmlFor: 'classroomJoinCode', textContent: 'Classroom code' }),
+      el('input', { id: 'classroomJoinCode', type: 'text', autocomplete: 'off' }),
+    ]);
+    const nameField = el('div', { className: 'cu-field' }, [
+      el('label', { htmlFor: 'classroomJoinName', textContent: 'Your name' }),
+      el('input', { id: 'classroomJoinName', type: 'text', autocomplete: 'name' }),
+    ]);
+    const codeInput = codeField.querySelector('input');
+    const nameInput = nameField.querySelector('input');
     const joinBtn = el('button', { type: 'button', className: 'cu-button cu-button-primary', textContent: 'Join classroom' });
 
     let joining = false;
@@ -748,13 +881,16 @@
       });
     });
 
-    panel.appendChild(el('div', { className: 'cu-field' }, [
-      heading, intro, codeLabel, codeInput, nameLabel, nameInput, joinBtn, status,
-    ]));
-    panel.appendChild(el('p', {
-      className: 'cu-command-tip',
-      textContent: 'You can also type or say "join" followed by your code once your name is filled in above.',
-    }));
+    // The Join button always gets its own row (never crammed beside the name
+    // input) - see .cu-classroom-join-actions in classroom.css.
+    const actionsRow = el('div', { className: 'cu-classroom-join-actions' }, [joinBtn]);
+
+    const body = el('div', { className: 'cu-disclosure-body' }, [
+      heading, codeField, nameField, actionsRow, status,
+      el('p', { className: 'cu-command-tip', textContent: 'You can also type "join a classroom" in the command box.' }),
+    ]);
+    details.appendChild(body);
+    panel.appendChild(details);
 
     if (!sessionStorage.getItem('codeupIdeNoCohortOrientationSpoken')) {
       sessionStorage.setItem('codeupIdeNoCohortOrientationSpoken', '1');
@@ -764,65 +900,39 @@
 
   function renderDashboardPanel(panel, data) {
     panel.innerHTML = '';
-    const cohortName = data.cohort ? data.cohort.name : '';
-    const headingRow = el('div', { className: 'cu-classroom-heading-row' });
-    headingRow.appendChild(el('h2', { id: 'classroomPanelHeading', textContent: 'Classroom: ' + (cohortName || data.learner.display_name) }));
-    headingRow.appendChild(el('a', { className: 'cu-button cu-button-secondary', href: '/classroom/leave/confirm', textContent: 'Leave this classroom' }));
-    panel.appendChild(headingRow);
 
-    panel.appendChild(el('h3', { id: 'classroomCourseHeading', textContent: 'Current learning' }));
-    if (data.module) {
-      const progText = (data.module.index && data.module.total)
-        ? ('Module ' + data.module.index + ' of ' + data.module.total + ': ' + data.module.title)
-        : data.module.title;
-      panel.appendChild(el('p', { textContent: progText }));
-      panel.appendChild(el('p', {}, [el('a', {
-        className: 'cu-button cu-button-secondary',
-        href: '/classroom/curriculum/' + encodeURIComponent(data.module.module_id) + '/open',
-        textContent: 'Continue',
-      })]));
-    } else {
-      panel.appendChild(el('p', { textContent: "You haven't started the course yet." }));
-      panel.appendChild(el('p', {}, [el('a', { className: 'cu-button cu-button-secondary', href: '/classroom/curriculum', textContent: 'Start the course' })]));
-    }
+    // Same single Classroom disclosure as the anonymous state, just with a
+    // status-bearing summary line and different body content - never a
+    // second, visually separate "classroom app" bolted onto the IDE.
+    const details = el('details', { id: 'classroomDetails', className: 'cu-disclosure' });
+    const summary = el('summary', { id: 'classroomPanelHeading', className: 'cu-disclosure-summary', textContent: summaryLineText(data) });
+    details.appendChild(summary);
 
-    panel.appendChild(el('h3', { id: 'classroomAssignmentsHeading', textContent: 'Assignments' }));
-    panel.appendChild(el('p', { textContent: describeAssignmentCounts(data.assignment_counts) }));
-    if (data.assignments && data.assignments.length) {
-      const details = el('details');
-      details.appendChild(el('summary', { textContent: 'Show all assignments (' + data.assignments.length + ')' }));
-      const list = el('ul');
-      data.assignments.forEach(function (a) {
-        const item = el('li');
-        item.appendChild(el('a', { href: a.open_url, textContent: a.title + ' — ' + a.state.replace(/_/g, ' ') }));
-        list.appendChild(item);
-      });
-      details.appendChild(list);
-      details.addEventListener('toggle', function () {
-        if (details.open) {
-          fetch('/classroom/ide/assignments-seen', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).catch(function () {});
-        }
-      });
-      panel.appendChild(details);
-    } else {
-      panel.appendChild(el('p', { textContent: 'No assignments yet.' }));
-    }
+    const body = el('div', { className: 'cu-disclosure-body' });
 
-    panel.appendChild(el('h3', { id: 'classroomProjectsHeading', textContent: 'Guided projects' }));
-    if (data.projects && data.projects.length) {
-      const list = el('ul');
-      data.projects.forEach(function (p) {
-        const item = el('li');
-        const progress = p.total_checkpoints ? (p.done_checkpoints + ' of ' + p.total_checkpoints + ' checkpoints') : '';
-        item.appendChild(el('a', { href: p.open_url, textContent: p.title + (progress ? ' — ' + progress : '') }));
-        list.appendChild(item);
-      });
-      panel.appendChild(list);
-    } else {
-      panel.appendChild(el('p', { textContent: 'No guided projects available yet.' }));
-    }
+    body.appendChild(el('p', { className: 'cu-classroom-leave' }, [el('a', { className: 'cu-button cu-button-secondary', href: '/classroom/leave/confirm', textContent: 'Leave this classroom' })]));
 
-    appendHelpWidget(panel, { headingId: 'classroomHelpHeading', currentHelpRequest: data.help_request });
+    body.appendChild(el('h3', { id: 'classroomCourseHeading', textContent: 'Current learning' }));
+    body.appendChild(el('div', { id: 'classroomCourseBody' }, buildCourseBodyNodes(data)));
+
+    body.appendChild(el('h3', { id: 'classroomAssignmentsHeading', textContent: 'Assignments' }));
+    body.appendChild(el('div', { id: 'classroomAssignmentsBody' }, buildAssignmentsBodyNodes(data, false)));
+
+    body.appendChild(el('h3', { id: 'classroomProjectsHeading', textContent: 'Guided projects' }));
+    body.appendChild(el('div', { id: 'classroomProjectsBody' }, buildProjectsBodyNodes(data)));
+
+    const helpContainer = el('div', { id: 'classroomHelpContainer' });
+    appendHelpWidget(helpContainer, { headingId: 'classroomHelpHeading', currentHelpRequest: data.help_request });
+    body.appendChild(helpContainer);
+
+    details.appendChild(body);
+    // Opening the disclosure is a natural moment to catch up on anything the
+    // last background poll missed - see requestClassroomSync() below. This
+    // never opens the disclosure itself, only reacts to the learner doing so.
+    details.addEventListener('toggle', function () {
+      if (details.open) requestClassroomSync({ immediate: true });
+    });
+    panel.appendChild(details);
 
     if (!data.ide_orientation_shown) {
       fetch('/classroom/ide/orientation-seen', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).catch(function () {});
@@ -831,6 +941,179 @@
       announce(data.welcome_message || '');
     }
   }
+
+  // Only the specific sub-section whose fingerprint changed gets rebuilt -
+  // patchDashboardPanel() never touches panel.innerHTML, so the outer
+  // <details>'s open state, keyboard focus, and any in-progress help-request
+  // text all survive a background sync untouched (see requestClassroomSync).
+  function patchDashboardPanel(previous, data) {
+    const summaryEl = document.getElementById('classroomPanelHeading');
+    if (summaryEl) {
+      const newLine = summaryLineText(data);
+      if (summaryEl.textContent !== newLine) summaryEl.textContent = newLine;
+    }
+
+    if (moduleFingerprint(previous && previous.module) !== moduleFingerprint(data.module)) {
+      const courseBody = document.getElementById('classroomCourseBody');
+      if (courseBody) fillContainer(courseBody, buildCourseBodyNodes(data));
+    }
+
+    if (assignmentsFingerprint(previous && previous.assignments) !== assignmentsFingerprint(data.assignments)) {
+      const assignmentsBody = document.getElementById('classroomAssignmentsBody');
+      if (assignmentsBody) {
+        const existingDetails = assignmentsBody.querySelector('details');
+        const keepOpen = existingDetails ? existingDetails.open : false;
+        fillContainer(assignmentsBody, buildAssignmentsBodyNodes(data, keepOpen));
+      }
+    }
+
+    if (projectsFingerprint(previous && previous.projects) !== projectsFingerprint(data.projects)) {
+      const projectsBody = document.getElementById('classroomProjectsBody');
+      if (projectsBody) fillContainer(projectsBody, buildProjectsBodyNodes(data));
+    }
+
+    if (helpFingerprint(previous && previous.help_request) !== helpFingerprint(data.help_request)) {
+      const helpContainer = document.getElementById('classroomHelpContainer');
+      if (helpContainer) {
+        helpContainer.innerHTML = '';
+        appendHelpWidget(helpContainer, { headingId: 'classroomHelpHeading', currentHelpRequest: data.help_request });
+      }
+    }
+  }
+
+  // ---- live classroom sync --------------------------------------------------
+  //
+  // Reuses the existing GET /classroom/ide/summary (no new endpoint, no
+  // WebSocket/SSE) so a joined learner's Classroom panel picks up instructor
+  // changes - a newly published assignment, a help request being answered -
+  // without a reload. One shared timer, one in-flight guard: there is never
+  // more than one summary request outstanding at a time, and the loop pauses
+  // entirely while the tab is hidden. Every tick is silent by default -
+  // announce() only fires for a genuinely new event (see applyClassroomSync),
+  // never "classroom refreshed" chatter, and DOM updates go through
+  // patchDashboardPanel's targeted per-section diff, never a full rebuild.
+
+  const SYNC_INTERVAL_MS = 9000;
+  const MIN_SYNC_GAP_MS = 1500;
+
+  const syncState = {
+    active: false,
+    timer: null,
+    inFlight: false,
+    lastSyncAt: 0,
+    lastSummary: null,
+    announcedAssignmentIds: null, // {id: true}
+    lastHelpStatus: null,
+  };
+
+  function moduleFingerprint(m) { return m ? JSON.stringify([m.module_id, m.index, m.total, m.title]) : 'none'; }
+  function assignmentsFingerprint(list) { return JSON.stringify((list || []).map(function (a) { return [a.id, a.state, a.title]; })); }
+  function projectsFingerprint(list) { return JSON.stringify((list || []).map(function (p) { return [p.id, p.done_checkpoints, p.total_checkpoints]; })); }
+  function helpFingerprint(hr) { return hr ? JSON.stringify([hr.id, hr.status]) : 'none'; }
+
+  // Assignments already present the moment sync starts are "already known,"
+  // not a live event - only an id that shows up AFTER this point is a real
+  // announcement candidate. This is client-side, session-only bookkeeping
+  // (cleared on reload) layered on top of the server's authoritative new/
+  // pending/seen state, never a replacement for it - see
+  // codeup.classroom.db.mark_assignments_seen, which this never calls.
+  function seedSyncBaseline(data) {
+    syncState.lastSummary = data;
+    const seen = {};
+    (data.assignments || []).forEach(function (a) { seen[a.id] = true; });
+    syncState.announcedAssignmentIds = seen;
+    syncState.lastHelpStatus = data.help_request ? data.help_request.status : null;
+  }
+
+  function stopClassroomSync() {
+    syncState.active = false;
+    if (syncState.timer) { clearInterval(syncState.timer); syncState.timer = null; }
+  }
+
+  function startClassroomSync() {
+    if (syncState.active) return;
+    syncState.active = true;
+    if (!document.hidden && !syncState.timer) {
+      syncState.timer = setInterval(function () { requestClassroomSync(); }, SYNC_INTERVAL_MS);
+    }
+  }
+
+  function requestClassroomSync(opts) {
+    opts = opts || {};
+    if (!syncState.active || document.hidden || syncState.inFlight) return;
+    const now = Date.now();
+    if (now - syncState.lastSyncAt < MIN_SYNC_GAP_MS) return; // de-dupe back-to-back triggers (focus + visibilitychange, etc.)
+    syncState.inFlight = true;
+    fetch('/classroom/ide/summary')
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        syncState.inFlight = false;
+        syncState.lastSyncAt = Date.now();
+        if (!data || !data.success) return; // silent - next opportunity retries automatically
+        applyClassroomSync(data);
+      })
+      .catch(function () {
+        syncState.inFlight = false;
+        syncState.lastSyncAt = Date.now();
+        // Background sync failure is silent and non-destructive - never
+        // replaces the panel with an error, never announces anything.
+      });
+  }
+
+  function applyClassroomSync(data) {
+    const previous = syncState.lastSummary;
+
+    if (!data.joined) {
+      const wasJoined = !!(previous && previous.joined);
+      syncState.lastSummary = data;
+      if (wasJoined) {
+        // Learner was removed/left via another tab or command - this is a
+        // real structural transition (joined <-> anonymous), not a routine
+        // poll, so a full re-render (not a targeted patch) is correct here.
+        stopClassroomSync();
+        if (mode === 'dashboard') fetchContextAndRender();
+      }
+      return;
+    }
+
+    const announced = syncState.announcedAssignmentIds || {};
+    (data.assignments || []).forEach(function (a) {
+      if (!announced[a.id]) {
+        announced[a.id] = true;
+        if (a.state === 'new') announce('New assignment: ' + a.title + '.');
+      }
+    });
+    syncState.announcedAssignmentIds = announced;
+
+    const newHelpStatus = data.help_request ? data.help_request.status : null;
+    if (newHelpStatus === 'helping' && syncState.lastHelpStatus !== 'helping') {
+      announce('Your instructor is helping you now.');
+    }
+    syncState.lastHelpStatus = newHelpStatus;
+
+    // Outside the dashboard panel (an assignment/project/lesson is the
+    // active content) there is nothing to patch - the active panel is never
+    // replaced by background sync - but the announcement above still fires.
+    if (mode === 'dashboard') patchDashboardPanel(previous, data);
+
+    syncState.lastSummary = data;
+  }
+
+  // Registered once at module scope (harmless no-ops until startClassroomSync
+  // has run) so the demo's teacher-tab/learner-tab switching gets an
+  // immediate catch-up instead of waiting out the full interval.
+  document.addEventListener('visibilitychange', function () {
+    if (!syncState.active) return;
+    if (document.hidden) {
+      if (syncState.timer) { clearInterval(syncState.timer); syncState.timer = null; }
+    } else {
+      requestClassroomSync({ immediate: true });
+      if (!syncState.timer) syncState.timer = setInterval(function () { requestClassroomSync(); }, SYNC_INTERVAL_MS);
+    }
+  });
+  window.addEventListener('focus', function () {
+    if (syncState.active && !document.hidden) requestClassroomSync({ immediate: true });
+  });
 
   // ---- init ------------------------------------------------------------------
 
@@ -846,9 +1129,14 @@
       // typed/spoken "join ABC123") can refresh straight to the joined
       // dashboard - see app.js's generic `classroom_refresh` check.
       window._classroomRefreshDashboard = fetchContextAndRender;
+      // Shares syncState.inFlight with requestClassroomSync so a manual
+      // refresh (join success, help-cancel) and the background poll never
+      // both have a /classroom/ide/summary request in flight at once.
+      syncState.inFlight = true;
       fetch('/classroom/ide/summary')
         .then(function (res) { return res.json(); })
         .then(function (data) {
+          syncState.inFlight = false;
           if (!data || !data.success) {
             panel.innerHTML = '';
             panel.appendChild(el('p', {
@@ -858,10 +1146,17 @@
             return;
           }
           contextData = data;
-          if (data.joined) renderDashboardPanel(panel, data);
-          else renderJoinPanel(panel, data);
+          if (data.joined) {
+            renderDashboardPanel(panel, data);
+            seedSyncBaseline(data);
+            startClassroomSync();
+          } else {
+            renderJoinPanel(panel, data);
+            stopClassroomSync();
+          }
         })
         .catch(function () {
+          syncState.inFlight = false;
           panel.innerHTML = '';
           panel.appendChild(el('p', {
             className: 'cu-notice cu-notice--error',
@@ -906,6 +1201,21 @@
     window._classroomOnRunResult = onRunResult;
     if (mode === 'assignment') {
       window._classroomReviewFix = reviewAiFix;
+    }
+    if (mode !== 'dashboard') {
+      // The dashboard branch of fetchContextAndRender seeds the sync
+      // baseline itself (reusing that same fetch); other modes need one
+      // dedicated /classroom/ide/summary call so a newly published
+      // assignment can still be announced while an assignment/project/
+      // lesson panel is the active content (see applyClassroomSync).
+      fetch('/classroom/ide/summary')
+        .then(function (res) { return res.json(); })
+        .then(function (data) {
+          if (!data || !data.success || !data.joined) return;
+          seedSyncBaseline(data);
+          startClassroomSync();
+        })
+        .catch(function () {});
     }
   }
 

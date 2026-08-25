@@ -635,6 +635,13 @@ body.theme-high-contrast .audio-blocks-palette .cu-button[data-category]::before
 .cu-help-content {
   padding: 0.3rem 0.8rem 0.75rem;
 }
+/* Explicit fallback for the native details-collapse rendering (some
+   embedded/WebView-based Chromium builds don't apply it): guarantees a
+   closed .cu-disclosure's body is actually display:none, not just missing
+   the [open] attribute, so its controls are never in the tab order. */
+.cu-disclosure:not([open]) > .cu-disclosure-body {
+  display: none;
+}
 .cu-tools-row,
 .audio-blocks-actions-row {
   display: flex;

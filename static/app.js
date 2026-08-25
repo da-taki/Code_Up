@@ -1020,6 +1020,7 @@ function focusNamedTarget(targetId) {
     }
     return;
   }
+  if (typeof window._classroomReveal === 'function') window._classroomReveal(targetId);
   const el = document.getElementById(targetId);
   if (!el) {
     srAnnounce('That part of the classroom panel is not open right now.');
@@ -3787,6 +3788,7 @@ async function handleConfirmedAction(action, payload) {
   // normal action/message - move real keyboard focus there too, silently
   // (no extra announcement; the response's own speech already covers it).
   if (payload && payload.focus_hint) {
+    if (typeof window._classroomReveal === 'function') window._classroomReveal(payload.focus_hint);
     const target = document.getElementById(payload.focus_hint);
     if (target) { try { target.focus(); } catch (e) {} }
   }

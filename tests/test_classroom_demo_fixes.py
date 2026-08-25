@@ -454,7 +454,7 @@ def test_instructor_sync_never_touches_the_assignment_form():
     """The polling patch functions must only reference the learner-table
     and help-queue ids - never the "Create an assignment" form's field ids
     - so a poll can never discard an instructor's in-progress typed draft."""
-    for fn in ("patchLearnersTable", "patchHelpQueueLink", "applySync"):
+    for fn in ("reconcileLearnersTable", "patchHelpQueueLink", "applySync"):
         body = _fn_body(INSTRUCTOR_SYNC_JS, fn)
         assert "a_title" not in body
         assert "a_instructions" not in body
@@ -462,16 +462,21 @@ def test_instructor_sync_never_touches_the_assignment_form():
 
 
 def test_instructor_sync_only_patches_on_meaningful_change():
-    body = _fn_body(INSTRUCTOR_SYNC_JS, "applySync")
-    assert "learnersFingerprint(previous.learners) !== learnersFingerprint(data.learners)" in body
-    assert "previous.open_help_count !== data.open_help_count" in body
+    body = _fn_body(INSTRUCTOR_SYNC_JS, "patchHelpQueueLink")
+    assert "state.lastOpenHelpCount === data.open_help_count" in body
+    heading_body = _fn_body(INSTRUCTOR_SYNC_JS, "reconcileLearnersTable")
+    assert "state.lastLearnerCount !== data.learner_count" in heading_body
 
 
-def test_instructor_sync_is_silent_no_announcements_no_new_live_region():
-    assert "announce(" not in INSTRUCTOR_SYNC_JS
+def test_instructor_sync_reuses_existing_live_region_no_new_one():
+    """Post-demo hardening adds meaningful-event announcements (section E),
+    but they must reuse the single existing #srAnnouncer already on every
+    classroom page - never a second live region, never a TTS/speak engine
+    (this page has none)."""
+    assert "getElementById('srAnnouncer')" in INSTRUCTOR_SYNC_JS
     assert "speak(" not in INSTRUCTOR_SYNC_JS
-    assert "srAnnounce(" not in INSTRUCTOR_SYNC_JS
     assert not re.search(r"setAttribute\(\s*['\"]aria-live['\"]", INSTRUCTOR_SYNC_JS)
+    assert INSTRUCTOR_SYNC_JS.count("getElementById('srAnnouncer')") == 1
 
 
 def test_instructor_sync_network_failure_is_silent():

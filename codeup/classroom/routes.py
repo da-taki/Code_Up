@@ -235,6 +235,40 @@ def _derive_live_status(learner: Dict[str, Any], events: list, help_status: Opti
     return "working"
 
 
+def _help_status_by_learner(cohort_id):
+    """Shared by cohort_dashboard and cohort_live_summary so their "is this
+    learner waiting for help" classification can never quietly drift apart."""
+    open_help = db.list_help_requests(cohort_id, status="open")
+    helping_help = db.list_help_requests(cohort_id, status="helping")
+    status = {hr["learner_id"]: "open" for hr in open_help}
+    status.update({hr["learner_id"]: "helping" for hr in helping_help})
+    return status, open_help
+
+
+def _learner_progress(learner, assignments, help_status_by_learner):
+    """One learner's row of progress data - the exact same DB reads and
+    computation for both the rendered cohort dashboard and its JSON
+    live-summary poll target (static/instructor-sync.js), so a "shortcut"
+    taken in one can never silently diverge from the other."""
+    progress_rows = db.list_progress_for_learner(learner["id"])
+    submitted = sum(1 for r in progress_rows if r["status"] == "submitted")
+    concept_states = concepts_mod.summary_for_learner(learner["id"])
+    demonstrated = sum(1 for s in concept_states.values() if s == "demonstrated")
+    events = db.list_events_for_learner(learner["id"], limit=5)
+    module_rows = db.list_module_progress(learner["id"])
+    modules_completed = sum(1 for m in module_rows if m["status"] == "completed")
+    return {
+        "assignments_submitted": submitted,
+        "assignments_total": len(assignments),
+        "concepts_demonstrated": demonstrated,
+        "concepts_total": len(concepts_mod.CURRICULUM_CONCEPTS),
+        "recent_activity": events,
+        "modules_completed": modules_completed,
+        "modules_total": len(curriculum.MODULE_ORDER),
+        "live_status": _derive_live_status(learner, events, help_status_by_learner.get(learner["id"])),
+    }
+
+
 @classroom_bp.route("/cohorts/<int:cohort_id>", methods=["GET"])
 @require_instructor
 def cohort_dashboard(instructor, cohort_id):
@@ -244,31 +278,12 @@ def cohort_dashboard(instructor, cohort_id):
 
     learners = db.list_learners_for_cohort(cohort_id)
     assignments = db.list_assignments_for_cohort(cohort_id)
-    open_help = db.list_help_requests(cohort_id, status="open")
-    helping_help = db.list_help_requests(cohort_id, status="helping")
-    help_status_by_learner = {hr["learner_id"]: "open" for hr in open_help}
-    help_status_by_learner.update({hr["learner_id"]: "helping" for hr in helping_help})
+    help_status_by_learner, open_help = _help_status_by_learner(cohort_id)
 
-    learner_rows = []
-    for learner in learners:
-        progress_rows = db.list_progress_for_learner(learner["id"])
-        submitted = sum(1 for r in progress_rows if r["status"] == "submitted")
-        concept_states = concepts_mod.summary_for_learner(learner["id"])
-        demonstrated = sum(1 for s in concept_states.values() if s == "demonstrated")
-        events = db.list_events_for_learner(learner["id"], limit=5)
-        module_rows = db.list_module_progress(learner["id"])
-        modules_completed = sum(1 for m in module_rows if m["status"] == "completed")
-        learner_rows.append({
-            "learner": learner,
-            "assignments_submitted": submitted,
-            "assignments_total": len(assignments),
-            "concepts_demonstrated": demonstrated,
-            "concepts_total": len(concepts_mod.CURRICULUM_CONCEPTS),
-            "recent_activity": events,
-            "modules_completed": modules_completed,
-            "modules_total": len(curriculum.MODULE_ORDER),
-            "live_status": _derive_live_status(learner, events, help_status_by_learner.get(learner["id"])),
-        })
+    learner_rows = [
+        {"learner": learner, **_learner_progress(learner, assignments, help_status_by_learner)}
+        for learner in learners
+    ]
 
     impact = reports.build_cohort_impact_summary(cohort_id)
 
@@ -280,6 +295,17 @@ def cohort_dashboard(instructor, cohort_id):
     )
 
 
+# Event kinds surfaced (and, client-side, announced) by cohort_live_summary -
+# a deliberate allowlist, not every codeup.classroom.db.log_event() kind.
+# progress_events also carries much higher-frequency, non-notification-
+# worthy kinds (assignment_autosave fires on every debounced keystroke save,
+# lesson_progress/quiz_submitted/module_restarted/concept_evidence are
+# routine curriculum bookkeeping) that a screen-reader instructor must never
+# hear about on a routine poll.
+_LIVE_SUMMARY_EVENT_KINDS = {"learner_joined", "help_requested", "assignment_submitted"}
+_LIVE_SUMMARY_EVENT_LIMIT = 20
+
+
 @classroom_bp.route("/cohorts/<int:cohort_id>/live-summary", methods=["GET"])
 @require_instructor
 def cohort_live_summary(instructor, cohort_id):
@@ -287,46 +313,60 @@ def cohort_live_summary(instructor, cohort_id):
     sync (static/instructor-sync.js) - reuses exactly the same DB reads as
     cohort_dashboard above, just serialized for a targeted DOM patch instead
     of a full page render. No new infrastructure: plain polling, same data,
-    same authorization."""
+    same authorization.
+
+    Also carries a small, cohort-scoped, allowlisted recent-events feed
+    (each with a stable auto-increment id) so the client can announce a
+    genuinely new join/help-request/submission exactly once - see
+    _LIVE_SUMMARY_EVENT_KINDS above and instructor-sync.js's
+    lastSeenEventId dedupe."""
     cohort = _own_cohort_or_404(instructor, cohort_id)
     if not cohort:
         return jsonify({"success": False, "error": "not_found"}), 404
 
     learners = db.list_learners_for_cohort(cohort_id)
     assignments = db.list_assignments_for_cohort(cohort_id)
-    open_help = db.list_help_requests(cohort_id, status="open")
-    helping_help = db.list_help_requests(cohort_id, status="helping")
-    help_status_by_learner = {hr["learner_id"]: "open" for hr in open_help}
-    help_status_by_learner.update({hr["learner_id"]: "helping" for hr in helping_help})
+    help_status_by_learner, open_help = _help_status_by_learner(cohort_id)
 
     learner_rows = []
     for learner in learners:
-        progress_rows = db.list_progress_for_learner(learner["id"])
-        submitted = sum(1 for r in progress_rows if r["status"] == "submitted")
-        concept_states = concepts_mod.summary_for_learner(learner["id"])
-        demonstrated = sum(1 for s in concept_states.values() if s == "demonstrated")
-        events = db.list_events_for_learner(learner["id"], limit=5)
-        module_rows = db.list_module_progress(learner["id"])
-        modules_completed = sum(1 for m in module_rows if m["status"] == "completed")
+        progress = _learner_progress(learner, assignments, help_status_by_learner)
         learner_rows.append({
             "id": learner["id"],
             "display_name": learner["display_name"],
             "detail_url": url_for("classroom.learner_detail", cohort_id=cohort_id, learner_id=learner["id"]),
-            "live_status": _derive_live_status(learner, events, help_status_by_learner.get(learner["id"])),
+            "live_status": progress["live_status"],
             "last_active_at": learner.get("last_active_at") or "Never",
-            "modules_completed": modules_completed,
-            "modules_total": len(curriculum.MODULE_ORDER),
-            "assignments_submitted": submitted,
-            "assignments_total": len(assignments),
-            "concepts_demonstrated": demonstrated,
-            "concepts_total": len(concepts_mod.CURRICULUM_CONCEPTS),
+            "modules_completed": progress["modules_completed"],
+            "modules_total": progress["modules_total"],
+            "assignments_submitted": progress["assignments_submitted"],
+            "assignments_total": progress["assignments_total"],
+            "concepts_demonstrated": progress["concepts_demonstrated"],
+            "concepts_total": progress["concepts_total"],
         })
+
+    assignment_titles = {a["id"]: a["title"] for a in assignments}
+    events = []
+    for e in db.list_events_for_cohort(cohort_id, limit=100):
+        if e["kind"] not in _LIVE_SUMMARY_EVENT_KINDS:
+            continue
+        entry = {
+            "id": e["id"], "kind": e["kind"],
+            "learner_name": e.get("display_name") or "A learner",
+            "created_at": e["created_at"],
+        }
+        if e["kind"] == "assignment_submitted":
+            entry["assignment_title"] = assignment_titles.get((e.get("payload") or {}).get("assignment_id"))
+        events.append(entry)
+        if len(events) >= _LIVE_SUMMARY_EVENT_LIMIT:
+            break
 
     return jsonify({
         "success": True,
         "learner_count": len(learners),
         "learners": learner_rows,
         "open_help_count": len(open_help),
+        "events": events,
     })
 
 

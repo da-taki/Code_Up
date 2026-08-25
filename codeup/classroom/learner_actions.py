@@ -31,6 +31,10 @@ def join_cohort_by_code(join_code: str, display_name: str) -> Dict[str, Any]:
     if not cohort:
         return {"success": False, "error": "not_found"}
     learner = db.join_cohort(cohort["id"], name)
+    try:
+        db.log_event(learner["id"], cohort["id"], "learner_joined", {})
+    except Exception:
+        pass  # the join itself already succeeded; the activity-log entry is best-effort
     return {"success": True, "cohort": cohort, "learner": learner}
 
 

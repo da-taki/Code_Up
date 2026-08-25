@@ -56,7 +56,7 @@
       </thead>
       <tbody>
         {% for row in learner_rows %}
-        <tr>
+        <tr data-learner-id="{{ row.learner.id }}">
           <td><a href="{{ url_for('classroom.learner_detail', cohort_id=cohort.id, learner_id=row.learner.id) }}">{{ row.learner.display_name }}</a></td>
           <td><span class="cu-badge">{{ row.live_status }}</span></td>
           <td>{{ row.learner.last_active_at or 'Never' }}</td>

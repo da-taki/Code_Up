@@ -224,6 +224,7 @@ CREATE TABLE IF NOT EXISTS progress_events (
 CREATE INDEX IF NOT EXISTS idx_learners_cohort ON learners(cohort_id);
 CREATE INDEX IF NOT EXISTS idx_assignments_cohort ON assignments(cohort_id);
 CREATE INDEX IF NOT EXISTS idx_progress_events_learner ON progress_events(learner_id);
+CREATE INDEX IF NOT EXISTS idx_progress_events_cohort ON progress_events(cohort_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_help_requests_cohort ON help_requests(cohort_id, status);
 CREATE INDEX IF NOT EXISTS idx_module_progress_learner ON module_progress(learner_id);
 CREATE INDEX IF NOT EXISTS idx_custom_lessons_cohort ON custom_lessons(cohort_id);

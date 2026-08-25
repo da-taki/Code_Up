@@ -159,8 +159,11 @@ def test_reconcile_never_does_a_full_tbody_rebuild():
 
 
 def test_existing_rows_are_updated_in_place_not_recreated():
-    body = _fn_body(INSTRUCTOR_SYNC_JS, "reconcileLearnersTable")
-    assert "updateLearnerRow(row, l)" in body
+    """reconcileLearnersTable delegates the actual diff to the shared
+    reconcileTable() helper (also used by the assignments table) - wired
+    with updateLearnerRow as its per-row updater."""
+    wiring = _fn_body(INSTRUCTOR_SYNC_JS, "reconcileLearnersTable")
+    assert "updateRow: updateLearnerRow" in wiring
     update_body = _fn_body(INSTRUCTOR_SYNC_JS, "updateLearnerRow")
     # Field-level equality guards - never an unconditional textContent write
     # that would be indistinguishable from a real change to assistive tech.
@@ -169,20 +172,36 @@ def test_existing_rows_are_updated_in_place_not_recreated():
 
 def test_reordering_uses_minimal_insertBefore_moves():
     """Learners are server-sorted alphabetically (display_name), so a new
-    arrival can belong in the middle - the reconciliation must walk a
-    cursor and only call insertBefore when a row is genuinely out of
-    place, never touching rows that are already correctly positioned."""
-    body = _fn_body(INSTRUCTOR_SYNC_JS, "reconcileLearnersTable")
+    arrival can belong in the middle - the shared reconcileTable() helper
+    must walk a cursor and only call insertBefore when a row is genuinely
+    out of place, never touching rows that are already correctly
+    positioned. Both the learners and assignments tables use this same
+    helper (see test_assignments_table_reuses_the_same_reconciler)."""
+    body = _fn_body(INSTRUCTOR_SYNC_JS, "reconcileTable")
     assert "tbody.insertBefore(row, cursor)" in body
     assert "cursor = cursor.nextSibling" in body
 
 
 def test_removed_learner_moves_focus_and_announces():
-    body = _fn_body(INSTRUCTOR_SYNC_JS, "reconcileLearnersTable")
-    assert "row.contains(document.activeElement)" in body
-    assert "heading.setAttribute('tabindex', '-1')" in body
-    assert "heading.focus()" in body
-    assert "is no longer in this cohort" in body
+    generic = _fn_body(INSTRUCTOR_SYNC_JS, "reconcileTable")
+    assert "row.contains(document.activeElement)" in generic
+    wiring = _fn_body(INSTRUCTOR_SYNC_JS, "reconcileLearnersTable")
+    assert "onRemoveIfFocused:" in wiring
+    assert "heading.setAttribute('tabindex', '-1')" in wiring
+    assert "heading.focus()" in wiring
+    assert "is no longer in this cohort" in wiring
+
+
+def test_assignments_table_reuses_the_same_reconciler():
+    """The optional assignments-table live patch (section 3 of the
+    hardening ask) reuses reconcileTable() instead of duplicating the
+    diff/insert/remove algorithm a second time."""
+    wiring = _fn_body(INSTRUCTOR_SYNC_JS, "reconcileAssignmentsTable")
+    assert "reconcileTable({" in wiring
+    assert "updateRow: updateAssignmentRow" in wiring
+    # No onRemoveIfFocused property passed in the options object - this app
+    # has no delete-assignment action.
+    assert re.search(r"onRemoveIfFocused\s*:\s*function", wiring) is None
 
 
 def test_seed_existing_rows_prevents_duplicate_rows_on_first_poll():
@@ -203,7 +222,12 @@ def test_template_marks_rows_with_learner_id(instructor_client, learner_client):
 
 
 def test_never_touches_assignment_form_fields():
-    for fn in ("reconcileLearnersTable", "updateLearnerRow", "patchHelpQueueLink", "applySync"):
+    """Even the assignments TABLE reconciliation (which now polls the same
+    endpoint that also carries the "Create an assignment" form's data)
+    must never reference the form's own field ids - the table and the form
+    are a completely separate part of the page."""
+    for fn in ("reconcileLearnersTable", "updateLearnerRow", "reconcileAssignmentsTable",
+               "updateAssignmentRow", "patchHelpQueueLink", "applySync"):
         body = _fn_body(INSTRUCTOR_SYNC_JS, fn)
         assert "a_title" not in body
         assert "a_instructions" not in body
@@ -391,3 +415,26 @@ def test_duplicate_submit_does_not_create_duplicate_progress_rows(instructor_cli
     matching = [row for row in rows if row["assignment_id"] == int(assignment_id)]
     assert len(matching) == 1
     assert matching[0]["code"] == "x=2"  # the later submission won, not a duplicate
+
+
+# ================================================================
+# Optional assignments-table live sync (section 3 of the third pass)
+# ================================================================
+
+def test_live_summary_carries_assignments_for_the_table_reconciler(instructor_client):
+    _join_code, cohort_id = _make_cohort(instructor_client, username="hardening_assignsync")
+    assignment_id = _publish_assignment(instructor_client, cohort_id, title="Student Marks Program")
+
+    summary = instructor_client.get(f"/classroom/cohorts/{cohort_id}/live-summary").get_json()
+    assert "assignments" in summary
+    row = next(a for a in summary["assignments"] if a["id"] == int(assignment_id))
+    assert row["title"] == "Student Marks Program"
+    assert row["status"] == "published"
+    assert row["detail_url"] == f"/classroom/assignments/{assignment_id}"
+
+
+def test_template_marks_assignment_rows_with_assignment_id(instructor_client):
+    _join_code, cohort_id = _make_cohort(instructor_client, username="hardening_assignrowid")
+    _publish_assignment(instructor_client, cohort_id)
+    html = instructor_client.get(f"/classroom/cohorts/{cohort_id}").get_data(as_text=True)
+    assert "data-assignment-id=" in html

@@ -32,7 +32,9 @@
     <form method="post" action="{{ url_for('classroom.rename_cohort', cohort_id=cohort.id) }}" novalidate>
       <div class="cu-field">
         <label for="rename_input">Rename cohort</label>
-        <input type="text" id="rename_input" name="name" value="{{ cohort.name }}" maxlength="120" required>
+        <input type="text" id="rename_input" name="name" value="{{ rename_value if rename_error else cohort.name }}" maxlength="120" required
+               {% if rename_error %}aria-invalid="true" aria-describedby="rename_input_error" data-focus-on-error{% endif %}>
+        {% if rename_error %}<p id="rename_input_error" class="cu-field-error">{{ rename_error }}</p>{% endif %}
       </div>
       <button type="submit" class="cu-button cu-button-secondary">Save name</button>
     </form>
@@ -78,42 +80,45 @@
     <form method="post" action="{{ url_for('classroom.create_assignment', cohort_id=cohort.id) }}" novalidate>
       <div class="cu-field">
         <label for="a_title">Title</label>
-        <input type="text" id="a_title" name="title" maxlength="200" required>
+        <input type="text" id="a_title" name="title" maxlength="200" required value="{{ assignment_form.title if assignment_form else '' }}"
+               {% if assignment_title_error %}aria-invalid="true" aria-describedby="a_title_error" data-focus-on-error{% endif %}>
+        {% if assignment_title_error %}<p id="a_title_error" class="cu-field-error">{{ assignment_title_error }}</p>{% endif %}
       </div>
       <div class="cu-field">
         <label for="a_instructions">Instructions</label>
-        <textarea id="a_instructions" name="instructions" rows="5"></textarea>
+        <textarea id="a_instructions" name="instructions" rows="5">{{ assignment_form.instructions if assignment_form else '' }}</textarea>
       </div>
       <div class="cu-field">
         <label for="a_starter">Starter code</label>
-        <textarea id="a_starter" name="starter_code" rows="6"></textarea>
+        <textarea id="a_starter" name="starter_code" rows="6">{{ assignment_form.starter_code if assignment_form else '' }}</textarea>
       </div>
       <div class="cu-field">
         <label for="a_start">Start (optional)</label>
-        <input type="datetime-local" id="a_start" name="start_at">
+        <input type="datetime-local" id="a_start" name="start_at" value="{{ assignment_form.start_at if assignment_form else '' }}">
       </div>
       <div class="cu-field">
         <label for="a_due">Due date</label>
-        <input type="date" id="a_due" name="due_date">
+        <input type="date" id="a_due" name="due_date" value="{{ assignment_form.due_date if assignment_form else '' }}">
       </div>
       <div class="cu-field">
         <label for="a_end">End / close (optional)</label>
-        <input type="datetime-local" id="a_end" name="end_at">
+        <input type="datetime-local" id="a_end" name="end_at" value="{{ assignment_form.end_at if assignment_form else '' }}">
       </div>
       <div class="cu-field">
         <label for="a_concepts">Expected concepts (comma separated)</label>
-        <input type="text" id="a_concepts" name="expected_concepts" placeholder="dictionaries, variables, print output">
+        <input type="text" id="a_concepts" name="expected_concepts" placeholder="dictionaries, variables, print output" value="{{ assignment_form.expected_concepts if assignment_form else '' }}">
       </div>
       <div class="cu-field">
         <label for="a_policy">AI policy preset (you can fine-tune individual permissions after creating)</label>
         <select id="a_policy" name="ai_policy">
+          {% set selected_policy = assignment_form.ai_policy if assignment_form else 'FULL' %}
           {% for policy in ai_policies %}
-          <option value="{{ policy }}" {% if policy == 'FULL' %}selected{% endif %}>{{ policy }}</option>
+          <option value="{{ policy }}" {% if policy == selected_policy %}selected{% endif %}>{{ policy }}</option>
           {% endfor %}
         </select>
       </div>
       <div class="cu-field">
-        <input type="checkbox" id="a_assessment" name="is_assessment">
+        <input type="checkbox" id="a_assessment" name="is_assessment" {% if assignment_form and assignment_form.is_assessment %}checked{% endif %}>
         <label for="a_assessment" style="display:inline;font-weight:normal;">This is an assessment</label>
       </div>
       <button type="submit" class="cu-button cu-button-primary">Create assignment (draft)</button>
@@ -122,8 +127,9 @@
 
   <section class="cu-panel" aria-labelledby="assignmentsHeading">
     <h2 id="assignmentsHeading">Assignments</h2>
+    <div id="assignmentsTableWrap">
     {% if assignments %}
-    <table class="cu-table">
+    <table class="cu-table" id="assignmentsTable">
       <caption class="sr-only">Assignments in this cohort</caption>
       <thead>
         <tr>
@@ -135,7 +141,7 @@
       </thead>
       <tbody>
         {% for a in assignments %}
-        <tr>
+        <tr data-assignment-id="{{ a.id }}">
           <td><a href="{{ url_for('classroom.assignment_detail', assignment_id=a.id) }}">{{ a.title }}</a></td>
           <td><span class="cu-badge cu-badge--{{ a.status }}">{{ a.status }}</span></td>
           <td>{{ a.ai_policy }}</td>
@@ -147,8 +153,10 @@
     {% else %}
       <p>No assignments yet.</p>
     {% endif %}
+    </div>
   </section>
 {% endblock %}
 {% block scripts %}
   <script src="/static/instructor-sync.js" data-cohort-id="{{ cohort.id }}"></script>
+  <script src="/static/form-error-focus.js"></script>
 {% endblock %}

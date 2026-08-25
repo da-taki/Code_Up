@@ -151,16 +151,25 @@ def instructor_logout():
 
 # ---- instructor: cohorts ---------------------------------------------------------
 
-@classroom_bp.route("/instructor", methods=["GET"])
-@require_instructor
-def instructor_dashboard(instructor):
+def _render_instructor_dashboard(instructor, *, cohort_name_error=None, cohort_name_value=""):
+    """Shared by the GET view and create_cohort's validation-failure path,
+    so a rejected submission re-renders the exact same page (not a
+    redirect to a blank one) with the error, the field's own previously-
+    typed value, and nothing else disturbed."""
     cohorts = db.list_cohorts_for_instructor(instructor["id"])
     for cohort in cohorts:
         cohort["learner_count"] = len(db.list_learners_for_cohort(cohort["id"]))
     return render_template(
         "classroom/instructor_dashboard.html", instructor=instructor, cohorts=cohorts,
         groq_status_url=url_for("classroom.groq_status"),
+        cohort_name_error=cohort_name_error, cohort_name_value=cohort_name_value,
     )
+
+
+@classroom_bp.route("/instructor", methods=["GET"])
+@require_instructor
+def instructor_dashboard(instructor):
+    return _render_instructor_dashboard(instructor)
 
 
 @classroom_bp.route("/admin/groq-status", methods=["GET"])
@@ -177,19 +186,28 @@ def groq_status(instructor):
 @require_instructor
 def create_cohort(instructor):
     name = (request.form.get("name") or "").strip()
-    if name:
-        db.create_cohort(instructor["id"], name)
+    if not name:
+        return _render_instructor_dashboard(
+            instructor, cohort_name_error="Cohort name is required.",
+            cohort_name_value=request.form.get("name") or "",
+        )
+    db.create_cohort(instructor["id"], name)
     return redirect(url_for("classroom.instructor_dashboard"))
 
 
 @classroom_bp.route("/cohorts/<int:cohort_id>/rename", methods=["POST"])
 @require_instructor
 def rename_cohort(instructor, cohort_id):
-    if not _own_cohort_or_404(instructor, cohort_id):
+    cohort = _own_cohort_or_404(instructor, cohort_id)
+    if not cohort:
         return redirect(url_for("classroom.instructor_dashboard"))
     name = (request.form.get("name") or "").strip()
-    if name:
-        db.rename_cohort(cohort_id, instructor["id"], name)
+    if not name:
+        return _render_cohort_dashboard(
+            instructor, cohort, rename_error="Cohort name is required.",
+            rename_value=request.form.get("name") or "",
+        )
+    db.rename_cohort(cohort_id, instructor["id"], name)
     return redirect(url_for("classroom.cohort_dashboard", cohort_id=cohort_id))
 
 
@@ -269,13 +287,14 @@ def _learner_progress(learner, assignments, help_status_by_learner):
     }
 
 
-@classroom_bp.route("/cohorts/<int:cohort_id>", methods=["GET"])
-@require_instructor
-def cohort_dashboard(instructor, cohort_id):
-    cohort = _own_cohort_or_404(instructor, cohort_id)
-    if not cohort:
-        return redirect(url_for("classroom.instructor_dashboard"))
-
+def _render_cohort_dashboard(instructor, cohort, *, rename_error=None, rename_value=None,
+                              assignment_title_error=None, assignment_form=None):
+    """Shared by the GET view and rename_cohort/create_assignment's
+    validation-failure paths, so a rejected submission re-renders the exact
+    same page (not a redirect to a blank one) with the error, the offending
+    field's own previously-typed value, and every other field on the page
+    (including the OTHER form) completely undisturbed."""
+    cohort_id = cohort["id"]
     learners = db.list_learners_for_cohort(cohort_id)
     assignments = db.list_assignments_for_cohort(cohort_id)
     help_status_by_learner, open_help = _help_status_by_learner(cohort_id)
@@ -292,7 +311,18 @@ def cohort_dashboard(instructor, cohort_id):
         instructor=instructor, cohort=cohort, learner_rows=learner_rows,
         assignments=assignments, open_help_count=len(open_help),
         ai_policies=ai_policy.POLICIES, impact=impact,
+        rename_error=rename_error, rename_value=rename_value,
+        assignment_title_error=assignment_title_error, assignment_form=assignment_form,
     )
+
+
+@classroom_bp.route("/cohorts/<int:cohort_id>", methods=["GET"])
+@require_instructor
+def cohort_dashboard(instructor, cohort_id):
+    cohort = _own_cohort_or_404(instructor, cohort_id)
+    if not cohort:
+        return redirect(url_for("classroom.instructor_dashboard"))
+    return _render_cohort_dashboard(instructor, cohort)
 
 
 # Event kinds surfaced (and, client-side, announced) by cohort_live_summary -
@@ -361,12 +391,22 @@ def cohort_live_summary(instructor, cohort_id):
         if len(events) >= _LIVE_SUMMARY_EVENT_LIMIT:
             break
 
+    assignment_rows = [
+        {
+            "id": a["id"], "title": a["title"], "status": a["status"],
+            "ai_policy": a["ai_policy"], "due_date": a["due_date"] or "-",
+            "detail_url": url_for("classroom.assignment_detail", assignment_id=a["id"]),
+        }
+        for a in assignments
+    ]
+
     return jsonify({
         "success": True,
         "learner_count": len(learners),
         "learners": learner_rows,
         "open_help_count": len(open_help),
         "events": events,
+        "assignments": assignment_rows,
     })
 
 
@@ -433,7 +473,20 @@ def create_assignment(instructor, cohort_id):
 
     title = (request.form.get("title") or "").strip()
     if not title:
-        return redirect(url_for("classroom.cohort_dashboard", cohort_id=cohort_id))
+        return _render_cohort_dashboard(
+            instructor, cohort, assignment_title_error="Assignment title is required.",
+            assignment_form={
+                "title": request.form.get("title") or "",
+                "instructions": request.form.get("instructions") or "",
+                "starter_code": request.form.get("starter_code") or "",
+                "start_at": request.form.get("start_at") or "",
+                "due_date": request.form.get("due_date") or "",
+                "end_at": request.form.get("end_at") or "",
+                "expected_concepts": request.form.get("expected_concepts") or "",
+                "ai_policy": request.form.get("ai_policy") or "FULL",
+                "is_assessment": request.form.get("is_assessment") == "on",
+            },
+        )
     instructions = request.form.get("instructions") or ""
     starter_code = request.form.get("starter_code") or ""
     due_date = (request.form.get("due_date") or "").strip() or None
@@ -1406,14 +1459,26 @@ def complete_onboarding(learner):
 # INSTRUCTOR-AUTHORED LESSONS
 # ============================================================================
 
+def _render_custom_lessons(instructor, cohort, *, title_error=None):
+    """Shared by the GET view and create_custom_lesson's validation-failure
+    path. The lesson form is re-populated straight from request.form (Flask
+    injects `request` as a template global) on failure - see
+    templates/classroom/custom_lessons.html - rather than re-listing every
+    one of its ~10 fields here by hand."""
+    lessons = db.list_custom_lessons(cohort["id"])
+    return render_template(
+        "classroom/custom_lessons.html", instructor=instructor, cohort=cohort, lessons=lessons,
+        lesson_title_error=title_error,
+    )
+
+
 @classroom_bp.route("/cohorts/<int:cohort_id>/lessons", methods=["GET"])
 @require_instructor
 def custom_lessons_list(instructor, cohort_id):
     cohort = _own_cohort_or_404(instructor, cohort_id)
     if not cohort:
         return redirect(url_for("classroom.instructor_dashboard"))
-    lessons = db.list_custom_lessons(cohort_id)
-    return render_template("classroom/custom_lessons.html", instructor=instructor, cohort=cohort, lessons=lessons)
+    return _render_custom_lessons(instructor, cohort)
 
 
 @classroom_bp.route("/cohorts/<int:cohort_id>/lessons", methods=["POST"])
@@ -1424,7 +1489,7 @@ def create_custom_lesson(instructor, cohort_id):
         return redirect(url_for("classroom.instructor_dashboard"))
     title = (request.form.get("title") or "").strip()
     if not title:
-        return redirect(url_for("classroom.custom_lessons_list", cohort_id=cohort_id))
+        return _render_custom_lessons(instructor, cohort, title_error="Lesson title is required.")
     choices = [c.strip() for c in (request.form.get("quiz_choices") or "").split("\n") if c.strip()]
     answer_index = None
     try:
@@ -1454,17 +1519,25 @@ def create_custom_lesson(instructor, cohort_id):
 # INSTRUCTOR-AUTHORED GUIDED PROJECTS
 # ============================================================================
 
+def _render_custom_projects(instructor, cohort, *, title_error=None):
+    """Shared by the GET view and create_custom_project's validation-
+    failure path - see _render_custom_lessons for why the form fields
+    (including the 5 fixed checkpoint rows) are re-populated straight from
+    request.form in the template rather than listed here by hand."""
+    projects = db.list_custom_projects(cohort["id"])
+    return render_template(
+        "classroom/custom_projects.html", instructor=instructor, cohort=cohort, projects=projects,
+        check_types=guided_projects.CUSTOM_CHECK_TYPES, project_title_error=title_error,
+    )
+
+
 @classroom_bp.route("/cohorts/<int:cohort_id>/projects", methods=["GET"])
 @require_instructor
 def custom_projects_list(instructor, cohort_id):
     cohort = _own_cohort_or_404(instructor, cohort_id)
     if not cohort:
         return redirect(url_for("classroom.instructor_dashboard"))
-    projects = db.list_custom_projects(cohort_id)
-    return render_template(
-        "classroom/custom_projects.html", instructor=instructor, cohort=cohort, projects=projects,
-        check_types=guided_projects.CUSTOM_CHECK_TYPES,
-    )
+    return _render_custom_projects(instructor, cohort)
 
 
 @classroom_bp.route("/cohorts/<int:cohort_id>/projects", methods=["POST"])
@@ -1475,7 +1548,7 @@ def create_custom_project(instructor, cohort_id):
         return redirect(url_for("classroom.instructor_dashboard"))
     title = (request.form.get("title") or "").strip()
     if not title:
-        return redirect(url_for("classroom.custom_projects_list", cohort_id=cohort_id))
+        return _render_custom_projects(instructor, cohort, title_error="Guided project title is required.")
 
     checkpoints = []
     labels = request.form.getlist("checkpoint_label")

@@ -39,7 +39,8 @@
     lastLearnerCount: null,
     lastOpenHelpCount: null,
     lastSeenEventId: null, // null until the first successful sync seeds it
-    rowsById: {}, // learner id (string) -> <tr> already in the table
+    learnerRowsById: {}, // learner id (string) -> <tr> already in the table
+    assignmentRowsById: {}, // assignment id (string) -> <tr> already in the table
   };
 
   // ---- accessible event announcements ----------------------------------
@@ -157,53 +158,50 @@
     return table;
   }
 
-  // Learners are server-sorted alphabetically (see
-  // codeup.classroom.db.list_learners_for_cohort), so a newly-joined
-  // learner can belong in the middle of the table, not just at the end.
-  // This walks the new order against the current DOM order and moves only
-  // the rows that are genuinely out of place - insertBefore() on a node
-  // already in the document repositions it without destroying it, so a
-  // moved row keeps its focus/selection state if it happened to have any.
-  function reconcileLearnersTable(data) {
-    var heading = document.getElementById('learnersHeading');
-    if (heading && state.lastLearnerCount !== data.learner_count) {
-      heading.textContent = 'Learners (' + data.learner_count + ')';
-      state.lastLearnerCount = data.learner_count;
-    }
-
-    var wrap = document.getElementById('learnersTableWrap');
+  // Generic "diff a server list against a <tbody>'s current rows" used by
+  // both the learners table and the assignments table below. Items are
+  // server-sorted (alphabetically for learners, newest-first for
+  // assignments), so a new arrival can belong anywhere in the list, not
+  // just the end - this walks the new order against the current DOM order
+  // and moves only the rows that are genuinely out of place.
+  // insertBefore() on a node already in the document repositions it
+  // without destroying it, so a moved row keeps its focus/selection state
+  // if it happened to have any; an unchanged row is never touched at all.
+  function reconcileTable(opts) {
+    var wrap = document.getElementById(opts.wrapId);
     if (!wrap) return;
 
-    if (!data.learners || !data.learners.length) {
-      if (document.getElementById('learnersTable')) {
+    if (!opts.items || !opts.items.length) {
+      if (document.getElementById(opts.tableId)) {
         wrap.innerHTML = '';
         var p = document.createElement('p');
-        p.textContent = 'No learners have joined this cohort yet. Share the join code above.';
+        p.textContent = opts.emptyMessage;
         wrap.appendChild(p);
       }
-      state.rowsById = {};
+      Object.keys(opts.rowsById).forEach(function (id) { delete opts.rowsById[id]; });
       return;
     }
 
-    var table = document.getElementById('learnersTable');
+    var table = document.getElementById(opts.tableId);
     if (!table) {
       wrap.innerHTML = '';
-      table = buildLearnersTable();
+      table = opts.buildTable();
       wrap.appendChild(table);
-      state.rowsById = {};
+      Object.keys(opts.rowsById).forEach(function (id) { delete opts.rowsById[id]; });
     }
     var tbody = table.querySelector('tbody');
 
     var seenIds = {};
     var cursor = tbody.firstChild;
-    data.learners.forEach(function (l) {
-      seenIds[l.id] = true;
-      var row = state.rowsById[l.id];
+    opts.items.forEach(function (item) {
+      var id = opts.idOf(item);
+      seenIds[id] = true;
+      var row = opts.rowsById[id];
       if (row && row.parentNode === tbody) {
-        updateLearnerRow(row, l);
+        opts.updateRow(row, item);
       } else {
-        row = buildLearnerRow(l);
-        state.rowsById[l.id] = row;
+        row = opts.buildRow(item);
+        opts.rowsById[id] = row;
       }
       if (cursor !== row) {
         tbody.insertBefore(row, cursor);
@@ -212,33 +210,136 @@
       }
     });
 
-    // A learner who no longer appears (removed from the cohort) - move
-    // focus off their row before removing it so the instructor never
-    // silently loses keyboard position to <body>, and say why.
-    Object.keys(state.rowsById).forEach(function (id) {
+    // An item that no longer appears - move focus off its row before
+    // removing it so the instructor never silently loses keyboard position
+    // to <body>, and say why (when the caller wants that; the assignments
+    // table never actually loses rows in this app, so it skips this).
+    Object.keys(opts.rowsById).forEach(function (id) {
       if (seenIds[id]) return;
-      var row = state.rowsById[id];
+      var row = opts.rowsById[id];
       if (row.parentNode === tbody) {
-        if (row.contains(document.activeElement)) {
-          var name = (row.querySelector('a') || {}).textContent || 'A learner';
-          if (heading) {
-            if (!heading.hasAttribute('tabindex')) heading.setAttribute('tabindex', '-1');
-            heading.focus();
-          }
-          announce(name + ' is no longer in this cohort.');
+        if (opts.onRemoveIfFocused && row.contains(document.activeElement)) {
+          opts.onRemoveIfFocused(row);
         }
         tbody.removeChild(row);
       }
-      delete state.rowsById[id];
+      delete opts.rowsById[id];
+    });
+  }
+
+  function reconcileLearnersTable(data) {
+    var heading = document.getElementById('learnersHeading');
+    if (heading && state.lastLearnerCount !== data.learner_count) {
+      heading.textContent = 'Learners (' + data.learner_count + ')';
+      state.lastLearnerCount = data.learner_count;
+    }
+    reconcileTable({
+      wrapId: 'learnersTableWrap', tableId: 'learnersTable',
+      emptyMessage: 'No learners have joined this cohort yet. Share the join code above.',
+      buildTable: buildLearnersTable, buildRow: buildLearnerRow, updateRow: updateLearnerRow,
+      items: data.learners, idOf: function (l) { return l.id; },
+      rowsById: state.learnerRowsById,
+      onRemoveIfFocused: function (row) {
+        var name = (row.querySelector('a') || {}).textContent || 'A learner';
+        if (heading) {
+          if (!heading.hasAttribute('tabindex')) heading.setAttribute('tabindex', '-1');
+          heading.focus();
+        }
+        announce(name + ' is no longer in this cohort.');
+      },
+    });
+  }
+
+  // ---- assignments table: same targeted patch, no full rebuild ----------
+  //
+  // Optional per the hardening pass's own scope note: only added because
+  // it reuses the exact same reconcileTable() the learners table already
+  // proved safe - a second, separate polling mechanism would not have been
+  // worth the added complexity, but one more call into the existing one is.
+
+  function buildAssignmentRow(a) {
+    var tr = document.createElement('tr');
+    tr.dataset.assignmentId = String(a.id);
+    var titleTd = document.createElement('td');
+    var link = document.createElement('a');
+    link.href = a.detail_url;
+    link.textContent = a.title;
+    titleTd.appendChild(link);
+    tr.appendChild(titleTd);
+
+    var statusTd = document.createElement('td');
+    var badge = document.createElement('span');
+    badge.className = 'cu-badge cu-badge--' + a.status;
+    badge.textContent = a.status;
+    statusTd.appendChild(badge);
+    tr.appendChild(statusTd);
+
+    tr.appendChild(textTd(a.ai_policy));
+    tr.appendChild(textTd(a.due_date));
+    return tr;
+  }
+
+  function updateAssignmentRow(tr, a) {
+    var link = tr.cells[0].querySelector('a');
+    if (link.textContent !== a.title) link.textContent = a.title;
+    if (link.getAttribute('href') !== a.detail_url) link.setAttribute('href', a.detail_url);
+    var badge = tr.cells[1].querySelector('span');
+    var badgeClass = 'cu-badge cu-badge--' + a.status;
+    if (badge.textContent !== a.status) badge.textContent = a.status;
+    if (badge.className !== badgeClass) badge.className = badgeClass;
+    if (tr.cells[2].textContent !== a.ai_policy) tr.cells[2].textContent = a.ai_policy;
+    if (tr.cells[3].textContent !== a.due_date) tr.cells[3].textContent = a.due_date;
+  }
+
+  function buildAssignmentsTable() {
+    var table = document.createElement('table');
+    table.className = 'cu-table';
+    table.id = 'assignmentsTable';
+    var caption = document.createElement('caption');
+    caption.className = 'sr-only';
+    caption.textContent = 'Assignments in this cohort';
+    table.appendChild(caption);
+    var thead = document.createElement('thead');
+    var headRow = document.createElement('tr');
+    ['Title', 'Status', 'AI policy', 'Due date'].forEach(function (label) {
+      var th = document.createElement('th');
+      th.scope = 'col';
+      th.textContent = label;
+      headRow.appendChild(th);
+    });
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+    table.appendChild(document.createElement('tbody'));
+    return table;
+  }
+
+  function reconcileAssignmentsTable(data) {
+    reconcileTable({
+      wrapId: 'assignmentsTableWrap', tableId: 'assignmentsTable',
+      emptyMessage: 'No assignments yet.',
+      buildTable: buildAssignmentsTable, buildRow: buildAssignmentRow, updateRow: updateAssignmentRow,
+      items: data.assignments, idOf: function (a) { return a.id; },
+      rowsById: state.assignmentRowsById,
+      // No onRemoveIfFocused: this app has no "delete assignment" action
+      // (only archive/lock, which still show a row), so a row disappearing
+      // here is not a real scenario worth handling.
     });
   }
 
   function seedExistingRows() {
-    var table = document.getElementById('learnersTable');
-    if (!table) return;
-    var rows = table.querySelectorAll('tbody tr[data-learner-id]');
-    for (var i = 0; i < rows.length; i++) {
-      state.rowsById[rows[i].dataset.learnerId] = rows[i];
+    var learnersTable = document.getElementById('learnersTable');
+    if (learnersTable) {
+      var learnerRows = learnersTable.querySelectorAll('tbody tr[data-learner-id]');
+      for (var i = 0; i < learnerRows.length; i++) {
+        state.learnerRowsById[learnerRows[i].dataset.learnerId] = learnerRows[i];
+      }
+    }
+    var assignmentsTable = document.getElementById('assignmentsTable');
+    if (assignmentsTable) {
+      var assignmentRows = assignmentsTable.querySelectorAll('tbody tr[data-assignment-id]');
+      for (var j = 0; j < assignmentRows.length; j++) {
+        state.assignmentRowsById[assignmentRows[j].dataset.assignmentId] = assignmentRows[j];
+      }
     }
   }
 
@@ -251,6 +352,7 @@
 
   function applySync(data) {
     reconcileLearnersTable(data);
+    reconcileAssignmentsTable(data);
     patchHelpQueueLink(data);
     announceNewEvents(data.events);
   }

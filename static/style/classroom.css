@@ -89,6 +89,22 @@ table.cu-table th { background: var(--bg-soft); }
 
 .cu-field textarea { max-width: 640px; }
 
+/* Server-rendered validation errors (create/rename cohort, create
+   assignment/lesson/project - see codeup/classroom/routes.py and
+   static/form-error-focus.js). The invalid field itself gets a visible
+   border via the same aria-invalid attribute assistive tech already reads,
+   so the visual and programmatic signal are the same single source. */
+.cu-field input[aria-invalid="true"],
+.cu-field textarea[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.cu-field-error {
+  color: var(--danger);
+  font-size: 0.85rem;
+  margin-top: 4px;
+}
+
 .cu-inline-form {
   display: inline;
 }

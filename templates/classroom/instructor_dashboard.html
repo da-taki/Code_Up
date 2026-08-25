@@ -13,7 +13,10 @@
     <form method="post" action="{{ url_for('classroom.create_cohort') }}" novalidate>
       <div class="cu-field">
         <label for="cohort_name">Cohort name</label>
-        <input type="text" id="cohort_name" name="name" maxlength="120" required placeholder="e.g. Python Beginners">
+        <input type="text" id="cohort_name" name="name" maxlength="120" required placeholder="e.g. Python Beginners"
+               value="{{ cohort_name_value or '' }}"
+               {% if cohort_name_error %}aria-invalid="true" aria-describedby="cohort_name_error" data-focus-on-error{% endif %}>
+        {% if cohort_name_error %}<p id="cohort_name_error" class="cu-field-error">{{ cohort_name_error }}</p>{% endif %}
       </div>
       <button type="submit" class="cu-button cu-button-primary">Create cohort</button>
     </form>
@@ -59,4 +62,7 @@
       <p>You have not created any cohorts yet.</p>
     {% endif %}
   </section>
+{% endblock %}
+{% block scripts %}
+  <script src="/static/form-error-focus.js"></script>
 {% endblock %}

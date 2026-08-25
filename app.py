@@ -9449,18 +9449,6 @@ def voice():
         if workspace is not None:
             audio_blocks.set_active_mode(workspace, active_mode)
 
-    awaiting_response = _handle_awaiting_program_input(text, current_code, mem)
-    if awaiting_response is not None:
-        awaiting_response.setdefault("heard", text)
-        awaiting_response.setdefault("confidence", 0.99)
-        return jsonify(_sanitize_voice_response(awaiting_response))
-
-    if intent == "repeat":
-        last_action = storage.get('last_voice_action', None)
-        if not last_action:
-            return jsonify({"success": True, "action": "unknown", "heard": "repeat", "message": "No previous command to repeat"})
-        return jsonify(last_action[0]), last_action[1]
-
     def _record_audio_diff_if_edit(response_dict):
         # Central choke point: any response that carries a code edit (ai_action.code)
         # records a before/after snapshot for Audio Diff Review. Reverts (undo/reject)
@@ -9512,8 +9500,14 @@ def voice():
         return jsonify(response_dict), status_code
 
     # Classroom commands (join/assignments/curriculum/projects/help/navigation)
-    # are matched deterministically and never reach Groq or the general NLU
-    # pipeline below - see codeup/classroom/ide_commands.py.
+    # are matched deterministically and never reach Groq, the general NLU
+    # pipeline, or the "awaiting program input" stdin capture just below -
+    # checked here, ahead of both, so an unambiguous phrase like
+    # "join ABC123" always wins even if the learner's program happens to be
+    # mid-input() when they type it. classroom_ide_commands.match() is
+    # narrow and deterministic (it only recognizes specific classroom
+    # phrases), so this never swallows a genuine answer to an input()
+    # prompt - see codeup/classroom/ide_commands.py.
     classroom_result = _classroom_command_response(raw_text, text, current_code, mem)
     if classroom_result is not None:
         classroom_response, new_learner_token = classroom_result
@@ -9524,6 +9518,18 @@ def voice():
                 max_age=3600 * 24 * 180, httponly=True, samesite="Lax",
             )
         return resp, status_code
+
+    awaiting_response = _handle_awaiting_program_input(text, current_code, mem)
+    if awaiting_response is not None:
+        awaiting_response.setdefault("heard", text)
+        awaiting_response.setdefault("confidence", 0.99)
+        return jsonify(_sanitize_voice_response(awaiting_response))
+
+    if intent == "repeat":
+        last_action = storage.get('last_voice_action', None)
+        if not last_action:
+            return jsonify({"success": True, "action": "unknown", "heard": "repeat", "message": "No previous command to repeat"})
+        return jsonify(last_action[0]), last_action[1]
 
     if confidence >= 0.75 and intent == "inside_loop":
         code_map_queries = {

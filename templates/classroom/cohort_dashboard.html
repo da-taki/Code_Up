@@ -3,7 +3,7 @@
 {% block header_title %}{{ cohort.name }}{% endblock %}
 {% block header_nav %}
   <nav aria-label="Cohort actions">
-    <a class="cu-button cu-button-secondary" href="{{ url_for('classroom.help_queue', cohort_id=cohort.id) }}">Help queue ({{ open_help_count }})</a>
+    <a class="cu-button cu-button-secondary" id="helpQueueLink" href="{{ url_for('classroom.help_queue', cohort_id=cohort.id) }}">Help queue ({{ open_help_count }})</a>
     <a class="cu-button cu-button-secondary" href="{{ url_for('classroom.custom_lessons_list', cohort_id=cohort.id) }}">Your lessons</a>
     <a class="cu-button cu-button-secondary" href="{{ url_for('classroom.custom_projects_list', cohort_id=cohort.id) }}">Your projects</a>
     <a class="cu-button cu-button-secondary" href="{{ url_for('classroom.cohort_report', cohort_id=cohort.id) }}">Report</a>
@@ -40,8 +40,9 @@
 
   <section class="cu-panel" aria-labelledby="learnersHeading">
     <h2 id="learnersHeading">Learners ({{ learner_rows|length }})</h2>
+    <div id="learnersTableWrap">
     {% if learner_rows %}
-    <table class="cu-table">
+    <table class="cu-table" id="learnersTable">
       <caption class="sr-only">Learners in this cohort and their progress</caption>
       <thead>
         <tr>
@@ -69,6 +70,7 @@
     {% else %}
       <p>No learners have joined this cohort yet. Share the join code above.</p>
     {% endif %}
+    </div>
   </section>
 
   <section class="cu-panel" aria-labelledby="newAssignmentHeading">
@@ -146,4 +148,7 @@
       <p>No assignments yet.</p>
     {% endif %}
   </section>
+{% endblock %}
+{% block scripts %}
+  <script src="/static/instructor-sync.js" data-cohort-id="{{ cohort.id }}"></script>
 {% endblock %}

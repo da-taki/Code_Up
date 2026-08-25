@@ -431,6 +431,17 @@
     panel.appendChild(submitBtn);
     panel.appendChild(submitStatus);
 
+    // Obvious way back to the plain IDE once there's something to come back
+    // from - visible immediately if already submitted (e.g. reopening this
+    // page), and revealed live by submitAssignment() on a fresh submit.
+    // Plain navigation (not a timer): never cuts off the submission speech,
+    // never touches the classroom cookie/membership.
+    const backLink = el('a', {
+      id: 'classroomBackToIdeLink', className: 'cu-button cu-button-secondary',
+      href: '/ide', textContent: 'Back to CodeUp', hidden: p.status !== 'submitted',
+    });
+    panel.appendChild(backLink);
+
     appendGuidedAiWidget(panel, a.capability_settings);
     appendHelpWidget(panel);
 
@@ -440,7 +451,15 @@
     pushVersion('Opened assignment', p.code || a.starter_code || '');
     renderUndoButton();
 
-    // Announce the permission summary once, not on every action.
+    // Read the assignment once, right when it opens - title + instructions
+    // (or a concise fallback if none were given), through the existing
+    // centralized announce(). renderAssignmentPanel only ever runs once per
+    // page load (see fetchContextAndRender's single 'assignment' branch;
+    // background classroom sync never touches this panel - see
+    // applyClassroomSync's `mode === 'dashboard'` guard), so this can never
+    // repeat from polling or an unrelated DOM update.
+    announce(a.title + '. ' + (a.instructions || 'No instructions were given for this assignment.'));
+    // Announce the permission summary separately, still once.
     if (a.policy_summary) announce(a.policy_summary);
   }
 
@@ -648,6 +667,8 @@
           statusEl.textContent = 'Assignment submitted.';
           button.textContent = 'Re-submit assignment';
           announce('Assignment submitted.');
+          const backLink = document.getElementById('classroomBackToIdeLink');
+          if (backLink) backLink.hidden = false;
         } else {
           statusEl.textContent = 'Could not submit. Your work is still saved; you can try again.';
           announce('Could not submit the assignment. Your work is still saved.');

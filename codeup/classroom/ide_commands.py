@@ -195,6 +195,10 @@ def match(text: str) -> Optional[Tuple[str, Dict[str, Any]]]:
     if m:
         return "nav_focus", {"target": m.group(1)}
 
+    # ---- back to the plain IDE (e.g. right after submitting an assignment) --
+    if _any(n, "back to ide", "return to ide", "go back to ide", "back to codeup", "return to codeup"):
+        return "back_to_ide", {}
+
     # ---- join / leave classroom ------------------------------------------
     code = extract_join_code(text)
     if code and ("join" in n or "class code" in n or "cohort" in n):
@@ -220,11 +224,11 @@ def match(text: str) -> Optional[Tuple[str, Dict[str, Any]]]:
     if m:
         return "open_assignment_index", {"index": int(m.group(1))}
     if _any(n, "continue my assignment", "read this assignment", "repeat the instructions",
-            "what am i supposed to do"):
+            "what am i supposed to do", "what do i need to do", "repeat the assignment"):
         return "assignment_instructions", {}
     if _any(n, "what can ai help me with", "what can ai do", "what is allowed"):
         return "ai_policy", {}
-    if _any(n, "submit my assignment", "submit this", "submit"):
+    if _any(n, "submit my assignment", "submit this", "submit", "turn this in", "turn in assignment"):
         return "submit_assignment", {}
 
     # ---- curriculum ---------------------------------------------------------
@@ -397,6 +401,13 @@ def handle(intent: str, slots: Dict[str, Any], ctx: Dict[str, Any]) -> Optional[
                 "message": "Opening the leave-classroom confirmation.",
                 "speech": "Say the leave button to confirm, or cancel to stay."}
 
+    if intent == "back_to_ide":
+        # Plain navigation to the plain /ide entry point - never clears the
+        # classroom cookie/membership, never logs anyone out. Works with or
+        # without a learner (harmless if already there / not in a classroom).
+        return {"success": True, "action": "navigate", "url": "/ide",
+                "message": "Back to CodeUp.", "speech": "Back to CodeUp."}
+
     # ---- ambiguous phrases: only ours when real classroom context backs them up.
     # "give me a hint" and "open <name>" are also meaningful to unrelated,
     # pre-existing features (the standalone tutor hint system; file/audio-
@@ -437,6 +448,15 @@ def handle(intent: str, slots: Dict[str, Any], ctx: Dict[str, Any]) -> Optional[
         return _msg("You're not in a classroom yet. Enter the code your instructor gave you.")
 
     if intent == "what_should_i_do":
+        # A currently-open assignment always takes priority over the general
+        # classroom-wide priority logic below - a learner mid-assignment
+        # asking "what should I do?" means "for this", not "across
+        # everything" (see also the "assignment_instructions" intent, which
+        # already behaves this way for its own phrasings).
+        active_assignment = _current_assignment(ctx)
+        if active_assignment:
+            instructions = active_assignment.get("instructions") or "No instructions were given for this assignment."
+            return _msg(f"{active_assignment['title']}. {instructions}")
         return _msg(_resolve_what_should_i_do(ctx))
 
     if intent == "assignments_list":
@@ -491,7 +511,12 @@ def handle(intent: str, slots: Dict[str, Any], ctx: Dict[str, Any]) -> Optional[
         if not assignment:
             return _msg("You don't have an assignment open to submit. Say open my assignments to pick one.")
         progress = learner_actions.submit_current_assignment(learner, assignment, ctx.get("current_code") or "")
-        return _msg(f"{assignment['title']} submitted successfully.", status=progress["status"])
+        # Generic, action-independent flag app.js checks after any response
+        # (like focus_hint/classroom_refresh) - reveals the "Back to CodeUp"
+        # control even when submission happened via a typed/spoken command
+        # rather than clicking the Submit button directly.
+        return _msg(f"{assignment['title']} submitted successfully.", status=progress["status"],
+                    assignment_submitted=True)
 
     if intent == "curriculum_continue":
         module = summary.get("module")

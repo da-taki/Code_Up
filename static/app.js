@@ -3792,6 +3792,15 @@ async function handleConfirmedAction(action, payload) {
     const target = document.getElementById(payload.focus_hint);
     if (target) { try { target.focus(); } catch (e) {} }
   }
+
+  // Generic, action-independent: a typed/spoken "submit" just succeeded -
+  // reveal the same "Back to CodeUp" control the Submit button's own click
+  // handler shows, without navigating (that would cut off the confirmation
+  // speech already spoken above) and without re-rendering the panel.
+  if (payload && payload.assignment_submitted) {
+    const backLink = document.getElementById('classroomBackToIdeLink');
+    if (backLink) backLink.hidden = false;
+  }
 }
 
 const _TUTORIAL_EDIT_ACTIONS = new Set([

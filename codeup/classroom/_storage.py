@@ -20,9 +20,11 @@ Postgres database, others hitting a throwaway local SQLite file).
 
 from __future__ import annotations
 
+import atexit
 import os
 import re
 import sqlite3
+import sys
 import threading
 from contextlib import contextmanager
 from typing import Any, Iterator, Optional, Sequence, Tuple
@@ -387,7 +389,26 @@ def _get_pool(url: str) -> ConnectionPool:
             conninfo=url,
             min_size=1,
             max_size=max_size,
-            kwargs={"autocommit": False, "row_factory": psycopg.rows.dict_row},
+            kwargs={
+                "autocommit": False,
+                "row_factory": psycopg.rows.dict_row,
+                # A pooled connection can sit idle between requests for a
+                # while; without these, a network path that silently drops
+                # the TCP connection (NAT/load-balancer idle timeout, a
+                # brief network blip) leaves the next query blocked in a
+                # socket select() with no upper bound - observed in testing
+                # as an indefinite hang, not a clean error. Keepalives make
+                # a dead connection surface as a normal OperationalError
+                # within ~60s instead. statement_timeout is defense in
+                # depth against a genuinely stuck query server-side -
+                # every classroom query is a small, fast CRUD statement,
+                # so 30s is a ceiling that should never trigger normally.
+                "keepalives": 1,
+                "keepalives_idle": 30,
+                "keepalives_interval": 10,
+                "keepalives_count": 3,
+                "options": "-c statement_timeout=30000",
+            },
             open=False,
         )
         connect_timeout = float(os.environ.get("CLASSROOM_PG_CONNECT_TIMEOUT", "10"))
@@ -404,6 +425,14 @@ def _get_pool(url: str) -> ConnectionPool:
             ) from None
         _pool = pool
         _pool_url = url
+        # Belt-and-suspenders: gunicorn worker shutdown should already be
+        # graceful, but registering this means process exit never leaves a
+        # background reconnect thread half-joined (psycopg_pool's own
+        # __del__ can raise "cannot join thread at interpreter shutdown"
+        # on abrupt exit otherwise). ConnectionPool.close() is idempotent,
+        # so this is safe even if a later _get_pool() call closes the same
+        # pool first.
+        atexit.register(pool.close)
         return pool
 
 
@@ -495,13 +524,27 @@ class _PGConnection:
 def _connect_postgres(url: str) -> Iterator[_PGConnection]:
     pool = _get_pool(url)
     _ensure_postgres_schema(pool, url)
+    conn_ctx = pool.connection()
+    # Only *acquiring* a connection from the pool is wrapped as
+    # ClassroomStorageError ("Postgres is unreachable"). Errors raised by
+    # the caller's own SQL once a connection is in hand (e.g. a UNIQUE
+    # violation from a join-code collision) must propagate unchanged - the
+    # same way sqlite3.IntegrityError does from the SQLite path - so
+    # db.py's own retry/handling logic (UNIQUE_VIOLATION_EXCEPTIONS) still
+    # sees the real exception instead of a rewrapped one.
     try:
-        with pool.connection() as conn:
-            yield _PGConnection(conn)
-    except psycopg.Error as exc:
+        conn = conn_ctx.__enter__()
+    except Exception as exc:
         raise ClassroomStorageError(
             f"PostgreSQL classroom storage error ({_sanitized_target(url)}): {exc.__class__.__name__}"
         ) from None
+    try:
+        yield _PGConnection(conn)
+    except BaseException:
+        conn_ctx.__exit__(*sys.exc_info())
+        raise
+    else:
+        conn_ctx.__exit__(None, None, None)
 
 
 def ensure_schema(url: str) -> None:

@@ -167,11 +167,11 @@ TABLES: List[Tuple[str, List[str], bool]] = [
 # (parent_table, parent_column, child_table, child_column) - checked after
 # copying, alongside the row-count check, for tables with a mandatory FK.
 FK_CHECKS: List[Tuple[str, str, str, str]] = [
-    ("cohorts", "id", "instructors", "instructor_id"),
-    ("learners", "id", "cohorts", "cohort_id"),
-    ("assignments", "id", "cohorts", "cohort_id"),
-    ("assignment_progress", "id", "assignments", "assignment_id"),
-    ("assignment_progress", "id", "learners", "learner_id"),
+    ("instructors", "id", "cohorts", "instructor_id"),
+    ("cohorts", "id", "learners", "cohort_id"),
+    ("cohorts", "id", "assignments", "cohort_id"),
+    ("assignments", "id", "assignment_progress", "assignment_id"),
+    ("learners", "id", "assignment_progress", "learner_id"),
 ]
 
 

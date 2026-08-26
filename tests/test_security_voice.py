@@ -87,7 +87,12 @@ def test_app_import_does_not_start_background_services():
         env=env,
         capture_output=True,
         text=True,
-        timeout=10,
+        # Generous timeout: importing the full app module now pulls in
+        # psycopg (classroom Postgres support), whose native extension can
+        # take several seconds to load on a cold cache / under AV
+        # scanning, especially on Windows - a plain 10s budget was
+        # observed to flake for exactly that reason.
+        timeout=30,
     )
     assert result.returncode == 0, result.stderr
     assert "True True" in result.stdout
@@ -314,7 +319,7 @@ def test_production_import_requires_secret_key():
         env=env,
         capture_output=True,
         text=True,
-        timeout=10,
+        timeout=30,  # see test_app_import_does_not_start_background_services for why
     )
     assert result.returncode != 0
     assert "FLASK_SECRET_KEY" in result.stderr
@@ -333,7 +338,7 @@ def test_dev_testing_secret_is_ephemeral():
             env=env,
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=30,  # see test_app_import_does_not_start_background_services for why
         )
         assert result.returncode == 0, result.stderr
         keys.append(result.stdout.strip())
@@ -356,7 +361,7 @@ def test_production_session_cookie_secure_by_default():
         env=env,
         capture_output=True,
         text=True,
-        timeout=10,
+        timeout=30,  # see test_app_import_does_not_start_background_services for why
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "True"

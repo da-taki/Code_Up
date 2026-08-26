@@ -27,8 +27,14 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import psycopg  # noqa: E402
+
 from codeup.classroom import _storage, db  # noqa: E402
 from scripts import migrate_classroom_sqlite_to_postgres as migrate_tool  # noqa: E402
+from tests._postgres_test_support import (  # noqa: E402
+    reset_postgres_classroom_data,
+    reset_postgres_schema_completely,
+)
 
 REAL_PG_URL = os.environ.get("CLASSROOM_TEST_DATABASE_URL", "").strip()
 
@@ -149,6 +155,11 @@ def test_resolve_destination_refuses_missing_or_non_postgres_url(monkeypatch):
 @pytest.mark.skipif(not REAL_PG_URL, reason="CLASSROOM_TEST_DATABASE_URL not set - real Postgres migration unverified")
 def test_full_migration_preserves_everything_and_new_ids_dont_collide(monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
+    # This migration inserts explicit historical IDs (id=1 for the first
+    # instructor, etc.), so the destination must genuinely be empty - not
+    # just schema-initialized - or it collides with rows real usage from
+    # another test/run left behind on this shared long-lived database.
+    reset_postgres_classroom_data(REAL_PG_URL)
     seeded = _seed_representative_data()
     sqlite_path = _classroom_db_path()
 
@@ -183,3 +194,46 @@ def test_full_migration_preserves_everything_and_new_ids_dont_collide(monkeypatc
     assert new_instructor["id"] > seeded["instructor"]["id"]
     new_cohort = db.create_cohort(new_instructor["id"], "Post-migration Cohort")
     assert new_cohort["id"] > seeded["cohort"]["id"]
+
+
+@pytest.mark.skipif(not REAL_PG_URL, reason="CLASSROOM_TEST_DATABASE_URL not set - real Postgres rollback unverified")
+def test_migration_rolls_back_completely_on_a_forced_mid_copy_failure(monkeypatch):
+    """Forces a real failure partway through the copy (by dropping one
+    destination table after the schema has already been created, so the
+    later INSERT into it fails with UndefinedTable) and verifies the
+    whole PostgreSQL transaction rolled back - not just the failing
+    table - and that the source SQLite file was never touched."""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    reset_postgres_classroom_data(REAL_PG_URL)
+    _storage.ensure_schema(REAL_PG_URL)  # make sure the schema exists before we damage it
+
+    with psycopg.connect(REAL_PG_URL, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("DROP TABLE progress_events CASCADE")
+
+    _seed_representative_data()
+    sqlite_path = _classroom_db_path()
+    with open(sqlite_path, "rb") as f:
+        source_bytes_before = f.read()
+
+    try:
+        with pytest.raises(Exception):
+            migrate_tool.migrate(sqlite_path, REAL_PG_URL, dry_run=False)
+
+        # Rollback proof: tables that copied successfully BEFORE the
+        # failing one must have been rolled back too - not left populated.
+        with psycopg.connect(REAL_PG_URL, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                for table in ("instructors", "cohorts", "learners", "assignments"):
+                    cur.execute(f"SELECT COUNT(*) FROM {table}")
+                    assert cur.fetchone()[0] == 0, f"{table} was not rolled back"
+
+        # Source SQLite file must be byte-for-byte untouched.
+        with open(sqlite_path, "rb") as f:
+            assert f.read() == source_bytes_before
+    finally:
+        # Restore a complete, working schema for any test that runs after
+        # this one in the same session.
+        reset_postgres_schema_completely(REAL_PG_URL)
+        _storage._schema_ready_for = None
+        _storage.ensure_schema(REAL_PG_URL)

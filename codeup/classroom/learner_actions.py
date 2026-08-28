@@ -55,6 +55,9 @@ def submit_current_assignment(learner: Dict[str, Any], assignment: Dict[str, Any
 
 
 def send_help_request(learner: Dict[str, Any], message: str, assignment_id: Optional[int] = None) -> Dict[str, Any]:
+    existing = current_help_request(learner)
+    if existing:
+        return existing
     hr = db.create_help_request(learner["cohort_id"], learner["id"], assignment_id, message or "")
     db.log_event(learner["id"], learner["cohort_id"], "help_requested", {"help_request_id": hr["id"]})
     return hr

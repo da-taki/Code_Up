@@ -867,7 +867,7 @@ def _current_module_lookup(learner: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not state or not state.get("current_module_id"):
         return None
     module_id = state["current_module_id"]
-    lesson = _lesson_context(module_id)
+    lesson = _lesson_context(module_id, cohort_id=learner["cohort_id"])
     if not lesson:
         return None
     index = None
@@ -1101,7 +1101,7 @@ def open_project(learner, project_id):
     return resp
 
 
-def _project_public(project_id: str) -> Optional[Dict[str, Any]]:
+def _project_public(project_id: str, *, cohort_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
     if project_id.startswith("custom:"):
         try:
             custom_id = int(project_id.split(":", 1)[1])
@@ -1109,6 +1109,8 @@ def _project_public(project_id: str) -> Optional[Dict[str, Any]]:
             return None
         project = db.get_custom_project(custom_id)
         if not project:
+            return None
+        if cohort_id is not None and project["cohort_id"] != cohort_id:
             return None
         return {
             "id": project_id, "title": project["title"], "description": project["instructions"],
@@ -1118,11 +1120,13 @@ def _project_public(project_id: str) -> Optional[Dict[str, Any]]:
     return guided_projects.get_project(project_id)
 
 
-def _project_newly_completed(project_id: str, code: str, previously_completed: list) -> list:
+def _project_newly_completed(
+    project_id: str, code: str, previously_completed: list, *, cohort_id: Optional[int] = None
+) -> list:
     if project_id.startswith("custom:"):
         custom_id = int(project_id.split(":", 1)[1])
         project = db.get_custom_project(custom_id)
-        if not project:
+        if not project or (cohort_id is not None and project["cohort_id"] != cohort_id):
             return []
         newly = guided_projects.newly_completed_custom(
             project["checkpoints"], code, [int(c) for c in previously_completed if str(c).isdigit()]
@@ -1134,7 +1138,7 @@ def _project_newly_completed(project_id: str, code: str, previously_completed: l
 @classroom_bp.route("/projects/<path:project_id>/context", methods=["GET"])
 @require_learner
 def project_context(learner, project_id):
-    project = _project_public(project_id)
+    project = _project_public(project_id, cohort_id=learner["cohort_id"])
     if not project:
         return jsonify({"success": False, "error": "not_found"}), 404
     progress = db.get_or_create_project_progress(learner["id"], project_id)
@@ -1149,14 +1153,16 @@ def project_context(learner, project_id):
 @classroom_bp.route("/projects/<path:project_id>/save", methods=["POST"])
 @require_learner
 def save_project(learner, project_id):
-    project = _project_public(project_id)
+    project = _project_public(project_id, cohort_id=learner["cohort_id"])
     if not project:
         return jsonify({"success": False, "error": "not_found"}), 404
     body = request.get_json(silent=True) or {}
     code = str(body.get("code") or "")
     try:
         prior = db.get_or_create_project_progress(learner["id"], project_id)
-        newly = _project_newly_completed(project_id, code, prior.get("checkpoints_completed") or [])
+        newly = _project_newly_completed(
+            project_id, code, prior.get("checkpoints_completed") or [], cohort_id=learner["cohort_id"]
+        )
         completed = list(dict.fromkeys((prior.get("checkpoints_completed") or []) + newly))
         progress = db.save_project_progress(learner["id"], project_id, code=code, checkpoints_completed=completed)
         if newly:
@@ -1198,6 +1204,8 @@ def create_help_request(learner):
         assignment_id = int(assignment_id) if assignment_id else None
     except (TypeError, ValueError):
         assignment_id = None
+    if assignment_id and not _learner_assignment_or_404(learner, assignment_id):
+        assignment_id = None
     hr = learner_actions.send_help_request(learner, message, assignment_id)
     if is_json:
         return jsonify({"success": True, "help_request": hr})
@@ -1217,7 +1225,7 @@ def cancel_help_request(learner, help_request_id):
 # CURRICULUM (built-in course + instructor-authored lessons, one interface)
 # ============================================================================
 
-def _lesson_context(module_id: str) -> Optional[Dict[str, Any]]:
+def _lesson_context(module_id: str, *, cohort_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
     """Normalizes a built-in module id OR a 'custom:<lesson_id>' instructor
     lesson to the same shape, so the learner always sees one lesson
     interface regardless of source."""
@@ -1228,6 +1236,8 @@ def _lesson_context(module_id: str) -> Optional[Dict[str, Any]]:
             return None
         lesson = db.get_custom_lesson(lesson_id)
         if not lesson:
+            return None
+        if cohort_id is not None and lesson["cohort_id"] != cohort_id:
             return None
         return {
             "id": module_id, "title": lesson["title"], "concept": lesson["explanation"] or lesson["objective"],
@@ -1246,9 +1256,11 @@ def _lesson_context(module_id: str) -> Optional[Dict[str, Any]]:
     return module
 
 
-def _check_lesson_stage(module_id: str, code: str, stage: str) -> Dict[str, Any]:
+def _check_lesson_stage(
+    module_id: str, code: str, stage: str, *, cohort_id: Optional[int] = None
+) -> Dict[str, Any]:
     if module_id.startswith("custom:"):
-        lesson = _lesson_context(module_id)
+        lesson = _lesson_context(module_id, cohort_id=cohort_id)
         if not lesson:
             return {"passed": False, "feedback": "This lesson could not be found."}
         expected = set(lesson.get("expected_concepts") or [])
@@ -1290,7 +1302,7 @@ def curriculum_home(learner):
 
     continue_module = None
     if state and state.get("current_module_id"):
-        continue_module = _lesson_context(state["current_module_id"])
+        continue_module = _lesson_context(state["current_module_id"], cohort_id=learner["cohort_id"])
         if continue_module:
             done = sum(1 for m in modules if m.get("status") == "completed")
             continue_module = {
@@ -1312,7 +1324,7 @@ def curriculum_home(learner):
 @classroom_bp.route("/curriculum/<path:module_id>/open", methods=["GET"])
 @require_learner
 def open_module(learner, module_id):
-    lesson = _lesson_context(module_id)
+    lesson = _lesson_context(module_id, cohort_id=learner["cohort_id"])
     if not lesson:
         return redirect(url_for("classroom.curriculum_home"))
     db.get_or_create_module_progress_row(learner["id"], module_id)
@@ -1328,7 +1340,7 @@ def open_module(learner, module_id):
 @classroom_bp.route("/curriculum/<path:module_id>/context", methods=["GET"])
 @require_learner
 def module_context(learner, module_id):
-    lesson = _lesson_context(module_id)
+    lesson = _lesson_context(module_id, cohort_id=learner["cohort_id"])
     if not lesson:
         return jsonify({"success": False, "error": "not_found"}), 404
     progress = db.get_or_create_module_progress_row(learner["id"], module_id)
@@ -1339,12 +1351,12 @@ def module_context(learner, module_id):
 @classroom_bp.route("/curriculum/<path:module_id>/attempt", methods=["POST"])
 @require_learner
 def submit_module_attempt(learner, module_id):
-    lesson = _lesson_context(module_id)
+    lesson = _lesson_context(module_id, cohort_id=learner["cohort_id"])
     if not lesson:
         return jsonify({"success": False, "error": "not_found"}), 404
     body = request.get_json(silent=True) or {}
     code = str(body.get("code") or "")
-    result = _check_lesson_stage(module_id, code, "attempt")
+    result = _check_lesson_stage(module_id, code, "attempt", cohort_id=learner["cohort_id"])
     try:
         db.upsert_module_stage(learner["id"], module_id, "attempt", status="completed" if result["passed"] else None)
         db.set_curriculum_position(learner["id"], module_id, "attempt")
@@ -1362,12 +1374,12 @@ def submit_module_attempt(learner, module_id):
 @classroom_bp.route("/curriculum/<path:module_id>/challenge", methods=["POST"])
 @require_learner
 def submit_module_challenge(learner, module_id):
-    lesson = _lesson_context(module_id)
+    lesson = _lesson_context(module_id, cohort_id=learner["cohort_id"])
     if not lesson:
         return jsonify({"success": False, "error": "not_found"}), 404
     body = request.get_json(silent=True) or {}
     code = str(body.get("code") or "")
-    result = _check_lesson_stage(module_id, code, "challenge")
+    result = _check_lesson_stage(module_id, code, "challenge", cohort_id=learner["cohort_id"])
     try:
         if result["passed"]:
             db.upsert_module_stage(learner["id"], module_id, "challenge")
@@ -1382,7 +1394,7 @@ def submit_module_challenge(learner, module_id):
 @classroom_bp.route("/curriculum/<path:module_id>/quiz", methods=["GET"])
 @require_learner
 def module_quiz(learner, module_id):
-    lesson = _lesson_context(module_id)
+    lesson = _lesson_context(module_id, cohort_id=learner["cohort_id"])
     if not lesson or not lesson.get("quiz_question"):
         return redirect(url_for("classroom.curriculum_home"))
     return render_template("classroom/quiz.html", learner=learner, module_id=module_id, lesson=lesson, result=None)
@@ -1391,7 +1403,7 @@ def module_quiz(learner, module_id):
 @classroom_bp.route("/curriculum/<path:module_id>/quiz", methods=["POST"])
 @require_learner
 def module_quiz_submit(learner, module_id):
-    lesson = _lesson_context(module_id)
+    lesson = _lesson_context(module_id, cohort_id=learner["cohort_id"])
     if not lesson or not lesson.get("quiz_question"):
         return redirect(url_for("classroom.curriculum_home"))
     try:
@@ -1415,7 +1427,7 @@ def module_quiz_submit(learner, module_id):
 @classroom_bp.route("/curriculum/restart-module/<path:module_id>/confirm", methods=["GET"])
 @require_learner
 def restart_module_confirm(learner, module_id):
-    lesson = _lesson_context(module_id)
+    lesson = _lesson_context(module_id, cohort_id=learner["cohort_id"])
     if not lesson:
         return redirect(url_for("classroom.curriculum_home"))
     return render_template(
@@ -1597,7 +1609,7 @@ def create_custom_project(instructor, cohort_id):
 @require_learner
 def open_custom_project(learner, project_id):
     project = db.get_custom_project(project_id)
-    if not project:
+    if not project or project["cohort_id"] != learner["cohort_id"]:
         return redirect(url_for("classroom.learner_home"))
     pid = f"custom:{project_id}"
     db.get_or_create_project_progress(learner["id"], pid)

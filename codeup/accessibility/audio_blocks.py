@@ -2517,11 +2517,19 @@ def route_command(
         generated, error = compile_workspace(workspace)
         if not generated:
             return _message(error, workspace)
-        same = (
-            ast.dump(ast.parse(generated)) == ast.dump(ast.parse(code or ""))
-            if code.strip()
-            else False
-        )
+        try:
+            same = (
+                ast.dump(ast.parse(generated)) == ast.dump(ast.parse(code or ""))
+                if code.strip()
+                else False
+            )
+        except SyntaxError:
+            # The Python editor can hold invalid/mid-edit code independently of the
+            # block workspace (they're separate modes) - unlike `generated`, which
+            # compile_workspace() already validated, `code` is untrusted user text
+            # and must not be parsed unguarded (this used to crash the whole request
+            # with an unhandled SyntaxError instead of just reporting "differs").
+            same = False
         return _message(
             "The editor matches the generated block code."
             if same

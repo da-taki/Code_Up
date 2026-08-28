@@ -67,6 +67,35 @@ class TestSafety:
 
 
 
+class TestExportPathTraversal:
+    """Regression: project["files"] keys in the /export-project request body used to
+    become literal zip member names with zero path validation (unlike every other
+    project route, which all go through normalize_project_path()) - a crafted key
+    like "../../evil.py" would land in the exported zip verbatim, a zip-slip payload
+    that could write outside the extraction folder on a naive/older unzip tool.
+    """
+
+    def test_traversal_and_absolute_paths_are_dropped_not_zipped(self, client):
+        project = {"files": {
+            "../../../../evil.py": "print('pwned')",
+            "../escape.py": "print('pwned2')",
+            "/etc/cron.d/x": "* * * * * root evil",
+            "C:/evil3.py": "print('pwned3')",
+            "good_file.py": "print('this is fine')",
+        }}
+        data = client.post("/export-project", json={"project": project}).get_json()
+        assert data["success"] is True
+        dl = client.get(data["download_url"])
+        names = _names(dl.data)
+        for bad in ("../../../../evil.py", "../escape.py", "/etc/cron.d/x", "C:/evil3.py"):
+            assert bad not in names
+        for name in names:
+            assert ".." not in name
+            assert not name.startswith("/")
+            assert not (len(name) > 1 and name[1] == ":")
+        assert "good_file.py" in names
+
+
 class TestExportRoute:
 
     def test_single_file_export_has_main_py(self, client):

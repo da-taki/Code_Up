@@ -134,6 +134,25 @@ def test_reply_while_awaiting_input_runs_next(client):
     assert data["actions"][0]["values"] == ["Taknoor"]
 
 
+@pytest.mark.parametrize("blank_reply", ["", "   ", "\n\t "])
+def test_blank_reply_while_awaiting_input_reprompts_instead_of_accepting_silently(client, blank_reply):
+    """Regression: a blank/whitespace-only reply (silence picked up by the mic, an
+    accidental empty submit) used to be silently accepted as the literal answer -
+    the response falsely said "Input value received. Running the program now."
+    even though nothing meaningful was captured, and the next /run just re-asked
+    the same prompt with no explanation why. It must re-prompt instead of guessing
+    the user meant to answer with nothing.
+    """
+    client.post("/run", json={"code": NAME})
+    data = vc(client, blank_reply, code=NAME)
+    assert data["action"] == "request_program_input"
+    assert data["prompt"] == "Enter name:"
+    # the awaiting-input state must still be at index 0 (nothing consumed)
+    followup = client.post("/run", json={"code": NAME}).get_json()
+    assert followup["action"] == "request_program_input"
+    assert followup["prompt"] == "Enter name:"
+
+
 def test_input_command_phrases_while_awaiting_use_values_only(client):
     first = client.post("/run", json={"code": NAME_AGE}).get_json()
     assert first["action"] == "request_program_input"

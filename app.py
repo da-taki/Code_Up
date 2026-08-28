@@ -2534,12 +2534,21 @@ def _run_with_trace_for_narration(
     env.pop('CODEUP_INPUT_FIFO', None)
     env.pop('CODEUP_EXEC_CODE', None)
 
+    # Force UTF-8 on both ends of the pipe: text=True alone decodes with the
+    # locale-preferred encoding, which on Windows is the system ANSI codepage
+    # (e.g. cp1252) and cannot represent emoji/Hindi/most non-Latin-1 text -
+    # sandbox_runner.py itself now writes UTF-8 (see its own reconfigure at
+    # import time), so the parent must decode as UTF-8 too or this just moves
+    # the same UnicodeDecodeError here instead of preventing it.
+    env['PYTHONIOENCODING'] = 'utf-8'
     popen_kwargs = dict(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         env=env,
         cwd=workspace_dir,
         text=True,
+        encoding='utf-8',
+        errors='replace',
     )
     if sys.platform != "win32":
         popen_kwargs["preexec_fn"] = _set_subprocess_limits
@@ -4424,9 +4433,21 @@ def _handle_awaiting_program_input(text: str, code: str, mem: Dict[str, Any]) ->
         return None
     values = list(awaiting.get("values") or [])
     if explicit_values is not None:
-        values.extend(str(v)[:1000] for v in explicit_values)
+        new_values = [str(v)[:1000] for v in explicit_values]
     else:
-        values.append(_clean_program_input_reply(text)[:1000])
+        new_values = [_clean_program_input_reply(text)[:1000]]
+    if not any(v.strip() for v in new_values):
+        # A blank/whitespace-only reply (silence picked up by the mic, an accidental
+        # empty submit) used to be silently accepted as the literal answer, with a
+        # falsely reassuring "Input value received. Running the program now." - the
+        # program would then either silently run with an empty string or, worse,
+        # immediately re-request the same prompt with no explanation why. Re-ask
+        # instead of guessing the user meant to answer with nothing.
+        return _request_program_input_response(
+            mem, code=code, descriptors=prompts, values=values,
+            index=idx, source="runtime",
+        )
+    values.extend(new_values)
     values = values[:len(prompts)] if prompts else values
     if len(values) < len(prompts):
         return _request_program_input_response(
@@ -4719,12 +4740,18 @@ def run_code():
             if sys.platform != "win32":
                 preexec = _set_subprocess_limits
 
+            # See the matching comment in _run_with_trace_for_narration: force UTF-8
+            # on both ends so emoji/Hindi/non-Latin-1 print() output doesn't crash
+            # instead of running.
+            env['PYTHONIOENCODING'] = 'utf-8'
             popen_kwargs = dict(
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 env=env,
                 cwd=run_cwd,
                 text=True,
+                encoding='utf-8',
+                errors='replace',
             )
             if sys.platform != "win32":
                 popen_kwargs["preexec_fn"] = preexec
@@ -11670,10 +11697,16 @@ def run_stream_start():
 
     output_queue = _queue_mod.Queue()
 
+    # See the matching comment in _run_with_trace_for_narration: force UTF-8 on
+    # both ends so emoji/Hindi/non-Latin-1 print() output doesn't crash instead
+    # of streaming through.
+    env['PYTHONIOENCODING'] = 'utf-8'
     popen_kwargs = dict(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         env=env,
+        encoding='utf-8',
+        errors='replace',
         cwd=workspace_dir,
         text=True,
         bufsize=1,  # line-buffered so we can stream
@@ -12341,7 +12374,22 @@ def _store_export(session_id: str, filename: str, data: bytes) -> str:
 def _export_files_from_body(body: Dict[str, Any]):
     project = body.get("project")
     if isinstance(project, dict) and isinstance(project.get("files"), dict) and project["files"]:
-        files = {str(k): (v if isinstance(v, str) else str(v or "")) for k, v in project["files"].items()}
+        # project["files"] keys come straight from the client's JSON body and are used
+        # as literal zip member names in build_zip_bytes() - unlike every other project
+        # route (/project/files, /project/rename, ...), this path never ran the keys
+        # through normalize_project_path(), so a crafted key like "../../evil.py" or
+        # "C:/evil.py" would land in the exported zip verbatim (a zip-slip payload
+        # that could write outside the extraction folder on a naive/older unzip tool).
+        # Reuse the same validator every other project path goes through; silently
+        # drop any entry it rejects rather than failing the whole export, matching
+        # how _load_project_files already drops individually-unreadable files.
+        files: Dict[str, str] = {}
+        for k, v in project["files"].items():
+            try:
+                safe_path = normalize_project_path(k)
+            except ProjectPathError:
+                continue
+            files[safe_path] = v if isinstance(v, str) else str(v or "")
         return files, True
     code = _safe_text(body.get("code"), limit=MAX_CODE_SIZE)
     if code.strip():

@@ -17,6 +17,17 @@ import traceback
 import types as _types
 import typing as _typing
 
+# Force UTF-8 stdout/stderr regardless of the parent process's locale (on Windows,
+# the default is the system ANSI codepage, e.g. cp1252, which cannot encode emoji,
+# Hindi/Devanagari, or most non-Latin-1 text - print(emoji_or_hindi_text) would
+# otherwise crash with UnicodeEncodeError instead of printing). errors='replace'
+# keeps a single malformed character from crashing an otherwise-valid run.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+
 _MODULE_OBJECTS = {
     'math': _math,
     'random': _random,
@@ -144,6 +155,21 @@ _FORBIDDEN_NAMES = {
     '__builtins__', '__import__', '__loader__', '__spec__', '__getattribute__',
     '__reduce__', '__reduce_ex__', '__dict__', '__code__', '__init_subclass__',
     '__base__', '__new__',
+    # Frame/traceback/generator introspection: an exception's __traceback__ (or a
+    # generator's gi_frame, a coroutine's cr_frame, ...) exposes a real frame object
+    # whose f_back chain walks all the way up to THIS module's own frame - and from
+    # there f_globals hands back the real, unrestricted os/sys/traceback module
+    # objects imported at the top of this file, completely bypassing every other
+    # check here (no getattr/eval/import needed - confirmed exploitable via
+    # `except Exception as e: f = e.__traceback__.tb_frame` then walking f.f_back).
+    # No beginner Python program legitimately needs any of these.
+    '__traceback__', 'tb_frame', 'tb_next', 'tb_lasti', 'tb_lineno',
+    'f_back', 'f_globals', 'f_locals', 'f_builtins', 'f_code', 'f_lasti', 'f_lineno', 'f_trace',
+    'gi_frame', 'gi_code', 'gi_yieldfrom',
+    'cr_frame', 'cr_code', 'cr_await',
+    'ag_frame', 'ag_code',
+    '__closure__', 'cell_contents', '__func__', '__self__', '__wrapped__',
+    '__cause__', '__context__',
 }
 _FORBIDDEN_GETATTR_FUNCS = {
     'getattr', 'setattr', 'delattr', 'hasattr', 'vars', 'globals', 'locals',

@@ -617,6 +617,42 @@ def test_fix_code_surfaces_ai_service_error(client, monkeypatch):
         "__import__('os').system('ls')",
         ["not allowed", "os"],
     ),
+    # Frame/traceback introspection sandbox escape: e.__traceback__.tb_frame exposes
+    # a real frame object; walking .f_back reaches sandbox_runner.py's own module
+    # frame, whose f_globals hands back the real, unrestricted `os`/`sys` modules -
+    # a full sandbox bypass using no getattr/eval/import/forbidden-name-of-the-old
+    # blocklist. Confirmed exploitable (leaked real os.environ) before this fix.
+    (
+        "try:\n"
+        "    raise Exception()\n"
+        "except Exception as e:\n"
+        "    f = e.__traceback__.tb_frame\n"
+        "    while f.f_back:\n"
+        "        f = f.f_back\n"
+        "    print(f.f_globals['os'].environ)\n",
+        ["not allowed", "tb_frame"],
+    ),
+    (
+        "def g():\n"
+        "    yield 1\n"
+        "gen = g()\n"
+        "gen.__next__()\n"
+        "f = gen.gi_frame\n"
+        "while f.f_back:\n"
+        "    f = f.f_back\n"
+        "print(f.f_globals['os'])\n",
+        ["not allowed", "gi_frame"],
+    ),
+    (
+        "try:\n"
+        "    try:\n"
+        "        raise ValueError('inner')\n"
+        "    except ValueError as inner:\n"
+        "        raise RuntimeError('outer') from inner\n"
+        "except RuntimeError as e:\n"
+        "    print(e.__cause__.__traceback__)\n",
+        ["not allowed", "__cause__"],
+    ),
 ])
 def test_sandbox_blocks_escape_attempts(client, code, expected_fragments):
     res = client.post("/run", json={"code": code})
@@ -772,6 +808,25 @@ def test_sandbox_loop_output(client):
     assert data["success"] is True
     output = data.get("output", "")
     assert "0" in output and "1" in output and "2" in output
+
+
+@pytest.mark.parametrize("code, expected_substring", [
+    ("print('\U0001F600\U0001F389\U0001F40D✨')", "\U0001F600\U0001F389\U0001F40D✨"),
+    ("print('नमस्ते दुनिया')", "नमस्ते"),
+    ("print('héllo wörld ñ')", "héllo wörld ñ"),
+])
+def test_sandbox_output_handles_non_latin1_unicode(client, code, expected_substring):
+    """Regression: the sandboxed subprocess's stdout pipe used text=True with no
+    explicit encoding, decoding with the parent's locale-preferred codec - cp1252 on
+    Windows, which cannot represent emoji or Devanagari (Hindi) text. print() of
+    any such string crashed the whole run with UnicodeEncodeError instead of
+    printing, for a product that explicitly offers Hindi voices/language support.
+    """
+    res = client.post("/run", json={"code": code, "language": "en", "inputs": []})
+    assert res.status_code == 200
+    data = res.get_json()
+    assert data["success"] is True, f"unicode output crashed the run: {data.get('error')}"
+    assert expected_substring in data.get("output", "")
 
 
 def test_broken_loop_error_is_safe_and_beginner_friendly(client):

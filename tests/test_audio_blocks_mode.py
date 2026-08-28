@@ -615,6 +615,21 @@ def test_command_workflow_compile_preview_compare_and_run_action(client):
     assert transferred["ai_action"]["code"] == code
 
 
+def test_compare_blocks_and_code_does_not_crash_on_invalid_editor_python(client):
+    """Regression: "compare blocks and code" called ast.parse(code) with no
+    try/except (unlike every other ast.parse in this module), so a syntactically
+    invalid Python editor - normal mid-edit state, since Code Mode and Audio
+    Blocks Mode are independent - crashed the whole /voice-command request with
+    an unhandled SyntaxError (500) instead of reporting "differs from the
+    generated block code".
+    """
+    voice(client, "enter block mode")
+    voice(client, "add print text block")
+    result = voice(client, "compare blocks and code", code="def foo(")
+    assert result["success"] is True
+    assert result["speech"].startswith("The editor differs")
+
+
 def test_parsons_overlap_remains_available_when_audio_mode_is_off(client):
     voice(client, "start block practice 3")
     order = voice(client, "read block order")

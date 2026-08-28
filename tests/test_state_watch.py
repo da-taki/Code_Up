@@ -58,6 +58,38 @@ def test_safe_value_truncation():
     assert sw.summarize_value(long_text) == "a long piece of text"
 
 
+def test_summarize_value_on_sandbox_truncated_repr_does_not_report_a_wrong_count():
+    """Regression: sandbox_runner._safe_repr() caps every traced value's repr() at
+    200 chars as `r[:197] + '...'` before state_watch ever sees it - the result has
+    no closing bracket. _count_items() used to blindly do `repr[1:-1]` and count
+    top-level commas by bracket depth; on an unclosed fragment, any nested bracket
+    that got cut off mid-way pushes depth permanently off zero, so trailing
+    top-level commas are miscounted - Variable Watch could report a wrong item
+    count for any list/dict/tuple long enough to be truncated at the sandbox layer.
+    It must now say the count isn't available rather than guess a wrong number.
+    """
+    # Mirrors sandbox_runner._safe_repr()'s exact truncation: real_repr[:197] + '...'
+    real_repr = "[" + ", ".join(str(i) for i in range(100)) + "]"  # far over 200 chars
+    assert len(real_repr) > 200
+    truncated_repr = real_repr[:197] + "..."
+    assert not truncated_repr.endswith("]"), "fixture should reproduce the unclosed-bracket shape"
+
+    result = sw.summarize_value(truncated_repr)
+    assert result == "a list too large to count exactly"
+    assert "with -1" not in result and "with 0" not in result  # never a confidently-wrong count
+
+    truncated_dict = ("{" + ", ".join(f"'k{i}': {i}" for i in range(30)) + "}")[:197] + "..."
+    assert sw.summarize_value(truncated_dict) == "dictionary too large to count exactly"
+
+
+def test_count_items_still_counts_correctly_for_normal_balanced_reprs():
+    # Non-truncated reprs (the overwhelmingly common case) must be unaffected.
+    assert sw._count_items("[1, 2, 3]") == 3
+    assert sw._count_items("[]") == 0
+    assert sw._count_items("{'a': 1, 'b': 2}") == 2
+    assert sw._count_items("(1, 2, 3, 4)") == 4
+
+
 def test_parse_state_and_variable_value():
     trace = [
         {"type": "line_exec", "line": 1},

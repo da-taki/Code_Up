@@ -7,7 +7,11 @@ MEMORY_KEY = "session_memory"
 _PENDING_TTL_SECONDS = 180
 
 _MAX_TEXT = 400
-_MAX_OUTPUT = 800
+# Matches app.py's MAX_NARRATION_OUTPUT_SIZE / CODEUP_SPOKEN_OUTPUT_LIMIT (4000) so
+# voice queries like "what did the program print" or "repeat last output" aren't
+# silently truncated to a fraction of what the run response and spoken narration
+# already allow.
+_MAX_OUTPUT = 4000
 _MAX_ERROR = 600
 _MAX_PROMPT = 600
 _MAX_CODE = 5000
@@ -18,6 +22,17 @@ _MAX_VALUES = 50
 def _clip(value: Any, limit: int = _MAX_TEXT) -> str:
     text = str(value or "").replace("\x00", "").strip()
     return text[:limit]
+
+
+def _clip_output(value: Any, limit: int = _MAX_OUTPUT) -> str:
+    """Like _clip, but appends a visible notice when text is actually cut off,
+    instead of silently dropping the tail - callers (voice replay/read-again
+    intents) speak this value directly, so a silent cut reads as complete output."""
+    text = str(value or "").replace("\x00", "").strip()
+    if len(text) <= limit:
+        return text
+    omitted = len(text) - limit
+    return text[:limit] + f"\n[Output truncated after {limit} characters; {omitted} more characters omitted.]"
 
 
 def code_hash(code: Any) -> str:
@@ -233,7 +248,7 @@ def record_run(mem: Dict[str, Any], *, output: str = "", error: str = "",
                input_source: str = "") -> None:
     mem["run_count"] = max(0, int(mem.get("run_count") or 0)) + 1
     mem["last_run_traceback"] = _clip(traceback_text, _MAX_ERROR * 2)
-    mem["last_run_output"] = _clip(output, _MAX_OUTPUT)
+    mem["last_run_output"] = _clip_output(output)
     mem["last_run_error"] = _clip(error, _MAX_ERROR)
     error_text = str(error or "")
     if error_text:

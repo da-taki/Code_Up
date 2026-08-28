@@ -4611,7 +4611,16 @@ def run_code():
         compile(code, project_run["entry"] if project_run else "<user>", "exec")
     except SyntaxError as e:
         safe_error = _syntax_error_message(e, code)
-        explanation = _local_error_explanation(code, safe_error, language=safe(body.get("language"), "en"), beginner=True)
+        # _syntax_error_message() already appends full beginner guidance ("must be
+        # indented" / "Add four spaces before: ...") for this specific case, and the
+        # frontend speaks both `error` and `explanation` back to back - generating a
+        # second, independently-worded explanation here just repeats the same advice
+        # in the user's ear. Skip it only for this one near-verbatim overlap; other
+        # syntax errors still get a distinct explanation from safe_error.
+        if isinstance(e, IndentationError) and "expected an indented block" in str(e.msg or "").lower():
+            explanation = None
+        else:
+            explanation = _local_error_explanation(code, safe_error, language=safe(body.get("language"), "en"), beginner=True)
         _save_mistake_snapshot(get_session_id(), code, safe_error, success=False, explanation=explanation)
         try:
             session_memory.record_run(mem,

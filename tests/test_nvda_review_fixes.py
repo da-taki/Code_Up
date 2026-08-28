@@ -211,3 +211,69 @@ def test_output_speech_limit_is_documented_in_code_and_replay_available(client):
     assert "readAgain.addEventListener('click', speakOutput)" in STATIC_APP
     assert "stopSpeech.addEventListener('click'" in STATIC_APP
     assert "SpeechManager.cancelAll()" in STATIC_APP
+
+
+def test_sr_announce_cap_is_not_shorter_than_spoken_output_limit():
+    """Regression: srAnnounce() used to hard-truncate every announcement at 600
+    chars, independent of CODEUP_SPOKEN_OUTPUT_LIMIT (4000). Screen Reader Mode
+    routes the already-bounded, notice-appended run-output speech through
+    srAnnounce() instead of audible TTS, so the smaller cap silently re-truncated
+    it mid-word and dropped the "Read output again" hint before it ever reached
+    screen-reader users. Live-browser repro: run 200 lines of output with Screen
+    Reader Mode on, the #srAnnouncer live region ended at exactly 600 chars,
+    mid-word, with the "Use the visible output..." notice sentence never reached.
+    """
+    match = re.search(r"function srAnnounce\(.*?\n\}", STATIC_APP, flags=re.DOTALL)
+    assert match, "srAnnounce() not found in static/app.js"
+    body = match.group(0)
+    slice_match = re.search(r"\.slice\(0,\s*(\d+)\)", body)
+    assert slice_match, "srAnnounce() should still cap announcement length"
+    cap = int(slice_match.group(1))
+    assert cap >= 4000, (
+        f"srAnnounce() truncates at {cap} chars, shorter than "
+        "CODEUP_SPOKEN_OUTPUT_LIMIT (4000) - screen-reader-mode users would hear "
+        "less of the run output than browser-TTS users hear of the same text"
+    )
+
+
+def test_editor_tab_key_behavior_is_accurately_described_and_indent_is_reachable():
+    """Regression: Monaco is created with accessibilitySupport:'on' (needed for AT
+    users), which makes Tab move focus OUT of the editor instead of indenting -
+    confirmed live: focusing the editor's textarea.inputarea and pressing Tab moved
+    focus straight to #leaveEditorBtn with no text change. The editor's ariaLabel
+    used to claim "Tab indents", which is what a screen reader announces as the
+    editing instructions - actively wrong, and with no keyboard alternative,
+    indenting a line was not reachable at all without a mouse. This checks the
+    label matches actual behavior and that a keyboard indent/outdent path exists.
+    """
+    assert "accessibilitySupport: 'on'" in STATIC_APP
+    aria_label_match = re.search(r"ariaLabel:\s*'([^']*)'", STATIC_APP)
+    assert aria_label_match, "editor ariaLabel not found"
+    aria_label = aria_label_match.group(1)
+    assert "Tab indents" not in aria_label, "ariaLabel still claims Tab indents, contradicting actual Monaco tab-focus-mode behavior"
+    assert "Tab moves focus" in aria_label
+    assert "Control right bracket to indent" in aria_label
+    assert "Control left bracket to outdent" in aria_label
+    assert "monaco.KeyCode.BracketRight" in STATIC_APP
+    assert "monaco.KeyCode.BracketLeft" in STATIC_APP
+    assert "editor.action.indentLines" in STATIC_APP
+    assert "editor.action.outdentLines" in STATIC_APP
+
+
+def test_command_palette_restores_focus_to_its_opener_not_always_the_editor():
+    """Regression: closeCommandPalette() used to hardcode editor.focus() on close,
+    no matter where the palette was opened from. Live repro: focus #runBtn, open
+    the palette (window.openCommandPalette()), close it with Escape - focus landed
+    in the Monaco textarea, not back on #runBtn. This stranded keyboard/screen-reader
+    users who opened the palette from anywhere other than the editor.
+    """
+    assert "_commandPaletteOpener = document.activeElement;" in STATIC_APP
+    close_match = re.search(r"function closeCommandPalette\(\).*?\n\}", STATIC_APP, flags=re.DOTALL)
+    assert close_match, "closeCommandPalette() not found in static/app.js"
+    body = close_match.group(0)
+    assert "_commandPaletteOpener" in body
+    assert "opener.focus()" in body
+    assert body.index("opener") < body.index("editor.focus()"), (
+        "closeCommandPalette() should try to restore focus to the palette's opener "
+        "before falling back to the editor"
+    )

@@ -1599,7 +1599,7 @@ require(['vs/editor/editor.main'], function () {
     glyphMargin:          true,
     automaticLayout:      true,
     accessibilitySupport: 'on',
-    ariaLabel:            'Python code editor. Use arrow keys to navigate and type to edit. Tab indents. Press Escape when speech is quiet, or Control M, to leave the editor. Press Control Enter to run.',
+    ariaLabel:            'Python code editor. Use arrow keys to navigate and type to edit. Tab moves focus out of the editor; use Control right bracket to indent a line and Control left bracket to outdent it. Press Escape when speech is quiet, or Control M, to leave the editor. Press Control Enter to run.',
     lineHeight:           24,
     tabSize:              4,
     insertSpaces:         true,
@@ -3123,8 +3123,13 @@ function srAnnounce(msg, priority = 'polite') {
   const region = priority === 'assertive' ? 'assertive' : 'polite';
   const el = document.getElementById(region === 'assertive' ? 'srAlert' : 'srAnnouncer');
   if (!el) return;
+  // Cap must stay >= CODEUP_SPOKEN_OUTPUT_LIMIT (4000, see below) plus room for its
+  // own truncation-notice sentence. Screen Reader Mode routes program-output speech
+  // (already bounded/notice-appended by formatRunOutputSpeech) through this function
+  // instead of audible TTS - a smaller cap here silently re-truncated that text mid-word
+  // and dropped the "Read output again" hint before screen-reader users ever heard it.
   const cleaned = sanitizeSpeechText(String(msg || '').replace(/<module>/g, 'top-level code'))
-    .replace(/\s+/g, ' ').trim().slice(0, 600);
+    .replace(/\s+/g, ' ').trim().slice(0, 4200);
   const now = Date.now();
   if (!cleaned || (_lastLiveRegionMessages[region] === cleaned && now - (_lastLiveRegionTimes[region] || 0) < 1200)) return;
   _lastLiveRegionMessages[region] = cleaned;
@@ -5586,6 +5591,11 @@ function registerEditorShortcuts() {
     }
   });
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyM, () => { leaveEditor(); });
+  // accessibilitySupport:'on' (above) puts Monaco in tab-focus-move mode, so plain
+  // Tab moves focus out of the editor instead of indenting - these are the only
+  // reachable keyboard shortcuts to indent/outdent a line (see ariaLabel above).
+  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.BracketRight, () => { editor.trigger('keyboard', 'editor.action.indentLines', {}); });
+  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.BracketLeft, () => { editor.trigger('keyboard', 'editor.action.outdentLines', {}); });
   const editorDom = editor.getDomNode();
   if (editorDom) {
     editorDom.addEventListener('keydown', (e) => {
@@ -6098,9 +6108,11 @@ const COMMAND_PALETTE_COMMANDS = [
 
 let commandPaletteSelectedIndex = 0;
 
+let _commandPaletteOpener = null;
 function openCommandPalette() {
   const overlay = document.getElementById('commandPaletteOverlay');
   const input   = document.getElementById('commandPaletteInput');
+  _commandPaletteOpener = document.activeElement;
   showEl(overlay);
   commandPaletteSelectedIndex = 0;
   renderCommandPalette('');
@@ -6109,8 +6121,15 @@ function openCommandPalette() {
 
 function closeCommandPalette() {
   hideEl(document.getElementById('commandPaletteOverlay'));
-  // Return focus to editor so keyboard users aren't stranded
-  if (editor) editor.focus();
+  // Return focus to whatever had focus before the palette opened, so keyboard users
+  // aren't relocated into the editor when they opened the palette from elsewhere.
+  const opener = _commandPaletteOpener;
+  _commandPaletteOpener = null;
+  if (opener && document.contains(opener) && typeof opener.focus === 'function') {
+    opener.focus();
+  } else if (editor) {
+    editor.focus();
+  }
   speak('Command palette closed.');
 }
 

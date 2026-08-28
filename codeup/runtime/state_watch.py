@@ -121,8 +121,20 @@ def _classify(value_repr: str) -> Tuple[str, str]:
     return "value", v
 
 
+_CONTAINER_CLOSERS = {"[": "]", "{": "}", "(": ")"}
+
+
 def _count_items(container_repr: str) -> int:
-    inner = container_repr.strip()[1:-1].strip()
+    """Returns -1 when container_repr looks truncated (e.g. sandbox_runner's 200-char
+    repr cap cuts mid-value and appends "..." with no closing bracket) rather than
+    silently miscounting: without a real closing bracket, comma/bracket-depth
+    tracking below can't tell top-level commas from ones inside a cut-off nested
+    value, so a naive count would just be wrong."""
+    text = container_repr.strip()
+    closer = _CONTAINER_CLOSERS.get(text[:1])
+    if not closer or not text.endswith(closer):
+        return -1
+    inner = text[1:-1].strip()
     if not inner:
         return 0
     depth = 0
@@ -149,6 +161,8 @@ def summarize_value(value_repr: str, *, full: bool = False) -> str:
     kind, v = _classify(value_repr)
     if kind == "list":
         n = _count_items(v)
+        if n == -1:
+            return "a list too large to count exactly"
         items = v.strip()[1:-1]
         all_numbers = bool(items) and all(
             re.fullmatch(r"\s*-?\d+(?:\.\d+)?\s*", part) for part in items.split(","))
@@ -160,6 +174,8 @@ def summarize_value(value_repr: str, *, full: bool = False) -> str:
         n = _count_items(v)
         label = {"dictionary": "a dictionary with", "set": "a set with", "tuple": "a tuple with"}[kind]
         unit = "keys" if kind == "dictionary" else "items"
+        if n == -1:
+            return f"{kind} too large to count exactly"
         if full and len(v) <= _MAX_VALUE_CHARS:
             return f"{kind} {v}"
         return f"{label} {n} {unit}"

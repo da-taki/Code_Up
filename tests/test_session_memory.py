@@ -112,7 +112,13 @@ class TestResolve:
     def test_memory_is_bounded(self):
         mem = sm.new_memory()
         sm.record_run(mem, output="x" * 5000, error="e" * 5000, ran_ok=False)
-        assert len(mem["last_run_output"]) <= 800
+        # last_run_output is bounded to _MAX_OUTPUT (4000, matching the app's other
+        # spoken-output limits) plus a visible truncation notice appended when the
+        # text is actually cut - see test_run_output_speech.py for the notice-text
+        # coverage. It intentionally clips lower than the raw 5000-char input, well
+        # above the old, silently-truncating 800-char cap.
+        assert 4000 < len(mem["last_run_output"]) < 5000
+        assert "truncated after 4000 characters" in mem["last_run_output"]
         assert len(mem["last_run_error"]) <= 600
         sm.record_generation(mem, "p" * 5000)
         assert len(mem["last_gen_prompt"]) <= 600

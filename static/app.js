@@ -2351,7 +2351,7 @@ async function runCodeStreaming() {
     const startRes = await fetch('/run-stream/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code: getCode() }),
+      body: JSON.stringify({ code: getCode(), inputs: _preflightInputs }),
     });
     const startData = await startRes.json();
     if (!startData.success) {
@@ -6975,11 +6975,27 @@ function showInputDialog(promptText, callback) {
     overlay.removeEventListener('keydown', onDialogKeydown);
     delete overlay._cuClose;
   }
+
+  function focusableDialogControls() {
+    return [input, ok, cancel].filter(el => el && !el.disabled && !el.hidden);
+  }
   function onInputKeydown(e) {
     if (e.key === 'Enter')  { e.preventDefault(); confirm(); }
   }
   function onDialogKeydown(e) {
-    if (e.key === 'Escape') { e.preventDefault(); dismiss(); }
+    if (e.key === 'Escape') { e.preventDefault(); dismiss(); return; }
+    if (e.key !== 'Tab') return;
+    const controls = focusableDialogControls();
+    if (!controls.length) return;
+    const first = controls[0];
+    const last = controls[controls.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
   }
   function onOverlayClick(e) {
     if (e.target === overlay) dismiss();

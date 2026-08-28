@@ -195,6 +195,39 @@ _CHANGE_RE = re.compile(r"^(\w+) changed from (.+) to (.+)$")
 _SCOPE_RE = re.compile(r"^(\w+) went out of scope$")
 
 
+def _iter_trace_changes(event: Dict[str, Any]) -> List[Dict[str, Any]]:
+    structured = event.get("structured_changes") or []
+    normalized: List[Dict[str, Any]] = []
+    for item in structured:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("variable") or "")
+        if not name:
+            continue
+        normalized.append({
+            "variable": name,
+            "kind": str(item.get("kind") or "changed"),
+            "before": item.get("before"),
+            "after": item.get("after"),
+        })
+    if normalized:
+        return normalized
+
+    for text in event.get("changes", []) or []:
+        m = _INIT_RE.match(text)
+        if m:
+            normalized.append({"variable": m.group(1), "kind": "initialized", "before": None, "after": m.group(2)})
+            continue
+        m = _CHANGE_RE.match(text)
+        if m:
+            normalized.append({"variable": m.group(1), "kind": "changed", "before": m.group(2), "after": m.group(3)})
+            continue
+        m = _SCOPE_RE.match(text)
+        if m:
+            normalized.append({"variable": m.group(1), "kind": "scope_exit", "before": None, "after": None})
+    return normalized
+
+
 def parse_state(trace: List[Dict[str, Any]], *, watched: Optional[set] = None) -> Dict[str, Dict[str, Any]]:
     """Final value of each variable, parsed from the trace's change strings."""
     state: Dict[str, Dict[str, Any]] = {}
@@ -203,21 +236,19 @@ def parse_state(trace: List[Dict[str, Any]], *, watched: Optional[set] = None) -
             continue
         line = event.get("line")
         file = event.get("file")
-        for change in event.get("changes", []):
-            m = _INIT_RE.match(change)
-            if m:
-                name, value = m.group(1), m.group(2)
-                if watched and name not in watched:
-                    continue
-                state[name] = {"value": value, "line": line, "from": None, "file": file}
+        for change in _iter_trace_changes(event):
+            name = change["variable"]
+            if watched and name not in watched:
                 continue
-            m = _CHANGE_RE.match(change)
-            if m:
-                name, old, new = m.group(1), m.group(2), m.group(3)
-                if watched and name not in watched:
-                    continue
-                state[name] = {"value": new, "line": line, "from": old, "file": file}
+            if change["kind"] == "scope_exit":
+                state.pop(name, None)
                 continue
+            state[name] = {
+                "value": change.get("after"),
+                "line": line,
+                "from": change.get("before"),
+                "file": file,
+            }
     return state
 
 
@@ -283,15 +314,15 @@ def build_steps(trace: List[Dict[str, Any]], code: str) -> List[Dict[str, Any]]:
             prev2, prev1 = prev1, event.get("line")
         elif etype == "state_change":
             causing = prev2 if prev2 is not None else event.get("line")
-            for change in event.get("changes", []):
-                m = _INIT_RE.match(change)
-                if m:
-                    desc = f"{m.group(1)} becomes {summarize_value(m.group(2), full=True)}"
+            for change in _iter_trace_changes(event):
+                if change["kind"] == "scope_exit":
+                    continue
+                name = change["variable"]
+                value = change.get("after")
+                if change["kind"] == "initialized":
+                    desc = f"{name} becomes {summarize_value(value, full=True)}"
                 else:
-                    m = _CHANGE_RE.match(change)
-                    if not m:
-                        continue
-                    desc = f"{m.group(1)} changes to {summarize_value(m.group(3), full=True)}"
+                    desc = f"{name} changes to {summarize_value(value, full=True)}"
                 steps.append({"line": causing, "file": file, "kind": "assignment", "text": desc})
         elif etype == "call":
             func = event.get("function", "?")
@@ -370,8 +401,8 @@ def loop_state(trace: List[Dict[str, Any]], code: str) -> str:
         # off-by-one from the loop header's final StopIteration check.
         iteration = sum(
             1 for e in trace if e.get("type") == "state_change"
-            for ch in e.get("changes", [])
-            if ch.startswith(f"{var} initialized") or ch.startswith(f"{var} changed"))
+            for ch in _iter_trace_changes(e)
+            if ch.get("variable") == var and ch.get("kind") in {"initialized", "changed"})
     else:
         iteration = max(1, sum(1 for e in trace if e.get("type") == "line_exec"
                                and e.get("line") == last_loop_line) - 1)
@@ -402,14 +433,12 @@ def _ticks(trace: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             _flush()
             cur_line = event.get("line")
         elif etype == "state_change":
-            for change in event.get("changes", []):
-                m = _INIT_RE.match(change)
-                if m:
-                    current[m.group(1)] = m.group(2)
-                    continue
-                m = _CHANGE_RE.match(change)
-                if m:
-                    current[m.group(1)] = m.group(3)
+            for change in _iter_trace_changes(event):
+                name = change["variable"]
+                if change["kind"] == "scope_exit":
+                    current.pop(name, None)
+                elif change.get("after") is not None:
+                    current[name] = change["after"]
     _flush()
     return ticks
 

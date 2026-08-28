@@ -346,6 +346,16 @@ def _interactive_input(prompt=''):
         raise RuntimeError(f"Could not read input: {e}")
 
 
+def _queued_input_available() -> bool:
+    return _INPUT_INDEX[0] < len(_INPUT_QUEUE)
+
+
+def _hybrid_input(prompt=''):
+    if _queued_input_available():
+        return _queued_input(prompt)
+    return _interactive_input(prompt)
+
+
 def _queued_input(prompt=''):
     if prompt:
         sys.stdout.write(prompt)
@@ -369,8 +379,8 @@ def _queued_input(prompt=''):
 
 
 def _select_input_func():
-    if _INTERACTIVE and _INPUT_FIFO:
-        return _interactive_input
+    if _INTERACTIVE:
+        return _hybrid_input
     return _queued_input
 
 
@@ -515,20 +525,51 @@ def main():
             last_locals = last_locals_by_frame.get(frame_key, {})
             current = _traceable_locals(frame)
             changes = []
+            structured_changes = []
             for k, v_repr in current.items():
                 if k not in last_locals:
                     changes.append(k + " initialized to " + v_repr)
+                    structured_changes.append({
+                        'variable': k,
+                        'kind': 'initialized',
+                        'before': None,
+                        'after': v_repr,
+                    })
                 else:
                     try:
                         if last_locals[k] != v_repr:
                             changes.append(k + " changed from " + last_locals[k] + " to " + v_repr)
+                            structured_changes.append({
+                                'variable': k,
+                                'kind': 'changed',
+                                'before': last_locals[k],
+                                'after': v_repr,
+                            })
                     except Exception:
                         changes.append(k + " changed (uncomparable value)")
+                        structured_changes.append({
+                            'variable': k,
+                            'kind': 'changed',
+                            'before': None,
+                            'after': v_repr,
+                        })
             for k in last_locals:
                 if k not in current:
                     changes.append(k + " went out of scope")
+                    structured_changes.append({
+                        'variable': k,
+                        'kind': 'scope_exit',
+                        'before': last_locals[k],
+                        'after': None,
+                    })
             if changes:
-                trace.append({'type': 'state_change', 'line': line, 'file': frame_file, 'changes': changes})
+                trace.append({
+                    'type': 'state_change',
+                    'line': line,
+                    'file': frame_file,
+                    'changes': changes,
+                    'structured_changes': structured_changes,
+                })
             last_locals_by_frame[frame_key] = current
         elif event == 'call':
             trace.append({'type': 'call', 'function': frame.f_code.co_name, 'line': frame.f_lineno, 'file': frame_file})

@@ -1,6 +1,7 @@
 import ast
 import atexit
 import errno
+import difflib
 import hashlib
 import io
 import json
@@ -2944,17 +2945,53 @@ def _audio_breakpoint_matches(current: float, operator: str, threshold: float) -
     return False
 
 
-def _find_audio_breakpoint_pause(trace: List[Dict[str, Any]], breakpoints: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+def _iter_audio_trace_changes(event: Dict[str, Any]) -> List[Dict[str, Any]]:
+    structured = event.get("structured_changes") or []
+    normalized: List[Dict[str, Any]] = []
+    for item in structured:
+        if not isinstance(item, dict):
+            continue
+        variable = str(item.get("variable") or "")
+        if not variable or item.get("kind") == "scope_exit":
+            continue
+        after = item.get("after")
+        before = item.get("before")
+        parsed = _coerce_audio_number(str(after))
+        if parsed is None:
+            continue
+        previous = _coerce_audio_number(str(before)) if before is not None else None
+        normalized.append({
+            "variable": variable,
+            "current": parsed,
+            "current_display": str(after),
+            "previous": previous,
+            "previous_display": None if before is None else str(before),
+        })
+    if normalized:
+        return normalized
+
+    for change_str in event.get("changes", []) or []:
+        change = _parse_audio_trace_change(change_str)
+        if change:
+            normalized.append(change)
+    return normalized
+
+
+def _find_audio_breakpoint_pause(
+    trace: List[Dict[str, Any]],
+    breakpoints: List[Dict[str, Any]],
+    start_index: int = 0,
+    skip_breakpoint: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
     context_values: Dict[str, str] = {}
     for idx, event in enumerate(trace or []):
-        if event.get("type") != "state_change":
+        if idx < start_index or event.get("type") != "state_change":
             continue
-        for change_str in event.get("changes", []) or []:
-            change = _parse_audio_trace_change(change_str)
-            if not change:
-                continue
+        for change in _iter_audio_trace_changes(event):
             context_values[change["variable"]] = change["current_display"]
             for breakpoint in breakpoints:
+                if skip_breakpoint and breakpoint == skip_breakpoint:
+                    continue
                 if change["variable"] != breakpoint.get("variable"):
                     continue
                 threshold = breakpoint.get("threshold")
@@ -2995,6 +3032,21 @@ def _trace_slice_to_narration(
             break
         etype = event.get("type")
         if etype == "state_change":
+            structured = event.get("structured_changes") or []
+            if structured:
+                for change in structured:
+                    if not isinstance(change, dict) or change.get("kind") == "scope_exit":
+                        continue
+                    var_name = str(change.get("variable") or "")
+                    if not var_name or (watched and var_name not in watched):
+                        continue
+                    current_display = change.get("after")
+                    if change.get("before") is None:
+                        narration.append(f"{var_name} becomes {current_display}.")
+                    else:
+                        narration.append(f"{var_name} changes to {current_display}.")
+                    step_count += 1
+                continue
             for change_str in event.get("changes", []) or []:
                 parts = change_str.split(" ", 1)
                 var_name = parts[0] if parts else ""
@@ -3096,11 +3148,44 @@ def _continue_audio_breakpoint(session_id: str) -> Dict[str, Any]:
             return {"success": False, "active": False, "speech": msg, "auto_speak": True}
         pause = storage.get("audio_breakpoint_pause") or {}
         trace = list(storage.get("last_trace", []) or [])
+        breakpoints = list(storage.get("audio_breakpoints", []) or [])
         storage["audio_breakpoint_pause"] = None
         storage["last_accessed"] = time.time()
 
     output_text = pause.get("output", "")
     start_index = int(pause.get("resume_index", 0))
+    next_pause = _find_audio_breakpoint_pause(
+        trace,
+        breakpoints,
+        start_index=start_index,
+        skip_breakpoint=pause.get("breakpoint"),
+    )
+    if next_pause:
+        next_pause["output"] = output_text
+        _store_audio_breakpoint_pause(session_id, next_pause)
+        narration = _trace_slice_to_narration(
+            trace,
+            start_index=start_index,
+            end_index=next_pause.get("event_index"),
+        )
+        pause_message = _audio_breakpoint_pause_message(next_pause)
+        speech = "Continuing from the audio breakpoint. " + " ".join(narration[:40])
+        if narration:
+            speech += " "
+        speech += pause_message
+        return {
+            "success": True,
+            "active": True,
+            "continued": True,
+            "paused": True,
+            "pause": next_pause,
+            "narration": narration,
+            "narration_text": speech,
+            "output": "",
+            "speech": speech,
+            "auto_speak": True,
+        }
+
     narration = _trace_slice_to_narration(
         trace,
         start_index=start_index,
@@ -3360,6 +3445,24 @@ def watch_variable_route():
 
 
 
+_MISTAKE_PAIR_MAX_SECONDS = 10 * 60
+_MISTAKE_PAIR_MIN_SIMILARITY = 0.35
+
+
+def _is_related_mistake_pair(error_code: str, success_code: str) -> bool:
+    before = (error_code or "").strip()
+    after = (success_code or "").strip()
+    if not before or not after:
+        return False
+    if before == after:
+        return True
+    before_names = set(re.findall(r"[A-Za-z_]\w*", before))
+    after_names = set(re.findall(r"[A-Za-z_]\w*", after))
+    if before_names and after_names and len(before_names & after_names) / max(len(before_names | after_names), 1) >= 0.25:
+        return True
+    return difflib.SequenceMatcher(None, before, after).ratio() >= _MISTAKE_PAIR_MIN_SIMILARITY
+
+
 def _save_mistake_snapshot(
     session_id: str,
     code: str,
@@ -3371,17 +3474,25 @@ def _save_mistake_snapshot(
     with _mistake_snapshots_lock:
         snap = _mistake_snapshots.get(session_id, {})
         snap["session_id"] = session_id
+        now = time.time()
         if not success and error:
             snap["error_code"] = code
             snap["error_msg"] = error
+            snap.pop("success_code", None)
+            snap.pop("success_output", None)
+            snap.pop("success_timestamp", None)
             if explanation:
                 snap["error_explanation"] = explanation
-            snap["error_timestamp"] = time.time()
+            snap["error_timestamp"] = now
         elif success:
-            if snap.get("error_code"):
+            error_code = snap.get("error_code", "")
+            error_age = now - float(snap.get("error_timestamp", 0) or 0)
+            if error_code and error_age <= _MISTAKE_PAIR_MAX_SECONDS and _is_related_mistake_pair(error_code, code):
                 snap["success_code"] = code
                 snap["success_output"] = output
-                snap["success_timestamp"] = time.time()
+                snap["success_timestamp"] = now
+            elif error_code:
+                snap = {"session_id": session_id}
         _mistake_snapshots[session_id] = snap
 
 
@@ -3501,14 +3612,12 @@ def mistake_replay():
         snap = dict(_mistake_snapshots.get(session_id, {}))
 
     error_code = snap.get("error_code", "")
-    success_code = snap.get("success_code", current_code)
+    success_code = snap.get("success_code", "")
 
     if not error_code:
         msg = "I do not have a recent corrected mistake to compare yet. Try running code with an error, correcting it, and running again."
         return jsonify({"success": False, "reply": msg, "speech": msg, "auto_speak": True})
 
-    if not success_code:
-        success_code = current_code
     if not success_code:
         msg = "I have the errored version but no corrected version yet. Fix the code and run it successfully first."
         return jsonify({"success": False, "reply": msg, "speech": msg, "auto_speak": True})
@@ -3564,6 +3673,8 @@ def mistake_replay():
 def mentor_code_map():
     body = safejson()
     code = safe(body.get("code"), "")
+    prepared_inputs = body.get("inputs") if isinstance(body.get("inputs"), list) else []
+    prepared_inputs = [str(item)[:1000] for item in prepared_inputs[:100]]
     if len(code) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": f"Code too large (max {MAX_CODE_SIZE} bytes)"}), 413
     blocked = _reject_non_python_response(code)
@@ -6384,6 +6495,20 @@ def project_requirements():
     return jsonify({"success": True, "requirements": requirements, "speech": speech})
 
 
+def _normalized_snippet_name(name: str) -> str:
+    return re.sub(r"\s+", " ", str(name or "").strip()).casefold()
+
+
+def _snippet_name_conflict(snippets: List[Dict[str, Any]], name: str, exclude_id: Optional[str] = None) -> bool:
+    wanted = _normalized_snippet_name(name)
+    for snippet in snippets or []:
+        if exclude_id is not None and str(snippet.get("id")) == str(exclude_id):
+            continue
+        if _normalized_snippet_name(snippet.get("name", "")) == wanted:
+            return True
+    return False
+
+
 @app.route("/snippets", methods=["GET", "POST"])
 def snippets():
     if request.method == "GET":
@@ -6423,6 +6548,8 @@ def snippets():
     new_id = str(uuid.uuid4())
     with _snippets_lock:
         data = load_snippets()
+        if _snippet_name_conflict(data.get("snippets", []), name):
+            return jsonify({"success": False, "error": "A snippet with that name already exists"}), 409
         data["snippets"].append({"id": new_id, "name": name, "code": code})
         save_snippets(data)
     return jsonify({"success": True, "id": new_id, "speech": f"Saved snippet: {name}"})
@@ -6458,6 +6585,8 @@ def snippet_detail(sid):
                         return jsonify({"success": False, "error": "Name is required"}), 400
                     if len(new_name) > 256:
                         return jsonify({"success": False, "error": "Name too long (max 256 chars)"}), 400
+                    if _snippet_name_conflict(data.get("snippets", []), new_name, exclude_id=sid):
+                        return jsonify({"success": False, "error": "A snippet with that name already exists"}), 409
                     s["name"] = new_name
                     snippet_name = new_name
                 if "code" in body:
@@ -11641,7 +11770,7 @@ def _cleanup_run(run_id):
             os.unlink(fifo)
         except OSError:
             pass
-    for tmp in (state.get("code_file"), state.get("trace_file"), state.get("script_file")):
+    for tmp in (state.get("code_file"), state.get("trace_file"), state.get("script_file"), state.get("inputs_file")):
         if tmp and os.path.exists(tmp):
             try:
                 os.unlink(tmp)
@@ -11686,6 +11815,13 @@ def run_stream_start():
         code_file_path = cf.name
 
     trace_file = os.path.join(workspace_dir, f"trace_{run_id}.json")
+    inputs_file_path = None
+    if prepared_inputs:
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False,
+                                         encoding='utf-8', dir=workspace_dir) as inf:
+            inf.write("\n".join(prepared_inputs))
+            inf.write("\n")
+            inputs_file_path = inf.name
     runner_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'codeup', 'runtime', 'sandbox_runner.py')
 
     env = os.environ.copy()
@@ -11693,7 +11829,10 @@ def run_stream_start():
     env['CODEUP_TRACE_FILE'] = trace_file
     env['CODEUP_INTERACTIVE'] = '1'
     env['CODEUP_INPUT_FIFO'] = fifo_path
-    env.pop('CODEUP_INPUTS_FILE', None)
+    if inputs_file_path:
+        env['CODEUP_INPUTS_FILE'] = inputs_file_path
+    else:
+        env.pop('CODEUP_INPUTS_FILE', None)
 
     output_queue = _queue_mod.Queue()
 
@@ -11861,20 +12000,23 @@ def run_stream_input(run_id):
     with state["awaiting_input_lock"]:
         if not state.get("awaiting_input", False):
             return jsonify({"success": False, "error": "Run is not awaiting input"}), 409
-    proc = state.get("proc")
-    if not proc or proc.poll() is not None:
-        return jsonify({"success": False, "error": "Run is not active"}), 410
-    fifo = state.get("fifo")
-    if not fifo or not os.path.exists(fifo):
-        return jsonify({"success": False, "error": "Input pipe not available"}), 410
+        proc = state.get("proc")
+        if not proc or proc.poll() is not None:
+            return jsonify({"success": False, "error": "Run is not active"}), 410
+        fifo = state.get("fifo")
+        if not fifo or not os.path.exists(fifo):
+            return jsonify({"success": False, "error": "Input pipe not available"}), 410
+        state["awaiting_input"] = False
     try:
-        fd = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+        fd = os.open(fifo, os.O_WRONLY | getattr(os, "O_NONBLOCK", 0))
         with os.fdopen(fd, 'w', encoding='utf-8') as f:
             f.write(value + '\n')
-        with state["awaiting_input_lock"]:
-            state["awaiting_input"] = False
         return jsonify({"success": True})
     except OSError as e:
+        with state["awaiting_input_lock"]:
+            proc = state.get("proc")
+            if proc and proc.poll() is None:
+                state["awaiting_input"] = True
         if e.errno in (errno.ENXIO, errno.EAGAIN, errno.EWOULDBLOCK):
             return jsonify({"success": False, "error": "Input reader is not ready"}), 409
         _debug_log(f"Could not write live input for run {run_id}: {sanitize_traceback(str(e))}")

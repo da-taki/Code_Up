@@ -57,7 +57,9 @@ def normalize_project_path(path: Any) -> str:
     cleaned = "/".join(parts)
     if not re.match(r"^[A-Za-z0-9._\-/]+$", cleaned):
         raise ProjectPathError("File path can only use letters, numbers, dashes, underscores, dots, and slashes.")
-    if cleaned == PROJECT_MANIFEST or cleaned.endswith("/" + PROJECT_MANIFEST):
+    lowered = cleaned.lower()
+    manifest = PROJECT_MANIFEST.lower()
+    if lowered == manifest or lowered.endswith("/" + manifest):
         raise ProjectPathError("The project manifest is managed by CodeUp.")
     return cleaned
 
@@ -94,9 +96,15 @@ def normalize_file_map(files: Any) -> Dict[str, str]:
         items = []
 
     normalized: Dict[str, str] = {}
+    seen_casefolded: Dict[str, str] = {}
     total = 0
     for raw_path, raw_content in items:
         path = normalize_project_path(raw_path)
+        path_key = path.casefold()
+        existing_path = seen_casefolded.get(path_key)
+        if existing_path and existing_path != path:
+            raise ProjectPathError(f"Project contains files that differ only by case: {existing_path} and {path}.")
+        seen_casefolded[path_key] = path
         content = str(raw_content or "")
         size = len(content.encode("utf-8"))
         if size > MAX_PROJECT_FILE_BYTES:

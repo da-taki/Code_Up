@@ -276,6 +276,10 @@ def find_definition(code: str, name: str) -> Dict[str, Any]:
     if not candidates:
         return {"found": False, "line": None,
                 "message": f"I could not find a definition for {name}."}
+    if name == "main":
+        function_candidates = [item for item in candidates if item[1] == "function"]
+        if function_candidates:
+            candidates = function_candidates
     line, kind = min(candidates, key=lambda item: item[0])
     if kind == "function":
         message = f"Function {name} starts on line {line}."
@@ -765,18 +769,21 @@ def csv_preview(project_state: Dict[str, Any], requested_path: str = "") -> str:
         path = csv_paths[0] if csv_paths else None
     if not path:
         return "I could not find a CSV file in this project."
-    stream = io.StringIO(str(files[path] or ""))
-    sample = "".join(stream.readline() for _ in range(4))
+    raw_text = str(files[path] or "")
+    stream = io.StringIO(raw_text.lstrip("\ufeff"))
+    sample = "".join(stream.readline() for _ in range(6))
     try:
         rows = list(csv.reader(io.StringIO(sample)))
     except csv.Error:
         return f"I could not read a safe preview of {path}."
     if not rows:
         return f"{path} is empty."
-    columns = ", ".join(rows[0]) or "none"
-    message = f"{path} has columns {columns}."
-    if len(rows) > 1:
-        message += f" First row: {', '.join(rows[1])}."
+    columns = ", ".join((rows[0] or [])) or "none"
+    data_rows = [row for row in rows[1:] if row]
+    shown_rows = min(len(data_rows), 5)
+    message = f"{path} has columns {columns}. Previewing {shown_rows} row{'s' if shown_rows != 1 else ''}."
+    if data_rows:
+        message += f" First row: {', '.join(data_rows[0])}."
     return message
 
 

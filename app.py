@@ -4,7 +4,9 @@ import errno
 import difflib
 import hashlib
 import io
+import itsdangerous
 import json
+import keyword
 import os
 import queue as _queue_mod
 import random
@@ -338,6 +340,25 @@ _tracer_lock = threading.Lock()
 SUBPROCESS_MEMORY_LIMIT_MB = int(os.environ.get("CODEUP_SUBPROCESS_MEMORY_MB", "512"))
 SUBPROCESS_CPU_LIMIT_SECONDS = int(os.environ.get("CODEUP_SUBPROCESS_CPU_SECONDS", "3"))
 SUBPROCESS_WALL_TIMEOUT_SECONDS = int(os.environ.get("CODEUP_SUBPROCESS_WALL_SECONDS", "8"))
+
+# OS plumbing the interpreter/runner genuinely needs to start up (locating
+# its own executable/DLLs, a writable temp dir, locale) - never the full
+# parent environment. The parent process holds real secrets (GROQ_API_KEY,
+# DATABASE_URL, FLASK_SECRET_KEY, ...) that arbitrary learner-submitted code
+# must never be able to read back out via os.environ. `import os` is
+# already blocked at the AST level before this point, but that is one
+# layer, not a reason to also hand the child process every parent secret -
+# this is defense in depth, not a substitute for that check.
+_SANDBOX_ENV_ALLOWLIST = {
+    "PATH", "PATHEXT", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR",
+    "TEMP", "TMP", "TMPDIR", "HOME", "USERPROFILE",
+    "COMSPEC", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE",
+    "LANG", "LC_ALL", "LC_CTYPE",
+}
+
+
+def _minimal_sandbox_env() -> dict:
+    return {key: value for key, value in os.environ.items() if key.upper() in _SANDBOX_ENV_ALLOWLIST}
 if sys.platform != "win32":
     import resource as _resource
 
@@ -372,29 +393,72 @@ SESSION_COOKIE_SAMESITE = None if os.environ.get("FLASK_TESTING", "false").lower
 
 @app.before_request
 def ensure_background_services_started():
+    get_session_id()
     if not _is_testing_mode():
         start_background_services()
         _maybe_run_groq_startup_health_check()
 
+_SESSION_ID_SALT = "codeup-session-id-v1"
+
+
+def _session_id_signer():
+    return itsdangerous.URLSafeSerializer(app.secret_key, salt=_SESSION_ID_SALT)
+
+
+def _sign_session_id(raw_id: str) -> str:
+    return _session_id_signer().dumps(raw_id)
+
+
+def _verify_session_id(signed_value):
+    if not signed_value:
+        return None
+    try:
+        value = _session_id_signer().loads(signed_value)
+    except Exception:
+        return None
+    return value if isinstance(value, str) and value else None
+
+
 @app.after_request
 def set_session_cookie(response):
-    if not request.cookies.get(SESSION_COOKIE_NAME):
-        session_id = getattr(g, 'session_id', None) or str(uuid.uuid4())
-        response.set_cookie(
-            SESSION_COOKIE_NAME,
-            session_id,
-            max_age=SESSION_COOKIE_MAX_AGE,
-            secure=SESSION_COOKIE_SECURE,
-            httponly=SESSION_COOKIE_HTTPONLY,
-            samesite=SESSION_COOKIE_SAMESITE,
-        )
+    session_id = getattr(g, 'session_id', None)
+    if not session_id:
+        return response
+    raw_cookie = request.cookies.get(SESSION_COOKIE_NAME)
+    if _verify_session_id(raw_cookie) == session_id:
+        return response
+    response.set_cookie(
+        SESSION_COOKIE_NAME,
+        _sign_session_id(session_id),
+        max_age=SESSION_COOKIE_MAX_AGE,
+        secure=SESSION_COOKIE_SECURE,
+        httponly=SESSION_COOKIE_HTTPONLY,
+        samesite=SESSION_COOKIE_SAMESITE,
+    )
     return response
 
 
 def get_session_id():
-    session_id = request.cookies.get(SESSION_COOKIE_NAME)
-    if session_id:
-        return session_id
+    """Server-verified execution identity.
+
+    The raw cookie value is only trusted if its signature verifies against
+    our secret key - a client cannot reset its rate-limit bucket just by
+    sending an arbitrary/changed cookie value, since anything not actually
+    issued by this server mints a brand-new (and equally rate-limited)
+    identity rather than being taken at face value.
+
+    ``g`` is only ever written to when there is *no* valid cookie to
+    resolve (mirrors the pre-signing implementation exactly). Writing to
+    ``g`` on every call - even when a cookie already verified cleanly -
+    would leak one request's identity into another's: Flask reuses the
+    top-of-stack app context (and so its ``g``) for nested same-app
+    requests, which happens whenever ``with app.test_client() as a, b:``
+    interleaves calls on two clients. A verified cookie never needs the
+    fallback anyway, so skipping the write there is also just correct.
+    """
+    verified = _verify_session_id(request.cookies.get(SESSION_COOKIE_NAME))
+    if verified:
+        return verified
     cached = getattr(g, 'session_id', None)
     if cached:
         return cached
@@ -471,6 +535,20 @@ RUN_RATE_LIMIT  = 30   # max runs
 RUN_RATE_WINDOW = 60   # per this many seconds
 _run_timestamps: dict = {}   # session_id -> list[float]
 _run_rate_lock = threading.Lock()
+
+def _rate_limit_identity() -> str:
+    """Execution-budget identity: prefers a DB-verified classroom learner
+    (a token a client cannot forge into someone else's row) over the
+    signed anonymous session cookie, so distinct learners sharing a
+    school NAT/browser profile never share one budget, while still never
+    bucketing by raw client-controlled input alone."""
+    if has_request_context():
+        token = request.cookies.get(CLASSROOM_LEARNER_COOKIE)
+        learner = classroom_db.get_learner_by_token(token) if token else None
+        if learner and learner.get("id") is not None:
+            return f"learner:{learner['id']}"
+    return get_session_id()
+
 
 def _check_run_rate_limit(session_id: str) -> bool:
     now = time.time()
@@ -1679,6 +1757,14 @@ def tutorial_validate():
     if not module_id or tutorial_engine.get_module(module_id) is None:
         return jsonify({"success": False, "error": "Unknown tutorial module"}), 400
 
+    storage = get_trace_storage()
+    mem = session_memory.get_memory(storage)
+    if ran_ok:
+        expected_hash = session_memory.code_hash(code)
+        if mem.get("last_run_ok") is not True or mem.get("last_run_code_hash") != expected_hash:
+            ran_ok = False
+            output = ""
+
     result = tutorial_engine.validate_attempt(
         module_id, code, ran_ok=ran_ok, output=output
     )
@@ -2524,7 +2610,7 @@ def _run_with_trace_for_narration(
                 input_file.write(str(item).replace('\n', ' ').replace('\r', ' ') + '\n')
             inputs_file_path = input_file.name
 
-    env = os.environ.copy()
+    env = _minimal_sandbox_env()
     env['CODEUP_CODE_FILE'] = code_file_path
     env['CODEUP_TRACE_FILE'] = trace_file
     if inputs_file_path:
@@ -3313,7 +3399,7 @@ def step_narration():
         msg = _syntax_error_message(e, code)
         return jsonify({"success": False, "error": msg, "narration": [msg]})
 
-    if not _check_run_rate_limit(session_id):
+    if not _check_run_rate_limit(_rate_limit_identity()):
         return jsonify({"success": False, "error": "Rate limit exceeded"}), 429
 
     with _watched_vars_lock:
@@ -4419,14 +4505,22 @@ def _input_help_message() -> str:
 
 
 def _split_input_values(raw: str) -> List[str]:
-    text = str(raw or "").strip().strip(".")
+    # Only the *trailing* period is sentence punctuation to discard (e.g.
+    # "set input to 16." -> "16"). A *leading* period can be a real part of
+    # the value itself (".5" is a valid float literal) and must never be
+    # stripped, or ".5" silently becomes "5" - a 10x value corruption.
+    text = str(raw or "").strip().rstrip(".")
     if not text:
         return []
     if "," in text:
         parts = re.split(r"\s*,\s*", text)
     else:
         parts = re.split(r"\s+and\s+", text, flags=re.IGNORECASE)
-    cleaned = [re.sub(r"^\s*and\s+", "", p, flags=re.IGNORECASE).strip(" ,.;:") for p in parts]
+    cleaned = []
+    for p in parts:
+        p = re.sub(r"^\s*and\s+", "", p, flags=re.IGNORECASE).strip()
+        p = p.lstrip(" ,;:").rstrip(" ,.;:")
+        cleaned.append(p)
     return [p for p in cleaned if p][:50]
 
 
@@ -4756,7 +4850,7 @@ def run_code():
         _save_mistake_snapshot(get_session_id(), code, safe_error, success=False, explanation=explanation)
         try:
             session_memory.record_run(mem,
-                                      error=safe_error, traceback_text=safe_error,
+                                      error=safe_error, traceback_text=safe_error, code=code,
                                       inputs=inputs, ran_ok=False, input_source=input_source)
         except Exception:
             pass
@@ -4768,7 +4862,7 @@ def run_code():
             "input_prompts": [],
         })
 
-    if not _check_run_rate_limit(get_session_id()):
+    if not _check_run_rate_limit(_rate_limit_identity()):
         return jsonify({
             "success": False,
             "error": f"Rate limit exceeded. Max {RUN_RATE_LIMIT} runs per {RUN_RATE_WINDOW} seconds."
@@ -4799,6 +4893,16 @@ def run_code():
                 "values, or add a magic comment like '# inputs: Alice, 17' at "
                 "the top of your code, or switch to live input mode."
             )
+
+    # Past this point we're committing to an actual execution attempt with the
+    # inputs we have (the client's "Program input answer" panel calls /run
+    # directly rather than going through the voice-command awaiting-input
+    # handler). Any earlier "still waiting for more input" bookkeeping is now
+    # stale regardless of whether this run succeeds or fails - leaving it set
+    # let a later, unrelated command (even the exact "set inputs to ..."
+    # recovery phrase this same error message recommends) get silently
+    # swallowed as a literal answer to a request that no longer exists.
+    session_memory.clear_awaiting_program_input(mem)
 
     stdout_buf = io.StringIO()
     stderr_buf = io.StringIO()
@@ -4832,7 +4936,7 @@ def run_code():
 
         time_limit = SUBPROCESS_WALL_TIMEOUT_SECONDS
         try:
-            env = os.environ.copy()
+            env = _minimal_sandbox_env()
             env['CODEUP_CODE_FILE'] = code_file_path
             env['CODEUP_TRACE_FILE'] = trace_file
             env['CODEUP_SAFE_OPEN_ROOT'] = run_cwd
@@ -4944,7 +5048,7 @@ def run_code():
             _save_mistake_snapshot(get_session_id(), code, error, success=False, explanation=explanation)
             try:
                 session_memory.record_run(mem,
-                                          error=error, traceback_text=sanitize_traceback(raw_error),
+                                          error=error, traceback_text=sanitize_traceback(raw_error), code=code,
                                           inputs=inputs, ran_ok=False, input_source=input_source)
             except Exception:
                 pass
@@ -4965,7 +5069,7 @@ def run_code():
         _save_mistake_snapshot(get_session_id(), code, "", success=True, output=output)
         try:
             session_memory.record_run(mem,
-                                      output=output, inputs=inputs, ran_ok=True,
+                                      output=output, code=code, inputs=inputs, ran_ok=True,
                                       input_source=input_source if inputs else "none")
             if inputs:
                 session_memory.clear_pending_stdin_values(mem)
@@ -9576,6 +9680,84 @@ def _route_ai_natural_command_mapper(
     return _ai_mapper_clarification(text, confidence=confidence_value, mapped_intent=intent_name, reason="intent_requires_clarification")
 
 
+_PY_EDIT_FILLER_NAMES = {"to", "for", "called", "named", "with", "using", "statement", "block", "function", "class", "parameter", "param"}
+
+
+def _python_definition_names(code: str, kind: str = "function") -> List[str]:
+    try:
+        tree = ast.parse(code or "")
+    except SyntaxError:
+        return []
+    node_types = (ast.FunctionDef, ast.AsyncFunctionDef) if kind == "function" else (ast.ClassDef,)
+    return [node.name for node in ast.walk(tree) if isinstance(node, node_types)]
+
+
+def _valid_python_identifier_name(name: str) -> bool:
+    value = str(name or "").strip()
+    return bool(value and value.isidentifier() and not keyword.iskeyword(value) and value.casefold() not in _PY_EDIT_FILLER_NAMES)
+
+
+def _clarify_python_edit(text: str, message: str, reason: str) -> Dict[str, Any]:
+    return {
+        "success": True,
+        "action": "clarify",
+        "intent": "clarify",
+        "message": message,
+        "speech": message,
+        "needs_clarification": True,
+        "heard": text,
+        "reason": reason,
+        "confidence": 0.96,
+    }
+
+
+def _validated_python_insert_response(intent: str, slots: Dict[str, Any], text: str, current_code: str, confidence: float) -> Optional[Dict[str, Any]]:
+    if intent == "insert_function":
+        name = str(slots.get("function_name") or "").strip()
+        if not _valid_python_identifier_name(name):
+            return _clarify_python_edit(text, "What should the function be named? Try: add a function called add_numbers.", "invalid_function_name")
+        if name in _python_definition_names(current_code, "function"):
+            return _clarify_python_edit(text, f"A function named {name} already exists. Tell me a different function name.", "function_name_collision")
+        return {"success": True, "action": "insert_function", "function_name": name, "confidence": confidence}
+
+    if intent == "insert_class":
+        name = str(slots.get("class_name") or "").strip()
+        if not _valid_python_identifier_name(name):
+            return _clarify_python_edit(text, "What should the class be named? Use a Python name that is not a keyword, like Student.", "invalid_class_name")
+        if name in _python_definition_names(current_code, "class"):
+            return _clarify_python_edit(text, f"A class named {name} already exists. Tell me a different class name.", "class_name_collision")
+        return {"success": True, "action": "insert_class", "class_name": name, "confidence": confidence}
+
+    if intent == "add_parameter":
+        raw = text.strip().lower()
+        direct_missing = re.match(r"^add\s+(?:a\s+)?param(?:eter)?\s+to\s+(?:function\s+)?([A-Za-z_]\w*)$", raw)
+        if direct_missing:
+            fn = direct_missing.group(1)
+            return _clarify_python_edit(text, f"What parameter should I add to {fn}? Try: add parameter name to {fn}.", "missing_parameter_name")
+        param = str(slots.get("param_name") or "").strip()
+        fn = str(slots.get("function_name") or "").strip()
+        if not _valid_python_identifier_name(param):
+            return _clarify_python_edit(text, "What parameter name should I add? Use a Python name like name or score.", "invalid_parameter_name")
+        function_names = _python_definition_names(current_code, "function")
+        if fn and not _valid_python_identifier_name(fn):
+            return _clarify_python_edit(text, "Which function should receive the parameter? Give the function name exactly.", "invalid_parameter_target")
+        if fn and function_names and fn not in function_names:
+            return _clarify_python_edit(text, f"I could not find a function named {fn}. Tell me which function to change.", "missing_parameter_target")
+        if not fn and len(function_names) > 1:
+            return _clarify_python_edit(text, "Which function should receive the parameter? I found multiple functions.", "ambiguous_parameter_target")
+        if not fn and len(function_names) == 1:
+            fn = function_names[0]
+        return {"success": True, "action": "add_parameter", "param_name": param, "function_name": fn or None, "confidence": confidence}
+
+    if intent == "insert_if":
+        condition = str(slots.get("condition") or "").strip()
+        if not condition or condition.casefold() in {"statement", "block"}:
+            return _clarify_python_edit(text, "What condition should the if statement check? Try: add if score greater than 10.", "missing_if_condition")
+        return {"success": True, "action": "insert_if", "condition": condition, "confidence": confidence}
+
+    return None
+
+
 @app.route("/voice-command", methods=["POST"])
 def voice():
     body = safejson()
@@ -9851,9 +10033,19 @@ def voice():
         text, current_code, mem, source=input_source, error_context=error_context
     )
     if audio_blocks_response is not None:
-        audio_blocks_response.setdefault("heard", text)
-        audio_blocks_response.setdefault("confidence", 1.0)
-        return _store_and_return(audio_blocks_response)
+        if not (
+            active_mode != "audio_blocks"
+            and intent in {"insert_if", "insert_function", "insert_class", "add_parameter"}
+            and "block" not in text.lower()
+            and str(audio_blocks_response.get("speech") or audio_blocks_response.get("message") or "").startswith("That command is for Audio Blocks Mode")
+        ):
+            audio_blocks_response.setdefault("heard", text)
+            audio_blocks_response.setdefault("confidence", 1.0)
+            return _store_and_return(audio_blocks_response)
+
+    deterministic_insert = _validated_python_insert_response(intent, slots, text, current_code, confidence)
+    if deterministic_insert is not None:
+        return _store_and_return(deterministic_insert)
 
     learning_kind = learning_moat.command_kind(text)
     if learning_kind is not None:
@@ -11047,14 +11239,16 @@ def voice():
             return _store_and_return({"success": True, "action": "load_snippet", "id": slots.get("id", ""), "confidence": confidence})
         if intent == "preview_snippet":
             return _store_and_return({"success": True, "action": "preview_snippet", "snippet_id": slots.get("snippet_id"), "confidence": confidence})
-        if intent == "insert_function":
-            return _store_and_return({"success": True, "action": "insert_function", "function_name": slots.get("function_name", "my_function"), "confidence": confidence})
-        if intent == "insert_class":
-            return _store_and_return({"success": True, "action": "insert_class", "class_name": slots.get("class_name", "MyClass"), "confidence": confidence})
+        if intent in {"insert_function", "insert_class"}:
+            checked = _validated_python_insert_response(intent, slots, text, current_code, confidence)
+            if checked is not None:
+                return _store_and_return(checked)
         if intent == "insert_loop":
             return _store_and_return({"success": True, "action": "insert_loop", "loop_var": slots.get("loop_var", "i"), "iterable": slots.get("iterable", "range(10)"), "confidence": confidence})
         if intent == "insert_if":
-            return _store_and_return({"success": True, "action": "insert_if", "condition": slots.get("condition", "True"), "confidence": confidence})
+            checked = _validated_python_insert_response(intent, slots, text, current_code, confidence)
+            if checked is not None:
+                return _store_and_return(checked)
         if intent == "insert_while":
             return _store_and_return({"success": True, "action": "insert_while", "condition": slots.get("condition", "True"), "confidence": confidence})
         if intent == "insert_variable":
@@ -11066,7 +11260,9 @@ def voice():
         if intent == "insert_line":
             return _store_and_return({"success": True, "action": "insert_line", "line_number": slots.get("line_number", 1), "text": slots.get("text", ""), "confidence": confidence})
         if intent == "add_parameter":
-            return _store_and_return({"success": True, "action": "add_parameter", "param_name": slots.get("param_name", "param"), "function_name": slots.get("function_name"), "confidence": confidence})
+            checked = _validated_python_insert_response(intent, slots, text, current_code, confidence)
+            if checked is not None:
+                return _store_and_return(checked)
         if intent == "suggest_next":
             return _store_and_return({"success": True, "action": "suggest_next", "confidence": confidence})
         if intent == "choose_suggestion":
@@ -11795,7 +11991,7 @@ def run_stream_start():
     blocked = _reject_non_python_response(code)
     if blocked:
         return blocked
-    if not _check_run_rate_limit(get_session_id()):
+    if not _check_run_rate_limit(_rate_limit_identity()):
         return jsonify({"success": False, "error": "Rate limit exceeded"}), 429
 
     run_id = uuid.uuid4().hex
@@ -11824,7 +12020,7 @@ def run_stream_start():
             inputs_file_path = inf.name
     runner_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'codeup', 'runtime', 'sandbox_runner.py')
 
-    env = os.environ.copy()
+    env = _minimal_sandbox_env()
     env['CODEUP_CODE_FILE'] = code_file_path
     env['CODEUP_TRACE_FILE'] = trace_file
     env['CODEUP_INTERACTIVE'] = '1'

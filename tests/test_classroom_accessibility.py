@@ -254,3 +254,91 @@ def test_disabled_capability_state_is_conveyed_with_aria_disabled_not_hidden():
     tree = _tree(client.get(f"/classroom/assignments/{assignment_id}"))
     checked = tree.xpath('//input[@type="checkbox" and starts-with(@id, "cap_") and @checked]')
     assert checked == []  # OFF preset -> none checked, and that's a real semantic checkbox state
+
+
+# ---- reflow at high zoom (Pass 5B) ------------------------------------------
+# Browser-verified at 320 CSS px (the WCAG 1.4.10 "400% zoom" equivalent): a
+# raw ISO timestamp / long unbreakable cell in a wide table used to force the
+# entire page wider than the viewport (a flex-item sizing bug in
+# .cu-classroom-main, compounded by tables having no scroll container of
+# their own), silently clipping columns with no way to reach them. Fixed in
+# static/style/classroom.css. This test pins the markup half of that fix
+# (every table wrapped) since CSS layout itself isn't unit-testable here.
+
+def _assert_every_table_is_wrapped(tree):
+    for table in tree.xpath('//table[contains(@class, "cu-table")]'):
+        parent = table.getparent()
+        assert parent is not None and "cu-table-wrap" in (parent.get("class") or ""), (
+            "a cu-table must be wrapped in a scrollable .cu-table-wrap container "
+            "so a wide/unbreakable cell scrolls within itself instead of forcing "
+            "the whole page wider at high zoom/reflow"
+        )
+
+
+def test_cohort_dashboard_tables_are_reflow_safe():
+    instructor = app_module.app.test_client()
+    join_code, cohort_id = _make_cohort(instructor, "reflow_instr1")
+    learner = app_module.app.test_client()
+    learner.post("/classroom/join", data={"join_code": join_code, "display_name": "Amir"}, follow_redirects=True)
+    tree = _tree(instructor.get(f"/classroom/cohorts/{cohort_id}"))
+    _assert_every_table_is_wrapped(tree)
+
+
+def test_instructor_dashboard_table_is_reflow_safe():
+    client = app_module.app.test_client()
+    join_code, cohort_id = _make_cohort(client, "reflow_instr2")
+    _assert_every_table_is_wrapped(_tree(client.get("/classroom/instructor")))
+
+
+def test_learner_home_tables_are_reflow_safe():
+    instructor = app_module.app.test_client()
+    join_code, cohort_id = _make_cohort(instructor, "reflow_instr3")
+    r = instructor.post(
+        f"/classroom/cohorts/{cohort_id}/assignments",
+        data={"title": "A", "instructions": "i", "starter_code": "", "ai_policy": "FULL"},
+        follow_redirects=True,
+    )
+    assignment_id = _extract(rb"assignments/(\d+)/publish", r.data)
+    instructor.post(f"/classroom/assignments/{assignment_id}/publish")
+    learner = app_module.app.test_client()
+    learner.post("/classroom/join", data={"join_code": join_code, "display_name": "Bea"}, follow_redirects=True)
+    _assert_every_table_is_wrapped(_tree(learner.get("/classroom/learner")))
+
+
+def test_learner_detail_tables_are_reflow_safe():
+    instructor = app_module.app.test_client()
+    join_code, cohort_id = _make_cohort(instructor, "reflow_instr4")
+    learner = app_module.app.test_client()
+    learner.post("/classroom/join", data={"join_code": join_code, "display_name": "Chen"}, follow_redirects=True)
+    dash = instructor.get(f"/classroom/cohorts/{cohort_id}")
+    learner_id = _extract(rb"learners/(\d+)", dash.data)
+    _assert_every_table_is_wrapped(_tree(instructor.get(f"/classroom/cohorts/{cohort_id}/learners/{learner_id}")))
+
+
+def test_help_queue_table_is_reflow_safe():
+    instructor = app_module.app.test_client()
+    join_code, cohort_id = _make_cohort(instructor, "reflow_instr5")
+    learner = app_module.app.test_client()
+    learner.post("/classroom/join", data={"join_code": join_code, "display_name": "Dee"}, follow_redirects=True)
+    learner.post("/classroom/help-requests", json={"message": "stuck"})
+    _assert_every_table_is_wrapped(_tree(instructor.get(f"/classroom/cohorts/{cohort_id}/help-requests")))
+
+
+def test_assignment_detail_table_is_reflow_safe():
+    client = app_module.app.test_client()
+    join_code, cohort_id = _make_cohort(client, "reflow_instr6")
+    r = client.post(
+        f"/classroom/cohorts/{cohort_id}/assignments",
+        data={"title": "A", "instructions": "i", "starter_code": "", "ai_policy": "FULL"},
+        follow_redirects=True,
+    )
+    assignment_id = _extract(rb"assignments/(\d+)/publish", r.data)
+    _assert_every_table_is_wrapped(_tree(client.get(f"/classroom/assignments/{assignment_id}")))
+
+
+def test_curriculum_home_table_is_reflow_safe():
+    instructor = app_module.app.test_client()
+    join_code, cohort_id = _make_cohort(instructor, "reflow_instr7")
+    learner = app_module.app.test_client()
+    learner.post("/classroom/join", data={"join_code": join_code, "display_name": "Faye"}, follow_redirects=True)
+    _assert_every_table_is_wrapped(_tree(learner.get("/classroom/curriculum")))

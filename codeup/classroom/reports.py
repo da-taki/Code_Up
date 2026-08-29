@@ -112,13 +112,23 @@ def build_cohort_report(cohort_id: int) -> Dict[str, Any]:
     assignments = db.list_assignments_for_cohort(cohort_id, published_only=True)
     open_help = db.list_help_requests(cohort_id, status="open")
 
+    learner_ids = [learner["id"] for learner in learners]
+    # Batched: one query for every learner's assignment progress and one for
+    # every learner's concept progress, instead of two queries per learner
+    # (previously O(learners) round trips - see Pass 5 dashboard perf fix).
+    progress_by_learner = db.list_progress_for_learners(learner_ids)
+    concept_summary_by_learner = concepts_mod.summary_for_learners(learner_ids)
+
     concept_needs_practice_counts: Dict[str, int] = {c: 0 for c in concepts_mod.CURRICULUM_CONCEPTS}
     concept_demonstrated_counts: Dict[str, int] = {c: 0 for c in concepts_mod.CURRICULUM_CONCEPTS}
 
     rows: List[Dict[str, Any]] = []
     for learner in learners:
-        counts = _assignment_progress_summary(learner["id"])
-        concept_states = concepts_mod.summary_for_learner(learner["id"])
+        counts = {"not_started": 0, "in_progress": 0, "submitted": 0}
+        for row in progress_by_learner.get(learner["id"], []):
+            status = row.get("status", "not_started")
+            counts[status] = counts.get(status, 0) + 1
+        concept_states = concept_summary_by_learner.get(learner["id"], {})
         for concept, state in concept_states.items():
             if state == "needs_practice":
                 concept_needs_practice_counts[concept] += 1

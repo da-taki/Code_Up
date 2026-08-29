@@ -12,6 +12,7 @@
   <section class="cu-panel" aria-labelledby="assignmentsHeading">
     <h2 id="assignmentsHeading">Assignments</h2>
     {% if assignments %}
+    <div class="cu-table-wrap">
     <table class="cu-table">
       <caption class="sr-only">Your assignments and their status</caption>
       <thead><tr><th scope="col">Title</th><th scope="col">Status</th><th scope="col">Due</th><th scope="col">Open</th></tr></thead>
@@ -26,6 +27,7 @@
         {% endfor %}
       </tbody>
     </table>
+    </div>
     {% else %}
       <p>No assignments have been published yet.</p>
     {% endif %}
@@ -47,6 +49,7 @@
   <section class="cu-panel" aria-labelledby="projectsHeading">
     <h2 id="projectsHeading">Guided projects</h2>
     {% if projects %}
+    <div class="cu-table-wrap">
     <table class="cu-table">
       <caption class="sr-only">Guided projects and your checkpoint progress</caption>
       <thead><tr><th scope="col">Project</th><th scope="col">Checkpoints</th><th scope="col">Open</th></tr></thead>
@@ -60,6 +63,7 @@
         {% endfor %}
       </tbody>
     </table>
+    </div>
     {% endif %}
   </section>
 

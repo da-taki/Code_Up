@@ -499,6 +499,48 @@ def test_typed_commands_create_every_block_type(client, command, block_type):
     assert result["audio_blocks"]["blocks"][-1]["type"] == block_type, result
 
 
+def test_bare_add_if_block_uses_safe_default_condition_not_the_literal_word_block(client):
+    # Regression: "add if block" used to be matched by the general
+    # "add if (.+)$" pattern before the bare-default pattern got a chance,
+    # capturing the literal word "block" as the condition and compiling to
+    # the malformed "if block:". See codeup/accessibility/audio_blocks.py.
+    voice(client, "enter block mode")
+    result = voice(client, "add if block")
+    block = result["audio_blocks"]["blocks"][-1]
+    assert block["type"] == "if_condition"
+    assert block["slots"]["condition"] == "total > 0"
+    assert block["generated"] == "if total > 0:"
+    compile(block["generated"] + "\n    pass\n", "<audio-blocks-if-default>", "exec")
+
+
+def test_bare_add_return_block_uses_safe_default_value_not_the_literal_word_block(client):
+    voice(client, "enter block mode")
+    result = voice(client, "add return block")
+    block = result["audio_blocks"]["blocks"][-1]
+    assert block["type"] == "return_value"
+    assert block["slots"]["value"] == "None"
+    assert block["generated"] == "return None"
+    compile("def f():\n    " + block["generated"] + "\n", "<audio-blocks-return-default>", "exec")
+
+
+def test_add_if_with_explicit_condition_still_preserves_it(client):
+    voice(client, "enter block mode")
+    result = voice(client, "add if score greater than 10")
+    block = result["audio_blocks"]["blocks"][-1]
+    assert block["type"] == "if_condition"
+    assert block["slots"]["condition"] == "score > 10"
+    assert block["generated"] == "if score > 10:"
+
+
+def test_add_return_with_explicit_value_still_preserves_it(client):
+    voice(client, "enter block mode")
+    result = voice(client, "add return total")
+    block = result["audio_blocks"]["blocks"][-1]
+    assert block["type"] == "return_value"
+    assert block["slots"]["value"] == "total"
+    assert block["generated"] == "return total"
+
+
 def test_audio_blocks_natural_demo_commands_generate_valid_python(client):
     typed(client, "open audio blocks")
     typed(client, "add print block hello")

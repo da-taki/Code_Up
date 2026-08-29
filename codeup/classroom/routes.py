@@ -1078,6 +1078,27 @@ def submit_assignment(learner, assignment_id):
         return jsonify({"success": False, "error": "not_found"}), 404
     body = request.get_json(silent=True) or {}
     code = str(body.get("code") or "")
+
+    # Lightweight staleness guard (Pass 5B multi-tab closure): a tab only
+    # knows this is safe to submit if the "known_submitted_at" it saw when
+    # it last loaded/submitted still matches what's actually stored. If
+    # another tab submitted in between, this tab is stale - reject instead
+    # of silently overwriting a newer submission with older/incomplete
+    # code. Omitting the field (older cached JS, or a first-ever load that
+    # never fetched /context) skips the check rather than blocking a
+    # legitimate first submission.
+    if "known_submitted_at" in body:
+        current = db.get_or_create_progress(assignment_id, learner["id"])
+        if current.get("submitted_at") != body.get("known_submitted_at"):
+            return jsonify({
+                "success": False,
+                "error": "stale_submission",
+                "message": "This assignment was already submitted more recently in another tab or "
+                           "device. Reload this page to see the latest submitted version before "
+                           "submitting again.",
+                "submitted_at": current.get("submitted_at"),
+            }), 409
+
     try:
         progress = learner_actions.submit_current_assignment(learner, assignment, code)
     except Exception:

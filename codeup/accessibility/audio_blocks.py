@@ -1673,8 +1673,13 @@ def _parse_add(text: str) -> Tuple[Optional[str], Dict[str, Any]]:
             "if_else_condition",
             lambda m: {"condition": m.group(1)},
         ),
-        (r"^add if (.+)$", "if_condition", lambda m: {"condition": m.group(1)}),
+        # Bare "add if block" must be matched before the general "add if
+        # (.+)$" capture below - otherwise the greedy (.+) swallows the
+        # literal word "block" as the condition itself, compiling to the
+        # malformed "if block:" (Pass 2/Pass 5 regression - see
+        # test_audio_blocks_bare_if_and_return_defaults_are_safe).
         (r"^add if block$", "if_condition", {"condition": "total > 0"}),
+        (r"^add if (.+)$", "if_condition", lambda m: {"condition": m.group(1)}),
         (r"^add elif block$", "elif_condition", {"condition": "total > 0"}),
         (r"^add elif (.+)$", "elif_condition", lambda m: {"condition": m.group(1)}),
         (r"^add else block$", "else_block", {}),
@@ -1754,8 +1759,11 @@ def _parse_add(text: str) -> Tuple[Optional[str], Dict[str, Any]]:
             "call_function",
             lambda m: {"name": m.group(1), "arguments": m.group(2)},
         ),
-        (r"^add return (.+)$", "return_value", lambda m: {"value": m.group(1)}),
+        # Same "match the bare default before the greedy capture" fix as
+        # "add if block" above - otherwise "add return block" compiles to
+        # "return block", referencing an undefined name.
         (r"^add return block$", "return_value", {"value": "None"}),
+        (r"^add return (.+)$", "return_value", lambda m: {"value": m.group(1)}),
         (r"^add try except block$", "try_block", {}),
         (r"^add try block$", "try_block", {}),
         (r"^add except block$", "except_block", {"exception": "Exception"}),

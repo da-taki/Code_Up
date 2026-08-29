@@ -334,18 +334,40 @@ def _sqlite_db_path() -> str:
     return os.path.join(data_dir, "classroom.db")
 
 
-@contextmanager
-def _connect_sqlite() -> Iterator[sqlite3.Connection]:
-    conn = sqlite3.connect(_sqlite_db_path(), timeout=10)
-    try:
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
+_sqlite_schema_lock = threading.Lock()
+_sqlite_schema_ready_for: set = set()
+
+
+def _ensure_sqlite_schema(conn: sqlite3.Connection, path: str) -> None:
+    # Schema creation/migration used to replay on *every* connect() call -
+    # a full multi-table executescript() plus 7 ALTER TABLE attempts before
+    # each single query. That dominated cohort-dashboard latency (each
+    # learner triggered several connect() calls). Now it runs once per
+    # database file per process; tests still get correct per-path isolation
+    # since DATA_DIR (and so the resolved path) changes per test.
+    if path in _sqlite_schema_ready_for:
+        return
+    with _sqlite_schema_lock:
+        if path in _sqlite_schema_ready_for:
+            return
         conn.executescript(SQLITE_SCHEMA)
         for statement in _SQLITE_MIGRATIONS:
             try:
                 conn.execute(statement)
             except sqlite3.OperationalError:
                 pass  # column already exists
+        conn.commit()
+        _sqlite_schema_ready_for.add(path)
+
+
+@contextmanager
+def _connect_sqlite() -> Iterator[sqlite3.Connection]:
+    path = _sqlite_db_path()
+    conn = sqlite3.connect(path, timeout=10)
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        _ensure_sqlite_schema(conn, path)
         yield conn
         conn.commit()
     finally:

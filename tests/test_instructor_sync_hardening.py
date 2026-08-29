@@ -126,7 +126,7 @@ def test_bare_cancel_cancels_pending_join_regardless_of_awaiting_input(learner_c
     learner_client.get("/ide")
     learner_client.post("/voice-command", json={"text": "go to top"},
                          headers={"Origin": "http://localhost", "Referer": "http://localhost/ide"})
-    session_id = learner_client.get_cookie("codeup_session").value
+    session_id = app_module._verify_session_id(learner_client.get_cookie("codeup_session").value)
     storage = app_module._session_traces[session_id]
     mem = session_memory.get_memory(storage)
 

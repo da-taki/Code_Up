@@ -32,8 +32,17 @@ def tmp_snippets(tmp_path, monkeypatch):
 
 
 def _client_session_id(client):
+    """The raw (signed) cookie value - reinject via set_cookie() on another
+    test client to make it share this client's real session identity."""
     cookie = client.get_cookie(app_module.SESSION_COOKIE_NAME)
     return getattr(cookie, "value", cookie)
+
+
+def _client_session_identity(client):
+    """The resolved/unsigned session id - what get_session_id() actually
+    returns, and so the correct key for server-side dicts/paths keyed by
+    session id directly (_session_traces, _snippets_path, _active_runs...)."""
+    return app_module._verify_session_id(_client_session_id(client))
 
 
 def _subprocess_env_without_dotenv():
@@ -966,7 +975,7 @@ def test_snippet_update_rejects_non_python_document(client):
 
 def test_corrupt_snippet_file_is_normalized(client):
     client.get("/snippets")
-    path = app_module._snippets_path(_client_session_id(client))
+    path = app_module._snippets_path(_client_session_identity(client))
     with open(path, "w", encoding="utf-8") as handle:
         json.dump({"snippets": [None, "bad", {"id": "ok", "name": "", "code": "print(1)"}]}, handle)
 
@@ -1340,7 +1349,7 @@ def test_custom_session_cookie_is_single_and_reused(client):
         if value.startswith(app_module.SESSION_COOKIE_NAME + "=")
     ]
     assert len(session_cookies) == 1
-    session_id = _client_session_id(client)
+    session_id = _client_session_identity(client)
     assert session_id in app_module._session_traces
 
     followup = client.get("/execution-trace")
@@ -1367,7 +1376,7 @@ def test_testing_session_cookie_is_local_workable(client):
 
 def test_run_stream_input_rejects_when_not_awaiting_without_opening_fifo(client, tmp_path):
     client.get("/execution-trace")
-    session_id = _client_session_id(client)
+    session_id = _client_session_identity(client)
     run_id = "notwaiting"
 
     class FakeProc:
@@ -2415,7 +2424,7 @@ class TestVoiceMacros:
 
     def test_macro_file_normalizes_bad_records(self, client):
         client.get("/macros")
-        path = app_module._macros_path(_client_session_id(client))
+        path = app_module._macros_path(_client_session_identity(client))
         with open(path, "w", encoding="utf-8") as handle:
             json.dump({
                 "good": {"code": "print(1)", "saved_at": "x"},
@@ -2476,7 +2485,7 @@ class TestVoiceMacros:
 
         with app.test_request_context(
             "/macros/shared/MissingToken123456",
-            headers={"Cookie": f"{app_module.SESSION_COOKIE_NAME}=fresh-session"},
+            headers={"Cookie": f"{app_module.SESSION_COOKIE_NAME}={app_module._sign_session_id('fresh-session')}"},
         ):
             assert app_module._check_shared_macro_lookup_limit() is True
 

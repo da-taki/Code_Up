@@ -42,7 +42,7 @@
 
   <section class="cu-panel" aria-labelledby="learnersHeading">
     <h2 id="learnersHeading">Learners ({{ learner_rows|length }})</h2>
-    <div id="learnersTableWrap">
+    <div id="learnersTableWrap" class="cu-table-wrap">
     {% if learner_rows %}
     <table class="cu-table" id="learnersTable">
       <caption class="sr-only">Learners in this cohort and their progress</caption>
@@ -127,7 +127,7 @@
 
   <section class="cu-panel" aria-labelledby="assignmentsHeading">
     <h2 id="assignmentsHeading">Assignments</h2>
-    <div id="assignmentsTableWrap">
+    <div id="assignmentsTableWrap" class="cu-table-wrap">
     {% if assignments %}
     <table class="cu-table" id="assignmentsTable">
       <caption class="sr-only">Assignments in this cohort</caption>

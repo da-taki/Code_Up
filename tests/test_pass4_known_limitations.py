@@ -14,6 +14,15 @@ from codeup.projects.project_support import ProjectPathError, normalize_file_map
 from codeup.runtime import state_watch
 
 
+def _resolved_session_id(client):
+    """Real server-verified session id for this client (the signed cookie
+    it was actually issued), not a client-fabricated literal."""
+    client.get("/")
+    cookie = client.get_cookie(app_module.SESSION_COOKIE_NAME)
+    raw = getattr(cookie, "value", cookie)
+    return app_module._verify_session_id(raw)
+
+
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     snippets_file = tmp_path / "snippets.json"
@@ -137,7 +146,7 @@ def test_audio_breakpoint_continue_surfaces_later_different_breakpoint(client):
 
 
 def test_run_stream_input_claims_awaiting_slot_before_write(client, monkeypatch, tmp_path):
-    client.set_cookie(app_module.SESSION_COOKIE_NAME, "pass4-stream")
+    session_id = _resolved_session_id(client)
     run_id = "run-pass4"
     fifo = tmp_path / "input.pipe"
     fifo.write_text("", encoding="utf-8")
@@ -164,7 +173,7 @@ def test_run_stream_input_claims_awaiting_slot_before_write(client, monkeypatch,
     monkeypatch.setattr(app_module.os, "open", fake_open)
     monkeypatch.setattr(app_module.os, "fdopen", lambda *args, **kwargs: Writer())
     app_module._active_runs[run_id] = {
-        "session_id": "pass4-stream",
+        "session_id": session_id,
         "awaiting_input": True,
         "awaiting_input_lock": threading.Lock(),
         "proc": Proc(),
@@ -180,7 +189,7 @@ def test_run_stream_input_claims_awaiting_slot_before_write(client, monkeypatch,
 
 
 def test_run_stream_input_restores_awaiting_when_writer_not_ready(client, monkeypatch, tmp_path):
-    client.set_cookie(app_module.SESSION_COOKIE_NAME, "pass4-stream-restore")
+    session_id = _resolved_session_id(client)
     run_id = "run-pass4-restore"
     fifo = tmp_path / "input.pipe"
     fifo.write_text("", encoding="utf-8")
@@ -194,7 +203,7 @@ def test_run_stream_input_restores_awaiting_when_writer_not_ready(client, monkey
 
     monkeypatch.setattr(app_module.os, "open", fake_open)
     app_module._active_runs[run_id] = {
-        "session_id": "pass4-stream-restore",
+        "session_id": session_id,
         "awaiting_input": True,
         "awaiting_input_lock": threading.Lock(),
         "proc": Proc(),

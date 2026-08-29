@@ -3,11 +3,24 @@
    rest of CodeUp instead of introducing a second visual language. */
 
 .cu-classroom-main {
+  width: 100%;
   max-width: 960px;
   margin: 0 auto;
   padding: var(--gap-lg);
   color: var(--text-main);
   font-family: var(--font-main);
+  /* body is a column flexbox (core.css). Two things are needed together
+     for this to actually stay within the viewport at high zoom/reflow:
+     - width:100% (not the default auto) - a flex item with auto
+       horizontal margins AND an auto cross-axis size is sized to its
+       CONTENT instead of stretched to the container (CSS Flexbox 8.3),
+       so "margin:0 auto" centering here was silently opting this out of
+       align-items:stretch and letting a wide descendant win.
+     - min-width:0 - a flex item's default min-width:auto is its content's
+       min-content size, which a wide unbreakable table cell (e.g. a raw
+       timestamp) can still exceed even once width:100% is stretching it. */
+  box-sizing: border-box;
+  min-width: 0;
 }
 
 .cu-classroom-main h2 {
@@ -40,10 +53,24 @@
   color: var(--danger);
 }
 
+/* Reflow (Pass 5B): a table with a genuinely wide/unbreakable cell (a raw
+   ISO timestamp, a long code snippet) must scroll within its own box at
+   high zoom instead of forcing the whole page wider - horizontal scrolling
+   for wide tabular content specifically is fine per WCAG 1.4.10, silently
+   clipping it off the edge of the viewport with no way to reach it is not. */
+.cu-table-wrap {
+  overflow-x: auto;
+  max-width: 100%;
+  margin-bottom: var(--gap-lg);
+}
+
 table.cu-table {
   width: 100%;
   border-collapse: collapse;
-  margin-bottom: var(--gap-lg);
+}
+
+.cu-table-wrap table.cu-table {
+  margin-bottom: 0;
 }
 
 table.cu-table caption {

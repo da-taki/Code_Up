@@ -40,6 +40,36 @@
       ).filter(function (n) { return !n.disabled && n.offsetParent !== null; });
     }
 
+    // Is `el` still a safe place to actually move focus to, right now? The
+    // recorded opener is snapshotted when the dialog *opens*, but the app
+    // keeps running while it's up - the opener can be removed, hidden, or
+    // buried inside a disclosure that got collapsed again before the user
+    // closes the dialog (confirmed live, Pass 5C classroom AI dialog check:
+    // .focus() on a since-hidden element silently no-ops, leaving focus
+    // wherever it happened to fall - often <body> or another hidden node).
+    function isUsable(el) {
+      return !!el && typeof el.focus === 'function' && el.isConnected
+        && el !== document.body && !el.disabled && el.offsetParent !== null;
+    }
+
+    // Last-resort target when neither the recorded opener nor any of its
+    // natural replacements are usable: the main heading, focusable via a
+    // temporary tabindex. Always present, always visible, never hidden
+    // inside a disclosure - this is what "somewhere useful, never body"
+    // degrades to when nothing more specific is available.
+    function safeFallback() {
+      const editorInput = document.querySelector('.monaco-editor textarea');
+      if (isUsable(editorInput)) return editorInput;
+      const fixBtn = document.getElementById('fixBtn');
+      if (isUsable(fixBtn)) return fixBtn;
+      const heading = document.getElementById('pageTitle') || document.querySelector('h1');
+      if (heading) {
+        if (!heading.hasAttribute('tabindex')) heading.setAttribute('tabindex', '-1');
+        return heading;
+      }
+      return null;
+    }
+
     function open(dialogEl, opts) {
       opts = opts || {};
       returnFocusTo = opts.returnFocusTo || document.activeElement;
@@ -77,7 +107,8 @@
       activeDialog.hidden = true;
       activeDialog.removeEventListener('keydown', keyHandler);
       activeDialog = null;
-      if (returnFocusTo && typeof returnFocusTo.focus === 'function') returnFocusTo.focus();
+      const target = isUsable(returnFocusTo) ? returnFocusTo : safeFallback();
+      if (target) target.focus();
       returnFocusTo = null;
     }
 
@@ -300,7 +331,27 @@
     return dialog;
   }
 
+  function isFocusable(el) {
+    return !!el && typeof el.focus === 'function' && el !== document.body && !el.disabled && el.offsetParent !== null;
+  }
+
   function reviewAiFix(before, after, explanation) {
+    // Capture the real opener *before* anything else can shift focus - the
+    // fallback used to be `document.getElementById('fixBtn') || ...`, but
+    // fixBtn always exists in the DOM (it just lives inside the collapsible
+    // "More tools" disclosure, so it's frequently not actually visible),
+    // and that `||` never fell through to the real opener anyway since
+    // getElementById never itself returns a falsy value. If the Fix action
+    // was reached via voice/keyboard, or the disclosure isn't open, the old
+    // code silently failed to move focus anywhere - confirmed live (Pass 5C
+    // classroom AI dialog check) as focus being left stranded on the
+    // dialog's own (now-hidden) button. Fall all the way back to the editor,
+    // matching every other dialog in this app, rather than risk that again.
+    const fixBtn = document.getElementById('fixBtn');
+    const editorInput = document.querySelector('.monaco-editor textarea');
+    const opener = isFocusable(document.activeElement)
+      ? document.activeElement
+      : (isFocusable(fixBtn) ? fixBtn : editorInput);
     return new Promise(function (resolve) {
       const dialog = buildReviewDialog();
       dialog.innerHTML = '';
@@ -332,7 +383,7 @@
       explainBtn.addEventListener('click', function () { announce(explanation || 'No further explanation available.'); });
 
       FocusTrap.open(dialog, {
-        returnFocusTo: document.getElementById('fixBtn') || document.activeElement,
+        returnFocusTo: opener,
         initialFocus: rejectBtn, // safer default than the primary action
         onEscape: function () { finish(false); },
       });
@@ -655,20 +706,35 @@
     if (submitting) return;
     submitting = true;
     const code = typeof window.getCode === 'function' ? window.getCode() : '';
+    // Tell the server the submitted_at this tab last saw, so a tab that has
+    // been open since before another tab (or device) already submitted
+    // gets rejected instead of silently overwriting the newer submission
+    // with stale code (Pass 5B multi-tab closure - see the matching
+    // known_submitted_at check in routes.submit_assignment).
+    const knownSubmittedAt = contextData && contextData.progress ? contextData.progress.submitted_at : null;
     fetch('/classroom/assignments/' + encodeURIComponent(assignmentId) + '/submit', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code: code }),
+      body: JSON.stringify({ code: code, known_submitted_at: knownSubmittedAt }),
     })
-      .then(function (res) { return res.json(); })
-      .then(function (data) {
+      .then(function (res) { return res.json().then(function (data) { return { status: res.status, data: data }; }); })
+      .then(function (result) {
         submitting = false;
+        const data = result.data;
         if (data && data.success) {
+          if (contextData && contextData.progress) contextData.progress.submitted_at = data.submitted_at;
           statusEl.textContent = 'Assignment submitted.';
           button.textContent = 'Re-submit assignment';
           announce('Assignment submitted.');
           const backLink = document.getElementById('classroomBackToIdeLink');
           if (backLink) backLink.hidden = false;
+        } else if (result.status === 409 && data && data.error === 'stale_submission') {
+          // Deliberately do NOT adopt data.submitted_at here - doing so
+          // would let a bare retry of the same (still-stale) code succeed
+          // on the next click. Only an actual reload (re-fetching /context)
+          // should be able to clear this warning.
+          statusEl.textContent = data.message;
+          announce(data.message, { priority: 'assertive' });
         } else {
           statusEl.textContent = 'Could not submit. Your work is still saved; you can try again.';
           announce('Could not submit the assignment. Your work is still saved.');

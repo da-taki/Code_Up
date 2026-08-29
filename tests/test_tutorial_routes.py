@@ -21,6 +21,18 @@ def _validate(client, module, code, ran_ok=True, output=""):
     ).get_json()
 
 
+def _run_then_validate(client, module, code):
+    # /tutorial/validate no longer trusts a client-claimed ran_ok=True on its
+    # own (Pass 5 completion-authority hardening) - it must match a real
+    # prior /run of the exact same code. Tests asserting a genuine "this
+    # correct code passes" case must actually run it first.
+    run = client.post("/run", json={"code": code, "language": "en"}).get_json()
+    return client.post(
+        "/tutorial/validate",
+        json={"module": module, "code": code, "ran_ok": True, "output": run.get("output", "")},
+    ).get_json()
+
+
 def _action(client, text, code=""):
     return client.post("/voice-command", json={"text": text, "code": code}).get_json()
 
@@ -40,7 +52,7 @@ class TestModulesRoute:
 
 class TestValidateRoute:
     def test_print_correct_accepted(self, client):
-        d = _validate(client, "print", 'print("hello")', ran_ok=True)
+        d = _run_then_validate(client, "print", 'print("hello")')
         assert d["success"] is True
         assert d["passed"] is True
         assert d["feedback"]
@@ -57,17 +69,17 @@ class TestValidateRoute:
         'city = "Patiala"\nprint(city)',
     ])
     def test_variables_accepts_different_names(self, client, code):
-        assert _validate(client, "variables", code, ran_ok=True)["passed"] is True
+        assert _run_then_validate(client, "variables", code)["passed"] is True
 
     def test_if_accepted(self, client):
-        assert _validate(client, "if", 'x=10\nif x>5:\n    print("big")', ran_ok=True)["passed"] is True
+        assert _run_then_validate(client, "if", 'x=10\nif x>5:\n    print("big")')["passed"] is True
 
     def test_for_accepted(self, client):
-        assert _validate(client, "for", 'for i in range(3):\n    print(i)', ran_ok=True)["passed"] is True
+        assert _run_then_validate(client, "for", 'for i in range(3):\n    print(i)')["passed"] is True
 
     def test_while_safe_accepted(self, client):
         code = 'c=1\nwhile c<=3:\n    print(c)\n    c=c+1'
-        assert _validate(client, "while", code, ran_ok=True)["passed"] is True
+        assert _run_then_validate(client, "while", code)["passed"] is True
 
     def test_while_unsafe_blocked(self, client):
         d = _validate(client, "while", 'while True:\n    print("x")', ran_ok=True)

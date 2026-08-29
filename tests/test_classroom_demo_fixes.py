@@ -121,7 +121,7 @@ def test_join_wins_over_awaiting_program_input(instructor_client, learner_client
     learner_client.post("/voice-command", json={"text": "go to top"},
                          headers={"Origin": "http://localhost", "Referer": "http://localhost/ide"})
     from codeup.runtime import session_memory
-    session_id = learner_client.get_cookie("codeup_session").value
+    session_id = app_module._verify_session_id(learner_client.get_cookie("codeup_session").value)
     storage = app_module._session_traces[session_id]
     mem = session_memory.get_memory(storage)
     code = 'x = input("Enter x: ")'
@@ -148,7 +148,7 @@ def test_awaiting_program_input_still_works_for_a_normal_answer(instructor_clien
     learner_client.post("/voice-command", json={"text": "go to top"},
                          headers={"Origin": "http://localhost", "Referer": "http://localhost/ide"})
     from codeup.runtime import session_memory
-    session_id = learner_client.get_cookie("codeup_session").value
+    session_id = app_module._verify_session_id(learner_client.get_cookie("codeup_session").value)
     storage = app_module._session_traces[session_id]
     mem = session_memory.get_memory(storage)
     code = 'x = input("Enter x: ")'

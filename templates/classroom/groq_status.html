@@ -32,6 +32,7 @@
   <section class="cu-panel" aria-labelledby="keysHeading">
     <h2 id="keysHeading">Keys</h2>
     {% if pool.key_rows %}
+    <div class="cu-table-wrap">
     <table class="cu-table">
       <caption class="sr-only">Per-key Groq pool status - no key values are ever shown</caption>
       <thead>
@@ -63,6 +64,7 @@
         {% endfor %}
       </tbody>
     </table>
+    </div>
     {% else %}
       <p>No Groq keys are configured.</p>
     {% endif %}

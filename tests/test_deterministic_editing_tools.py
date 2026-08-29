@@ -125,7 +125,10 @@ def test_project_requirements_missing_files_and_csv_preview():
     assert tools.requirements_summary(project) == "requirements.txt lists pandas, numpy."
     assert tools.missing_project_files(project) == "main.py imports helper.py, but helper.py is missing."
     preview = tools.csv_preview(project)
-    assert preview == "marks.csv has columns name, score. First row: Aman, 92."
+    # Preview-row disclosure was added in Pass 4 (never silently claim a
+    # sampled preview is the exact full dataset) - this file has exactly
+    # 4 data rows, all of which are shown.
+    assert preview == "marks.csv has columns name, score. Previewing 4 rows. First row: Aman, 92."
     assert tools.import_policy_summary("os").startswith("os is blocked")
     assert "math, random" in tools.import_policy_summary()
     assert "protect the lesson sandbox" in tools.import_policy_summary(explain_blocked=True)

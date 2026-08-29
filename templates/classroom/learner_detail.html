@@ -16,6 +16,7 @@
       {% if curriculum_state and curriculum_state.last_activity_at %}Last curriculum activity: {{ curriculum_state.last_activity_at }}.{% endif %}
     </p>
     {% if module_rows %}
+    <div class="cu-table-wrap">
     <table class="cu-table">
       <caption class="sr-only">Module-by-module progress</caption>
       <thead><tr><th scope="col">Module</th><th scope="col">Status</th><th scope="col">Quiz</th><th scope="col">Reset</th></tr></thead>
@@ -35,6 +36,7 @@
         {% endfor %}
       </tbody>
     </table>
+    </div>
     {% else %}
       <p>No modules started yet.</p>
     {% endif %}
@@ -43,6 +45,7 @@
   <section class="cu-panel" aria-labelledby="assignmentsProgressHeading">
     <h2 id="assignmentsProgressHeading">Assignments</h2>
     {% if progress_rows %}
+    <div class="cu-table-wrap">
     <table class="cu-table">
       <caption class="sr-only">This learner's assignment progress</caption>
       <thead>
@@ -68,6 +71,7 @@
         {% endfor %}
       </tbody>
     </table>
+    </div>
     {% else %}
       <p>No assignments started yet.</p>
     {% endif %}
@@ -75,6 +79,7 @@
 
   <section class="cu-panel" aria-labelledby="conceptsHeading">
     <h2 id="conceptsHeading">Concept progress</h2>
+    <div class="cu-table-wrap">
     <table class="cu-table">
       <caption class="sr-only">This learner's concept mastery</caption>
       <thead><tr><th scope="col">Concept</th><th scope="col">State</th></tr></thead>
@@ -87,6 +92,7 @@
         {% endfor %}
       </tbody>
     </table>
+    </div>
   </section>
 
   <section class="cu-panel" aria-labelledby="activityHeading">

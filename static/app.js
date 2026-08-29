@@ -123,6 +123,37 @@ let _liveInputMode = false;
 let _programInputRequest = null;
 let _editorErrorDecorationIds = [];
 
+const NarrationRequests = (window.CodeUpNarrationGuard && window.CodeUpNarrationGuard.createNarrationGuard)
+  ? window.CodeUpNarrationGuard.createNarrationGuard()
+  : {
+      begin: () => ({ active: () => true, finish: () => {}, signal: undefined }),
+      invalidate: () => {},
+      guardedFetch: async (_scope, fetcher) => ({ stale: false, value: await fetcher({ active: () => true, finish: () => {}, signal: undefined }) }),
+    };
+
+function narrationContext(codeSnapshot) {
+  return {
+    code: codeSnapshot !== undefined ? codeSnapshot : getCode(),
+    file: ProjectState.activeFile || '',
+  };
+}
+
+async function guardedJson(scope, url, options, context, currentContext) {
+  const snapshot = context || narrationContext();
+  return NarrationRequests.guardedFetch(
+    scope,
+    guard => fetch(url, Object.assign({}, options || {}, { signal: guard.signal })).then(res => res.json()),
+    snapshot,
+    currentContext || (() => narrationContext())
+  );
+}
+
+function staleResult(result) {
+  return !result || result.stale;
+}
+
+window.NarrationRequests = NarrationRequests;
+
 let _activeStreamRun = null;
 
 let _heartbeatTimer = null;
@@ -373,6 +404,7 @@ const SpeechManager = (function () {
 
     function cancelAll() {
       bumpSpeechEpoch();
+      try { if (window.NarrationRequests) window.NarrationRequests.invalidate(); } catch (e) {}
       queue.length = 0;
       AppState.isSpeaking = false;
       currentUtterance = null;
@@ -1608,6 +1640,7 @@ require(['vs/editor/editor.main'], function () {
 
   let _structureDebounce = null;
   editor.onDidChangeModelContent(() => {
+    try { NarrationRequests.invalidate(); } catch (e) {}
     clearEditorErrorMarkers();
     syncActiveProjectFileLocal();
     clearTimeout(_structureDebounce);
@@ -2069,6 +2102,7 @@ function setCode(v, opts) {
     return false;
   }
   if (typeof ErrorBeaconManager !== 'undefined') ErrorBeaconManager.stop();
+  try { NarrationRequests.invalidate(); } catch (e) {}
   if (!opts.preserveSpeech) SpeechManager.cancelAll();
   lastSpokenText = null;
   window.executionTrace = [];
@@ -2188,6 +2222,7 @@ async function runCode(runFile, codeOverride) {
   }
 
   SpeechManager.cancelAll();
+  try { NarrationRequests.invalidate(); } catch (e) {}
 
   const hasCodeOverride = codeOverride != null;
   const codeToCheck = hasCodeOverride ? String(codeOverride || '') : getCode();
@@ -2200,6 +2235,15 @@ async function runCode(runFile, codeOverride) {
   if (usesInput && _preflightInputs.length > 0) {
     speak(`Pre-flight inputs ready: ${_preflightInputs.length} value${_preflightInputs.length === 1 ? '' : 's'}.`);
   }
+
+  // Rapid Run/Run/switch-file races (Pass 5C live check): runCode() itself
+  // used a raw, unguarded fetch, so an earlier run's late-arriving response
+  // was never checked for staleness before speaking/mutating state - it
+  // could still narrate an old file's output after a newer run (or a file
+  // switch) had already taken over. Reuse the same 'run' scope on every
+  // call: begin() supersedes the previous in-flight run's guard, and its
+  // AbortController cancels that run's own request outright.
+  const _runGuard = NarrationRequests.begin('run', narrationContext(codeToCheck));
 
   AppState.isExecuting = true;
   cueSuccess();
@@ -2233,8 +2277,10 @@ async function runCode(runFile, codeOverride) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
+      signal: _runGuard.signal,
     });
     const data = await res.json();
+    if (!_runGuard.active(narrationContext())) return;
     window.executionTrace = data.trace || [];
     window.traceIndex = 0;
 
@@ -2327,8 +2373,10 @@ async function runCode(runFile, codeOverride) {
       }
     }
   } catch (e) {
+    if (e && e.name === 'AbortError') return;
     out('System error.', { assertive: true }); console.error(e); cueError(); speak('System error.');
   } finally {
+    _runGuard.finish();
     stopHeartbeat();
     AppState.isExecuting = false;
     hideAI();
@@ -2466,14 +2514,16 @@ async function sendStreamingInput(value) {
 
 async function analyzeCode() {
   if (!ensurePythonEditorContent('analyze')) return;
+  const codeSnapshot = getCode();
   cueSuccess(); out('Analyzing...'); showAI('Analyzing code with AI...'); speak('Analyzing code.');
   try {
-    const res  = await fetch('/analyze', {
+    const result = await guardedJson('analysis', '/analyze', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ code: getCode(), language: getLanguage() }),
-    });
-    const data = await res.json();
+      body:    JSON.stringify({ code: codeSnapshot, language: getLanguage() }),
+    }, narrationContext(codeSnapshot));
+    if (staleResult(result)) return;
+    const data = result.value;
     out(data.analysis || 'No analysis.');
     maybePromptForApiKey(data.analysis);
     if (data.analysis) {
@@ -2482,7 +2532,7 @@ async function analyzeCode() {
         .replace(/\s*want a deeper line by line walkthrough\??.*$/i, '')
         .replace(/\s*just say:?\s*analyze deeper\.?\s*$/i, '');
       speak(spoken);
-      window._lastAnalyzeContext = { code: getCode(), at: Date.now() };
+      window._lastAnalyzeContext = { code: codeSnapshot, at: Date.now() };
     } else {
       speak('No analysis available.');
     }
@@ -2511,12 +2561,13 @@ async function analyzeDeep() {
   }
   cueSuccess(); showAI('Going deeper...'); speak('Going line by line.');
   try {
-    const res = await fetch('/analyze-deep', {
+    const result = await guardedJson('analysis', '/analyze-deep', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ code: codeForDeep, language: getLanguage() }),
-    });
-    const data = await res.json();
+    }, narrationContext(codeForDeep), () => ({ code: codeForDeep, file: ProjectState.activeFile || '' }));
+    if (staleResult(result)) return;
+    const data = result.value;
     out(data.analysis || 'No deeper analysis.');
     if (data.analysis) speak(data.analysis);
   } catch (e) {
@@ -4375,7 +4426,7 @@ async function talkToMentor(message, mode = 'general') {
   showAI('Asking CodeUp Mentor...');
   try {
     const context = getMentorContext();
-    const res = await fetch('/mentor/chat', {
+    const result = await guardedJson('mentor', '/mentor/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -4388,8 +4439,9 @@ async function talkToMentor(message, mode = 'general') {
         history: context.history,
         preferences: context.preferences,
       }),
-    });
-    const data = await res.json();
+    }, narrationContext(context.code));
+    if (staleResult(result)) return;
+    const data = result.value;
     const reply = data.reply || data.error || 'Mentor is not available right now.';
     showMentorReply(msg, reply);
     maybePromptForApiKey(reply);
@@ -4405,12 +4457,13 @@ async function checkProgressWithMentor() {
   if (!ensurePythonEditorContent('check progress')) return;
   showAI('Checking progress...');
   try {
-    const res = await fetch('/mentor/check-progress', {
+    const codeSnapshot = getCode();
+    const result = await guardedJson('mentor', '/mentor/check-progress', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         previousCode: window.previousCodeSnapshot || '',
-        currentCode: getCode(),
+        currentCode: codeSnapshot,
         previousError: window.previousErrorSnapshot || '',
         currentOutput: window.lastRunOutput || '',
         currentError: window.lastRunError || '',
@@ -4418,8 +4471,9 @@ async function checkProgressWithMentor() {
         history: (window.mentorHistory || []).slice(-6),
         preferences: window.mentorPreferences || {},
       }),
-    });
-    const data = await res.json();
+    }, narrationContext(codeSnapshot));
+    if (staleResult(result)) return;
+    const data = result.value;
     const reply = data.reply || data.error || 'Could not check progress.';
     showMentorReply('Did I fix it?', reply);
     maybePromptForApiKey(reply);
@@ -4449,12 +4503,14 @@ async function speakCodeMap() {
   if (!ensurePythonEditorContent('code map')) return;
   showAI('Mapping your code...');
   try {
-    const res = await fetch('/mentor/code-map', {
+    const codeSnapshot = getCode();
+    const result = await guardedJson('code-map', '/mentor/code-map', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code: getCode(), language: getLanguage() }),
-    });
-    const data = await res.json();
+      body: JSON.stringify({ code: codeSnapshot, language: getLanguage() }),
+    }, narrationContext(codeSnapshot));
+    if (staleResult(result)) return;
+    const data = result.value;
     const reply = data.reply || data.error || 'Could not map the code.';
     showMentorReply('Give me a map of my code.', reply);
   } catch (e) {
@@ -4470,12 +4526,14 @@ async function requestCodeMap(query) {
   showAI('Mapping your code...');
   const _codeMapEpoch = currentSpeechEpoch();
   try {
-    const res = await fetch('/audio-code-map', {
+    const codeSnapshot = getCode();
+    const result = await guardedJson('code-map', '/audio-code-map', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code: getCode(), query: query || '', language: getLanguage() }),
-    });
-    const data = await res.json();
+      body: JSON.stringify({ code: codeSnapshot, query: query || '', language: getLanguage() }),
+    }, narrationContext(codeSnapshot));
+    if (staleResult(result)) return;
+    const data = result.value;
     const reply = data.reply || data.speech || data.error || 'Could not map the code.';
     out(reply);
     speak(reply, { epoch: _codeMapEpoch });
@@ -4771,12 +4829,13 @@ async function handleCommandText(txt) {
 
   if (window.LiveAssistant) window.LiveAssistant.noteProcessing(true);
   try {
-    const res  = await fetch('/voice-command', {
+    const result = await guardedJson('voice-command', '/voice-command', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify(buildVoiceCommandPayload(txt, 'typed')),
-    });
-    const data = await res.json();
+    }, narrationContext());
+    if (staleResult(result)) return;
+    const data = result.value;
     if (window.LiveAssistant) {
       window.LiveAssistant.recordTurn(txt, data.speech || data.message || '', data.action || '');
     }
@@ -5381,12 +5440,13 @@ async function handleVoiceCommand(rawText) {
   _debugLog('Voice parsing:', cleaned);
 
   try {
-    const res  = await fetch('/voice-command', {
+    const result = await guardedJson('voice-command', '/voice-command', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify(buildVoiceCommandPayload(cleaned, 'voice')),
-    });
-    const data = await res.json();
+    }, narrationContext());
+    if (staleResult(result)) return;
+    const data = result.value;
     applyCommandUnderstanding(data, cleaned);
 
     if (data.action === 'confirm') {
@@ -5560,6 +5620,27 @@ window.addEventListener('DOMContentLoaded', () => {
   if (paletteOverlay) {
     paletteOverlay.addEventListener('click', e => {
       if (e.target === paletteOverlay) closeCommandPalette();
+    });
+    // Keep Tab/Shift+Tab inside the palette while it's open - without this,
+    // Tab from the last focusable item (the results listbox) escapes to
+    // whatever comes next in the underlying page's tab order (e.g. the
+    // "Jump to editor" skip link), even though the overlay is still open
+    // and visually blocking the page (Pass 5B modal focus audit).
+    paletteOverlay.addEventListener('keydown', e => {
+      if (e.key !== 'Tab') return;
+      const items = Array.prototype.slice.call(
+        paletteOverlay.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')
+      ).filter(el => !el.disabled && el.offsetParent !== null);
+      if (!items.length) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
     });
   }
 });
@@ -6058,12 +6139,13 @@ async function getDebugSuggestions() {
   if (!ensurePythonEditorContent('debug suggestions')) return;
   speak('Analyzing code for improvement suggestions...');
   try {
-    const res  = await fetch('/debug-suggestions', {
+    const result = await guardedJson('debug-suggestions', '/debug-suggestions', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ code, language: getLanguage() }),
-    });
-    const data = await res.json();
+    }, narrationContext(code));
+    if (staleResult(result)) return;
+    const data = result.value;
     if (!data.success || !data.suggestions) { out('No suggestions available.'); speak('Could not generate suggestions.'); return; }
     if (data.suggestions.length === 0) { out('Code looks good! No issues found.'); speak('Code looks good. No issues found.'); return; }
 
@@ -6113,6 +6195,12 @@ function openCommandPalette() {
   const overlay = document.getElementById('commandPaletteOverlay');
   const input   = document.getElementById('commandPaletteInput');
   _commandPaletteOpener = document.activeElement;
+  // Opening the palette is a context switch like run/setCode/etc, all of
+  // which cancel prior narration before speaking their own message.
+  // Without this, "Command palette open..." silently queued behind
+  // whatever was already speaking instead of announcing immediately
+  // (Pass 5C live check: speech -> palette -> run -> input dialog).
+  SpeechManager.cancelAll();
   showEl(overlay);
   commandPaletteSelectedIndex = 0;
   renderCommandPalette('');
@@ -6583,12 +6671,14 @@ async function suggestNextLine() {
   speak('Analyzing context. Suggesting next lines.');
 
   try {
-    const res  = await fetch('/suggest-next', {
+    const codeSnapshot = getCode();
+    const result = await guardedJson('suggest-next', '/suggest-next', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ code: getCode(), line: pos.lineNumber, language: getLanguage() }),
-    });
-    const data = await res.json();
+      body:    JSON.stringify({ code: codeSnapshot, line: pos.lineNumber, language: getLanguage() }),
+    }, narrationContext(codeSnapshot));
+    if (staleResult(result)) return;
+    const data = result.value;
 
     if (!data.success || !data.suggestions || data.suggestions.length === 0) {
       speak('Could not generate suggestions. Try writing a bit more code first.');
@@ -6649,12 +6739,14 @@ async function tellExecutionStory() {
   showAI('Narrating your execution...');
   speak('Narrating what happened when your code ran.');
   try {
-    const res  = await fetch('/execution-story', {
+    const codeSnapshot = getCode();
+    const result = await guardedJson('execution-story', '/execution-story', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ code: getCode(), language: getLanguage() }),
-    });
-    const data = await res.json();
+      body:    JSON.stringify({ code: codeSnapshot, language: getLanguage() }),
+    }, narrationContext(codeSnapshot));
+    if (staleResult(result)) return;
+    const data = result.value;
     if (data.success) {
       out(data.story);
       speak(data.story);
@@ -6843,12 +6935,13 @@ async function quizMe(topic) {
   showAI(`Creating quiz on ${t}...`);
   speak(`Creating a quiz question on ${t}.`);
   try {
-    const res  = await fetch('/mentor/quiz', {
+    const result = await guardedJson('learning', '/mentor/quiz', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ topic: t, language: getLanguage() }),
-    });
-    const data = await res.json();
+    }, narrationContext());
+    if (staleResult(result)) return;
+    const data = result.value;
     if (!data.success) { speak('Could not generate quiz. Try again.'); hideAI(); return; }
 
     const q = data.quiz;
@@ -6881,12 +6974,13 @@ async function explainConcept(concept) {
   showAI(`Explaining ${c}...`);
   speak(`Explaining ${c}.`);
   try {
-    const res  = await fetch('/mentor/explain', {
+    const result = await guardedJson('learning', '/mentor/explain', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ concept: c, language: getLanguage() }),
-    });
-    const data = await res.json();
+    }, narrationContext());
+    if (staleResult(result)) return;
+    const data = result.value;
     if (data.success) {
       out(data.explanation);
       speak(data.explanation);
@@ -6907,12 +7001,13 @@ async function bugChallenge() {
   showAI('Generating bug challenge...');
   speak('Generating a bug fixing challenge. Get ready.');
   try {
-    const res  = await fetch('/mentor/bug-challenge', {
+    const result = await guardedJson('learning', '/mentor/bug-challenge', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ language: getLanguage() }),
-    });
-    const data = await res.json();
+    }, narrationContext());
+    if (staleResult(result)) return;
+    const data = result.value;
     if (!data.success) { speak('Could not generate challenge. Try again.'); hideAI(); return; }
 
     const ch = data.challenge;
@@ -7064,12 +7159,13 @@ async function walkThroughCode() {
   speak('Let me walk through your code.');
   const _walkEpoch = currentSpeechEpoch();
   try {
-    const res = await fetch('/walkthrough', {
+    const result = await guardedJson('walkthrough', '/walkthrough', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ code, language: getLanguage() }),
-    });
-    const data = await res.json();
+    }, narrationContext(code));
+    if (staleResult(result)) return;
+    const data = result.value;
     const explanation = data.explanation || data.speech || data.error || 'No walkthrough available.';
     out(explanation);
     speak(explanation, { epoch: _walkEpoch });
@@ -7152,6 +7248,7 @@ async function talkToMentorStreaming(message, mode) {
   if (outputEl) outputEl.textContent = '';
 
   const context = getMentorContext();
+  const guard = NarrationRequests.begin('mentor', narrationContext(context.code));
   const result = await VoiceEngine.streamingRequest('/mentor/chat-stream', {
     code: context.code,
     message: msg,
@@ -7165,7 +7262,8 @@ async function talkToMentorStreaming(message, mode) {
 
   hideAI();
 
-  if (result.aborted) return;
+  if (result.aborted || !guard.active(narrationContext())) { guard.finish(); return; }
+  guard.finish();
 
   if (result.error) {
     out('Mentor error: ' + result.error);

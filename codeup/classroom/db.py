@@ -489,6 +489,25 @@ def list_progress_for_learner(learner_id: int) -> List[Dict[str, Any]]:
         )
 
 
+def list_progress_for_learners(learner_ids: List[int]) -> Dict[int, List[Dict[str, Any]]]:
+    """Batched equivalent of calling :func:`list_progress_for_learner` once per
+    id - one round trip for the whole cohort instead of one per learner."""
+    grouped: Dict[int, List[Dict[str, Any]]] = {lid: [] for lid in learner_ids}
+    if not learner_ids:
+        return grouped
+    placeholders = ",".join("?" for _ in learner_ids)
+    with connect() as conn:
+        rows = _rows(
+            conn.execute(
+                f"SELECT * FROM assignment_progress WHERE learner_id IN ({placeholders})",
+                tuple(learner_ids),
+            ).fetchall()
+        )
+    for row in rows:
+        grouped.setdefault(row["learner_id"], []).append(row)
+    return grouped
+
+
 # ---- help requests ------------------------------------------------------------
 
 def create_help_request(
@@ -699,6 +718,23 @@ def get_concept_progress(learner_id: int) -> Dict[str, Dict[str, Any]]:
             "SELECT * FROM concept_progress WHERE learner_id = ?", (learner_id,)
         ).fetchall()
     return {row["concept"]: dict(row) for row in rows}
+
+
+def get_concept_progress_for_learners(learner_ids: List[int]) -> Dict[int, Dict[str, Dict[str, Any]]]:
+    """Batched equivalent of calling :func:`get_concept_progress` once per id."""
+    grouped: Dict[int, Dict[str, Dict[str, Any]]] = {lid: {} for lid in learner_ids}
+    if not learner_ids:
+        return grouped
+    placeholders = ",".join("?" for _ in learner_ids)
+    with connect() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM concept_progress WHERE learner_id IN ({placeholders})",
+            tuple(learner_ids),
+        ).fetchall()
+    for row in rows:
+        row = dict(row)
+        grouped.setdefault(row["learner_id"], {})[row["concept"]] = row
+    return grouped
 
 
 def set_concept_state(

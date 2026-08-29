@@ -147,6 +147,35 @@ def test_accessible_csv_stats_chart_and_sonification(client):
     assert "not found" in voice(client, "average unknown", project=project)["speech"]
 
 
+def test_csv_nan_and_infinity_do_not_poison_aggregates(client):
+    project = {
+        "files": {"scores.csv": "name,score\nA,10\nB,nan\nC,20\nD,inf\nE,-infinity\nF,30\n"},
+    }
+    highest = voice(client, "find highest in score", project=project)["speech"]
+    assert "30" in highest and "nan" not in highest and "inf" not in highest
+    lowest = voice(client, "find lowest in score", project=project)["speech"]
+    assert "10" in lowest and "nan" not in lowest and "inf" not in lowest
+    average = voice(client, "average score", project=project)["speech"]
+    assert "20" in average and "nan" not in average
+    assert "using 3 numeric values" in average
+
+
+def test_csv_row_cap_is_disclosed_not_silently_reported_as_exact(client):
+    big_csv = "n\n" + "\n".join(str(i) for i in range(600))
+    project = {"files": {"big.csv": big_csv}}
+    summary = voice(client, "summarize csv", project=project)["speech"]
+    assert "at least 500" in summary
+    assert "500" in summary and "more than 500 rows" in summary
+
+    average = voice(client, "average n", project=project)["speech"]
+    assert "more than 500 rows" in average
+    assert "using 500 numeric values" in average
+
+    small_project = csv_project()
+    small_summary = voice(client, "summarize csv", project=small_project)["speech"]
+    assert "more than 500 rows" not in small_summary
+
+
 def test_teacher_report_privacy_counts_and_export(client):
     assert "on" in voice(client, "teacher mode on")["speech"]
     voice(client, "start learning path")

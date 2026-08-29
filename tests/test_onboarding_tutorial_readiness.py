@@ -195,9 +195,14 @@ def test_tutorial_coach_speaks_a_fact_without_ai(client):
 
 
 def test_tutorial_validate_route_passes_a_real_for_loop(client):
+    code = "for i in range(3):\n    print(i)"
+    # /tutorial/validate requires ran_ok=True to match a real prior /run of
+    # this exact code (Pass 5 completion-authority hardening) rather than
+    # trusting the client's claim alone.
+    run = client.post("/run", json={"code": code, "language": "en"}).get_json()
     d = client.post("/tutorial/validate",
-                    json={"module": "for", "code": "for i in range(3):\n    print(i)",
-                          "ran_ok": True}).get_json()
+                    json={"module": "for", "code": code,
+                          "ran_ok": True, "output": run.get("output", "")}).get_json()
     assert d["passed"] is True
 
 

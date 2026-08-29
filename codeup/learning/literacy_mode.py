@@ -205,6 +205,8 @@ def command_kind(text: str) -> Optional[Dict[str, str]]:
         "next lesson": "next_lesson",
         "previous lesson": "previous_lesson",
         "lesson status": "lesson_status",
+        "reset lesson": "reset_lesson",
+        "restart lesson": "reset_lesson",
         "what am i learning": "what_learning",
         "what should i do next": "next_step",
         "give me lesson starter code": "starter_code",
@@ -223,7 +225,7 @@ def command_kind(text: str) -> Optional[Dict[str, str]]:
 def is_python_lesson_command(kind: str) -> bool:
     return kind in {
         "start_lesson", "next_lesson", "previous_lesson", "what_learning", "next_step",
-        "starter_code", "practice_mistake", "check_understanding", "complete_lesson",
+        "starter_code", "practice_mistake", "check_understanding", "complete_lesson", "reset_lesson",
     }
 
 
@@ -341,8 +343,18 @@ def handle_command(command: Dict[str, str], mem: Dict[str, Any], code: str = "",
         title = lesson["title"] if lesson else "none"
         msg = f"Current lesson: {title}. Completed {len(set(_completed(mem)))} of {len(LESSONS)} lessons."
         return {"message": msg, "speech": msg}
-    if kind in {"what_learning", "next_step", "starter_code", "practice_mistake", "check_understanding", "complete_lesson"} and not lesson:
+    if kind in {"what_learning", "next_step", "starter_code", "practice_mistake", "check_understanding", "complete_lesson", "reset_lesson"} and not lesson:
         return _need_lesson()
+    if kind == "reset_lesson":
+        lesson_id = lesson["id"]
+        completed = mem.setdefault("completed_lessons", [])
+        mem["completed_lessons"] = [item for item in completed if item != lesson_id]
+        mem.setdefault("lesson_checks_requested", {}).pop(lesson_id, None)
+        mem.setdefault("lesson_mistakes_practiced", {}).pop(lesson_id, None)
+        mem.setdefault("lesson_completed_at", {}).pop(lesson_id, None)
+        _set_current(mem, lesson)
+        msg = f"Reset lesson {_lesson_number(lesson)}: {lesson['title']}. Progress for this lesson was cleared. Your editor and other lessons were not changed."
+        return {"message": msg, "speech": msg, "starter_code": lesson["starter_code"], "lesson_id": lesson_id}
     if kind == "what_learning":
         msg = f"You are learning {lesson['concept']}. {lesson['hint']}"
         return {"message": msg, "speech": msg}

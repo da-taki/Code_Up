@@ -26,6 +26,7 @@
   <section class="cu-panel" aria-labelledby="cohortsHeading">
     <h2 id="cohortsHeading">Your cohorts</h2>
     {% if cohorts %}
+      <div class="cu-table-wrap">
       <table class="cu-table">
         <caption class="sr-only">Your cohorts and their join codes</caption>
         <thead>
@@ -59,6 +60,7 @@
           {% endfor %}
         </tbody>
       </table>
+      </div>
     {% else %}
       <p>You have not created any cohorts yet.</p>
     {% endif %}

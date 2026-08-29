@@ -132,3 +132,17 @@ def record_assignment_submitted(learner_id: int, cohort_id: int, code: str, expe
 def summary_for_learner(learner_id: int) -> Dict[str, str]:
     stored = db.get_concept_progress(learner_id)
     return {concept: (stored.get(concept) or {}).get("state", "not_started") for concept in CURRICULUM_CONCEPTS}
+
+
+def summary_for_learners(learner_ids: List[int]) -> Dict[int, Dict[str, str]]:
+    """Batched equivalent of calling :func:`summary_for_learner` once per id -
+    used by the cohort dashboard so it issues one query for the whole
+    cohort instead of one per learner."""
+    stored_by_learner = db.get_concept_progress_for_learners(learner_ids)
+    return {
+        learner_id: {
+            concept: (stored.get(concept) or {}).get("state", "not_started")
+            for concept in CURRICULUM_CONCEPTS
+        }
+        for learner_id, stored in stored_by_learner.items()
+    }

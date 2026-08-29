@@ -79,6 +79,7 @@ def new_memory() -> Dict[str, Any]:
         "last_run_traceback": "",
         "last_run_ok": None,
         "last_run_inputs": [],
+        "last_run_code_hash": "",
         "run_count": 0,
         "last_explain_target": "",
         "last_active_file": "",
@@ -243,11 +244,13 @@ def record_editor_code(mem: Dict[str, Any], code: str) -> None:
 
 
 def record_run(mem: Dict[str, Any], *, output: str = "", error: str = "",
-               traceback_text: str = "",
+               traceback_text: str = "", code: str = "",
                inputs: Optional[List[str]] = None, ran_ok: Optional[bool] = None,
                input_source: str = "") -> None:
     mem["run_count"] = max(0, int(mem.get("run_count") or 0)) + 1
     mem["last_run_traceback"] = _clip(traceback_text, _MAX_ERROR * 2)
+    if code is not None:
+        mem["last_run_code_hash"] = code_hash(code)
     mem["last_run_output"] = _clip_output(output)
     mem["last_run_error"] = _clip(error, _MAX_ERROR)
     error_text = str(error or "")
@@ -286,6 +289,7 @@ def clear_run_state(mem: Dict[str, Any]) -> None:
     mem["last_run_traceback"] = ""
     mem["last_run_ok"] = None
     mem["last_run_inputs"] = []
+    mem["last_run_code_hash"] = ""
     mem["run_count"] = 0
 
 
@@ -640,6 +644,7 @@ def snapshot(mem: Dict[str, Any], *, utterance: str = "", file_name: str = "") -
         "last_intent": mem.get("last_intent", ""),
         "last_action": mem.get("last_action", ""),
         "last_run_ok": mem.get("last_run_ok"),
+        "last_run_code_hash": mem.get("last_run_code_hash"),
         "last_error": _clip(mem.get("last_run_error", ""), 200),
         "last_output": _clip(mem.get("last_run_output", ""), 200),
         "last_gen_prompt": _clip(mem.get("last_gen_prompt", ""), 200),

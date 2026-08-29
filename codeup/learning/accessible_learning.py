@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import csv
 import io
+import math
 import re
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -412,26 +413,48 @@ def _block_order(state: Dict[str, Any]) -> str:
     )
 
 
+_CSV_ROW_CAP = 500
+
+
 def _csv_rows(
     project: Dict[str, Any],
-) -> Tuple[str, List[str], List[Dict[str, str]], str]:
+) -> Tuple[str, List[str], List[Dict[str, str]], str, bool]:
+    """Returns (path, columns, rows, error, truncated). ``truncated`` is
+    True only when the file actually has more than _CSV_ROW_CAP data rows -
+    every caller must disclose this rather than silently reporting an
+    aggregate over the first _CSV_ROW_CAP rows as if it covered the whole
+    file (see Pass 5 CSV closure)."""
     files = project.get("files") if isinstance(project.get("files"), dict) else {}
     path = next((p for p in sorted(files) if str(p).lower().endswith(".csv")), "")
     if not path:
-        return "", [], [], "No CSV file is available in the current project."
+        return "", [], [], "No CSV file is available in the current project.", False
     try:
         reader = csv.DictReader(io.StringIO(str(files[path])))
         columns = list(reader.fieldnames or [])
         rows = []
+        truncated = False
         for row in reader:
-            rows.append({str(k): str(v or "") for k, v in row.items() if k is not None})
-            if len(rows) >= 500:
+            if len(rows) >= _CSV_ROW_CAP:
+                truncated = True
                 break
+            rows.append({str(k): str(v or "") for k, v in row.items() if k is not None})
         if not columns:
-            return path, [], [], f"{path} does not have a header row."
-        return path, columns, rows, ""
+            return path, [], [], f"{path} does not have a header row.", False
+        return path, columns, rows, "", truncated
     except (csv.Error, UnicodeError, TypeError) as exc:
-        return path, [], [], f"Could not read {path}: {type(exc).__name__}."
+        return path, [], [], f"Could not read {path}: {type(exc).__name__}.", False
+
+
+def _row_count_phrase(count: int, truncated: bool) -> str:
+    return f"at least {count}" if truncated else str(count)
+
+
+def _truncation_note(truncated: bool) -> str:
+    return (
+        f" This file has more than {_CSV_ROW_CAP} rows; this result only covers the first {_CSV_ROW_CAP}."
+        if truncated
+        else ""
+    )
 
 
 def _numbers(rows: Iterable[Dict[str, str]], column: str) -> Tuple[List[float], int]:
@@ -442,9 +465,17 @@ def _numbers(rows: Iterable[Dict[str, str]], column: str) -> Tuple[List[float], 
             missing += 1
             continue
         try:
-            values.append(float(raw))
+            value = float(raw)
         except ValueError:
-            pass
+            continue
+        if not math.isfinite(value):
+            # "nan"/"inf"/"infinity" parse successfully as floats but are
+            # not real data - letting them into the list silently poisons
+            # average (always becomes nan) and max/min (order-dependent,
+            # sometimes silently wrong instead of nan). Treat them the same
+            # as any other malformed numeric cell: skipped, not counted.
+            continue
+        values.append(value)
     return values, missing
 
 
@@ -481,7 +512,7 @@ def _data_command(t: str, project: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "message": "Sonification stopped.",
             "speech": "Sonification stopped.",
         }
-    path, columns, rows, error = _csv_rows(project)
+    path, columns, rows, error, truncated = _csv_rows(project)
     if error:
         return _message(error)
     if t in {"list csv columns", "describe csv"}:
@@ -489,7 +520,8 @@ def _data_command(t: str, project: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             sum(1 for v in row.values() if not str(v).strip()) for row in rows
         )
         return _message(
-            f"{path} has {len(rows)} rows and {len(columns)} columns: {', '.join(columns)}. Missing values: {missing}."
+            f"{path} has {_row_count_phrase(len(rows), truncated)} rows and {len(columns)} columns: "
+            f"{', '.join(columns)}. Missing values: {missing}.{_truncation_note(truncated)}"
         )
     if t == "summarize csv":
         numeric = [
@@ -504,14 +536,15 @@ def _data_command(t: str, project: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             else "no data rows"
         )
         return _message(
-            f"{path} has {len(rows)} rows. Columns: {', '.join(columns)}. Numeric columns: {', '.join(numeric) or 'none'}. First row: {first}."
+            f"{path} has {_row_count_phrase(len(rows), truncated)} rows. Columns: {', '.join(columns)}. "
+            f"Numeric columns: {', '.join(numeric) or 'none'}. First row: {first}.{_truncation_note(truncated)}"
         )
     m = re.match(r"read csv row (\d+)$", t)
     if m:
         n = int(m.group(1))
         if n < 1 or n > len(rows):
             return _message(
-                f"Row {n} is not available. This file has {len(rows)} data rows."
+                f"Row {n} is not available. This file has {_row_count_phrase(len(rows), truncated)} data rows."
             )
         return _message(
             f"Row {n}: "
@@ -529,7 +562,7 @@ def _data_command(t: str, project: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not values:
             return _message(f"Column {col} does not contain numeric values.")
         value = max(values) if m.group(1) == "highest" else min(values)
-        return _message(f"The {m.group(1)} value in {col} is {value:g}.")
+        return _message(f"The {m.group(1)} value in {col} is {value:g}.{_truncation_note(truncated)}")
     m = re.match(r"average(?: of)? ([\w -]+)$", t)
     if m:
         col = _find_column(columns, m.group(1))
@@ -542,6 +575,7 @@ def _data_command(t: str, project: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             return _message(f"Column {col} does not contain numeric values.")
         return _message(
             f"The average of {col} is {sum(values) / len(values):g}, using {len(values)} numeric values."
+            f"{_truncation_note(truncated)}"
         )
     m = re.match(r"compare columns ([\w -]+) and ([\w -]+)$", t)
     if m:
@@ -554,7 +588,7 @@ def _data_command(t: str, project: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not av or not bv:
             return _message("Both selected columns need numeric values.")
         return _message(
-            f"{a} averages {sum(av) / len(av):g} with range {min(av):g} to {max(av):g}. {b} averages {sum(bv) / len(bv):g} with range {min(bv):g} to {max(bv):g}. This compares averages and ranges; it does not infer causation."
+            f"{a} averages {sum(av) / len(av):g} with range {min(av):g} to {max(av):g}. {b} averages {sum(bv) / len(bv):g} with range {min(bv):g} to {max(bv):g}. This compares averages and ranges; it does not infer causation.{_truncation_note(truncated)}"
         )
     m = re.match(r"sonify(?: data| column(?: ([\w -]+))?)$", t)
     if m:
@@ -592,7 +626,7 @@ def _data_command(t: str, project: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             else "starts and ends at the same value"
         )
         return _message(
-            f"Accessible chart description: a simple line chart of {col} by row, with values from {min(values):g} to {max(values):g}. The series {trend}. Highest {max(values):g}; lowest {min(values):g}. This is a text description, not a generated visual chart."
+            f"Accessible chart description: a simple line chart of {col} by row, with values from {min(values):g} to {max(values):g}. The series {trend}. Highest {max(values):g}; lowest {min(values):g}. This is a text description, not a generated visual chart.{_truncation_note(truncated)}"
         )
     return None
 

@@ -66,17 +66,22 @@ def parse_attrs(html, element_id):
     return match.group(0)
 
 
-def test_screen_reader_mode_defaults_browser_speech_off_without_manual_override():
-    assert "BROWSER_SPEECH_OVERRIDE_KEY" in STATIC_APP
-    assert "_browserSpeechUserOverride" in STATIC_APP
-    assert "_browserSpeechEnabled = !_screenReaderModeEnabled" in STATIC_APP
-    assert "Screen Reader Mode is on, so Browser Speech is off by default" in STATIC_APP
+def test_speech_mode_is_the_single_authoritative_source_of_truth():
+    """Superseded design note: this used to test an independent "manual
+    override" escape hatch that let Browser Speech be forced on while
+    Screen Reader Mode was also on - exactly the kind of drifting,
+    contradictory state a later pass (see
+    test_student_ide_default_and_speech_modes.py) removed in favor of one
+    speech-mode switch that is the only thing allowed to set
+    _screenReaderModeEnabled / _browserSpeechEnabled, always in lockstep."""
+    assert "_screenReaderModeEnabled = mode !== 'codeup-voice'" in STATIC_APP
+    assert "_browserSpeechEnabled = mode === 'codeup-voice'" in STATIC_APP
+    assert "_browserSpeechUserOverride" not in STATIC_APP
+    assert "BROWSER_SPEECH_OVERRIDE_KEY" not in STATIC_APP
 
 
-def test_manual_browser_speech_override_is_persisted():
-    assert "localStorage.setItem(BROWSER_SPEECH_OVERRIDE_KEY, 'true')" in STATIC_APP
-    assert "localStorage.setItem(BROWSER_SPEECH_KEY, String(_browserSpeechEnabled))" in STATIC_APP
-    assert "Browser speech is on by manual choice while Screen Reader Mode is also on" in STATIC_APP
+def test_screen_reader_safe_mode_keeps_browser_speech_off():
+    assert "'sr-safe': 'CodeUp stays quiet automatically" in STATIC_APP
 
 
 def test_live_regions_are_deduplicated_and_errors_use_one_assertive_path():

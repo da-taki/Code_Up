@@ -117,8 +117,15 @@
 
   function announce(text, opts) {
     opts = opts || {};
+    // speak() is always sr:false here so Screen Reader Safe mode routes
+    // through the explicit srAnnounce() call below instead of speak()'s own
+    // fallback - but in CodeUp Voice mode speak() already narrates this
+    // audibly, so srAnnounce() must be skipped there or every one of this
+    // function's 40+ callers (assignment status, help requests, guided
+    // lessons, submissions, quizzes...) would speak twice at once.
+    var isCodeupVoice = typeof _speechMode !== 'undefined' && _speechMode === 'codeup-voice';
     if (typeof window.speak === 'function') window.speak(text, { sr: false });
-    if (typeof window.srAnnounce === 'function') window.srAnnounce(text, opts.priority || 'polite');
+    if (!isCodeupVoice && typeof window.srAnnounce === 'function') window.srAnnounce(text, opts.priority || 'polite');
   }
 
   // Progressive disclosure lives entirely in native <details>/<summary>

@@ -207,4 +207,9 @@ def test_breakpoint_frontend_wires_existing_client_state():
     assert "function enableBreakpoints()" in source
     assert "if (!_breakpointsEnabled)" in source
     assert "requestAudioBreakpoint('clear', null, { silent: true })" in source
-    assert "out('Cleared all breakpoints.')" in source
+    # sr:false here because the very next line speaks the identical text -
+    # without it, CodeUp Voice mode would announce "Cleared all
+    # breakpoints." via ARIA and audibly at the same time (see the
+    # speech-architecture audit's out()/speak() duplicate-announcement pass).
+    assert "out('Cleared all breakpoints.', { sr: false });" in source
+    assert "speak('Cleared all breakpoints.');" in source

@@ -36,8 +36,17 @@
       <details class="cu-disclosure cu-header-settings">
         <summary class="cu-disclosure-summary" aria-label="CodeUp display and accessibility settings">CodeUp display and accessibility settings</summary>
         <div class="cu-theme-controls" role="group" aria-describedby="settingsDescription" aria-label="CodeUp display and accessibility settings">
-      <p id="settingsDescription" class="cu-settings-description">Controls for display, screen-reader mode, browser speech, voice speed, and browser voice selection.</p>
+      <p id="settingsDescription" class="cu-settings-description">Controls for speech mode, display, screen-reader profile, voice speed, and browser voice selection.</p>
       <h2 id="accessibilitySettingsHeading" class="sr-only">Accessibility and speech settings</h2>
+
+      <h3 class="cu-settings-subheading">Speech mode</h3>
+      <label for="speechModeSelect">How should CodeUp speak?</label>
+      <select id="speechModeSelect" class="theme-selector" aria-describedby="speechModeDescription">
+        <option value="sr-safe">Screen Reader Safe (for NVDA, JAWS, VoiceOver, Narrator)</option>
+        <option value="codeup-voice">CodeUp Voice (CodeUp narrates automatically)</option>
+      </select>
+      <p id="speechModeDescription" class="cu-settings-description" aria-live="polite"></p>
+
       <h3 class="cu-settings-subheading">Display</h3>
       <select id="colorVisionMode" class="theme-selector" aria-label="Color vision mode">
         <option value="default">Standard Colors (no special mode)</option>
@@ -73,21 +82,12 @@
         <option value="orca">Orca</option>
         <option value="vs code">VS Code handoff</option>
       </select>
-      <button id="screenReaderModeToggle" class="theme-toggle" aria-pressed="false" aria-label="Toggle screen reader mode">
-        Screen Reader Mode (Off)
-      </button>
-
-      <h3 class="cu-settings-subheading">Browser speech</h3>
-      <button id="browserSpeechToggle" class="theme-toggle" aria-pressed="true" aria-label="Toggle browser speech">
-        Browser Speech (On)
-      </button>
-      <p id="browserSpeechStatus" class="cu-settings-description" aria-live="polite">Browser speech is on.</p>
 
       <h3 class="cu-settings-subheading">Voice speed and voice selection</h3>
       <label for="speechRateControl">Speech rate: <span id="speechRateValue">1.0x</span></label>
-      <input id="speechRateControl" class="cu-speech-rate" type="range" min="0.5" max="2" step="0.1" value="1" aria-describedby="browserSpeechStatus">
+      <input id="speechRateControl" class="cu-speech-rate" type="range" min="0.5" max="2" step="0.1" value="1" aria-describedby="speechModeDescription">
       <label for="speechVoiceSelect">Browser voice: <span id="speechVoiceValue">Default browser voice</span></label>
-      <select id="speechVoiceSelect" class="theme-selector" aria-label="Browser speech voice" aria-describedby="browserSpeechStatus">
+      <select id="speechVoiceSelect" class="theme-selector" aria-label="Browser speech voice" aria-describedby="speechModeDescription">
         <option value="">Default browser voice</option>
       </select>
       <button id="testVoiceBtn" class="cu-button cu-button-secondary" type="button" aria-label="Test selected browser voice">Test Voice</button>
@@ -98,6 +98,13 @@
     <div class="cu-subtitle">
       Python editor with voice, screen-reader, debugging, and tutorial tools. Press <span class="cu-hotkey">Ctrl+Enter</span> to run.
     </div>
+    <nav class="cu-secondary-nav" aria-label="More CodeUp features"
+         style="font-size:0.85rem;color:var(--text-dim);display:flex;gap:14px;flex-wrap:wrap;margin-top:4px;">
+      <a href="/classroom">Classroom</a>
+      <a href="/classroom/instructor">Instructor tools</a>
+      <a href="/accessible-coding-tools">Accessible coding tools</a>
+      <a href="/accessibility">Accessibility help</a>
+    </nav>
   </header>
 
   <main id="mainContent" class="cu-main-shell" aria-labelledby="pageTitle">
@@ -142,7 +149,7 @@
               style="padding:6px 10px;font-size:0.8rem;"
             >Save</button>
           </div>
-          <div id="snippetList" class="cu-snippet-list" aria-label="Saved snippets" style="max-height:180px;"></div>
+          <div id="snippetList" class="cu-snippet-list" role="group" aria-label="Saved snippets" style="max-height:180px;"></div>
         </div>
       </details>
 
@@ -150,7 +157,7 @@
         <summary class="cu-disclosure-summary">Project files</summary>
         <div class="cu-disclosure-body">
           <h3 class="sr-only">Project files</h3>
-          <div id="projectFileList" class="cu-snippet-list" aria-label="Project files" style="max-height:180px;">
+          <div id="projectFileList" class="cu-snippet-list" role="group" aria-label="Project files" style="max-height:180px;">
             <div style="color:var(--text-dim);font-style:italic;padding:6px 0;font-size:0.8rem;">Single-file mode</div>
           </div>
         </div>
@@ -181,7 +188,7 @@
               style="padding:6px 10px;font-size:0.8rem;"
             >+</button>
           </div>
-          <div id="inputsPanelList" aria-label="Pre-flight inputs">
+          <div id="inputsPanelList" role="group" aria-label="Pre-flight inputs">
             <div style="color:var(--text-dim);font-style:italic;padding:6px 0;font-size:0.8rem;">No inputs declared</div>
           </div>
           <div style="display:flex;gap:6px;margin-top:8px;">
@@ -202,7 +209,7 @@
 
       <div class="cu-editor-region" id="codeModeRegion">
         <p id="editorHelp" class="cu-editor-help">Tab indents inside the editor. Press Escape when speech is quiet, or press Control+M, to leave the editor and continue to CodeUp controls.</p>
-        <div id="editor" class="cu-editor" aria-label="Python code editor" aria-describedby="editorHelp"></div>
+        <div id="editor" class="cu-editor" role="group" aria-label="Python code editor" aria-describedby="editorHelp"></div>
         <button id="leaveEditorBtn" class="cu-button cu-button-secondary cu-leave-editor" type="button" aria-label="Leave editor and move to editor actions">Leave editor</button>
         <div id="errorSummary" class="cu-error-summary" aria-live="off" hidden>
           <h3 id="errorSummaryHeading">Editor error</h3>
@@ -274,7 +281,7 @@
 
     <aside class="cu-panel cu-structure" id="structurePanel" hidden aria-labelledby="structure-heading">
       <h2 class="cu-panel-title" id="structure-heading">Code structure navigator</h2>
-      <div id="structureContent" class="cu-structure-content" aria-labelledby="structure-heading">
+      <div id="structureContent" class="cu-structure-content" role="group" aria-labelledby="structure-heading">
         <p class="structure-info">Parse code to show structure...</p>
       </div>
     </aside>

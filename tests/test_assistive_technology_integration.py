@@ -113,8 +113,13 @@ def test_ide_has_live_regions_and_labeled_controls(client):
     assert 'id="srAnnouncer" role="status" aria-live="polite" aria-atomic="true"' in html
     assert 'id="srAlert" role="alert" aria-live="assertive" aria-atomic="true"' in html
     assert '<label for="assistiveTechnologyProfile">Assistive technology profile</label>' in html
-    assert 'aria-label="Toggle screen reader mode"' in html
-    assert 'aria-label="Toggle browser speech"' in html
+    # The separate "Toggle screen reader mode" / "Toggle browser speech"
+    # buttons were replaced by a single speechModeSelect control - two
+    # independently-clickable toggles could drift into a contradictory
+    # state (e.g. Screen Reader Mode on AND Browser Speech on at once);
+    # one dropdown with two mutually exclusive options cannot.
+    assert '<select id="speechModeSelect"' in html
+    assert 'id="speechModeDescription"' in html
 
 
 def test_frontend_routes_visual_output_to_live_regions():

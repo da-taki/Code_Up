@@ -59,7 +59,7 @@ def test_live_regions_are_not_hidden_inside_collapsed_details(client, region_id)
     [
         "analyzeBtn", "fixBtn", "codeMapBtn", "stepNarrationBtn", "mistakeReplayBtn",
         "saveBtn", "languageSelector", "colorVisionMode", "dyslexiaToggle",
-        "screenReaderModeToggle", "browserSpeechToggle", "snippetSaveBtn",
+        "speechModeSelect", "assistiveTechnologyProfile", "snippetSaveBtn",
         "clearInputsBtn", "toggleInputModeBtn",
         "audioBlockMoveUpBtn", "audioBlockDeleteBtn", "audioBlockIndentBtn",
     ],

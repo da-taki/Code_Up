@@ -24,7 +24,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from typing import Any, Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
-from flask import Flask, Response, g, has_request_context, jsonify, render_template, request, send_from_directory, stream_with_context
+from flask import Flask, Response, g, has_request_context, jsonify, redirect, render_template, request, send_from_directory, stream_with_context
 from rapidfuzz import fuzz
 
 from codeup.commands.conversation_orchestrator import frontend_actions, action_next_label, looks_like_generation_request, orchestrate_command, strip_wake_phrase
@@ -1551,6 +1551,14 @@ def _should_use_local_generation_fallback(raw: str) -> bool:
 
 @app.route("/")
 def landing():
+    # The student IDE is the product: opening CodeUp goes straight into the
+    # editor with no marketing page or feature-selection screen in between.
+    # The old marketing landing page still exists at /welcome (nothing was
+    # deleted), it's just no longer the thing a student has to click through.
+    return redirect("/ide")
+
+@app.route("/welcome")
+def welcome():
     return render_template('landing.html')
 
 @app.route("/ide")

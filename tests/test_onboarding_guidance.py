@@ -101,7 +101,10 @@ def test_help_action_does_not_modify_editor_contents():
     assert "setCode(" not in block
     assert "clearEditor(" not in block
     assert ".setValue(" not in block
-    assert "out(msg);" in block
+    # sr:false because speak(speech) right below already covers this event -
+    # without it, CodeUp Voice mode would announce the help text via ARIA
+    # and audibly at the same time.
+    assert "out(msg, { sr: false });" in block
     assert "speak(speech);" in block
 
 

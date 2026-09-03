@@ -540,14 +540,14 @@ async function readLineEnhanced(line) {
   const maxLine = model.getLineCount();
   if (line < 1 || line > maxLine) {
     const msg = `Line ${line} is out of range. File has ${maxLine} lines.`;
-    out(msg); speak(msg); return;
+    out(msg, { sr: false }); speak(msg); return;
   }
   const lineText = model.getLineContent(line);
   const indent = Math.floor(getIndentLevel(lineText));
   sonifyLine(lineText, indent);
   setTimeout(() => {
     const msg = `Line ${line}: ${lineText || 'empty line'}`;
-    out(msg);
+    out(msg, { sr: false });
     speak(msg);
   }, 200);
 }
@@ -589,9 +589,8 @@ async function sonifyCurrentBlock() {
   }
   if (!structuralLines.length) {
     const msg = 'No nonblank lines to sonify.';
-    out(msg);
+    out(msg, { sr: false });
     speak(msg);
-    srAnnounce(msg);
     return;
   }
 
@@ -641,9 +640,8 @@ async function sonifyCurrentBlock() {
     const completion = getLanguage() === 'hi'
       ? `Block sonification complete. Is block mein ${lineWord} line${structuralLines.length === 1 ? '' : 's'} hain, aur ${nestedWord} nested line${nestedCount === 1 ? '' : 's'} hai.`
       : `Block sonification complete. ${lineWord[0].toUpperCase()}${lineWord.slice(1)} line${structuralLines.length === 1 ? '' : 's'}, with ${nestedWord} nested line${nestedCount === 1 ? '' : 's'}.`;
-    out(`${startMsg}\n${completion}`);
+    out(`${startMsg}\n${completion}`, { sr: false });
     speak(completion);
-    srAnnounce(completion);
     SonificationManager.cancelJob(jobId);
   }, durationMs);
   SonificationManager.pushTimer(jobId, fin);
@@ -682,9 +680,9 @@ function navigateForward() {
 }
 
 function showNavigationHistory() {
-  if (navigationHistory.length === 0) { speak('Navigation history is empty.'); out('Navigation history is empty.'); return; }
+  if (navigationHistory.length === 0) { speak('Navigation history is empty.'); out('Navigation history is empty.', { sr: false }); return; }
   const history = navigationHistory.slice(-10).map((line, i) => `${i + 1}. Line ${line}`).join('\n');
-  out(`Recent navigation history:\n${history}`);
+  out(`Recent navigation history:\n${history}`, { sr: false });
   speak(`You have ${navigationHistory.length} positions in history. Showing last 10.`);
   speak(history);
 }
@@ -706,13 +704,13 @@ async function listVariables() {
     const data = await res.json();
     if (data.success) {
       if (data.variables.length === 0) {
-        out(`No variables found in ${data.current_scope}.`);
+        out(`No variables found in ${data.current_scope}.`, { sr: false });
         speak(`No variables found in ${data.current_scope}.`);
       } else {
         const varList = data.variables.map(v =>
           `${v.name} (${v.phonetic}): used ${v.usage_count} times, defined at line ${v.first_line}`
         ).join('\n');
-        out(`Variables in ${data.current_scope}:\n\n${varList}`);
+        out(`Variables in ${data.current_scope}:\n\n${varList}`, { sr: false });
 
         speak(`Found ${data.variables.length} variables in ${data.current_scope}.`);
 
@@ -726,10 +724,10 @@ async function listVariables() {
       }
     } else {
       const msg = data.message || 'Failed to analyze variables.';
-      out(msg); speak(msg);
+      out(msg, { sr: false }); speak(msg);
     }
   } catch (e) {
-    console.error(e); out('Variable tracking failed.'); speak('Variable tracking failed.');
+    console.error(e); out('Variable tracking failed.', { sr: false }); speak('Variable tracking failed.');
   } finally {
     hideAI();
   }
@@ -749,16 +747,16 @@ async function findVariable(varName) {
     const data = await res.json();
     if (data.success) {
       const usageList = data.usages.map(u => `Line ${u.line} (${u.type}): ${u.content}`).join('\n');
-      out(`Variable '${varName}' (${data.phonetic}):\nFound ${data.count} usages:\n\n${usageList}`);
+      out(`Variable '${varName}' (${data.phonetic}):\nFound ${data.count} usages:\n\n${usageList}`, { sr: false });
       speak(`Found ${data.count} usages of ${data.phonetic}.`);
       data.usages.slice(0, 3).forEach(u => speak(`Line ${u.line}: ${u.type}.`));
       if (data.count > 3) data.usages.slice(3).forEach(u => speak(`Line ${u.line}: ${u.type}.`));
       if (data.usages.length > 0) gotoLine(data.usages[0].line, false);
     } else {
-      out(data.message); speak(data.message);
+      out(data.message, { sr: false }); speak(data.message);
     }
   } catch (e) {
-    console.error(e); out('Variable search failed.'); speak('Variable search failed.');
+    console.error(e); out('Variable search failed.', { sr: false }); speak('Variable search failed.');
   } finally {
     hideAI();
   }
@@ -777,14 +775,14 @@ async function checkSyntaxErrors() {
     });
     const data = await res.json();
     if (data.success && !data.has_errors) {
-      out('No errors detected. Code looks good!');
+      out('No errors detected. Code looks good!', { sr: false });
       stopErrorBeacon();
 
       speak('No errors detected.');
       speak('Code looks good.');
     } else if (data.success && data.has_errors) {
       const errorList = data.errors.map(e => `Line ${e.line || 'unknown'}: ${e.type} - ${e.message}`).join('\n');
-      out(`Found ${data.error_count} error(s):\n\n${errorList}`);
+      out(`Found ${data.error_count} error(s):\n\n${errorList}`, { sr: false });
 
       // Canceling here was causing Chrome TTS race conditions
       speak(`Found ${data.error_count} error${data.error_count !== 1 ? 's' : ''}.`);
@@ -797,7 +795,7 @@ async function checkSyntaxErrors() {
     }
   } catch (e) {
     console.error(e);
-    out('Syntax check failed.');
+    out('Syntax check failed.', { sr: false });
 
     speak('Syntax check failed.');
   } finally {
@@ -876,9 +874,8 @@ async function showHelp() {
     msg = BEGINNER_COMMAND_GUIDE_VISIBLE;
   }
   const speech = lang === 'hi' ? msg : BEGINNER_COMMAND_GUIDE_SPEECH;
-  out(msg);
+  out(msg, { sr: false });
   speak(speech);
-  srAnnounce('Beginner command guide shown');
 }
 
 function showFullHelp() {
@@ -973,7 +970,7 @@ function getFileStats() {
   if (!model) return;
   const code  = getCode();
   const stats = `File statistics:\n- ${model.getLineCount()} lines\n- ${code.split(/\s+/).filter(w => w.length > 0).length} words\n- ${code.length} characters`;
-  out(stats);
+  out(stats, { sr: false });
   const lineCount = model.getLineCount();
   const wordCount = code.split(/\s+/).filter(w => w.length > 0).length;
   const charCount = code.length;
@@ -991,7 +988,7 @@ function goToBottom() {
 function copyCode() {
   if (!ensureNotExecuting(() => copyCode(), 'copy code')) return;
   navigator.clipboard.writeText(getCode()).then(() => {
-    speak('Code copied to clipboard.'); out('Code copied to clipboard.');
+    speak('Code copied to clipboard.'); out('Code copied to clipboard.', { sr: false });
   }).catch(() => speak('Failed to copy code.'));
 }
 
@@ -999,16 +996,65 @@ function pasteCode() {
   if (!ensureNotExecuting(() => pasteCode(), 'paste code')) return;
   navigator.clipboard.readText().then(text => {
     if (!setCode(text, { source: 'clipboard' })) return;
-    speak('Code pasted from clipboard.'); out('Code pasted from clipboard.');
+    speak('Code pasted from clipboard.'); out('Code pasted from clipboard.', { sr: false });
   }).catch(() => speak('Failed to paste code.'));
 }
 
-let _browserSpeechEnabled = true;
-let _browserSpeechUserOverride = false;
-let _screenReaderModeEnabled = false;
+// Speech mode is the single, authoritative switch for how CodeUp
+// communicates. applySpeechMode() is the ONLY place that ever writes
+// _speechMode, _screenReaderModeEnabled, or _browserSpeechEnabled -
+// the latter two are always derived from the mode, in lockstep, so there
+// is no reachable state where they disagree (e.g. "Screen Reader Safe"
+// with browser speech accidentally left on). Two modes, not three: an
+// earlier "Manual" mode was removed because it was not behaviorally
+// distinguishable from Screen Reader Safe (both keep automatic speech off
+// and both still let explicit commands like "read output again" speak) -
+// keeping a third option that meant the same thing was just a second
+// control that could drift from the first, exactly what this design
+// avoids. This does not try to sniff out NVDA/JAWS/VoiceOver - that
+// detection is unreliable - it just makes the tradeoff explicit and
+// defaults new visitors to the safe side of it.
+const SPEECH_MODE_KEY = 'codeupSpeechMode';
+const BROWSER_SPEECH_KEY = 'codeupBrowserSpeech'; // legacy key, kept for migration + external readers
+const SPEECH_MODES = ['sr-safe', 'codeup-voice'];
+const SPEECH_MODE_LABELS = {
+  'sr-safe': 'Screen Reader Safe',
+  'codeup-voice': 'CodeUp Voice',
+};
+const SPEECH_MODE_DESCRIPTIONS = {
+  'sr-safe': 'CodeUp stays quiet automatically so your screen reader is the only voice; status updates go through ARIA regions instead. Commands like "read output again" or "explain error" still speak aloud because you asked for them.',
+  'codeup-voice': 'CodeUp narrates code, output, errors, and steps automatically through its own voice, and screen-reader status announcements stay quiet so the two never talk over each other.',
+};
+let _speechMode = 'sr-safe';
+let _screenReaderModeEnabled = true;   // derived from _speechMode - see applySpeechMode()
+let _browserSpeechEnabled = false;     // derived from _speechMode - see applySpeechMode()
 let _assistiveTechnologyProfile = 'default';
-const BROWSER_SPEECH_KEY = 'codeupBrowserSpeech';
-const BROWSER_SPEECH_OVERRIDE_KEY = 'codeupBrowserSpeechUserOverride';
+
+function applySpeechMode(mode, opts = {}) {
+  if (SPEECH_MODES.indexOf(mode) === -1) mode = 'sr-safe';
+  _speechMode = mode;
+  _screenReaderModeEnabled = mode !== 'codeup-voice';
+  _browserSpeechEnabled = mode === 'codeup-voice';
+  try {
+    localStorage.setItem(SPEECH_MODE_KEY, mode);
+    localStorage.setItem('codeupScreenReaderMode', String(_screenReaderModeEnabled));
+    localStorage.setItem(BROWSER_SPEECH_KEY, String(_browserSpeechEnabled));
+  } catch (e) {}
+  updateSpeechModeUI();
+  persistAccessibilitySettings({});
+  if (!opts.silent) srAnnounce(`Speech mode set to ${SPEECH_MODE_LABELS[mode]}. ${SPEECH_MODE_DESCRIPTIONS[mode]}`);
+}
+
+function updateSpeechModeUI() {
+  const select = document.getElementById('speechModeSelect');
+  if (select) select.value = _speechMode;
+  const desc = document.getElementById('speechModeDescription');
+  if (desc) desc.textContent = SPEECH_MODE_DESCRIPTIONS[_speechMode] || '';
+  const rate = document.getElementById('speechRateControl');
+  const voice = document.getElementById('speechVoiceSelect');
+  const test = document.getElementById('testVoiceBtn');
+  [rate, voice, test].forEach(el => { if (el) el.disabled = !_browserSpeechEnabled; });
+}
 
 function speak(text, opts = {}) {
   // Test anchor for the single speech path: VoiceEngine.speak(text, opts).
@@ -1017,7 +1063,12 @@ function speak(text, opts = {}) {
   const spokenText = sanitizeSpeechText(text);
   if (!spokenText) return;
   lastSpokenText = spokenText;
-  if (!_browserSpeechEnabled) {
+  // Explicitly-requested narration (opts.explicit:true) is allowed through
+  // even when automatic browser speech is off, i.e. in Screen Reader Safe
+  // mode - see SPEECH_MODE_* above. It never also announces via ARIA in
+  // this branch, so the event is still spoken exactly once.
+  const explicitBypass = opts.explicit === true && _speechMode !== 'codeup-voice';
+  if (!_browserSpeechEnabled && !explicitBypass) {
     if (opts.sr !== false) srAnnounce(spokenText, opts.priority || 'polite');
     return;
   }
@@ -1034,10 +1085,10 @@ function speakOutput() {
   const raw = (typeof window !== 'undefined' && window.lastRunOutput)
     ? window.lastRunOutput
     : (panel ? panel.textContent : '');
-  speak(formatFullOutputSpeech(raw), { forceFull: true, speechKind: 'program-output-replay' });
+  speak(formatFullOutputSpeech(raw), { forceFull: true, speechKind: 'program-output-replay', explicit: true });
 }
 function repeatLastSpeech() {
-  speak(lastSpokenText || 'There is nothing to repeat yet.', { forceFull: true });
+  speak(lastSpokenText || 'There is nothing to repeat yet.', { forceFull: true, explicit: true });
 }
 
 // Moves real keyboard focus to a classroom/IDE landmark (not just an
@@ -1076,7 +1127,7 @@ function currentAudioBlockCommand(action) {
   const state = window._audioBlocksState || {};
   if (!state.cursor_id) {
     const message = 'There is no current block.';
-    out(message); srAnnounce(message); speak(message);
+    out(message, { sr: false }); speak(message);
     return;
   }
   audioBlocksCommand(`${action} block ${state.cursor_id}`);
@@ -1191,13 +1242,13 @@ async function exportAudioBlocksProject() {
     const data = await response.json();
     if (!response.ok || !data.success) {
       const message = data.message || data.error || 'Audio Blocks export failed.';
-      out(message); srAnnounce(message); speak(message); return;
+      out(message, { sr: false }); speak(message); return;
     }
     const link = document.createElement('a');
     link.href = data.download_url;
     link.download = data.filename || 'codeup_audio_blocks.zip';
     document.body.appendChild(link); link.click(); link.remove();
-    out(data.message); srAnnounce(data.message); speak(data.speech || data.message);
+    out(data.message, { sr: false }); speak(data.speech || data.message);
   } catch (error) {
     console.error('Audio Blocks export failed:', error);
     speak('Audio Blocks export failed.');
@@ -1208,9 +1259,8 @@ function sayMore() {
   if (_sayMoreContinuation) {
     const more = _sayMoreContinuation;
     _sayMoreContinuation = '';
-    out(more);
+    out(more, { sr: false });
     speak(more);
-    srAnnounce('Continuing.');
   } else {
     showFullHelp();
   }
@@ -1282,36 +1332,6 @@ function populateSpeechVoiceSelect() {
   });
   select.value = selected;
 }
-function updateBrowserSpeechUI() {
-  const speechButton = document.getElementById('browserSpeechToggle');
-  const status = document.getElementById('browserSpeechStatus');
-  const rate = document.getElementById('speechRateControl');
-  const voice = document.getElementById('speechVoiceSelect');
-  const test = document.getElementById('testVoiceBtn');
-  if (speechButton) {
-    speechButton.setAttribute('aria-pressed', String(_browserSpeechEnabled));
-    speechButton.textContent = `Browser Speech (${_browserSpeechEnabled ? 'On' : 'Off'})`;
-  }
-  if (status) {
-    if (_browserSpeechEnabled) {
-      status.textContent = _screenReaderModeEnabled
-        ? 'Browser speech is on by manual choice while Screen Reader Mode is also on.'
-        : 'Browser speech is on.';
-    } else if (_screenReaderModeEnabled && !_browserSpeechUserOverride) {
-      status.textContent = 'Screen Reader Mode is on, so Browser Speech is off by default. ARIA status messages remain available for your screen reader.';
-    } else {
-      status.textContent = 'Browser speech is off. Screen-reader announcements still use ARIA status and alert areas.';
-    }
-  }
-  [rate, voice, test].forEach(el => { if (el) el.disabled = !_browserSpeechEnabled; });
-}
-function reconcileBrowserSpeechDefault() {
-  if (!_browserSpeechUserOverride) {
-    _browserSpeechEnabled = !_screenReaderModeEnabled;
-    try { localStorage.setItem(BROWSER_SPEECH_KEY, String(_browserSpeechEnabled)); } catch (e) {}
-  }
-  updateBrowserSpeechUI();
-}
 function initializeSpeechVoiceControls() {
   const rate = document.getElementById('speechRateControl');
   const voice = document.getElementById('speechVoiceSelect');
@@ -1333,7 +1353,7 @@ function initializeSpeechVoiceControls() {
     test.dataset.codeupBound = 'true';
     test.addEventListener('click', function () { speak('This is CodeUp browser speech using your selected voice and speed.', { forceFull: true }); });
   }
-  updateBrowserSpeechUI();
+  updateSpeechModeUI();
 }
 function setVerbosity(mode) {
   const allowed = ['concise', 'normal', 'detailed', 'beginner', 'expert'];
@@ -1354,37 +1374,41 @@ function restoreAccessibilityPreferences() {
   applySpeechRate(getStoredSpeechRate(), true);
   applySpeechVoiceName(getStoredSpeechVoiceName(), true);
   getVerbosity();
-  try { _browserSpeechEnabled = localStorage.getItem(BROWSER_SPEECH_KEY) !== 'false'; } catch (e) {}
-  try { _browserSpeechUserOverride = localStorage.getItem(BROWSER_SPEECH_OVERRIDE_KEY) === 'true'; } catch (e) {}
-  try { _screenReaderModeEnabled = localStorage.getItem('codeupScreenReaderMode') === 'true'; } catch (e) {}
+  let storedMode = null;
+  try { storedMode = localStorage.getItem(SPEECH_MODE_KEY); } catch (e) {}
+  if (SPEECH_MODES.indexOf(storedMode) === -1) {
+    // No speech-mode preference stored yet - either a true first visit, or
+    // a returning visitor from before speech modes existed. Migrate their
+    // old Screen Reader Mode toggle if it was ever set; otherwise default
+    // to the safe side (Screen Reader Safe) so opening CodeUp with
+    // NVDA/JAWS/VoiceOver already running never starts two voices talking
+    // over each other before the learner has chosen anything.
+    let legacyScreenReaderMode = null;
+    try { legacyScreenReaderMode = localStorage.getItem('codeupScreenReaderMode'); } catch (e) {}
+    storedMode = legacyScreenReaderMode === 'false' ? 'codeup-voice' : 'sr-safe';
+  }
+  // applySpeechMode() is the only function anywhere that assigns
+  // _screenReaderModeEnabled/_browserSpeechEnabled - including at startup,
+  // so there is exactly one writer for the whole session, not a second
+  // bootstrap copy of the same derivation that could drift from it.
+  applySpeechMode(storedMode, { silent: true });
   try { _assistiveTechnologyProfile = localStorage.getItem('codeupAssistiveProfile') || 'default'; } catch (e) {}
-  applyAccessibilitySettings({
-    screen_reader_mode: _screenReaderModeEnabled,
-    screen_reader_profile: _assistiveTechnologyProfile,
-  });
+  applyAccessibilitySettings({ screen_reader_profile: _assistiveTechnologyProfile });
   initializeAssistiveTechnologyControls();
   initializeSpeechVoiceControls();
 }
 
+// Persists/reflects only the assistive-technology profile (phrasing/output
+// tailoring for NVDA/JAWS/Narrator/etc) - the speech mode itself is owned
+// exclusively by applySpeechMode() above and is never read or written here,
+// so there is only one function in the whole file that can change it.
 function applyAccessibilitySettings(settings) {
-  if (settings && typeof settings.screen_reader_mode === 'boolean') {
-    _screenReaderModeEnabled = settings.screen_reader_mode;
-  }
   if (settings && settings.screen_reader_profile) {
     _assistiveTechnologyProfile = String(settings.screen_reader_profile);
   }
-  try {
-    localStorage.setItem('codeupScreenReaderMode', String(_screenReaderModeEnabled));
-    localStorage.setItem('codeupAssistiveProfile', _assistiveTechnologyProfile);
-  } catch (e) {}
-  const modeButton = document.getElementById('screenReaderModeToggle');
-  if (modeButton) {
-    modeButton.setAttribute('aria-pressed', String(_screenReaderModeEnabled));
-    modeButton.textContent = `Screen Reader Mode (${_screenReaderModeEnabled ? 'On' : 'Off'})`;
-  }
+  try { localStorage.setItem('codeupAssistiveProfile', _assistiveTechnologyProfile); } catch (e) {}
   const profile = document.getElementById('assistiveTechnologyProfile');
   if (profile) profile.value = _assistiveTechnologyProfile;
-  reconcileBrowserSpeechDefault();
 }
 
 async function persistAccessibilitySettings(patch) {
@@ -1405,9 +1429,13 @@ async function persistAccessibilitySettings(patch) {
 }
 
 function initializeAssistiveTechnologyControls() {
+  const speechModeSelect = document.getElementById('speechModeSelect');
   const profile = document.getElementById('assistiveTechnologyProfile');
-  const modeButton = document.getElementById('screenReaderModeToggle');
-  const speechButton = document.getElementById('browserSpeechToggle');
+  if (speechModeSelect && !speechModeSelect.dataset.codeupBound) {
+    speechModeSelect.dataset.codeupBound = 'true';
+    speechModeSelect.addEventListener('change', function () { applySpeechMode(this.value); });
+  }
+  updateSpeechModeUI();
   if (profile && !profile.dataset.codeupBound) {
     profile.dataset.codeupBound = 'true';
     profile.addEventListener('change', function () {
@@ -1415,30 +1443,6 @@ function initializeAssistiveTechnologyControls() {
       srAnnounce(`Screen reader profile set to ${this.options[this.selectedIndex].text}.`);
     });
   }
-  if (modeButton && !modeButton.dataset.codeupBound) {
-    modeButton.dataset.codeupBound = 'true';
-    modeButton.addEventListener('click', function () {
-      const enabled = !_screenReaderModeEnabled;
-      persistAccessibilitySettings({ screen_reader_mode: enabled });
-      srAnnounce(enabled
-        ? 'Screen reader mode is on. CodeUp will send command results to the screen reader status area.'
-        : 'Screen reader mode is off. Browser speech remains available.');
-    });
-  }
-  if (speechButton && !speechButton.dataset.codeupBound) {
-    speechButton.dataset.codeupBound = 'true';
-    speechButton.addEventListener('click', function () {
-      _browserSpeechEnabled = !_browserSpeechEnabled;
-      _browserSpeechUserOverride = true;
-      try {
-        localStorage.setItem(BROWSER_SPEECH_KEY, String(_browserSpeechEnabled));
-        localStorage.setItem(BROWSER_SPEECH_OVERRIDE_KEY, 'true');
-      } catch (e) {}
-      updateBrowserSpeechUI();
-      srAnnounce(`Browser speech is ${_browserSpeechEnabled ? 'on' : 'off'}.`);
-    });
-  }
-  updateBrowserSpeechUI();
   persistAccessibilitySettings({});
   initializeSpeechVoiceControls();
 }
@@ -1481,14 +1485,13 @@ async function exportProject() {
     const data = await res.json();
     if (!data.success) {
       const msg = data.message || data.error || 'There is nothing to export yet.';
-      out(msg); speak(msg); srAnnounce(msg);
+      out(msg, { sr: false }); speak(msg);
       return;
     }
     out((data.speech || 'Your project is ready to download.') + '\nFile: ' + data.filename +
-        ' (' + (data.file_count || 0) + ' file' + (data.file_count === 1 ? '' : 's') + ').');
+        ' (' + (data.file_count || 0) + ' file' + (data.file_count === 1 ? '' : 's') + ').', { sr: false });
     offerProjectDownload(data.download_url, data.filename);
     speak(data.speech || 'Your project is ready to download.');
-    srAnnounce('Project export ready to download');
   } catch (e) {
     console.error(e);
     speak('Sorry, the export failed.');
@@ -1509,11 +1512,10 @@ async function requestProjectReport() {
     });
     const data = await res.json();
     const reportText = data.report_md || data.speech || 'No report available.';
-    out(reportText);
+    out(reportText, { sr: false });
     // continuation for "say more". The full markdown stays in the output box.
     speak(data.speech || 'Here is your project report.', { epoch });
     setSayMoreContinuation(data.speech_more || '');
-    srAnnounce('Project report ready');
   } catch (e) {
     console.error(e);
     speak('Sorry, I could not build the report.');
@@ -1544,7 +1546,6 @@ function openApiKeyModal() {
     if (input) input.focus();
   });
   speak('AI features need a Groq API key. Get one at console dot groq dot com. Paste it into the field and press Enter, or press Escape to cancel and continue without AI.');
-  srAnnounce('Groq API key required');
 }
 
 function closeApiKeyModal() {
@@ -1572,7 +1573,6 @@ async function submitApiKey() {
       input.value = '';
       closeApiKeyModal();
       speak('API key configured. AI features are now available.');
-      srAnnounce('API key configured');
     } else {
       speak('That key did not work. ' + (data.error || 'Please try again or press Escape to cancel.'));
     }
@@ -1592,7 +1592,6 @@ function maybePromptForApiKey(responseText) {
     if (!window._offlineModeAnnounced) {
       window._offlineModeAnnounced = true;
       speak('Cloud AI is unavailable. Switching to offline AI for this response.');
-      srAnnounce('Offline AI active');
     }
     return false;
   }
@@ -1816,9 +1815,8 @@ function applyProjectData(data, opts = {}) {
   setCode(ProjectState.files[ProjectState.activeFile] || '', { preserveSpeech: true, projectFile: true, allowNonPython: !ProjectState.activeFile.endsWith('.py') });
   renderProjectFiles();
   const speech = data.speech || `${Object.keys(ProjectState.files).length} project files loaded. Active file is ${ProjectState.activeFile}.`;
-  out(speech);
+  out(speech, { sr: false });
   if (!opts.silent) speak(speech);
-  srAnnounce(`Project active file ${ProjectState.activeFile}`);
   return true;
 }
 
@@ -1837,7 +1835,7 @@ async function saveProjectFile(path, content, active = true) {
     const data = await res.json();
     if (!res.ok || !data.success) {
       const msg = data.error || `Could not save ${clean}.`;
-      out(msg); speak(msg);
+      out(msg, { sr: false }); speak(msg);
       return false;
     }
     ProjectState.active = true;
@@ -1857,7 +1855,7 @@ async function saveProjectFile(path, content, active = true) {
 
 async function openProjectFile(path) {
   const resolved = resolveProjectFileAlias(path, ProjectState.files);
-  if (resolved.error) { out(resolved.error); speak(resolved.error); return; }
+  if (resolved.error) { out(resolved.error, { sr: false }); speak(resolved.error); return; }
   const clean = resolved.path;
   if (!clean) { speak('Please give a valid file name.'); return; }
   syncActiveProjectFileLocal();
@@ -1867,7 +1865,7 @@ async function openProjectFile(path) {
     setCode(ProjectState.files[clean], { preserveSpeech: true, projectFile: true, allowNonPython: !clean.endsWith('.py') });
     renderProjectFiles();
     const msg = `Opened ${clean}.`;
-    out(msg); speak(msg); srAnnounce(msg);
+    out(msg, { sr: false }); speak(msg);
     return;
   }
   try {
@@ -1879,7 +1877,7 @@ async function openProjectFile(path) {
     const data = await res.json();
     if (!res.ok || !data.success) {
       const msg = data.error || `${clean} was not found.`;
-      out(msg); speak(msg);
+      out(msg, { sr: false }); speak(msg);
       return;
     }
     ProjectState.active = true;
@@ -1888,7 +1886,7 @@ async function openProjectFile(path) {
     ProjectState.manifest = data.manifest || ProjectState.manifest;
     setCode(ProjectState.files[clean], { preserveSpeech: true, projectFile: true, allowNonPython: !clean.endsWith('.py') });
     renderProjectFiles();
-    out(data.speech || `Opened ${clean}.`);
+    out(data.speech || `Opened ${clean}.`, { sr: false });
     speak(data.speech || `Opened ${clean}.`);
   } catch (e) {
     console.error(e);
@@ -1909,7 +1907,7 @@ async function createProjectFile(path) {
   if (!ok) return;
   setCode(starter, { preserveSpeech: true, projectFile: true, allowNonPython: !clean.endsWith('.py') });
   const msg = `Created ${clean}.`;
-  out(msg); speak(msg); srAnnounce(msg);
+  out(msg, { sr: false }); speak(msg);
 }
 
 async function renameProjectFile(oldPath, newPath) {
@@ -1926,7 +1924,7 @@ async function renameProjectFile(oldPath, newPath) {
     const data = await res.json();
     if (!res.ok || !data.success) {
       const msg = data.error || `Could not rename ${oldClean}.`;
-      out(msg); speak(msg);
+      out(msg, { sr: false }); speak(msg);
       return;
     }
     ProjectState.files[newClean] = ProjectState.files[oldClean] || getCode();
@@ -1935,7 +1933,7 @@ async function renameProjectFile(oldPath, newPath) {
     ProjectState.manifest = data.manifest || ProjectState.manifest;
     setCode(ProjectState.files[newClean], { preserveSpeech: true, projectFile: true, allowNonPython: !newClean.endsWith('.py') });
     renderProjectFiles();
-    out(data.speech || `Renamed ${oldClean} to ${newClean}.`);
+    out(data.speech || `Renamed ${oldClean} to ${newClean}.`, { sr: false });
     speak(data.speech || `Renamed ${oldClean} to ${newClean}.`);
   } catch (e) {
     console.error(e);
@@ -1955,7 +1953,7 @@ async function deleteProjectFile(path) {
     const data = await res.json();
     if (!res.ok || !data.success) {
       const msg = data.error || `Could not delete ${clean}.`;
-      out(msg); speak(msg);
+      out(msg, { sr: false }); speak(msg);
       return;
     }
     delete ProjectState.files[clean];
@@ -1966,7 +1964,7 @@ async function deleteProjectFile(path) {
       setCode(ProjectState.files[next], { preserveSpeech: true, projectFile: true, allowNonPython: !next.endsWith('.py') });
     }
     renderProjectFiles();
-    out(data.speech || `Deleted ${clean}.`);
+    out(data.speech || `Deleted ${clean}.`, { sr: false });
     speak(data.speech || `Deleted ${clean}.`);
   } catch (e) {
     console.error(e);
@@ -1979,12 +1977,12 @@ function readProjectFiles() {
   const names = Object.keys(ProjectState.files || {}).sort();
   if (!ProjectState.active || names.length === 0) {
     const msg = 'Single-file mode is active. There is only the current editor file.';
-    out(msg); speak(msg);
+    out(msg, { sr: false }); speak(msg);
     return;
   }
   const reqs = ProjectState.requirements && ProjectState.requirements.length ? ` Requirements: ${ProjectState.requirements.join(', ')}.` : '';
   const msg = `Project files: ${names.join(', ')}. Active file is ${ProjectState.activeFile}.${reqs}`;
-  out(msg); speak(msg); srAnnounce('Project files read');
+  out(msg, { sr: false }); speak(msg);
 }
 
 function explainProjectStructure() {
@@ -1992,7 +1990,7 @@ function explainProjectStructure() {
   const names = Object.keys(ProjectState.files || {}).sort();
   if (!ProjectState.active || names.length === 0) {
     const msg = 'Single-file mode is active. There is only the current editor file.';
-    out(msg); speak(msg);
+    out(msg, { sr: false }); speak(msg);
     return;
   }
   const roles = names.map(name => {
@@ -2009,7 +2007,7 @@ function explainProjectStructure() {
     ? ` Requirements: ${ProjectState.requirements.join(', ')}.`
     : '';
   const msg = `Project structure: ${roles.join(' ')}${reqs}`;
-  out(msg); speak(msg); srAnnounce('Project structure explained');
+  out(msg, { sr: false }); speak(msg);
 }
 
 async function explainProjectRequirements() {
@@ -2018,14 +2016,14 @@ async function explainProjectRequirements() {
     const msg = reqs.length
       ? `This project needs: ${reqs.join(', ')}. They are listed in requirements.txt.`
       : 'This project does not need third-party packages.';
-    out(msg); speak(msg);
+    out(msg, { sr: false }); speak(msg);
     return;
   }
   try {
     const res = await fetch('/project/requirements');
     const data = await res.json();
     const msg = data.speech || 'No requirements information available.';
-    out(msg); speak(msg);
+    out(msg, { sr: false }); speak(msg);
   } catch (e) {
     speak('Could not read project requirements.');
   }
@@ -2033,7 +2031,7 @@ async function explainProjectRequirements() {
 
 async function runProjectFile(path) {
   const resolved = resolveProjectFileAlias(path || ProjectState.activeFile || 'main.py', ProjectState.files);
-  if (resolved.error) { out(resolved.error); speak(resolved.error); return; }
+  if (resolved.error) { out(resolved.error, { sr: false }); speak(resolved.error); return; }
   const clean = resolved.path;
   if (!clean) { speak('Please give a valid file name to run.'); return; }
   if (ProjectState.files[clean] != null && ProjectState.activeFile !== clean) {
@@ -2073,9 +2071,8 @@ function looksLikeNonPythonCode(value) {
 function rejectNonPythonCode(source) {
   const suffix = source ? ` Rejected ${source}.` : '';
   const msg = `${PYTHON_ONLY_MESSAGE}${suffix}`;
-  out(msg);
+  out(msg, { sr: false });
   speak(msg);
-  srAnnounce('Python-only code required');
 }
 
 function ensurePythonEditorContent(action) {
@@ -2088,9 +2085,8 @@ function ensurePythonEditorContent(action) {
 
 function resetPythonStarter() {
   setCode(DEFAULT_PYTHON_STARTER, { preserveSpeech: true });
-  out('Python starter loaded.');
+  out('Python starter loaded.', { sr: false });
   speak('Python starter loaded.');
-  srAnnounce('Python starter loaded');
 }
 
 function setCode(v, opts) {
@@ -2181,7 +2177,7 @@ function applyCommandUnderstanding(data, heardText) {
 
 function tellUser(text, opts) {
   if (!text) return;
-  out(text);
+  out(text, { sr: false });
   speak(text, opts || {});
 }
 
@@ -2258,10 +2254,9 @@ async function runCode(runFile, codeOverride) {
   const _runMsgAI = runFileLabel
     ? `Running ${runFileLabel}...`
     : (getLanguage() === 'hi' ? 'Code run ho raha hai...' : 'Running code...');
-  if (!usesInput) out(_runMsgOut);
+  if (!usesInput) out(_runMsgOut, { sr: false });
   showAI(_runMsgAI);
   speak(_runMsgSpoken);
-  srAnnounce(_runMsgSpoken);
   try {
     const payload = {
       code: codeToCheck,
@@ -2357,7 +2352,11 @@ async function runCode(runFile, codeOverride) {
       const lineHint = lineMatch ? ` on line ${lineMatch[1]}` : '';
       setEditorErrorMarkerFromText(data.error || '', lastLine);
       speak(`Error${lineHint}: ${lastLine}`, { sr: false, priority: 'assertive' });
-      srAlert(`Error${lineHint}: ${lastLine}`);
+      // speak() above is deliberately sr:false so this is the one and only
+      // assertive announcement in Screen Reader Safe mode; in CodeUp Voice
+      // mode speak() already said it audibly, so calling srAlert() too would
+      // duplicate the same error into an ARIA live region at the same time.
+      if (_speechMode !== 'codeup-voice') srAlert(`Error${lineHint}: ${lastLine}`);
       if (data.explanation) {
         speak(data.explanation);
       }
@@ -2374,7 +2373,7 @@ async function runCode(runFile, codeOverride) {
     }
   } catch (e) {
     if (e && e.name === 'AbortError') return;
-    out('System error.', { assertive: true }); console.error(e); cueError(); speak('System error.');
+    out('System error.', { sr: false, assertive: true }); console.error(e); cueError(); speak('System error.');
   } finally {
     _runGuard.finish();
     stopHeartbeat();
@@ -2390,10 +2389,9 @@ async function runCodeStreaming() {
   AppState.isExecuting = true;
   cueSuccess();
   startHeartbeat();
-  out('Running in live input mode...\n');
+  out('Running in live input mode...\n', { sr: false });
   showAI('Live run started.');
   speak('Live input mode. I will read prompts as your code asks for them. Say or type your answer.');
-  srAnnounce('Live run started');
 
   try {
     const startRes = await fetch('/run-stream/start', {
@@ -2407,7 +2405,7 @@ async function runCodeStreaming() {
       AppState.isExecuting = false;
       hideAI();
       const msg = startData.error || 'Could not start live run.';
-      out(msg);
+      out(msg, { sr: false });
       speak(msg);
       if (msg.toLowerCase().includes('windows') || msg.toLowerCase().includes('posix')) {
         speak('Switching back to pre-flight input mode.');
@@ -2449,12 +2447,10 @@ async function runCodeStreaming() {
         const message = `Your code is asking: ${prompt}. Input 1. Expected text. Type your answer in Program inputs and press Enter, or say your answer.`;
         showProgramInputControl({ prompt, inputIndex: 1, inputCount: 1, expectedType: 'text', streaming: true, message });
         speak(message, { sr: false });
-        srAnnounce(message);
         SonificationManager.playTone(800, 0.15, 0.1);
       } else if (event.type === 'done') {
         hideProgramInputControl('No program input is being requested.');
         speak('Run complete.');
-        srAnnounce('Run complete');
         es.close();
         stopHeartbeat();
         AppState.isExecuting = false;
@@ -2515,7 +2511,7 @@ async function sendStreamingInput(value) {
 async function analyzeCode() {
   if (!ensurePythonEditorContent('analyze')) return;
   const codeSnapshot = getCode();
-  cueSuccess(); out('Analyzing...'); showAI('Analyzing code with AI...'); speak('Analyzing code.');
+  cueSuccess(); out('Analyzing...', { sr: false }); showAI('Analyzing code with AI...'); speak('Analyzing code.');
   try {
     const result = await guardedJson('analysis', '/analyze', {
       method:  'POST',
@@ -2537,7 +2533,7 @@ async function analyzeCode() {
       speak('No analysis available.');
     }
   } catch (e) {
-    out('Analyze failed.'); console.error(e); cueError(); speak('Analyze failed.');
+    out('Analyze failed.', { sr: false }); console.error(e); cueError(); speak('Analyze failed.');
   } finally {
     hideAI();
   }
@@ -2568,7 +2564,7 @@ async function analyzeDeep() {
     }, narrationContext(codeForDeep), () => ({ code: codeForDeep, file: ProjectState.activeFile || '' }));
     if (staleResult(result)) return;
     const data = result.value;
-    out(data.analysis || 'No deeper analysis.');
+    out(data.analysis || 'No deeper analysis.', { sr: false });
     if (data.analysis) speak(data.analysis);
   } catch (e) {
     console.error(e); speak('Deeper analysis failed.');
@@ -2609,7 +2605,7 @@ async function listDemos() {
   presets.forEach((p, i) => {
     display += `${i + 1}. ${p.title} — ${p.description}\n   Say: "demo ${p.id}"\n\n`;
   });
-  out(display);
+  out(display, { sr: false });
   speak(`There are ${presets.length} demos available.`);
   presets.forEach(p => speak(`${p.title}. ${p.description}. Say "demo ${p.id}" to load it.`));
   speak('Or just say "demo" followed by the name.');
@@ -2655,10 +2651,9 @@ async function loadDemoById(id) {
     const data = await res.json();
     if (data.success) {
       setCode(data.code, { preserveSpeech: true });
-      out(`DEMO LOADED: ${data.title}\n\n${data.description}\n\nPress Ctrl+Enter or say "run" to execute.`);
+      out(`DEMO LOADED: ${data.title}\n\n${data.description}\n\nPress Ctrl+Enter or say "run" to execute.`, { sr: false });
       speak(`Demo loaded: ${data.title}. ${data.description}.`);
       speak('The code is in the editor. Press Control Enter, or say "run", to execute it. Say "narrate" to hear it line by line first.');
-      srAnnounce(`Demo ${data.title} loaded`);
     } else {
       speak(`Could not load demo: ${data.error || 'unknown error'}`);
     }
@@ -2674,13 +2669,12 @@ function readMyCodeAloud() {
   SpeechManager.cancelAll();
   const trimmed = String(getCode() || '').replace(/\s+$/, '');
   if (!trimmed.trim()) {
-    out('The editor is empty.');
+    out('The editor is empty.', { sr: false });
     speak('The editor is empty. There is nothing to read yet.');
-    srAnnounce('Editor empty');
     return;
   }
   const lines = trimmed.split('\n');
-  out(trimmed);
+  out(trimmed, { sr: false });
   speak(`Your program has ${lines.length} line${lines.length === 1 ? '' : 's'}.`);
   for (let i = 0; i < lines.length; i++) {
     const lead = (lines[i].match(/^[ \t]*/) || [''])[0].replace(/\t/g, '    ');
@@ -2701,7 +2695,7 @@ async function narrateFile() {
   }
   if (!ensurePythonEditorContent('narrate file')) return;
   cueSuccess();
-  out('Narrating file...');
+  out('Narrating file...', { sr: false });
   showAI('Narrating the entire file...');
   speak('Narrating the file from start to finish. Press Escape at any time to stop.');
   try {
@@ -2715,7 +2709,7 @@ async function narrateFile() {
       const prefix = data.truncated
         ? `File has ${data.line_count} lines. Narrating the first 50.\n\n`
         : `File has ${data.line_count} lines.\n\n`;
-      out(prefix + data.narration);
+      out(prefix + data.narration, { sr: false });
       if (data.truncated) {
         speak(`Your file has ${data.line_count} lines. I will narrate the first 50.`);
       }
@@ -2728,12 +2722,12 @@ async function narrateFile() {
       srAnnounce('File narration ready');
     } else {
       const msg = data.error || 'Could not narrate file.';
-      out(msg);
+      out(msg, { sr: false });
       speak(msg);
     }
   } catch (e) {
     console.error(e);
-    out('Narration failed.');
+    out('Narration failed.', { sr: false });
     speak('Narration failed. Please try again.');
   } finally {
     hideAI();
@@ -2742,7 +2736,7 @@ async function narrateFile() {
 
 async function summarizeFile() {
   if (!ensurePythonEditorContent('summarize')) return;
-  cueSuccess(); out('Summarizing file...'); showAI('Summarizing this file...'); speak('Summarizing this file.');
+  cueSuccess(); out('Summarizing file...', { sr: false }); showAI('Summarizing this file...'); speak('Summarizing this file.');
   try {
     const res  = await fetch('/summarize', {
       method:  'POST',
@@ -2751,9 +2745,9 @@ async function summarizeFile() {
     });
     const data = await res.json();
     const summary = data.summary || 'No summary generated.';
-    out(summary); speak(summary);
+    out(summary, { sr: false }); speak(summary);
   } catch (e) {
-    console.error(e); out('Summary failed.'); speak('Summary failed.');
+    console.error(e); out('Summary failed.', { sr: false }); speak('Summary failed.');
   } finally {
     speak('Task completed.'); hideAI();
   }
@@ -2761,7 +2755,7 @@ async function summarizeFile() {
 
 async function adviseCode() {
   if (!ensurePythonEditorContent('advise')) return;
-  cueSuccess(); out('Advising on your code...'); showAI('Generating improvement suggestions...'); speak('Advising on your code.');
+  cueSuccess(); out('Advising on your code...', { sr: false }); showAI('Generating improvement suggestions...'); speak('Advising on your code.');
   try {
     const res  = await fetch('/advise', {
       method:  'POST',
@@ -2770,9 +2764,9 @@ async function adviseCode() {
     });
     const data = await res.json();
     const advice = data.advice || 'No advice generated.';
-    out(advice); speak('Here are some ways you can improve this code.'); speak(advice);
+    out(advice, { sr: false }); speak('Here are some ways you can improve this code.'); speak(advice);
   } catch (e) {
-    out('Advice failed.'); console.error(e); cueError(); speak('Advice failed.');
+    out('Advice failed.', { sr: false }); console.error(e); cueError(); speak('Advice failed.');
   } finally {
     speak('Task completed.'); hideAI();
   }
@@ -2781,7 +2775,7 @@ async function adviseCode() {
 async function fixCode() {
   const before = getCode();
   if (!ensurePythonEditorContent('fix')) return;
-  cueSuccess(); out('Fixing...'); showAI('Fixing code with AI...'); speak('Fixing code.');
+  cueSuccess(); out('Fixing...', { sr: false }); showAI('Fixing code with AI...'); speak('Fixing code.');
   try {
     const res  = await fetch('/fix', {
       method:  'POST',
@@ -2808,20 +2802,20 @@ async function fixCode() {
       } else {
         setCode(data.code);
         const fixedSpeech = data.speech || data.explanation || 'Code has been fixed.';
-        out(fixedSpeech); speak(fixedSpeech);
+        out(fixedSpeech, { sr: false }); speak(fixedSpeech);
         const diffRes  = await fetch('/diff-explain', {
           method:  'POST',
           headers: { 'Content-Type': 'application/json' },
           body:    JSON.stringify({ before, after: data.code, language: getLanguage() }),
         });
         const diffData = await diffRes.json();
-        if (diffData.explanation) { out(diffData.explanation); speak(diffData.explanation); }
+        if (diffData.explanation) { out(diffData.explanation, { sr: false }); speak(diffData.explanation); }
       }
     } else {
-      out('Fix failed.'); speak('Fix failed.');
+      out('Fix failed.', { sr: false }); speak('Fix failed.');
     }
   } catch (e) {
-    console.error(e); out('Fix failed.'); speak('Fix failed.');
+    console.error(e); out('Fix failed.', { sr: false }); speak('Fix failed.');
   } finally {
     hideAI();
   }
@@ -2837,10 +2831,10 @@ async function describeLine(line) {
       body:    JSON.stringify({ code: getCode(), line, language: getLanguage() }),
     });
     const data = await res.json();
-    if (data.success) { out(data.description); speak(data.description); }
-    else { const msg = data.message || 'Describe failed.'; out(msg); speak(msg); }
+    if (data.success) { out(data.description, { sr: false }); speak(data.description); }
+    else { const msg = data.message || 'Describe failed.'; out(msg, { sr: false }); speak(msg); }
   } catch (e) {
-    out('Describe failed.'); console.error(e); cueError(); speak('Describe failed.');
+    out('Describe failed.', { sr: false }); console.error(e); cueError(); speak('Describe failed.');
   } finally {
     hideAI();
   }
@@ -2856,9 +2850,8 @@ async function generateCode(prompt, context = {}) {
   SpeechManager.cancelAll();
 
   cueSuccess();
-  out('Generating code for: ' + prompt);
+  out('Generating code for: ' + prompt, { sr: false });
   showAI('Generating code for: ' + prompt);
-  srAnnounce('Generating code');
   speak('Generating code for ' + prompt + '. One moment please.');
 
   try {
@@ -2882,36 +2875,30 @@ async function generateCode(prompt, context = {}) {
       const usesInput = /\binput\s*\(/.test(data.code);
       if (data.exact_symbol) {
         const message = data.message || 'Exact-symbol code generated and inserted into editor. Press Control Enter to run.';
-        out(message + '\n\nCode inserted. Press Control Enter to run.');
-        srAnnounce('Exact symbol code generated');
+        out(message + '\n\nCode inserted. Press Control Enter to run.', { sr: false });
         speak(data.speech || message);
       } else if (usesInput) {
         const inputCount = (data.code.match(/\binput\s*\(/g) || []).length;
-        out(`Code generated with ${inputCount} input() call${inputCount === 1 ? '' : 's'}.\n\nBefore running, declare your inputs by saying:\n  "set inputs to value1 and value2"`);
-        srAnnounce('Code generated');
+        out(`Code generated with ${inputCount} input() call${inputCount === 1 ? '' : 's'}.\n\nBefore running, declare your inputs by saying:\n  "set inputs to value1 and value2"`, { sr: false });
         speak(`Code is ready. Heads up: it uses input ${inputCount} time${inputCount === 1 ? '' : 's'}. Before pressing run, say "set inputs to" followed by your values.`);
       } else {
-        out('Code generated and inserted into editor. Press Control Enter to run, or say "analyze" to hear an explanation.');
-        srAnnounce('Code generated');
+        out('Code generated and inserted into editor. Press Control Enter to run, or say "analyze" to hear an explanation.', { sr: false });
         speak('Code is ready in the editor. Press Control Enter to run it, or say "walk through code" to hear it explained.');
       }
     } else if (data.clarification) {
       const reason = data.message || data.error || 'Please type a more precise command.';
-      out(reason);
-      srAnnounce('Clarification needed');
+      out(reason, { sr: false });
       speak(data.speech || reason);
     } else {
       const reason = data.error || 'the AI returned an empty response. Please try rephrasing your request.';
-      out('Code generation failed: ' + reason);
+      out('Code generation failed: ' + reason, { sr: false });
       cueError();
-      srAnnounce('Code generation failed');
       speak('Code generation did not work. ' + reason);
     }
   } catch (e) {
     console.error(e);
-    out('Code generation failed.');
+    out('Code generation failed.', { sr: false });
     cueError();
-    srAnnounce('Code generation failed');
     speak('Code generation failed.');
   } finally {
     hideAI();
@@ -2923,14 +2910,14 @@ function gotoLine(line, record = true) {
   const model = getModel();
   if (!model) { speak('Editor not ready.'); return; }
   const maxLine = model.getLineCount();
-  if (line < 1 || line > maxLine) { const msg = `Line ${line} is out of range. File has ${maxLine} lines.`; out(msg); speak(msg); return; }
+  if (line < 1 || line > maxLine) { const msg = `Line ${line} is out of range. File has ${maxLine} lines.`; out(msg, { sr: false }); speak(msg); return; }
   if (record) recordNavigation(line);
   try {
     editor.setPosition({ lineNumber: line, column: 1 });
   } catch (e) { console.warn('gotoLine: setPosition failed', e); return; }
   editor.revealLineInCenter(line);
   const text = model.getLineContent(line);
-  out(`Line ${line}: ${text}`);
+  out(`Line ${line}: ${text}`, { sr: false });
   SpeechManager.cancelAll();
   speak(`Moved to line ${line}. ${text || 'Empty line.'}`);
 }
@@ -2940,10 +2927,10 @@ function readLine(line) {
   const model = getModel();
   if (!model) { speak('Editor not ready.'); return; }
   const maxLine = model.getLineCount();
-  if (line < 1 || line > maxLine) { const msg = `Line ${line} is out of range. File has ${maxLine} lines.`; out(msg); speak(msg); return; }
+  if (line < 1 || line > maxLine) { const msg = `Line ${line} is out of range. File has ${maxLine} lines.`; out(msg, { sr: false }); speak(msg); return; }
   SpeechManager.cancelAll();
   const text = model.getLineContent(line);
-  out(`Line ${line}: ${text}`);
+  out(`Line ${line}: ${text}`, { sr: false });
   speak(`Line ${line}: ${text || 'Empty line.'}`);
 }
 
@@ -2954,7 +2941,7 @@ function readCurrentLine() {
   const pos  = editor.getPosition() || { lineNumber: 1 };
   SpeechManager.cancelAll();
   const text = model.getLineContent(pos.lineNumber);
-  out(`Line ${pos.lineNumber}: ${text}`);
+  out(`Line ${pos.lineNumber}: ${text}`, { sr: false });
   speak(`Current line ${pos.lineNumber}: ${text || 'Empty line.'}`);
 }
 
@@ -2968,7 +2955,7 @@ function nextLine() {
   editor.setPosition({ lineNumber: line, column: 1 });
   editor.revealLineInCenter(line);
   const text = model.getLineContent(line);
-  out(`Line ${line}: ${text}`);
+  out(`Line ${line}: ${text}`, { sr: false });
   speak(`Line ${line}: ${text || 'Empty line.'}`);
 }
 
@@ -2982,7 +2969,7 @@ function prevLine() {
   editor.setPosition({ lineNumber: line, column: 1 });
   editor.revealLineInCenter(line);
   const text = model.getLineContent(line);
-  out(`Line ${line}: ${text}`);
+  out(`Line ${line}: ${text}`, { sr: false });
   speak(`Line ${line}: ${text || 'Empty line.'}`);
 }
 
@@ -2999,16 +2986,15 @@ function clearEditor() {
   try { localStorage.removeItem(AUTOSAVE_KEY); } catch (e) {}
   _autosaveLastCode = '';
   setCode('');
-  out('Editor cleared.');
+  out('Editor cleared.', { sr: false });
   speak('Editor cleared.');
-  srAnnounce('Editor cleared.');
 }
 
 function deleteLine(line) {
   const model = getModel();
   if (!model) return;
   const maxLine = model.getLineCount();
-  if (line < 1 || line > maxLine) { const msg = `Line ${line} is out of range.`; out(msg); speak(msg); return; }
+  if (line < 1 || line > maxLine) { const msg = `Line ${line} is out of range.`; out(msg, { sr: false }); speak(msg); return; }
   const text = model.getLineContent(line);
 
   let range;
@@ -3020,7 +3006,7 @@ function deleteLine(line) {
   }
 
   model.pushEditOperations([], [{ range, text: '' }], () => null);
-  out(`Deleted line ${line}: ${text}`);
+  out(`Deleted line ${line}: ${text}`, { sr: false });
   speak(`Deleted line ${line}.`);
 }
 
@@ -3033,18 +3019,16 @@ function applyConversationalEdit(aiAction) {
 
   if (edit.requires_confirmation) {
     const msg = confirmation || 'That change needs confirmation before I replace the program.';
-    out(msg);
+    out(msg, { sr: false });
     speak(msg);
-    srAnnounce('Edit needs confirmation');
     return;
   }
 
   if (kind === 'undo') {
     if (!editor) { speak('Editor not ready.'); return; }
     editor.trigger('voice', 'undo', null);
-    out(confirmation);
+    out(confirmation, { sr: false });
     speak(confirmation);
-    srAnnounce('Edit undone');
     return;
   }
 
@@ -3125,7 +3109,7 @@ function applyConversationalEdit(aiAction) {
     else if (next.startsWith('\t')) next = next.slice(1);
     else {
       const msg = 'That line is not indented.';
-      out(msg);
+      out(msg, { sr: false });
       speak(msg);
       return false;
     }
@@ -3162,9 +3146,8 @@ function applyConversationalEdit(aiAction) {
 
   if (!applied) return;
   suggestPreflightInputsFromCode(getCode());
-  out(confirmation);
+  out(confirmation, { sr: false });
   speak(confirmation);
-  srAnnounce('Conversational edit applied');
 }
 
 const _liveRegionTimers = {};
@@ -3293,7 +3276,7 @@ async function saveSnippetWithName(name) {
     const msg = getLanguage() === 'hi'
       ? 'Editor empty hai. Snippet save karne ke liye pehle code likho.'
       : 'The editor is empty. Nothing to save as a snippet.';
-    out(msg); speak(msg);
+    out(msg, { sr: false }); speak(msg);
     return false;
   }
   try {
@@ -3304,7 +3287,7 @@ async function saveSnippetWithName(name) {
       const msg = getLanguage() === 'hi'
         ? `${cleanName} naam ka snippet already saved hai. Save karne ke liye alag naam choose karo.`
         : `A snippet named ${cleanName} already exists. Choose a different name before saving.`;
-      out(msg); speak(msg);
+      out(msg, { sr: false }); speak(msg);
       return false;
     }
     const res = await fetch('/snippets', {
@@ -3315,19 +3298,19 @@ async function saveSnippetWithName(name) {
     const data = await res.json();
     if (!res.ok || !data.success) {
       const msg = data.error || 'Snippet was not saved.';
-      out(msg); speak(msg);
+      out(msg, { sr: false }); speak(msg);
       return false;
     }
     await loadSnippets();
     const msg = getLanguage() === 'hi'
       ? `${cleanName} naam ka snippet save ho gaya.`
       : `Saved this code as the snippet ${cleanName}.`;
-    out(msg);
+    out(msg, { sr: false });
     speak(msg);
     return true;
   } catch (e) {
     console.error('Snippet save failed:', e);
-    out('Snippet save failed.');
+    out('Snippet save failed.', { sr: false });
     speak('Snippet save failed.');
     return false;
   }
@@ -3384,7 +3367,7 @@ async function loadSnippetById(id, confirmed) {
     const msg = getLanguage() === 'hi'
       ? `${id} naam ka snippet nahi mila.`
       : `Snippet ${id} not found.`;
-    speak(msg); out(msg); return;
+    speak(msg); out(msg, { sr: false }); return;
   }
   const current = getCode().trim();
   if (!confirmed && current && current !== String(sn.code || '').trim()) {
@@ -3396,23 +3379,22 @@ async function loadSnippetById(id, confirmed) {
     const msg = getLanguage() === 'hi'
       ? `${sn.name || id} snippet load karne se current editor replace hoga. Continue ke liye yes bolo, ya code rakhne ke liye cancel bolo.`
       : `Loading snippet ${sn.name || id} will replace the current editor. Say yes to continue or cancel to keep your code.`;
-    out(msg);
+    out(msg, { sr: false });
     speak(msg);
-    srAnnounce('Snippet load needs confirmation');
     return;
   }
   if (!setCode(sn.code, { source: `snippet ${sn.name || id}` })) return;
   const msg = getLanguage() === 'hi'
     ? `${sn.name || id} snippet editor mein load ho gaya.`
     : `Loaded the snippet ${sn.name || id} into the editor.`;
-  speak(msg); out(msg);
+  speak(msg); out(msg, { sr: false });
 }
 
 async function listSnippetsAccessible() {
   await loadSnippets();
   if (!snippetsCache.length) {
     const msg = getLanguage() === 'hi' ? 'Aapke paas saved snippets nahi hain.' : 'You have no saved snippets.';
-    out(msg); speak(msg);
+    out(msg, { sr: false }); speak(msg);
     return;
   }
   const names = snippetsCache.map(sn => sn.name || 'Untitled');
@@ -3421,9 +3403,8 @@ async function listSnippetsAccessible() {
     : (names.length === 1
       ? `Your snippet is: ${names[0]}.`
       : `Your snippets are: ${names.join(', ')}.`);
-  out(msg);
+  out(msg, { sr: false });
   speak(msg);
-  srAnnounce('Snippet list updated');
 }
 
 async function deleteSnippetById(id) {
@@ -3433,11 +3414,11 @@ async function deleteSnippetById(id) {
     const data = await res.json();
     if (!res.ok || !data.success) {
       const msg = data.error || `Could not delete snippet ${id}.`;
-      out(msg); speak(msg);
+      out(msg, { sr: false }); speak(msg);
       return;
     }
     await loadSnippets();
-    speak(data.speech || `Deleted snippet ${id}.`); out(data.speech || `Deleted snippet ${id}.`);
+    speak(data.speech || `Deleted snippet ${id}.`); out(data.speech || `Deleted snippet ${id}.`, { sr: false });
   } catch (e) {
     console.error('Snippet delete failed:', e);
     speak('Snippet delete failed.');
@@ -3456,11 +3437,11 @@ async function renameSnippetById(id, newName) {
     const data = await res.json();
     if (!res.ok || !data.success) {
       const msg = data.error || `Could not rename snippet ${id}.`;
-      out(msg); speak(msg);
+      out(msg, { sr: false }); speak(msg);
       return;
     }
     await loadSnippets();
-    speak(data.speech || `Renamed snippet ${id} to ${newName}.`); out(data.speech || `Renamed snippet ${id} to ${newName}.`);
+    speak(data.speech || `Renamed snippet ${id} to ${newName}.`); out(data.speech || `Renamed snippet ${id} to ${newName}.`, { sr: false });
   } catch (e) {
     console.error('Snippet rename failed:', e);
     speak('Snippet rename failed.');
@@ -3476,23 +3457,22 @@ async function previewSnippetById(id) {
     return;
   }
   const lines = (sn.code || '').split('\n').slice(0, 5);
-  out(`PREVIEW: ${sn.name}\n\n${lines.join('\n')}${(sn.code || '').split('\n').length > 5 ? '\n...' : ''}`);
+  out(`PREVIEW: ${sn.name}\n\n${lines.join('\n')}${(sn.code || '').split('\n').length > 5 ? '\n...' : ''}`, { sr: false });
   speak(`Preview of ${sn.name}. First ${lines.length} line${lines.length === 1 ? '' : 's'}:`);
   lines.forEach((l, i) => speak(`Line ${i + 1}: ${l || 'empty line'}`));
   speak('Say load snippet ' + sn.name + ' to open it in the editor.');
-  srAnnounce('Snippet previewed');
 }
 
 async function executeActionSequence(payload) {
   const actions = Array.isArray(payload && payload.actions) ? payload.actions : [];
   if (!actions.length) {
     const message = (payload && payload.spoken_summary) || 'No safe actions were planned.';
-    out(message);
+    out(message, { sr: false });
     speak(message);
     return;
   }
   const summary = (payload && payload.spoken_summary) || `I will do ${actions.length} actions.`;
-  out(summary);
+  out(summary, { sr: false });
   speak(summary);
   for (const planned of actions) {
     if (!planned || !planned.action) continue;
@@ -3522,7 +3502,7 @@ async function handleConfirmedAction(action, payload) {
     await runCode('', (payload && payload.code) || '');
   }
   else if (action === 'action_sequence') await executeActionSequence(payload || {});
-  else if (action === 'mentor_stop') { SpeechManager.cancelAll(); speak('Mentor stopped.'); srAnnounce('Mentor stopped'); }
+  else if (action === 'mentor_stop') { SpeechManager.cancelAll(); speak('Mentor stopped.'); }
   else if (action === 'stop_speaking') { SpeechManager.cancelAll(); srAnnounce('Speech stopped'); }
   else if (action === 'mentor_chat') {
     const _mentorMode = payload && payload.mode ? payload.mode : 'general';
@@ -3554,12 +3534,12 @@ async function handleConfirmedAction(action, payload) {
   else if (action === 'describe_line') await describeLine(payload && payload.line ? payload.line : 1);
   else if (action === 'next_step' || action === 'previous_step' || action === 'what_changed') {
     const text = (payload && (payload.speech || payload.message)) || 'No trace event available.';
-    out(text); speak(text);
+    out(text, { sr: false }); speak(text);
   }
   else if (action === 'accessibility_setting') {
     applyAccessibilitySettings(payload || {});
     const message = (payload && (payload.message || payload.speech)) || 'Assistive technology settings updated.';
-    out(message);
+    out(message, { sr: false });
     speak(message);
   }
   else if (action === 'focus_target') focusNamedTarget(payload && payload.target);
@@ -3571,20 +3551,17 @@ async function handleConfirmedAction(action, payload) {
   else if (action === 'generate_code') await generateCode(payload && payload.prompt ? payload.prompt : '', payload || {});
   else if (action === 'exact_symbol_clarification' || action === 'orchestrator_clarification' || action === 'deterministic_message' || action === 'clarify') {
     const message = (payload && (payload.message || payload.speech)) || 'No guidance available.';
-    out((payload && payload.report) ? `${message}\n\n${payload.report}` : message);
-    srAnnounce('Guidance shown');
+    out((payload && payload.report) ? `${message}\n\n${payload.report}` : message, { sr: false });
     speak((payload && payload.speech) || message);
   }
   else if (action === 'set_speech_rate') {
     applySpeechRate(payload && payload.rate ? payload.rate : 1.0);
     const msg = (payload && payload.speech) || 'Speed changed.';
-    srAnnounce(msg);
     speak(msg);  // spoken at the new rate
   }
   else if (action === 'set_verbosity') {
     setVerbosity(payload && payload.verbosity ? payload.verbosity : 'normal');
     const msg = (payload && payload.speech) || 'Detail level changed.';
-    srAnnounce(msg);
     speak(msg);
   }
   else if (action === 'export_project') {
@@ -3595,8 +3572,7 @@ async function handleConfirmedAction(action, payload) {
   else if (action === 'audio_blocks_project_report') {
     const report = (payload && payload.report) || 'No Audio Blocks report available.';
     const message = (payload && (payload.speech || payload.message)) || 'Audio Blocks project report ready.';
-    out(report);
-    srAnnounce(message);
+    out(report, { sr: false });
     speak(message);
   }
   else if (action === 'project_report') {
@@ -3608,14 +3584,12 @@ async function handleConfirmedAction(action, payload) {
     const message = (payload && (payload.message || payload.speech)) || 'Here is the block.';
     if (payload && payload.line && typeof gotoLine === 'function') gotoLine(payload.line);
     const excerpt = (payload && payload.code_excerpt) ? '\n\n' + payload.code_excerpt : '';
-    out(message + excerpt);
-    srAnnounce(message);
+    out(message + excerpt, { sr: false });
     speak(message);
   }
   else if (action === 'bookmark_created' || action === 'bookmark_deleted' || action === 'bookmark_list' || action === 'bookmark_error') {
     const message = (payload && (payload.message || payload.speech)) || 'Done.';
-    out(message);
-    srAnnounce(message);
+    out(message, { sr: false });
     speak(message);
   }
   else if (action === 'read_project_files') readProjectFiles();
@@ -3739,16 +3713,16 @@ async function handleConfirmedAction(action, payload) {
     document.body.appendChild(link); link.click(); link.remove();
     setTimeout(() => URL.revokeObjectURL(link.href), 1000);
     const message = (payload && payload.speech) || 'Teacher report exported locally.';
-    out(message); srAnnounce(message); speak(message);
+    out(message, { sr: false }); speak(message);
   }
   else if (action === 'accessible_data_sonify') {
     const values = Array.isArray(payload && payload.values) ? payload.values.map(Number).filter(Number.isFinite) : [];
     SonificationManager.clearAll();
-    if (!values.length) { out('No numeric values to sonify.'); speak('No numeric values to sonify.'); }
+    if (!values.length) { out('No numeric values to sonify.', { sr: false }); speak('No numeric values to sonify.'); }
     else {
       const low = Math.min(...values), high = Math.max(...values), span = high - low || 1;
       const message = (payload && payload.speech) || `Sonifying ${values.length} values.`;
-      out(message); srAnnounce(message); speak(message);
+      out(message, { sr: false }); speak(message);
       values.forEach((value, index) => setTimeout(() => {
         SonificationManager.playTone(220 + ((value - low) / span) * 660, 0.12, 0.08);
       }, index * 170));
@@ -3757,11 +3731,11 @@ async function handleConfirmedAction(action, payload) {
   else if (action === 'stop_data_sonification') {
     SonificationManager.clearAll();
     const message = (payload && payload.speech) || 'Sonification stopped.';
-    out(message); srAnnounce(message); speak(message);
+    out(message, { sr: false }); speak(message);
   }
   else if (action === 'open_accessible_tools') {
     const message = (payload && payload.speech) || 'Opening accessible coding tools.';
-    srAnnounce(message); speak(message);
+    speak(message);
     window.location.assign('/accessible-coding-tools');
   }
   else if (action === 'why_audio_breakpoint') await requestAudioBreakpoint('why');
@@ -3769,9 +3743,8 @@ async function handleConfirmedAction(action, payload) {
   else if (action === 'clear_breakpoints')  {
     clearBreakpoints();
     await requestAudioBreakpoint('clear', null, { silent: true });
-    out('Cleared all breakpoints.');
+    out('Cleared all breakpoints.', { sr: false });
     speak('Cleared all breakpoints.');
-    srAnnounce('Breakpoints cleared');
   }
   else if (action === 'remove_breakpoint')  removeBreakpoint(payload && payload.line_number);
   else if (action === 'disable_breakpoints') disableBreakpoints();
@@ -3809,7 +3782,7 @@ async function handleConfirmedAction(action, payload) {
   else if (action === 'read_var_values')    await requestStepNarration();
   else if (action === 'what_changed_step') {
     const text = (payload && (payload.speech || payload.message)) || 'No trace event available.';
-    out(text); speak(text);
+    out(text, { sr: false }); speak(text);
   }
   else if (action === 'only_announce_changes') { speak('I will only announce variable changes during step narration.'); }
   else if (action === 'compare_before_after') await requestMistakeReplay('compare');
@@ -3926,9 +3899,8 @@ function handleProgramInputRequest(payload) {
   };
   const message = (payload && (payload.speech || payload.message)) || inputRequestMessage(_programInputRequest);
   showProgramInputControl(Object.assign({}, _programInputRequest, { message }));
-  out(`${inputRequestMessage(_programInputRequest)}\nType or say the value now.`);
+  out(`${inputRequestMessage(_programInputRequest)}\nType or say the value now.`, { sr: false });
   speak(message, { sr: false });
-  srAnnounce(message);
 }
 async function submitProgramInputValue() {
   const input = document.getElementById('programInputValue');
@@ -3952,9 +3924,8 @@ function cancelProgramInputRequest() {
   _preflightInputPlaceholders = [];
   updateInputsPanel();
   hideProgramInputControl('Program input cancelled.');
-  out('Program input cancelled.');
+  out('Program input cancelled.', { sr: false });
   speak('Program input cancelled.', { sr: false });
-  srAnnounce('Program input cancelled.');
   focusEditor();
 }
 
@@ -3968,8 +3939,7 @@ function setPreflightInputs(values, speechMessage) {
   updateInputsPanel();
   const summary = _preflightInputs.join(', ');
   speak(speechMessage || `${_preflightInputs.length} input${_preflightInputs.length === 1 ? '' : 's'} ready: ${summary}.`);
-  out(`PRE-FLIGHT INPUTS SET (${_preflightInputs.length}):\n${_preflightInputs.map((v, i) => `  ${i + 1}. ${v}`).join('\n')}\n\nThese will be used in order when your code calls input().`);
-  srAnnounce(`${_preflightInputs.length} inputs set`);
+  out(`PRE-FLIGHT INPUTS SET (${_preflightInputs.length}):\n${_preflightInputs.map((v, i) => `  ${i + 1}. ${v}`).join('\n')}\n\nThese will be used in order when your code calls input().`, { sr: false });
 }
 
 function clearPreflightInputs() {
@@ -3977,35 +3947,32 @@ function clearPreflightInputs() {
   _preflightInputPlaceholders = [];
   updateInputsPanel();
   speak('Pre-flight inputs cleared.');
-  out('Pre-flight inputs cleared.');
-  srAnnounce('Inputs cleared');
+  out('Pre-flight inputs cleared.', { sr: false });
 }
 
 function listPreflightInputs() {
   if (_preflightInputs.length === 0) {
     speak('You have no pre-flight inputs declared.');
-    out('No pre-flight inputs declared.');
+    out('No pre-flight inputs declared.', { sr: false });
     return;
   }
   speak(`You have ${_preflightInputs.length} input${_preflightInputs.length === 1 ? '' : 's'}:`);
   _preflightInputs.forEach((v, i) => speak(`Input ${i + 1}: ${v}.`));
-  out(`PRE-FLIGHT INPUTS (${_preflightInputs.length}):\n${_preflightInputs.map((v, i) => `  ${i + 1}. ${v}`).join('\n')}`);
+  out(`PRE-FLIGHT INPUTS (${_preflightInputs.length}):\n${_preflightInputs.map((v, i) => `  ${i + 1}. ${v}`).join('\n')}`, { sr: false });
 }
 
 function enableLiveInputMode() {
   _liveInputMode = true;
   updateInputModeUI();
   speak('Switched to live input mode. When you press run, your code will pause and ask for each input as it needs it. Note: live mode requires Linux or macOS on the server.');
-  out('LIVE INPUT MODE ON\n\nYour code will pause at each input() call and wait for you to answer by voice or by typing in the command box.');
-  srAnnounce('Live input mode on');
+  out('LIVE INPUT MODE ON\n\nYour code will pause at each input() call and wait for you to answer by voice or by typing in the command box.', { sr: false });
 }
 
 function enablePreflightInputMode() {
   _liveInputMode = false;
   updateInputModeUI();
   speak('Switched to pre-flight input mode. Declare your inputs ahead of time, then press run.');
-  out('PRE-FLIGHT INPUT MODE ON (default)\n\nDeclare inputs first: say "set inputs to value1 and value2", then press run.');
-  srAnnounce('Pre-flight input mode on');
+  out('PRE-FLIGHT INPUT MODE ON (default)\n\nDeclare inputs first: say "set inputs to value1 and value2", then press run.', { sr: false });
 }
 
 function updateInputModeUI() {
@@ -4070,7 +4037,6 @@ async function saveMacro(name) {
     const data = await res.json();
     if (data.success) {
       speak(data.speech || `Macro ${name} saved.`);
-      srAnnounce(`Macro ${name} saved`);
     } else {
       speak(data.error || 'Could not save macro.');
     }
@@ -4087,8 +4053,7 @@ async function useMacro(name) {
     if (data.success) {
       if (!setCode(data.code, { source: `macro ${name}` })) return;
       speak(`Loaded macro ${name}.`);
-      out(`Macro "${name}" loaded into the editor.`);
-      srAnnounce(`Macro ${name} loaded`);
+      out(`Macro "${name}" loaded into the editor.`, { sr: false });
     } else {
       speak(`No macro named ${name}. Say "list macros" to hear what is saved.`);
     }
@@ -4104,9 +4069,9 @@ async function listMacrosVoice() {
     if (!data.success) { speak('Could not list macros.'); return; }
     speak(data.speech);
     if (data.names && data.names.length) {
-      out(`MACROS (${data.names.length}):\n${data.names.map((n, i) => `  ${i + 1}. ${n}`).join('\n')}\n\nSay "use macro" followed by a name.`);
+      out(`MACROS (${data.names.length}):\n${data.names.map((n, i) => `  ${i + 1}. ${n}`).join('\n')}\n\nSay "use macro" followed by a name.`, { sr: false });
     } else {
-      out('No macros saved. Save one by writing code, then saying "remember this as" followed by a name.');
+      out('No macros saved. Save one by writing code, then saying "remember this as" followed by a name.', { sr: false });
     }
   } catch (e) {
     speak('Macro list failed.');
@@ -4126,8 +4091,7 @@ async function shareCurrentMacro(name) {
     const data = await res.json();
     if (data.success) {
       speak(`Shared macro code ${data.share_code}.`);
-      out(`SHARED MACRO\n\nCode: ${data.share_code}\n\nStudents can say: use shared macro ${data.share_code}`);
-      srAnnounce(`Shared macro code ${data.share_code}`);
+      out(`SHARED MACRO\n\nCode: ${data.share_code}\n\nStudents can say: use shared macro ${data.share_code}`, { sr: false });
     } else {
       speak(data.error || 'Could not share macro.');
     }
@@ -4144,8 +4108,7 @@ async function useSharedMacro(shareCode) {
     if (data.success) {
       if (!setCode(data.code, { source: `shared macro ${shareCode}` })) return;
       speak(`Loaded shared macro ${data.share_code}.`);
-      out(`Shared macro "${data.name}" loaded into the editor.`);
-      srAnnounce(`Shared macro ${data.share_code} loaded`);
+      out(`Shared macro "${data.name}" loaded into the editor.`, { sr: false });
     } else {
       speak(data.error || 'Shared macro not found.');
     }
@@ -4167,7 +4130,6 @@ async function bookmarkOutput(label) {
     if (data.success) {
       SonificationManager.playTone(750, 0.08, 0.08);
       speak(data.speech);
-      srAnnounce('Bookmark saved');
     }
   } catch (e) {
     speak('Could not save bookmark.');
@@ -4211,12 +4173,12 @@ async function listBookmarks() {
     if (!data.success) { speak('Could not list bookmarks.'); return; }
     if (!data.bookmarks.length) {
       speak('You have no bookmarks.');
-      out('No bookmarks. Say "bookmark this" while output is showing to save one.');
+      out('No bookmarks. Say "bookmark this" while output is showing to save one.', { sr: false });
       return;
     }
     speak(`You have ${data.bookmarks.length} bookmark${data.bookmarks.length === 1 ? '' : 's'}:`);
     data.bookmarks.forEach(b => speak(b.label));
-    out(`BOOKMARKS (${data.bookmarks.length}):\n${data.bookmarks.map((b, i) => `  ${i + 1}. ${b.label}`).join('\n')}`);
+    out(`BOOKMARKS (${data.bookmarks.length}):\n${data.bookmarks.map((b, i) => `  ${i + 1}. ${b.label}`).join('\n')}`, { sr: false });
   } catch (e) {
     speak('Bookmark list failed.');
   }
@@ -4256,7 +4218,7 @@ async function readBreadcrumb() {
     if (data.success) {
       const ctx = data.context ? ' ' + data.context : '';
       speak(`You are in: ${data.breadcrumb}.${ctx}`);
-      out(`Position: ${data.breadcrumb}${ctx}`);
+      out(`Position: ${data.breadcrumb}${ctx}`, { sr: false });
     } else {
       speak(data.message || 'Could not determine position.');
     }
@@ -4285,9 +4247,8 @@ async function explainErrorSimply() {
     });
     const data = await res.json();
     if (data.success) {
-      out(data.explanation);
+      out(data.explanation, { sr: false });
       speak(data.explanation);
-      srAnnounce('Beginner explanation ready');
     } else {
       speak('Could not generate a simpler explanation.');
     }
@@ -4339,7 +4300,7 @@ async function explainOutputDiff() {
     });
     const data = await res.json();
     const msg = data.success ? data.explanation : (data.error || 'Could not explain the output difference.');
-    out(msg);
+    out(msg, { sr: false });
     speak(msg);
   } catch (e) {
     speak('Could not explain the output difference.');
@@ -4396,10 +4357,9 @@ function renderMentorTranscript() {
 
 function showMentorReply(studentText, reply) {
   const text = reply || 'The mentor did not return a reply.';
-  out('MENTOR\n\n' + text);
+  out('MENTOR\n\n' + text, { sr: false });
   showAI('Mentor answered.');
   speak(text);
-  srAnnounce('Mentor reply ready');
   rememberMentorTurn(studentText, text);
   setTimeout(() => hideAI(), 1200);
 }
@@ -4410,13 +4370,11 @@ async function talkToMentor(message, mode = 'general') {
       showMentorReply('repeat that', window.lastMentorReply);
     } else {
       speak('There is no mentor reply to repeat yet.');
-      srAnnounce('No mentor reply to repeat');
     }
     return;
   }
   if ((mode === 'shorter' || mode === 'simpler') && !window.lastMentorReply) {
     speak('There is no mentor reply to revise yet.');
-    srAnnounce('No mentor reply to revise');
     return;
   }
   let msg = message || 'Help me with my code.';
@@ -4495,8 +4453,7 @@ function setMentorPreference(key, value) {
       ? `Mentor language style set to ${value}.`
       : 'Mentor will keep hints first and avoid direct answers.';
   speak(label);
-  srAnnounce(label);
-  out(label);
+  out(label, { sr: false });
 }
 
 async function speakCodeMap() {
@@ -4535,9 +4492,8 @@ async function requestCodeMap(query) {
     if (staleResult(result)) return;
     const data = result.value;
     const reply = data.reply || data.speech || data.error || 'Could not map the code.';
-    out(reply);
+    out(reply, { sr: false });
     speak(reply, { epoch: _codeMapEpoch });
-    if (_codeMapEpoch === currentSpeechEpoch()) srAnnounce('Code map ready');
   } catch (e) {
     console.error(e);
     speak('Code map failed.');
@@ -4555,9 +4511,8 @@ async function requestWatchVariable(variable, action) {
     });
     const data = await res.json();
     const msg = data.speech || data.error || 'Done.';
-    out(msg);
+    out(msg, { sr: false });
     speak(msg);
-    srAnnounce(msg);
   } catch (e) {
     console.error(e);
     speak('Could not update watch list.');
@@ -4578,9 +4533,8 @@ async function requestAudioBreakpoint(action, condition, options) {
     const msg = data.speech || data.error || 'Done.';
     const inactive = data.active === false && data.success === false;
     if (!opts.silent && !(opts.silentInactive && inactive)) {
-      out(msg);
+      out(msg, { sr: false });
       speak(msg);
-      srAnnounce(msg);
     }
     return data;
   } catch (e) {
@@ -4651,7 +4605,7 @@ async function requestStepNarration() {
       const narration = data.paused
         ? (data.speech || data.narration_text || steps.join(' '))
         : (data.narration_text || data.speech || steps.join(' ') || data.error || 'No narration available.');
-      out(narration);
+      out(narration, { sr: false });
       speak(narration);
     }
 
@@ -4675,9 +4629,8 @@ async function requestMistakeReplay(query) {
     });
     const data = await res.json();
     const reply = data.reply || data.speech || data.error || 'No comparison available.';
-    out(reply);
+    out(reply, { sr: false });
     speak(reply);
-    srAnnounce('Mistake replay ready');
   } catch (e) {
     console.error(e);
     speak('Mistake replay failed.');
@@ -4692,7 +4645,6 @@ function maybeOfferSlowWalkthroughAfterErrors() {
   window._mentorSlowWalkthroughOffered = true;
   const msg = 'You have hit a few errors in a row. Want a slow walkthrough? Say: slow walkthrough.';
   speak(msg);
-  srAnnounce('Slow walkthrough offered');
 }
 
 function tryResolveConfirmation(txt) {
@@ -4780,13 +4732,11 @@ async function handleCommandText(txt) {
       if (chosen === q.answer) {
         SonificationManager.playTone(900, 0.1, 0.1);
         speak(`Correct! ${q.explanation}`);
-        srAnnounce('Correct answer');
-        out(`CORRECT!\n\n${q.explanation}`);
+        out(`CORRECT!\n\n${q.explanation}`, { sr: false });
       } else {
         SonificationManager.playTone(200, 0.15, 0.08);
         speak(`Not quite. The correct answer was ${q.answer}. ${q.explanation}`);
-        srAnnounce('Wrong answer');
-        out(`Incorrect. The correct answer was ${q.answer}.\n\n${q.explanation}`);
+        out(`Incorrect. The correct answer was ${q.answer}.\n\n${q.explanation}`, { sr: false });
       }
       return;
     }
@@ -4802,10 +4752,9 @@ async function handleCommandText(txt) {
     if (t.includes('show answer') || t.includes('give up') || t.includes('reveal') || t.includes('answer दिखाओ')) {
       const ch = _ts._pendingBugChallenge;
       _ts._pendingBugChallenge = null;
-      out(`THE BUG:\n${ch.bug}\n\nFIXED CODE:\n${ch.fixed}`);
+      out(`THE BUG:\n${ch.bug}\n\nFIXED CODE:\n${ch.fixed}`, { sr: false });
       speak(`The bug was: ${ch.bug}`);
       setTimeout(() => setCode(ch.fixed), 2000);
-      srAnnounce('Answer revealed');
       return;
     }
   }
@@ -4849,7 +4798,7 @@ async function handleCommandText(txt) {
       const heard = data.heard || txt;
       const message = data.message || `I heard "${heard}", but I could not match it to a command. Say help to hear available commands.`;
       speak(message);
-      out(`Unrecognized command: "${heard}"`);
+      out(`Unrecognized command: "${heard}"`, { sr: false });
       return;
     }
 
@@ -4863,7 +4812,7 @@ async function handleCommandText(txt) {
       const optsSpoken = opts.map(o => o.replace(/_/g, ' ')).join(' or ');
       const heard = data.heard || txt;
       speak(`Did you mean ${optsSpoken}? Say first or second, or just say a new command.`);
-      out(`Heard: "${heard}"\nDid you mean: ${optsSpoken}?\nSay "first" / "second", a new command, or "cancel".`);
+      out(`Heard: "${heard}"\nDid you mean: ${optsSpoken}?\nSay "first" / "second", a new command, or "cancel".`, { sr: false });
       return;
     }
 
@@ -4940,9 +4889,8 @@ function toggleVoice() {
       if (!started) {
         const msg = voiceUnavailableMessage();
         markVoiceListeningOff();
-        out(msg);
+        out(msg, { sr: false });
         speak(msg);
-        srAnnounce('Speech recognition unavailable');
         return;
       }
       isListening = true;
@@ -4951,9 +4899,8 @@ function toggleVoice() {
       setTimeout(() => {
         if (_voiceEnabledByUser && isListening && typeof VoiceEngine !== 'undefined' && VoiceEngine.VoiceInput && !VoiceEngine.VoiceInput.isActive()) {
           const msg = 'Microphone access blocked. Please grant microphone permission and toggle voice again. Keyboard shortcuts and the typed command box still work.';
-          out(msg);
+          out(msg, { sr: false });
           speak(msg);
-          srAnnounce('Microphone access blocked');
           markVoiceListeningOff();
         }
       }, 1500);
@@ -5064,9 +5011,8 @@ function startListening() {
   if (!SR) {
     const msg = voiceUnavailableMessage();
     setVoiceButtonOff();
-    out(msg);
+    out(msg, { sr: false });
     speak(msg);
-    srAnnounce('Speech recognition unavailable');
     return;
   }
   if (isListening) { speak('Already listening.'); return; }
@@ -5212,9 +5158,8 @@ function startListening() {
     }
     if (event.error === 'audio-capture' || event.error === 'not-allowed') {
       const msg = 'Microphone access blocked. Please grant microphone permission and toggle voice again. Keyboard shortcuts and the typed command box still work.';
-      out(msg);
+      out(msg, { sr: false });
       speak(msg);
-      srAnnounce('Microphone access blocked');
       markVoiceListeningOff();
       return;
     }
@@ -5238,9 +5183,8 @@ function startListening() {
     _recognitionStarting = false;
     _debugLog('Failed to start recognition:', e && e.message ? e.message : e);
     const msg = 'Failed to start voice control. Keyboard shortcuts and the typed command box still work.';
-    out(msg);
+    out(msg, { sr: false });
     speak(msg);
-    srAnnounce('Speech recognition unavailable');
     markVoiceListeningOff();
     _voiceStartIsUserInitiated = false;
   }
@@ -5272,9 +5216,8 @@ function pauseVoiceRecognition() {
   const offMsg = offLang === 'hi'
     ? 'Voice off kar diya. Jab ready ho, Voice on kar sakte ho.'
     : 'Listening stopped. I will not listen until you turn Voice on again.';
-  out(offMsg);
+  out(offMsg, { sr: false });
   speak(offMsg);
-  srAnnounce('Listening stopped');
   _debugLog('Voice: Manually off');
   return;
   if (!isListening) { speak('Voice control is not active.'); return; }
@@ -5397,13 +5340,11 @@ async function handleVoiceCommand(rawText) {
       if (chosen === q.answer) {
         SonificationManager.playTone(900, 0.1, 0.1);
         speak(`Correct! ${q.explanation}`);
-        srAnnounce('Correct answer');
-        out(`CORRECT!\n\n${q.explanation}`);
+        out(`CORRECT!\n\n${q.explanation}`, { sr: false });
       } else {
         SonificationManager.playTone(200, 0.15, 0.08);
         speak(`Not quite. The correct answer was ${q.answer}. ${q.explanation}`);
-        srAnnounce('Wrong answer');
-        out(`Incorrect. The correct answer was ${q.answer}.\n\n${q.explanation}`);
+        out(`Incorrect. The correct answer was ${q.answer}.\n\n${q.explanation}`, { sr: false });
       }
       return;
     }
@@ -5419,10 +5360,9 @@ async function handleVoiceCommand(rawText) {
     if (t.includes('show answer') || t.includes('give up') || t.includes('reveal') || t.includes('answer दिखाओ')) {
       const ch = _ts._pendingBugChallenge;
       _ts._pendingBugChallenge = null;
-      out(`THE BUG:\n${ch.bug}\n\nFIXED CODE:\n${ch.fixed}`);
+      out(`THE BUG:\n${ch.bug}\n\nFIXED CODE:\n${ch.fixed}`, { sr: false });
       speak(`The bug was: ${ch.bug}`);
       setTimeout(() => setCode(ch.fixed), 2000);
-      srAnnounce('Answer revealed');
       return;
     }
   }
@@ -5459,7 +5399,7 @@ async function handleVoiceCommand(rawText) {
       const optsSpoken = opts.map(o => o.replace(/_/g, ' ')).join(' or ');
       const heard = data.heard || rawText;
       speak(`Did you mean ${optsSpoken}? Say first or second, or just say a new command.`);
-      out(`Heard: "${heard}"\nDid you mean: ${optsSpoken}?\nSay "first" / "second", a new command, or "cancel".`);
+      out(`Heard: "${heard}"\nDid you mean: ${optsSpoken}?\nSay "first" / "second", a new command, or "cancel".`, { sr: false });
       return;
     }
 
@@ -5479,6 +5419,23 @@ async function handleVoiceCommand(rawText) {
 window.addEventListener('DOMContentLoaded', () => {
   try { restoreAccessibilityPreferences(); } catch (e) {}
   try { _wireLiveAssistantButtons(); } catch (e) {}
+
+  // Regression: "Jump to editor" only scrolled #editor into view - Monaco's
+  // real focusable element is a hidden textarea nested deep inside that
+  // div, and a plain div with no tabindex is not a native browser focus
+  // target on a hash jump, so keyboard focus silently stayed on <body>.
+  // "Jump to output" worked because #output itself has tabindex="0"; the
+  // editor needs the same promise kept, via Monaco's own focus() instead.
+  const skipToEditor = document.querySelector('.cu-skip-links a[href="#editor"]');
+  if (skipToEditor) {
+    skipToEditor.addEventListener('click', (event) => {
+      if (typeof editor !== 'undefined' && editor && editor.focus) {
+        event.preventDefault();
+        document.getElementById('editor').scrollIntoView({ block: 'center' });
+        editor.focus();
+      }
+    });
+  }
 
   const readAgain = document.getElementById('readOutputAgainBtn');
   if (readAgain) readAgain.addEventListener('click', speakOutput);
@@ -5574,7 +5531,7 @@ window.addEventListener('DOMContentLoaded', () => {
       SonificationManager.clearAll();
       ErrorBeaconManager.stop();
       const msg = 'Stopped listening and speech. Editor unchanged.';
-      srAnnounce(msg);             // silent screen-reader status (always)
+                  // silent screen-reader status (always)
       speak(msg);
       return;
     }
@@ -5767,7 +5724,6 @@ function recoverAutosaveDraft() {
     }
     if (!setCode(draft.code, { source: 'autosaved draft' })) return;
     speak('A draft from your previous session has been restored. Press Control Z to undo if you did not want this.');
-    srAnnounce('Previous draft restored');
   } catch (e) { /* corrupted or missing — silent fail */ }
 }
 
@@ -6045,7 +6001,7 @@ function findFunction(functionName) {
   if (!functionName) { speak('Please specify a function name.'); return; }
   if (!ensurePythonEditorContent('find function')) return;
   const line = findFunctionLine(functionName);
-  if (!line) { speak(`Function ${functionName} not found.`); out(`Function ${functionName} not found.`); return; }
+  if (!line) { speak(`Function ${functionName} not found.`); out(`Function ${functionName} not found.`, { sr: false }); return; }
   gotoLine(line, false);
   speak(`Function ${functionName} starts on line ${line}.`);
 }
@@ -6054,7 +6010,7 @@ function findClass(className) {
   if (!className) { speak('Please specify a class name.'); return; }
   if (!ensurePythonEditorContent('find class')) return;
   const line = findClassLine(className);
-  if (!line) { speak(`Class ${className} not found.`); out(`Class ${className} not found.`); return; }
+  if (!line) { speak(`Class ${className} not found.`); out(`Class ${className} not found.`, { sr: false }); return; }
   gotoLine(line, false);
   speak(`Class ${className} starts on line ${line}.`);
 }
@@ -6063,7 +6019,7 @@ function readFunction(functionName) {
   if (!functionName) { speak('Please specify a function name.'); return; }
   if (!ensurePythonEditorContent('read function')) return;
   const startLine = findFunctionLine(functionName);
-  if (!startLine) { speak(`Function ${functionName} not found.`); out(`Function ${functionName} not found.`); return; }
+  if (!startLine) { speak(`Function ${functionName} not found.`); out(`Function ${functionName} not found.`, { sr: false }); return; }
   const lines = getCode().split('\n');
   const baseIndent = lines[startLine - 1].search(/\S/);
   let endLine = lines.length;
@@ -6075,7 +6031,7 @@ function readFunction(functionName) {
     }
   }
   const body = lines.slice(startLine - 1, endLine).join('\n');
-  out(`Function ${functionName}, lines ${startLine} to ${endLine}:\n\n${body}`);
+  out(`Function ${functionName}, lines ${startLine} to ${endLine}:\n\n${body}`, { sr: false });
   speak(`Function ${functionName} starts on line ${startLine} and ends on line ${endLine}.`);
   body.split('\n').slice(0, 12).forEach((line, idx) => speak(`Line ${startLine + idx}: ${line || 'empty line'}`));
 }
@@ -6146,13 +6102,13 @@ async function getDebugSuggestions() {
     }, narrationContext(code));
     if (staleResult(result)) return;
     const data = result.value;
-    if (!data.success || !data.suggestions) { out('No suggestions available.'); speak('Could not generate suggestions.'); return; }
-    if (data.suggestions.length === 0) { out('Code looks good! No issues found.'); speak('Code looks good. No issues found.'); return; }
+    if (!data.success || !data.suggestions) { out('No suggestions available.', { sr: false }); speak('Could not generate suggestions.'); return; }
+    if (data.suggestions.length === 0) { out('Code looks good! No issues found.', { sr: false }); speak('Code looks good. No issues found.'); return; }
 
     let output = 'DEBUG SUGGESTIONS:\n\n';
     let speech = `Found ${data.suggestions.length} suggestion${data.suggestions.length !== 1 ? 's' : ''}. `;
     data.suggestions.forEach((sugg, idx) => { output += `${sugg.type === 'warning' ? 'Warning' : 'Suggestion'}: ${sugg.text}\n\n`; speech += `Item ${idx + 1}: ${sugg.text}. `; });
-    out(output); speak(speech);
+    out(output, { sr: false }); speak(speech);
   } catch (e) {
     console.error('Debug suggestions error:', e); speak('Error getting suggestions.');
   }
@@ -6293,7 +6249,7 @@ async function readStructureOutline() {
     });
     const data = await res.json();
     const outline = data.success ? data.outline : (data.error || 'Unable to read the outline.');
-    out(outline);
+    out(outline, { sr: false });
     speak(outline);
   } catch (e) {
     speak('Unable to read the outline.');
@@ -6510,7 +6466,6 @@ function insertFunctionVoice(functionName) {
   const code = `def ${name}():\n    pass`;
   insertAtCursor(code);
   speak(`Inserted function ${name}. Cursor is on the pass line. Add your code there.`);
-  srAnnounce(`Function ${name} inserted`);
 }
 
 function insertClassVoice(className) {
@@ -6518,7 +6473,6 @@ function insertClassVoice(className) {
   const code = `class ${name}:\n    def __init__(self):\n        pass`;
   insertAtCursor(code);
   speak(`Inserted class ${name} with an init method.`);
-  srAnnounce(`Class ${name} inserted`);
 }
 
 function insertLoopVoice(loopVar, iterable) {
@@ -6568,7 +6522,6 @@ function insertVariableVoice(name, value) {
     ? `the text ${v.replace(/^['"]|['"]$/g, '')}`
     : `the value ${v}`;
   speak(`Inserted: ${n} equals ${spokenValue}.`);
-  srAnnounce(`Variable ${n} inserted`);
 }
 
 function appendLineVoice(text) {
@@ -6576,7 +6529,6 @@ function appendLineVoice(text) {
   const code = normalizeSpokenCodeText(text);
   insertAtCursor(code);
   speak(`Inserted: ${spokenCodeReadback(code)}`);
-  srAnnounce('Line inserted');
 }
 
 function spokenCodeReadback(code) {
@@ -6601,7 +6553,6 @@ function replaceLineVoice(lineNum, text) {
   }], () => null);
   editor.setPosition({ lineNumber: lineNum, column: 1 });
   speak(`Replaced line ${lineNum} with: ${code}`);
-  srAnnounce(`Line ${lineNum} replaced`);
 }
 
 function insertLineVoice(lineNum, text) {
@@ -6616,7 +6567,6 @@ function insertLineVoice(lineNum, text) {
   }], () => null);
   editor.setPosition({ lineNumber: lineNum, column: 1 });
   speak(`Inserted at line ${lineNum}: ${code}`);
-  srAnnounce(`Line inserted at ${lineNum}`);
 }
 
 function addParameterVoice(paramName, functionName) {
@@ -6655,7 +6605,6 @@ function addParameterVoice(paramName, functionName) {
 
   const fname = functionName || 'the function';
   speak(`Added parameter ${paramName} to ${fname}.`);
-  srAnnounce(`Parameter ${paramName} added`);
 }
 
 
@@ -6689,8 +6638,7 @@ async function suggestNextLine() {
     _suggestionsLang = getLanguage();
 
     const numbered = data.suggestions.map((s, i) => `${i + 1}: ${s}`).join('\n');
-    out(`Suggested next lines:\n${numbered}\n\nSay "choose 1", "choose 2", or "choose 3" to insert.`);
-    srAnnounce(`${data.suggestions.length} suggestions ready`);
+    out(`Suggested next lines:\n${numbered}\n\nSay "choose 1", "choose 2", or "choose 3" to insert.`, { sr: false });
 
     speak(`Here are ${data.suggestions.length} suggestions.`);
     data.suggestions.forEach((s, i) => speak(`Option ${i + 1}: ${s}`));
@@ -6729,7 +6677,6 @@ function chooseSuggestion(choice) {
   insertAtCursor(chosen);
   _lastSuggestions = [];
   speak(`Inserted: ${chosen}`);
-  srAnnounce('Suggestion inserted');
 }
 
 
@@ -6748,11 +6695,10 @@ async function tellExecutionStory() {
     if (staleResult(result)) return;
     const data = result.value;
     if (data.success) {
-      out(data.story);
+      out(data.story, { sr: false });
       speak(data.story);
-      srAnnounce('Execution story ready');
     } else {
-      out(data.story || 'No story available.');
+      out(data.story || 'No story available.', { sr: false });
       speak(data.story || 'Run your code first, then ask for the story.');
     }
   } catch (e) {
@@ -6796,8 +6742,7 @@ function setBreakpoint(lineNum) {
 
   SonificationManager.playTone(600, 0.1, 0.1);
   speak(`Breakpoint set at line ${lineNum}.`);
-  srAnnounce(`Breakpoint line ${lineNum}`);
-  out(`Breakpoints active: ${Array.from(_breakpoints).sort((a,b)=>a-b).join(', ')}`);
+  out(`Breakpoints active: ${Array.from(_breakpoints).sort((a,b)=>a-b).join(', ')}`, { sr: false });
 }
 
 function clearBreakpoints() {
@@ -6813,43 +6758,39 @@ function listBreakpoints() {
     message = `You have breakpoints on lines ${lines.join(' and ')}.`;
     if (!_breakpointsEnabled) message += ' Breakpoints are disabled.';
   }
-  out(message);
+  out(message, { sr: false });
   speak(message);
-  srAnnounce(message);
 }
 
 function removeBreakpoint(lineNum) {
   if (!_breakpoints.has(lineNum)) {
     const message = `There is no breakpoint on line ${lineNum}.`;
-    out(message); speak(message); srAnnounce(message);
+    out(message, { sr: false }); speak(message);
     return;
   }
   _breakpoints.delete(lineNum);
   refreshBreakpointDecorations();
   const message = `Removed the breakpoint on line ${lineNum}.`;
-  out(message); speak(message); srAnnounce(message);
+  out(message, { sr: false }); speak(message);
 }
 
 function disableBreakpoints() {
   _breakpointsEnabled = false;
-  out('Breakpoints disabled.');
+  out('Breakpoints disabled.', { sr: false });
   speak('Breakpoints disabled.');
-  srAnnounce('Breakpoints disabled');
 }
 
 function enableBreakpoints() {
   _breakpointsEnabled = true;
-  out('Breakpoints enabled.');
+  out('Breakpoints enabled.', { sr: false });
   speak('Breakpoints enabled.');
-  srAnnounce('Breakpoints enabled');
 }
 
 function watchVariable(varName) {
   if (!varName) { speak('Please specify a variable name to watch.'); return; }
   _watchedVars.add(varName);
   speak(`Now watching variable ${varName}. I will report its value at each breakpoint.`);
-  srAnnounce(`Watching ${varName}`);
-  out(`Watched variables: ${Array.from(_watchedVars).join(', ')}`);
+  out(`Watched variables: ${Array.from(_watchedVars).join(', ')}`, { sr: false });
 }
 
 async function continueDebugging() {
@@ -6901,7 +6842,6 @@ function debugContinue() {
       SonificationManager.playTone(800, 0.15, 0.12);
       gotoLine(event.line, false);
       speak(`Hit breakpoint at line ${event.line}.${varReport || ''}`);
-      srAnnounce(`Breakpoint hit line ${event.line}`);
       return;
     }
   }
@@ -6909,7 +6849,6 @@ function debugContinue() {
   if (!hitBreakpoint) {
     window.traceIndex = 0;
     speak('No more breakpoints hit. Execution complete.');
-    srAnnounce('Execution complete');
   }
 }
 
@@ -6948,8 +6887,7 @@ async function quizMe(topic) {
     _currentQuiz = q;
 
     const display = `QUIZ: ${q.question}\n\n${q.options.join('\n')}\n\nSay "answer A", "answer B", or "answer C".`;
-    out(display);
-    srAnnounce('Quiz question ready');
+    out(display, { sr: false });
     speak(q.question);
     q.options.forEach(o => speak(o));
     speak('Say answer A, answer B, or answer C.');
@@ -6982,9 +6920,8 @@ async function explainConcept(concept) {
     if (staleResult(result)) return;
     const data = result.value;
     if (data.success) {
-      out(data.explanation);
+      out(data.explanation, { sr: false });
       speak(data.explanation);
-      srAnnounce(`${c} explained`);
     } else {
       speak('Could not explain that concept. Try again.');
     }
@@ -7012,8 +6949,7 @@ async function bugChallenge() {
 
     const ch = data.challenge;
     setCode(ch.code);
-    out(`BUG CHALLENGE\n\nFind and fix the bug in the editor.\nHint: ${ch.hint}\n\nSay "show answer" when ready to reveal.`);
-    srAnnounce('Bug challenge loaded');
+    out(`BUG CHALLENGE\n\nFind and fix the bug in the editor.\nHint: ${ch.hint}\n\nSay "show answer" when ready to reveal.`, { sr: false });
     speak(`Bug challenge loaded into editor. ${ch.hint}. Say show answer when you are ready.`);
 
     tabState()._pendingBugChallenge = {
@@ -7113,7 +7049,7 @@ async function listVariablesWithValues() {
   const trace = window.executionTrace || [];
   if (!trace.length) {
     speak('No variables to report yet. Please run your code first by pressing Control Enter or saying "run".');
-    out('No execution trace available. Run your code first.');
+    out('No execution trace available. Run your code first.', { sr: false });
     return;
   }
   const vars = {};
@@ -7130,7 +7066,7 @@ async function listVariablesWithValues() {
   const names = Object.keys(vars);
   if (!names.length) {
     speak('Your code ran but no variables were declared.');
-    out('No variables found in execution trace.');
+    out('No variables found in execution trace.', { sr: false });
     return;
   }
   let display = `VARIABLES AND VALUES (${names.length}):\n\n`;
@@ -7139,7 +7075,7 @@ async function listVariablesWithValues() {
     display += `  ${name} = ${vars[name]}\n`;
     speech += `${pronounceVariableJS(name)} equals ${vars[name]}. `;
   }
-  out(display);
+  out(display, { sr: false });
   speak(speech);
 }
 
@@ -7167,9 +7103,8 @@ async function walkThroughCode() {
     if (staleResult(result)) return;
     const data = result.value;
     const explanation = data.explanation || data.speech || data.error || 'No walkthrough available.';
-    out(explanation);
+    out(explanation, { sr: false });
     speak(explanation, { epoch: _walkEpoch });
-    if (_walkEpoch === currentSpeechEpoch()) srAnnounce('Walkthrough complete');
   } catch (e) {
     console.error(e);
     speak('Walkthrough failed.');
@@ -7227,13 +7162,11 @@ async function talkToMentorStreaming(message, mode) {
       showMentorReply('repeat that', window.lastMentorReply);
     } else {
       speak('There is no mentor reply to repeat yet.');
-      srAnnounce('No mentor reply to repeat');
     }
     return;
   }
   if ((mode === 'shorter' || mode === 'simpler') && !window.lastMentorReply) {
     speak('There is no mentor reply to revise yet.');
-    srAnnounce('No mentor reply to revise');
     return;
   }
 
@@ -7266,7 +7199,7 @@ async function talkToMentorStreaming(message, mode) {
   guard.finish();
 
   if (result.error) {
-    out('Mentor error: ' + result.error);
+    out('Mentor error: ' + result.error, { sr: false });
     speak('Sorry, I could not reach the mentor right now.');
   } else if (result.fullText) {
     window.mentorHistory.push({ role: 'assistant', content: result.fullText });

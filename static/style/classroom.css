@@ -37,7 +37,27 @@
   margin-bottom: var(--gap-md);
 }
 
-.cu-crumb a { color: var(--accent); }
+/* Shared root-cause fix (all 16 classroom templates extend _base.html and
+   load this one stylesheet): a bare <a> inherits nothing from an ancestor's
+   color, so any link in classroom content that isn't styled as a
+   .cu-button falls back to the browser's default link blue - the same gap
+   found and fixed in the IDE's secondary nav. One rule here covers every
+   current and future plain content link (breadcrumbs, the join/login
+   cross-links, "back to the lesson", etc.) without touching each template.
+   Header-area links use .cu-button/.cu-button-secondary, which already set
+   an explicit color, so they're unaffected by and don't need this rule.
+   Underline gives a non-color affordance; the global *:focus-visible rule
+   in accessibility.css already provides a visible keyboard focus outline. */
+.cu-classroom-main a {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.cu-classroom-main a:hover {
+  color: var(--accent-hover);
+}
+.cu-classroom-main a:visited {
+  color: var(--accent);
+}
 
 .cu-notice {
   background: var(--accent-soft);

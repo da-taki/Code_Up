@@ -7,6 +7,7 @@ os.environ.setdefault("FLASK_TESTING", "true")
 
 
 INTEGRATION_MODULES = {
+    "test_accessibility_axe.py",
     "test_assistive_technology_integration.py",
     "test_chrome_english_onboarding.py",
     "test_conversation_orchestrator.py",

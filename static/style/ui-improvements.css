@@ -11,9 +11,35 @@
   border-radius: var(--radius-sm, 2px);
   padding: 20px 22px;
   max-width: 480px; width: 90%;
+  max-height: 85vh; overflow-y: auto;
   box-shadow: none;
   color: var(--text-main);
 }
+/* XRCVC Issue 10/13: visible tooltip on hover *and* keyboard focus - a plain
+   `title=""` attribute never shows for keyboard focus in Chrome, only for
+   mouse hover. Only apply `data-tooltip` to elements that already carry an
+   explicit `aria-label`/`aria-labelledby` (aria-label always wins accname
+   computation), because the CSS `content` property on ::after is otherwise
+   folded into the accessible name per the ARIA accname spec - the same bug
+   that was fixed for the disclosure-triangle glyph in core.css. */
+[data-tooltip] { position: relative; }
+[data-tooltip]:hover::after,
+[data-tooltip]:focus-visible::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: 100%; left: 50%; transform: translateX(-50%);
+  margin-bottom: 8px;
+  background: var(--text-main); color: var(--bg-panel);
+  padding: 5px 9px; border-radius: 4px;
+  font-size: 0.78rem; font-weight: 400; line-height: 1.4;
+  white-space: normal; max-width: 220px; width: max-content;
+  z-index: 20; pointer-events: none;
+}
+.cu-shortcut-list, .cu-guide-list {
+  font-size: 0.9rem; line-height: 1.6; color: var(--text-main);
+  margin: 0 0 16px; padding-left: 1.4em;
+}
+.cu-shortcut-list li, .cu-guide-list li { margin-bottom: 8px; }
 .modal-content h2 {
   font-size: 1.15rem; font-weight: 700; letter-spacing: 0;
   margin-bottom: 10px; color: var(--text-main);
@@ -81,6 +107,16 @@
 .command-palette-results > *.selected,
 .command-palette-results > *[aria-selected="true"] {
   background: var(--accent-soft); color: var(--accent);
+}
+/* XRCVC Issue 7: the row highlighted by ArrowUp/ArrowDown was indicated by
+   background color alone (no border/outline), unlike every other keyboard-
+   focusable control in the app - these rows have no tabindex, so the global
+   `*:focus-visible` outline rule never applied to them either. Give the
+   keyboard-selected row its own visible inset border so it doesn't rely on
+   color contrast alone. */
+.command-palette-results > *.selected,
+.command-palette-results > *[aria-selected="true"] {
+  box-shadow: inset 0 0 0 2px var(--accent);
 }
 .command-palette-results > *:last-child { border-bottom: 0; }
 
@@ -241,7 +277,7 @@
 }
 .cu-tutorial-exit:hover { color: var(--accent); border-color: var(--accent); }
 .cu-tutorial-status {
-  font-size: 0.74rem;
+  font-size: 0.85rem;
   color: var(--text-dim);
   margin: 0 0 8px;
   font-style: italic;
@@ -267,7 +303,7 @@
   flex: 1 1 auto;
 }
 .cu-tutorial-help {
-  font-size: 0.72rem;
+  font-size: 0.85rem;
   color: var(--text-dim);
   margin: 4px 0 0;
   line-height: 1.4;

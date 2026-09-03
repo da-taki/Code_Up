@@ -5,9 +5,19 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Accessibility support - CodeUp</title>
   <style>
-    body { max-width: 52rem; margin: 0 auto; padding: 1rem 1.25rem 3rem; font: 1rem/1.6 system-ui, sans-serif; color: #171717; background: #fff; }
-    a { color: #0645ad; } code { font-size: 0.95em; } h1, h2 { line-height: 1.25; }
+    /* XRCVC Issue 15: this standalone page previously always rendered pure
+       black-on-white regardless of the visitor's system/browser dark-mode
+       preference, unlike the rest of CodeUp which honors it - jarring and
+       harder to read for a low-vision or light-sensitive user coming from a
+       dark IDE. Colors below are verified >= 7:1 contrast in both palettes. */
+    body { max-width: 52rem; margin: 0 auto; padding: 1rem 1.25rem 3rem; font: 1.05rem/1.65 system-ui, sans-serif; color: #171717; background: #fff; }
+    a { color: #0645ad; } code { font-size: 0.95em; background: rgba(0,0,0,0.06); padding: 0.1em 0.3em; border-radius: 3px; } h1, h2 { line-height: 1.3; }
     .skip-link { position: absolute; left: -9999px; } .skip-link:focus { position: static; }
+    @media (prefers-color-scheme: dark) {
+      body { color: #f3e7d2; background: #0a0703; }
+      a { color: #ffb38a; }
+      code { background: rgba(255,255,255,0.1); }
+    }
   </style>
 </head>
 <body>

@@ -140,7 +140,7 @@ body.cu-body.theme-high-contrast::before { display: none; }
   font-family: var(--font-mono); font-size: 0.78rem; font-weight: 600;
 }
 .cu-theme-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.cu-settings-description { flex-basis: 100%; margin: 0; color: var(--text-dim); font-size: 0.82rem; line-height: 1.4; }
+.cu-settings-description { flex-basis: 100%; margin: 0; color: var(--text-dim); font-size: 0.86rem; line-height: 1.4; }
 .cu-settings-subheading { flex-basis: 100%; margin: 6px 0 0; color: var(--text-main); font-size: 0.86rem; font-weight: 700; }
 .cu-speech-rate { min-width: 150px; accent-color: var(--accent); }
 .cu-section-heading { margin: 0 0 8px; color: var(--text-main); font-size: 1rem; font-weight: 700; letter-spacing: 0; }
@@ -354,7 +354,7 @@ body.theme-night .cu-output { background: #06030a; }
   flex-basis: 100%;
   margin: -2px 0 0;
   color: var(--text-dim);
-  font-size: 0.82rem;
+  font-size: 0.86rem;
   line-height: 1.35;
 }
 .cu-command-understanding {
@@ -637,10 +637,22 @@ body.theme-high-contrast .audio-blocks-palette .cu-button[data-category]::before
   user-select: none;
 }
 .cu-disclosure-summary::-webkit-details-marker { display: none; }
+/* Decorative expand/collapse indicator, drawn with borders rather than a
+   CSS content glyph. The ARIA accname spec requires ::before/::after
+   `content` text to be folded into the element's accessible name, so the
+   previous `content: "\25B8"` triangle was announced by NVDA as part of the
+   <summary>'s name (heard as "right-pointing small triangle") on top of the
+   native "collapsed/expanded" state NVDA already announces for <details> -
+   XRCVC's "duplicate"/confusing disclosure announcement. A border-only
+   shape has no text content, so nothing leaks into the accessible name. */
 .cu-disclosure-summary::before {
-  content: "\25B8";
-  color: var(--text-dim);
-  font-size: 0.7rem;
+  content: "";
+  display: inline-block;
+  width: 0;
+  height: 0;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 5px solid var(--text-dim);
   transition: transform .15s ease;
 }
 .cu-disclosure[open] > .cu-disclosure-summary::before { transform: rotate(90deg); }

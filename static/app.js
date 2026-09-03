@@ -601,8 +601,10 @@ async function sonifyCurrentBlock() {
   }
   SonificationManager.clearAll();
   const startMsg = `Sonifying block from line ${startLine} to line ${endLine}.`;
+  // out() already announces via srAnnounce() internally (sr not set to false)
+  // - the extra call here duplicated the same announcement (XRCVC "duplicate
+  // output speech").
   out(startMsg);
-  srAnnounce(startMsg);
 
   const jobId = Date.now();
   SonificationManager.startJob(jobId);
@@ -947,12 +949,16 @@ SCREEN READER HANDOFF:
 - "make a project report" — a teacher-style summary of the project
 
 KEYBOARD:
-- Escape: Stop speech
 - Ctrl+Enter: Run
-- Alt+S/L/V/E/H: Sonify/Line/Vars/Errors/Help
-- Alt+Left/Right: Navigate history
-- Ctrl+Shift+M: Toggle voice
+- Escape (editor quiet) or Ctrl+M: Leave the editor
+- Escape (while speaking): Stop speech
+- Ctrl+Shift+M: Toggle voice control
 - Ctrl+Shift+P: Command palette
+- Alt+Shift+K: Show this full shortcut list
+- Alt+Shift+O: Open accessibility and speech settings
+- Alt+Shift+R/H/E/M/T/S/A/N: Run/Help/Errors/Code map/Step narration/Stop/Toggle screen reader mode/Toggle navigation mode
+- In the editor - Alt+S/L/V/E/H/B/W: Sonify/Line/Vars/Errors/Help/Breadcrumb/Walkthrough
+- In the editor - Alt+Left/Right/Home/End: Navigate history/top/bottom
   `.trim();
   out(helpText);
   const speechText = helpText
@@ -1032,9 +1038,20 @@ let _assistiveTechnologyProfile = 'default';
 
 function applySpeechMode(mode, opts = {}) {
   if (SPEECH_MODES.indexOf(mode) === -1) mode = 'sr-safe';
+  const wasBrowserSpeechEnabled = _browserSpeechEnabled;
   _speechMode = mode;
   _screenReaderModeEnabled = mode !== 'codeup-voice';
   _browserSpeechEnabled = mode === 'codeup-voice';
+  // XRCVC Issue 9 ("switch mode while speech is active"): switching into
+  // Screen Reader Safe used to leave any already-queued CodeUp Voice
+  // narration playing to completion, so a user who switched specifically to
+  // silence CodeUp still heard it talk over their screen reader for a few
+  // more seconds. Cancel in-flight speech the moment automatic browser
+  // speech turns off; nothing to cancel the other way (sr-safe has no
+  // automatic speech running to interrupt).
+  if (wasBrowserSpeechEnabled && !_browserSpeechEnabled) {
+    try { SpeechManager.cancelAll(); } catch (e) {}
+  }
   try {
     localStorage.setItem(SPEECH_MODE_KEY, mode);
     localStorage.setItem('codeupScreenReaderMode', String(_screenReaderModeEnabled));
@@ -1054,6 +1071,26 @@ function updateSpeechModeUI() {
   const voice = document.getElementById('speechVoiceSelect');
   const test = document.getElementById('testVoiceBtn');
   [rate, voice, test].forEach(el => { if (el) el.disabled = !_browserSpeechEnabled; });
+  // XRCVC Issue 9 ("CodeUp Voice and NVDA speaking simultaneously"): #output
+  // carries a static aria-live="polite" in the HTML so a screen reader can
+  // read program output in Screen Reader Safe mode - that's the correct,
+  // intended channel there. But the {sr:false} passed to out() only skips
+  // CodeUp's *own* manual srAnnounce() push; it can't stop a concurrently
+  // running screen reader from independently reacting to #output's own
+  // aria-live the moment its textContent changes. In CodeUp Voice mode,
+  // CodeUp already speaks that same text out loud via speak(formatRun...),
+  // so leaving #output "polite" meant a screen reader running alongside
+  // CodeUp Voice spoke the full output too, on top of CodeUp's own voice -
+  // the exact duplicate/simultaneous-speech complaint. #output stays fully
+  // present, focusable, and readable via normal review either way; only the
+  // automatic live-announcement toggles with the mode.
+  const outputRegion = document.getElementById('output');
+  if (outputRegion) outputRegion.setAttribute('aria-live', _browserSpeechEnabled ? 'off' : 'polite');
+  // Same duplication risk for the Mentor transcript: rememberMentorTurn()
+  // writes the exact text speak() just spoke into #mentorTranscript, which
+  // also carries its own static aria-live="polite" in the HTML.
+  const mentorRegion = document.getElementById('mentorTranscript');
+  if (mentorRegion) mentorRegion.setAttribute('aria-live', _browserSpeechEnabled ? 'off' : 'polite');
 }
 
 function speak(text, opts = {}) {
@@ -1135,6 +1172,17 @@ function currentAudioBlockCommand(action) {
 
 function renderAudioBlocks(state) {
   if (!state || typeof state !== 'object') return;
+  // Captured *before* the block list is rebuilt below: `list.textContent = ''`
+  // removes the currently-focused <li> from the DOM, which immediately moves
+  // document.activeElement to <body> - checking activeElement any later than
+  // this would always see <body> and never detect that focus was in the
+  // blocks UI, silently defeating the focus-follow fix for XRCVC Issue 12.
+  const _activeBeforeRerender = document.activeElement;
+  const _focusWasInBlocksUI = !!(_activeBeforeRerender && (
+    _activeBeforeRerender.classList.contains('audio-blocks-list-item') ||
+    _activeBeforeRerender.classList.contains('audio-blocks-workspace') ||
+    (_activeBeforeRerender.closest && _activeBeforeRerender.closest('.audio-blocks-controls, .audio-blocks-workspace'))
+  ));
   const previousMode = window.activeMode || 'python';
   window._audioBlocksState = state;
   const activeMode = state.activeMode || (state.mode === 'audio_blocks' ? 'audio_blocks' : 'python');
@@ -1221,6 +1269,22 @@ function renderAudioBlocks(state) {
       });
       list.appendChild(item);
     });
+    // XRCVC Issue 12: block navigation (next/previous/move/indent/outdent)
+    // only ever updated the aria-live status text - real DOM focus never
+    // followed onto the new current block, so a keyboard/screen-reader user
+    // who had focus inside the block workspace stayed stuck on whatever
+    // element they last had focus on instead of landing on the block they
+    // just navigated to. Only move focus when it was already somewhere in
+    // the blocks UI (captured above, before this rebuild tore out the old
+    // focused <li>), so this never steals focus during normal typing
+    // elsewhere (e.g. a command spoken while focus is in the command box).
+    if (_focusWasInBlocksUI) {
+      const currentItem = list.querySelector('.audio-block--current');
+      if (currentItem && currentItem.focus) {
+        currentItem.focus();
+        if (currentItem.scrollIntoView) currentItem.scrollIntoView({ block: 'nearest' });
+      }
+    }
   }
   const emptyState = document.getElementById('audioBlocksEmptyState');
   if (emptyState) emptyState.hidden = blocks.length > 0;
@@ -1275,7 +1339,7 @@ function buildVoiceCommandPayload(text, source = 'typed') {
     error: errorText,
     language: getLanguage(),
     source,
-    active_mode: window.activeMode || window._activeMode || 'python',
+    active_mode: window.activeMode || window._activeMode || 'python',  // deliberate default, not a guess
     cursor_line: pos && pos.lineNumber ? pos.lineNumber : null,
     verbosity: getVerbosity(),
     screen_reader_mode: _screenReaderModeEnabled,
@@ -1553,6 +1617,57 @@ function closeApiKeyModal() {
   if (modal) hideEl(modal);
   if (editor) editor.focus();
 }
+
+// XRCVC Issue 19 (keyboard shortcut reference) and Issue 20 (getting started
+// guide): both are reachable from a plain visible button in the header, not
+// only via a voice/typed command, and behave like ordinary dialogs (Escape
+// closes, Tab stays inside while open, closing returns focus to the button
+// that opened it).
+function _trapFocusWithinModal(modal, event) {
+  if (event.key !== 'Tab') return;
+  const items = Array.prototype.slice.call(
+    modal.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')
+  ).filter(el => !el.disabled && el.offsetParent !== null);
+  if (!items.length) return;
+  const first = items[0];
+  const last = items[items.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+function _openInfoModal(modalId, closeBtnId, opener) {
+  const modal = document.getElementById(modalId);
+  if (!modal) return;
+  modal._codeupOpener = opener || document.activeElement;
+  showEl(modal);
+  const closeBtn = document.getElementById(closeBtnId);
+  setTimeout(() => { if (closeBtn) closeBtn.focus(); }, 0);
+  if (!modal._codeupKeydownBound) {
+    modal._codeupKeydownBound = true;
+    modal.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { e.preventDefault(); _closeInfoModal(modalId); return; }
+      _trapFocusWithinModal(modal, e);
+    });
+  }
+}
+
+function _closeInfoModal(modalId) {
+  const modal = document.getElementById(modalId);
+  if (!modal) return;
+  hideEl(modal);
+  const opener = modal._codeupOpener;
+  if (opener && opener.focus) opener.focus();
+}
+
+function openShortcutHelp() { _openInfoModal('shortcutHelpModal', 'shortcutHelpCloseBtn'); }
+function closeShortcutHelp() { _closeInfoModal('shortcutHelpModal'); }
+function openGettingStartedGuide() { _openInfoModal('guideModal', 'guideCloseBtn'); }
+function closeGettingStartedGuide() { _closeInfoModal('guideModal'); }
 
 async function submitApiKey() {
   const input = document.getElementById('apiKeyInput');
@@ -2290,7 +2405,12 @@ async function runCode(runFile, codeOverride) {
       hideProgramInputControl('Program finished. Focus moved to output.');
       clearSrAlert();
       clearEditorErrorMarkers();
-      out(data.output);
+      // sr:false - out() would otherwise push the raw output into #srAnnouncer
+      // on top of the #output live region's own change AND the formatted
+      // speak(formatRunOutputSpeech(...)) announcement below, so a Screen
+      // Reader Safe user heard the same run output announced twice (once raw,
+      // once formatted) - XRCVC "duplicate output speech".
+      out(data.output, { sr: false });
       const outputFocus = document.getElementById('output');
       try { if (outputFocus && shouldFocusOutputAfterInput) outputFocus.focus(); } catch (e) {}
       cueSuccess();
@@ -5302,9 +5422,12 @@ async function handleVoiceCommand(rawText) {
       SpeechManager.cancelAll();
       SonificationManager.clearAll();
       ErrorBeaconManager.stop();
+      // out() already announces via srAnnounce() internally - the extra
+      // srAnnounce('Stopped') here duplicated it with slightly different
+      // text ("Stopped." vs "Stopped"), so the two calls didn't even
+      // dedupe against each other (XRCVC "duplicate output speech").
       out('Stopped.');
       SonificationManager.playTone(400, 0.08, 0.08);
-      srAnnounce('Stopped');
     }
     return;
   }
@@ -5443,6 +5566,14 @@ window.addEventListener('DOMContentLoaded', () => {
   if (stopSpeech) stopSpeech.addEventListener('click', () => { SpeechManager.cancelAll(); srAnnounce('Speech stopped.'); });
   const leaveEditorBtn = document.getElementById('leaveEditorBtn');
   if (leaveEditorBtn) leaveEditorBtn.addEventListener('click', leaveEditor);
+  const shortcutHelpBtn = document.getElementById('shortcutHelpBtn');
+  if (shortcutHelpBtn) shortcutHelpBtn.addEventListener('click', () => openShortcutHelp());
+  const shortcutHelpCloseBtn = document.getElementById('shortcutHelpCloseBtn');
+  if (shortcutHelpCloseBtn) shortcutHelpCloseBtn.addEventListener('click', () => closeShortcutHelp());
+  const guideBtn = document.getElementById('guideBtn');
+  if (guideBtn) guideBtn.addEventListener('click', () => openGettingStartedGuide());
+  const guideCloseBtn = document.getElementById('guideCloseBtn');
+  if (guideCloseBtn) guideCloseBtn.addEventListener('click', () => closeGettingStartedGuide());
   const programInput = document.getElementById('programInputValue');
   if (programInput) programInput.addEventListener('keydown', event => {
     if (event.key === 'Enter') { event.preventDefault(); submitProgramInputValue(); }
@@ -5504,6 +5635,7 @@ window.addEventListener('DOMContentLoaded', () => {
         R: 'run', H: 'what can I do here', E: 'read errors only', M: 'code map',
         T: 'run with step narration', S: 'stop', A: 'toggle screen reader mode',
         K: 'show keyboard shortcuts', N: 'what navigation mode am I in',
+        O: 'open accessibility options',
       };
       const key = String(e.key || '').toUpperCase();
       if (commands[key]) {
@@ -5513,6 +5645,10 @@ window.addEventListener('DOMContentLoaded', () => {
           const command = navOn ? 'navigation mode off' : 'navigation mode on';
           localStorage.setItem('codeupNavigationMode', navOn ? 'false' : 'true');
           handleCommandText(command);
+        } else if (key === 'O') {
+          openAccessibilityOptionsPanel();
+        } else if (key === 'K') {
+          openShortcutHelp();
         } else {
           handleCommandText(commands[key]);
         }
@@ -5609,6 +5745,24 @@ function leaveEditor() {
   const next = document.getElementById('runBtn') || document.getElementById('voiceText') || document.getElementById('output');
   if (next && next.focus) next.focus();
   srAnnounce('Left editor. Press Tab to continue through CodeUp controls.');
+}
+
+// XRCVC Issue 18: "Accessibility Options shortcut does not work" - there was
+// no keyboard shortcut that opened the Accessibility settings disclosure at
+// all, so any documentation/expectation of one was simply a mismatch. This
+// gives Alt+Shift+O a real, working target: opens the <details> in the
+// header and moves focus inside it, rather than just announcing text.
+function openAccessibilityOptionsPanel() {
+  const details = document.querySelector('.cu-header-settings');
+  if (!details) return;
+  details.open = true;
+  const firstControl = document.getElementById('speechModeSelect');
+  if (firstControl && firstControl.focus) {
+    firstControl.focus();
+  } else if (details.querySelector('summary') && details.querySelector('summary').focus) {
+    details.querySelector('summary').focus();
+  }
+  srAnnounce('Accessibility and speech settings opened.');
 }
 
 function registerEditorShortcuts() {
@@ -6403,6 +6557,34 @@ function spokenConditionPhrase(cond) {
 
 function _outputPeriod(s) { return /[.!?:]$/.test(String(s || '')) ? '' : '.'; }
 const _NO_OUTPUT_PLACEHOLDER = 'Program finished with no output.';
+
+// XRCVC Issue 6: Python container punctuation ([1, 2, 3], (1, 2), {'a': 1})
+// was being spoken with the raw bracket/brace characters, which most TTS
+// voices either mumble or silently skip - a screen-reader/CodeUp-Voice user
+// heard "one two three" with no indication it was a list at all. This walks
+// each line once and only touches bracket/paren/brace characters (open/close
+// names) and colons *inside* a detected container, so ordinary sentences
+// with no container punctuation are left completely untouched - narrating
+// every comma/colon in normal prose would be "unbearable" per the ticket.
+// Commas and decimal points are left as-is; TTS already pauses on commas and
+// reads "3.14"/"-3" correctly on its own.
+const _OPEN_WORDS  = { '[': ' open bracket ', '(': ' open parenthesis ', '{': ' open brace ' };
+const _CLOSE_WORDS = { ']': ' close bracket ', ')': ' close parenthesis ', '}': ' close brace ' };
+function narrateStructuredOutputLine(line) {
+  const text = String(line == null ? '' : line);
+  if (!/[[\](){}]/.test(text)) return text;
+  let spoken = '';
+  let depth = 0;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (_OPEN_WORDS[ch]) { depth++; spoken += _OPEN_WORDS[ch]; }
+    else if (_CLOSE_WORDS[ch]) { depth = Math.max(0, depth - 1); spoken += _CLOSE_WORDS[ch]; }
+    else if (ch === ':' && depth > 0) { spoken += ' colon '; }
+    else { spoken += ch; }
+  }
+  return spoken.replace(/\s+/g, ' ').trim();
+}
+
 function shortenOutputForSpeech(text) {
   const cleaned = String(text || '').replace(/\s+/g, ' ').trim();
   if (cleaned.length <= CODEUP_SPOKEN_OUTPUT_LIMIT) return { text: cleaned, shortened: false };
@@ -6412,7 +6594,7 @@ function shortenOutputForSpeech(text) {
 function formatRunOutputSpeech(output) {
   const raw = String(output == null ? '' : output);
   if (raw.trim() === _NO_OUTPUT_PLACEHOLDER) return 'Program ran successfully with no printed output.';
-  const lines = raw.split('\n').map(s => s.trim()).filter(s => s.length > 0);
+  const lines = raw.split('\n').map(s => s.trim()).filter(s => s.length > 0).map(narrateStructuredOutputLine);
   if (lines.length === 0) return 'Program ran successfully with no printed output.';
   const joined = lines.join(', ');
   if (joined.length <= CODEUP_SPOKEN_OUTPUT_LIMIT) {
@@ -6426,7 +6608,7 @@ function formatRunOutputSpeech(output) {
 function formatFullOutputSpeech(output) {
   const raw = String(output == null ? '' : output);
   if (raw.trim() === _NO_OUTPUT_PLACEHOLDER) return 'The program finished with no printed output.';
-  const lines = raw.split('\n').map(s => s.trim()).filter(s => s.length > 0);
+  const lines = raw.split('\n').map(s => s.trim()).filter(s => s.length > 0).map(narrateStructuredOutputLine);
   if (lines.length === 0) return 'No output available.';
   const joined = lines.join(', ');
   return 'Complete program output: ' + joined + _outputPeriod(joined);

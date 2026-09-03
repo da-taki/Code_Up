@@ -131,7 +131,13 @@ def test_frontend_routes_visual_output_to_live_regions():
     run_code = source[source.index("async function runCode("):]
     success_start = run_code.index("if (data.success) {")
     run_success = run_code[success_start:run_code.index("} else {", success_start)]
-    assert run_success.index("clearSrAlert();") < run_success.index("out(data.output);")
+    # out(data.output, { sr: false }) - sr:false so out() doesn't also push the
+    # raw output through srAnnounce() on top of the #output live region's own
+    # change and the formatted speak(formatRunOutputSpeech(...)) announcement
+    # right below it (XRCVC-reported duplicate output speech in Screen Reader
+    # Safe mode: the same run output was announced twice, once raw once
+    # formatted).
+    assert run_success.index("clearSrAlert();") < run_success.index("out(data.output, { sr: false });")
     assert "replace(/<module>/g, 'top-level code')" in source
 
 

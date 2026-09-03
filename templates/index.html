@@ -21,6 +21,7 @@
 
   <nav class="cu-skip-links" aria-label="Skip links">
     <a class="skip-link" href="#editor">Jump to editor</a>
+    <a class="skip-link" href="#voiceText">Jump to command input</a>
     <a class="skip-link" href="#output">Jump to output</a>
   </nav>
 
@@ -34,10 +35,10 @@
       <h1 id="pageTitle" class="cu-title">CodeUp</h1>
       <span id="cuModeStatus" class="cu-mode-badge" role="status" aria-live="polite" aria-label="Current mode">Python Code Mode</span>
       <details class="cu-disclosure cu-header-settings">
-        <summary class="cu-disclosure-summary" aria-label="CodeUp display and accessibility settings">CodeUp display and accessibility settings</summary>
-        <div class="cu-theme-controls" role="group" aria-describedby="settingsDescription" aria-label="CodeUp display and accessibility settings">
-      <p id="settingsDescription" class="cu-settings-description">Controls for speech mode, display, screen-reader profile, voice speed, and browser voice selection.</p>
+        <summary class="cu-disclosure-summary">CodeUp display and accessibility settings</summary>
+        <div class="cu-theme-controls" role="group" aria-describedby="settingsDescription" aria-labelledby="accessibilitySettingsHeading">
       <h2 id="accessibilitySettingsHeading" class="sr-only">Accessibility and speech settings</h2>
+      <p id="settingsDescription" class="cu-settings-description">Controls for speech mode, display, screen-reader profile, voice speed, and browser voice selection.</p>
 
       <h3 class="cu-settings-subheading">Speech mode</h3>
       <label for="speechModeSelect">How should CodeUp speak?</label>
@@ -99,7 +100,9 @@
       Python editor with voice, screen-reader, debugging, and tutorial tools. Press <span class="cu-hotkey">Ctrl+Enter</span> to run.
     </div>
     <nav class="cu-secondary-nav" aria-label="More CodeUp features"
-         style="font-size:0.85rem;color:var(--text-dim);display:flex;gap:14px;flex-wrap:wrap;margin-top:4px;">
+         style="font-size:0.85rem;color:var(--text-dim);display:flex;gap:14px;flex-wrap:wrap;margin-top:4px;align-items:center;">
+      <button type="button" id="guideBtn" class="cu-button cu-button-secondary" style="font-size:0.8rem;padding:4px 10px;" aria-label="Open the CodeUp getting started guide" aria-haspopup="dialog">Getting started guide</button>
+      <button type="button" id="shortcutHelpBtn" class="cu-button cu-button-secondary" style="font-size:0.8rem;padding:4px 10px;" aria-label="Open the keyboard shortcuts reference" aria-haspopup="dialog">Keyboard shortcuts</button>
       <a href="/classroom">Classroom</a>
       <a href="/classroom/instructor">Instructor tools</a>
       <a href="/accessible-coding-tools">Accessible coding tools</a>
@@ -236,10 +239,10 @@
         <div class="audio-blocks-controls" role="toolbar" aria-label="Audio Blocks controls">
           <button class="cu-button" data-block-command="previous block" aria-label="Read previous block">Previous</button>
           <button class="cu-button" data-block-command="next block" aria-label="Read next block">Next</button>
-          <button class="cu-button cu-button-primary" data-block-command="compile blocks to Python" aria-label="Compile blocks to Python">Compile</button>
-          <button class="cu-button cu-button-primary" data-block-command="run blocks" aria-label="Compile and run blocks">Run blocks</button>
+          <button class="cu-button cu-button-primary" data-block-command="compile blocks to Python" aria-label="Compile blocks to Python" data-tooltip="Turn your blocks into Python code, without running it">Compile</button>
+          <button class="cu-button cu-button-primary" data-block-command="run blocks" aria-label="Compile and run blocks" data-tooltip="Compile your blocks to Python, then run them">Run blocks</button>
           <details class="cu-disclosure cu-block-actions">
-            <summary class="cu-disclosure-summary">Block actions</summary>
+            <summary class="cu-disclosure-summary" aria-label="Block actions" data-tooltip="Move, indent, outdent, or delete the current block">Block actions</summary>
             <div class="audio-blocks-actions-row">
               <button class="cu-button" id="audioBlockMoveUpBtn" aria-label="Move current block up">Move up</button>
               <button class="cu-button" id="audioBlockMoveDownBtn" aria-label="Move current block down">Move down</button>
@@ -256,8 +259,8 @@
       </div>
 
       <div class="cu-command-bar" role="toolbar" aria-label="Editor actions">
-        <button class="cu-button cu-button-primary" id="runBtn" aria-label="Run Python code (Ctrl+Enter)">Run</button>
-        <button class="cu-button cu-button-voice" id="voiceButton" aria-label="Toggle voice control" aria-pressed="false">
+        <button class="cu-button cu-button-primary" id="runBtn" aria-label="Run Python code (Ctrl+Enter)" data-tooltip="Run your code. Shortcut: Ctrl+Enter">Run</button>
+        <button class="cu-button cu-button-voice" id="voiceButton" aria-label="Toggle voice control (Ctrl+Shift+M)" data-tooltip="Toggle CodeUp Voice. Shortcut: Ctrl+Shift+M" aria-pressed="false">
           Voice (Off)
         </button>
         <span id="voiceStateIndicator" class="voice-state-indicator" aria-live="polite" aria-atomic="true"></span>
@@ -375,6 +378,7 @@
       <details id="cuHelpPanel" class="cu-disclosure cu-help-disclosure">
         <summary class="cu-disclosure-summary">Show commands &amp; help</summary>
         <div class="cu-help-content">
+          <h3 id="cuHelpPanelHeading" class="sr-only">Commands and help</h3>
           <p class="cu-help-intro">Everything works by voice or by typing a command here. You do not need buttons. Say or type any command below, or say <strong>&quot;what can I do here&quot;</strong>.</p>
           <div class="cu-help-grid">
             <div class="cu-help-group">
@@ -499,6 +503,50 @@
       <div class="modal-buttons">
         <button class="cu-button cu-button-primary" id="_cuDialogOk" type="button">Go</button>
         <button class="cu-button" id="_cuDialogCancel" type="button">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="shortcutHelpModal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="shortcutHelpTitle">
+    <div class="modal-content">
+      <h2 id="shortcutHelpTitle">Keyboard shortcuts</h2>
+      <ul class="cu-shortcut-list">
+        <li><span class="cu-hotkey">Ctrl+Enter</span> — Run your code</li>
+        <li><span class="cu-hotkey">Jump to editor</span> skip link, or <span class="cu-hotkey">Tab</span> from the top of the page — Focus the editor</li>
+        <li><span class="cu-hotkey">Escape</span> (editor quiet) or <span class="cu-hotkey">Ctrl+M</span> — Leave the editor</li>
+        <li><span class="cu-hotkey">Escape</span> (while speaking) — Stop speech</li>
+        <li><span class="cu-hotkey">Jump to command input</span> skip link — Focus the command box</li>
+        <li><span class="cu-hotkey">Jump to output</span> skip link — Focus program output</li>
+        <li><span class="cu-hotkey">Ctrl+Shift+M</span> — Toggle CodeUp Voice control</li>
+        <li><span class="cu-hotkey">Alt+Shift+O</span> — Open accessibility and speech settings</li>
+        <li><span class="cu-hotkey">Alt+Shift+K</span> — Open this shortcut list</li>
+        <li><span class="cu-hotkey">Ctrl+Shift+P</span> — Command palette</li>
+        <li>In Audio Blocks: <span class="cu-hotkey">Ctrl+Enter</span> compile, <span class="cu-hotkey">Ctrl+Shift+Enter</span> run, arrow keys move between blocks, <span class="cu-hotkey">[</span> / <span class="cu-hotkey">]</span> outdent / indent</li>
+      </ul>
+      <div class="modal-buttons">
+        <button class="cu-button cu-button-primary" id="shortcutHelpCloseBtn" type="button">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="guideModal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="guideTitle">
+    <div class="modal-content">
+      <h2 id="guideTitle">Getting started with CodeUp</h2>
+      <ol class="cu-guide-list">
+        <li>Use the <strong>Jump to editor</strong> skip link, or Tab from the top of the page, to reach the code editor.</li>
+        <li>Type Python code in the editor. Tab moves focus out, so use Ctrl+] / Ctrl+[ to indent and outdent.</li>
+        <li>Press <strong>Ctrl+Enter</strong>, or the Run button, to run your code.</li>
+        <li>Use the <strong>Jump to output</strong> skip link to inspect the program output.</li>
+        <li>Use the <strong>Jump to command input</strong> skip link, or the Commands box, to type or say a command.</li>
+        <li>Say or type "read last error" to hear and explore any error in detail.</li>
+        <li>In Screen Reader Safe mode, CodeUp stays quiet and lets NVDA, JAWS, VoiceOver, or Narrator read everything.</li>
+        <li>Switch to CodeUp Voice in the display and accessibility settings if you want CodeUp to narrate automatically.</li>
+        <li>Press Alt+Shift+K any time for the full keyboard shortcut list.</li>
+        <li>Press Escape (or Ctrl+M) to leave the editor when you are done typing.</li>
+        <li>Use the Classroom and Instructor tools links at the top of the page for classroom features.</li>
+      </ol>
+      <div class="modal-buttons">
+        <button class="cu-button cu-button-primary" id="guideCloseBtn" type="button">Close</button>
       </div>
     </div>
   </div>

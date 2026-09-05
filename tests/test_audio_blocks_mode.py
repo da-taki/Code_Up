@@ -460,6 +460,11 @@ def test_mode_palette_add_edit_navigation_and_code_preservation(client):
         ("add if else total greater than 2", "if_else_condition"),
         ("add comparison total > 2 into passed", "compare_values"),
         ("add repeat 3 times block", "repeat_times"),
+        # XRCVC functional audit (Issue 13): "block before times" is at
+        # least as natural as the original phrasing and used to fall
+        # through to "That block command is not available yet."
+        ("add repeat block 3 times", "repeat_times"),
+        ("add a repeat block for 3 times", "repeat_times"),
         ("add for range block from 0 to 3", "for_range"),
         ("add for loop block", "for_range"),
         ("add while total less than 3", "while_condition"),

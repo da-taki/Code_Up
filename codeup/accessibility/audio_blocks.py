@@ -1662,6 +1662,17 @@ def _parse_add(text: str) -> Tuple[Optional[str], Dict[str, Any]]:
             "repeat_times",
             lambda m: {"times": m.group(1)},
         ),
+        (
+            # XRCVC functional audit: "add repeat block 3 times" (block
+            # before the count) is at least as natural a phrasing as the
+            # original "add repeat 3 times block" and previously fell
+            # through to "That block command is not available yet." -
+            # matching the report's "Audio Block Mode most of the time not
+            # working". Same accommodation as "add variable(?: block)?" above.
+            r"^add (?:a )?repeat block(?: for)? (\d+) times$",
+            "repeat_times",
+            lambda m: {"times": m.group(1)},
+        ),
         (r"^add loop block$", "repeat_times", {"times": 3}),
         (
             r"^add for range block from (-?[\d.]+) to (-?[\d.]+)$",

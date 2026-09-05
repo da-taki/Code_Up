@@ -4898,11 +4898,19 @@ async function handleCommandText(txt) {
 
   if (window.LiveAssistant) window.LiveAssistant.noteProcessing(true);
   try {
-    const result = await guardedJson('voice-command', '/voice-command', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify(buildVoiceCommandPayload(txt, 'typed')),
-    }, narrationContext());
+    // XRCVC: "Voice mode can become stuck on 'command understanding'" - if
+    // the backend request never settles (a hung network request or a slow
+    // AI call with nothing to abort it), the status readout above stayed on
+    // "Interpreting command." forever with no way out. This bounds that
+    // wait so the UI always reaches a final state, one way or another.
+    const result = await Promise.race([
+      guardedJson('voice-command', '/voice-command', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(buildVoiceCommandPayload(txt, 'typed')),
+      }, narrationContext()),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('command_understanding_timeout')), 20000)),
+    ]);
     if (staleResult(result)) return;
     const data = result.value;
     if (window.LiveAssistant) {
@@ -4938,7 +4946,13 @@ async function handleCommandText(txt) {
 
     await handleConfirmedAction(action, data);
   } catch (err) {
-    console.error(err); speak('Voice command failed.');
+    console.error(err);
+    const timedOut = err && err.message === 'command_understanding_timeout';
+    updateCommandUnderstanding({
+      understood: '',
+      nextAction: timedOut ? 'Timed out. Try the command again.' : 'Command failed. Try again.',
+    });
+    speak(timedOut ? 'That took too long. Please try the command again.' : 'Voice command failed.');
   } finally {
     if (window.LiveAssistant) window.LiveAssistant.noteProcessing(false);
   }
@@ -5503,11 +5517,18 @@ async function handleVoiceCommand(rawText) {
   _debugLog('Voice parsing:', cleaned);
 
   try {
-    const result = await guardedJson('voice-command', '/voice-command', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify(buildVoiceCommandPayload(cleaned, 'voice')),
-    }, narrationContext());
+    // XRCVC: "Voice mode can become stuck on 'command understanding'" - see
+    // the matching fix/comment in handleCommandText(); this is the same
+    // request made from the voice-recognition path instead of the typed
+    // command box, so it needs the same bound.
+    const result = await Promise.race([
+      guardedJson('voice-command', '/voice-command', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(buildVoiceCommandPayload(cleaned, 'voice')),
+      }, narrationContext()),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('command_understanding_timeout')), 20000)),
+    ]);
     if (staleResult(result)) return;
     const data = result.value;
     applyCommandUnderstanding(data, cleaned);
@@ -5535,7 +5556,12 @@ async function handleVoiceCommand(rawText) {
     }
   } catch (e) {
     console.error('Backend interpretation failed:', e);
-    speak("Command not recognized. Say 'help' for available commands.");
+    const timedOut = e && e.message === 'command_understanding_timeout';
+    updateCommandUnderstanding({
+      understood: '',
+      nextAction: timedOut ? 'Timed out. Try the command again.' : 'Command not recognized.',
+    });
+    speak(timedOut ? 'That took too long. Please try the command again.' : "Command not recognized. Say 'help' for available commands.");
   }
 }
 

@@ -83,6 +83,20 @@
   border-bottom: 1px solid var(--border-soft);
   display: flex; justify-content: space-between; align-items: center;
 }
+/* XRCVC main-page/night-mode text-size audit: this "ESC to close" hint is
+   functional instructional text, not decoration, but inherited a plain
+   `<small>` shrink (~80%) on top of the header's already-small 11px base,
+   landing at ~9px, plus a hardcoded #666 that ignores night/high-contrast
+   theming. Un-shrink it and reuse the header's own --text-dim token, which
+   already carries a verified-readable contrast against --bg-soft in every
+   theme. */
+.cu-command-palette-esc-hint {
+  float: right;
+  font-size: 1em;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--text-dim);
+}
 .command-palette-input {
   width: 100%;
   padding: 16px 20px;

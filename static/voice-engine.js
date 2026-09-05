@@ -171,6 +171,31 @@ const VoiceEngine = (function () {
   let _isSpeaking = false;
   let _narrationAborted = false;
   let _cancelGeneration = 0;
+  let _synthKeepAliveTimer = null;
+
+  // Chrome's speechSynthesis silently stops producing audio (while
+  // `speaking` stays true and neither onend nor onerror ever fires) once a
+  // single utterance has been playing for roughly 15 seconds - this is the
+  // long-documented Chromium bug behind "speech stops mid-output" (XRCVC:
+  // a prime-number list read aloud went silent around 29 with nothing
+  // wrong in the text itself). pause()+resume() resets Chrome's internal
+  // timer without audibly interrupting playback, so kicking it well inside
+  // that window keeps long single chunks (slow speech rates, chunk text
+  // near the 260-char boundary) from ever reaching it.
+  function _startSynthKeepAlive() {
+    _stopSynthKeepAlive();
+    _synthKeepAliveTimer = setInterval(() => {
+      try {
+        if (window.speechSynthesis && window.speechSynthesis.speaking) {
+          window.speechSynthesis.pause();
+          window.speechSynthesis.resume();
+        }
+      } catch (e) {}
+    }, 10000);
+  }
+  function _stopSynthKeepAlive() {
+    if (_synthKeepAliveTimer) { clearInterval(_synthKeepAliveTimer); _synthKeepAliveTimer = null; }
+  }
 
   function sanitizeSpeechText(text) {
     return String(text || '')
@@ -285,6 +310,7 @@ const VoiceEngine = (function () {
     const cleanup = () => {
       if (finished) return;
       finished = true;
+      _stopSynthKeepAlive();
       _isSpeaking = false;
       _currentUtterance = null;
       if (item.resolve) item.resolve();
@@ -298,7 +324,15 @@ const VoiceEngine = (function () {
     _currentUtterance.onend = cleanup;
     _currentUtterance.onerror = cleanup;
 
-    const timeout = Math.max(5000, item.text.length * 100);
+    // Must scale with the utterance's own rate (user-configurable 0.5x-2.0x,
+    // see applySpeechRate()) - a fixed chars*100ms estimate assumes 1x and
+    // fires early at slower rates, cancelling speech that is still
+    // legitimately playing and reproducing the exact "speech stops
+    // mid-output" symptom XRCVC reported (this is a *safety* timeout for a
+    // genuinely stuck utterance, not a length cap - the text itself is
+    // already bounded by _semanticSpeechChunks()).
+    const rate = Math.max(0.5, Number(_currentUtterance.rate) || 1);
+    const timeout = Math.min(90000, Math.max(8000, Math.ceil(item.text.length * 120 / rate) + 6000));
     const timer = setTimeout(() => {
       if (!finished) {
         try { window.speechSynthesis.cancel(); } catch (e) {}
@@ -306,6 +340,7 @@ const VoiceEngine = (function () {
       }
     }, timeout);
 
+    _startSynthKeepAlive();
     _currentUtterance.onend = () => { clearTimeout(timer); cleanup(); };
     _currentUtterance.onerror = () => { clearTimeout(timer); cleanup(); };
 
@@ -317,6 +352,7 @@ const VoiceEngine = (function () {
     const myGeneration = ++_cancelGeneration;
     const pending = _narrationQueue.splice(0);
     pending.forEach(item => { if (item.resolve) try { item.resolve(); } catch (e) {} });
+    _stopSynthKeepAlive();
     _currentUtterance = null;
     _isSpeaking = false;
     try { window.speechSynthesis.cancel(); } catch (e) {}

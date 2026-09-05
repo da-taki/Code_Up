@@ -211,7 +211,7 @@
       </div>
 
       <div class="cu-editor-region" id="codeModeRegion">
-        <p id="editorHelp" class="cu-editor-help">Tab indents inside the editor. Press Escape when speech is quiet, or press Control+M, to leave the editor and continue to CodeUp controls.</p>
+        <p id="editorHelp" class="cu-editor-help">Tab moves focus out of the editor. Use Control right bracket to indent a line and Control left bracket to outdent it. Press Escape when speech is quiet, or press Control+M, to leave the editor and continue to CodeUp controls.</p>
         <div id="editor" class="cu-editor" role="group" aria-label="Python code editor" aria-describedby="editorHelp"></div>
         <button id="leaveEditorBtn" class="cu-button cu-button-secondary cu-leave-editor" type="button" aria-label="Leave editor and move to editor actions">Leave editor</button>
         <div id="errorSummary" class="cu-error-summary" aria-live="off" hidden>
@@ -468,7 +468,7 @@
     <div class="command-palette-container">
       <div class="command-palette-header">
         <span id="commandPaletteTitle">COMMAND PALETTE</span>
-        <small style="float:right; color: #666;">ESC to close</small>
+        <small class="cu-command-palette-esc-hint">ESC to close</small>
       </div>
       <input
         id="commandPaletteInput"

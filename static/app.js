@@ -931,11 +931,11 @@ LEARNING:
 - "bug challenge"
 
 EXECUTION PLAYBACK:
-- "tell the story"
-- "next step" / "previous step"
-- "set breakpoint at line [N]"
-- "watch variable [name]"
-- "continue"
+- "tell the story" — narrate the program running, one step at a time
+- "next step" / "previous step" — move through that narration yourself
+- "set breakpoint at line [N]" — pause and describe things when line N runs
+- "watch variable [name]" — hear that variable's value every time it changes
+- "continue" — resume after a breakpoint
 
 UTILITIES:
 - "repeat" — repeat last action
@@ -2253,6 +2253,19 @@ function updateCommandUnderstanding(update = {}) {
   }
   if (nextEl && Object.prototype.hasOwnProperty.call(update, 'nextAction')) {
     nextEl.textContent = String(update.nextAction || '').trim() || 'None yet.';
+    // Product-polish pass: a command/AI failure needs to be visually
+    // noticeable to a sighted user without touching #output - that's
+    // program output, a different concept, and overwriting it would erase
+    // whatever the learner's program actually printed. This status line is
+    // the smallest existing surface already wired for exactly this
+    // (role="status", its own aria-live, already correctly announced) - it
+    // just needed to be visually distinct on failure. --danger is already
+    // defined per-theme (default/night/high-contrast - see core.css), so
+    // this stays correct in every mode. Every call that starts a new
+    // command omits isError (falsy), so this never lingers from a previous
+    // failure into a fresh attempt.
+    nextEl.style.color = update.isError ? 'var(--danger)' : '';
+    nextEl.style.fontWeight = update.isError ? '700' : '';
   }
 }
 window.updateTranscriptStatus = updateCommandUnderstanding;
@@ -2564,7 +2577,7 @@ async function runCodeStreaming() {
       } else if (event.type === 'input_request') {
         const prompt = event.prompt || 'Input requested';
         _activeStreamRun.awaitingPrompt = prompt;
-        const message = `Your code is asking: ${prompt}. Input 1. Expected text. Type your answer in Program inputs and press Enter, or say your answer.`;
+        const message = `Your code is asking: ${prompt}. Expected text. Type your answer in Program inputs and press Enter, or say your answer.`;
         showProgramInputControl({ prompt, inputIndex: 1, inputCount: 1, expectedType: 'text', streaming: true, message });
         speak(message, { sr: false });
         SonificationManager.playTone(800, 0.15, 0.1);
@@ -3959,9 +3972,16 @@ const _TUTORIAL_EDIT_ACTIONS = new Set([
 
 function inputRequestMessage(req, fallback) {
   if (!req) return fallback || 'This program needs input.';
-  const total = req.inputCount && req.inputCount > 1 ? ` of ${req.inputCount}` : '';
   const type = req.expectedType || 'text';
-  return `Input ${req.inputIndex || 1}${total}. ${req.prompt || 'This program needs input.'} Expected ${type}.`;
+  const prompt = req.prompt || 'This program needs input.';
+  // Product-polish pass: "Input 1. <prompt>" numbered every request even
+  // when there was only ever going to be one, which reads like a stray
+  // internal counter to a first-time learner. Only surface the count when
+  // there is actually more than one input to track.
+  if (req.inputCount && req.inputCount > 1) {
+    return `Input ${req.inputIndex || 1} of ${req.inputCount}. ${prompt} Expected ${type}.`;
+  }
+  return `${prompt} Expected ${type}.`;
 }
 function showProgramInputControl(req) {
   const section = document.getElementById('programInputSection');
@@ -4948,11 +4968,28 @@ async function handleCommandText(txt) {
   } catch (err) {
     console.error(err);
     const timedOut = err && err.message === 'command_understanding_timeout';
+    // Product-polish pass: a failure here previously only changed the small
+    // "Next action" status line, with no visible cue - easy for a sighted
+    // user to miss. It must NOT write to #output: that is the learner's
+    // actual program output (see the "Hello" test case), a different
+    // concept, and overwriting it would erase something they still need to
+    // see. isError:true instead makes this same, already-announced status
+    // line visually distinct (color, via updateCommandUnderstanding).
     updateCommandUnderstanding({
       understood: '',
       nextAction: timedOut ? 'Timed out. Try the command again.' : 'Command failed. Try again.',
+      isError: true,
     });
-    speak(timedOut ? 'That took too long. Please try the command again.' : 'Voice command failed.');
+    // sr:false here: with browser speech off, speak() would otherwise call
+    // srAnnounce() itself (see speak()'s own !_browserSpeechEnabled branch),
+    // a *second*, separately-worded live-region announcement on top of the
+    // status-line update just above - confirmed live via NVDA-equivalent
+    // DOM/mutation tracing: "Command failed. Try again." then immediately
+    // "Voice command failed." for one failure. sr:false only skips that
+    // fallback; it has no effect on VoiceEngine's audible path (opts.sr is
+    // never read there), so CodeUp Voice still speaks this normally when
+    // browser speech is intentionally on.
+    speak(timedOut ? 'That took too long. Please try the command again.' : 'Voice command failed.', { sr: false });
   } finally {
     if (window.LiveAssistant) window.LiveAssistant.noteProcessing(false);
   }
@@ -5557,11 +5594,21 @@ async function handleVoiceCommand(rawText) {
   } catch (e) {
     console.error('Backend interpretation failed:', e);
     const timedOut = e && e.message === 'command_understanding_timeout';
+    // This catch means the request itself failed (network/timeout) - the
+    // command was never actually understood one way or the other, so
+    // "not recognized" (which means something different: the backend
+    // answered but didn't match a known command) was a misleading label
+    // for this case.
     updateCommandUnderstanding({
       understood: '',
-      nextAction: timedOut ? 'Timed out. Try the command again.' : 'Command not recognized.',
+      nextAction: timedOut ? 'Timed out. Try the command again.' : 'Command failed. Try again.',
+      isError: true,
     });
-    speak(timedOut ? 'That took too long. Please try the command again.' : "Command not recognized. Say 'help' for available commands.");
+    // sr:false: see the matching comment in handleCommandText()'s catch
+    // block - without it, speak() duplicates the status-line announcement
+    // just above via its own srAnnounce() fallback when browser speech is
+    // off.
+    speak(timedOut ? 'That took too long. Please try the command again.' : 'Voice command failed.', { sr: false });
   }
 }
 

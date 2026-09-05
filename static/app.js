@@ -2254,9 +2254,35 @@ function setCode(v, opts) {
   return true;
 }
 
+let _outputAnnounceRestoreTimer = null;
 function out(t, options = {}) {
   const output = document.getElementById('output');
-  if (output) output.textContent = t;
+  if (output) {
+    if (options.announce === false) {
+      // XRCVC full re-audit: options.sr===false only skips out()'s own
+      // *manual* srAnnounce() call below - it cannot stop a real screen
+      // reader from independently reacting to #output's native aria-live
+      // the instant textContent changes (same mechanism documented in the
+      // comment a few lines down for the browser-speech-off case). The
+      // runtime-error caller writes the raw error into #output AND calls
+      // srAlert() with a short summary of the same event immediately after,
+      // so #output's native "polite" announcement and srAlert's "assertive"
+      // one both fired automatically for one error - confirmed live via
+      // MutationObserver + srAnnounce instrumentation. Same mute/restore
+      // technique as showAI()/updateCommandUnderstanding(): silence the
+      // native live-region announcement for just this one write, then
+      // restore it a beat later, so whichever caller already owns the
+      // announcement (srAlert here) stays the only automatic source.
+      clearTimeout(_outputAnnounceRestoreTimer);
+      output.setAttribute('aria-live', 'off');
+      output.textContent = t;
+      _outputAnnounceRestoreTimer = setTimeout(() => {
+        output.setAttribute('aria-live', _browserSpeechEnabled ? 'off' : 'polite');
+      }, 50);
+    } else {
+      output.textContent = t;
+    }
+  }
   const text = String(t || '').trim();
   if (options.sr === false) return;
   // Announcement-ownership pass: #output carries its own static aria-live,
@@ -2495,7 +2521,15 @@ async function runCode(runFile, codeOverride) {
       signal: _runGuard.signal,
     });
     const data = await res.json();
-    if (!_runGuard.active(narrationContext())) return;
+    // Bug (XRCVC full-functional pass, Audio Blocks "Run Blocks"): this used
+    // to re-check with narrationContext() (no args), which defaults to
+    // getCode() - the live Monaco editor's content. When codeOverride is a
+    // compiled Audio Blocks program, that never matches the editor (compiled
+    // block code is never synced into Monaco), so the guard always saw a
+    // "stale" mismatch and returned here before out()/speak() ever ran,
+    // leaving #output stuck on "Running..." forever. Re-check against the
+    // same code value that was snapshotted in the guard above.
+    if (!_runGuard.active(narrationContext(codeToCheck))) return;
     window.executionTrace = data.trace || [];
     window.traceIndex = 0;
 
@@ -2565,7 +2599,12 @@ async function runCode(runFile, codeOverride) {
       }
     } else {
       hideProgramInputControl('Run stopped because of an error.');
-      out('ERROR:\n' + (data.error || ''), { assertive: true, sr: false });
+      // announce:false: srAlert() a few lines down is this event's one
+      // intended automatic announcer (assertive, short "Error on line N"
+      // summary) - see out()'s announce:false branch for why sr:false alone
+      // doesn't stop #output's own native aria-live from announcing this
+      // same write a second time.
+      out('ERROR:\n' + (data.error || ''), { assertive: true, sr: false, announce: false });
       cueError();
       _lastErrorContext = {
         code: codeToCheck,
@@ -4250,7 +4289,7 @@ function updateInputsPanel() {
       ).join('');
       return;
     }
-    panel.innerHTML = '<div style="color:var(--text-dim);font-style:italic;padding:6px 0;font-size:0.8rem;">No inputs declared</div>';
+    panel.innerHTML = '<div style="color:var(--text-dim);font-style:italic;padding:6px 0;font-size:0.875rem;">No inputs declared</div>';
     return;
   }
   panel.innerHTML = _preflightInputs.map((v, i) =>
@@ -5764,7 +5803,17 @@ window.addEventListener('DOMContentLoaded', () => {
   if (guideCloseBtn) guideCloseBtn.addEventListener('click', () => closeGettingStartedGuide());
   const programInput = document.getElementById('programInputValue');
   if (programInput) programInput.addEventListener('keydown', event => {
-    if (event.key === 'Enter') { event.preventDefault(); submitProgramInputValue(); }
+    if (event.key === 'Enter') {
+      // event.isComposing: an IME (e.g. typing Japanese/Chinese) sends its
+      // own Enter to confirm a composed character, not to submit the field
+      // - submitting here would eat that confirmation. event.repeat: a
+      // held-down Enter key auto-repeats keydown, and submitProgramInputValue()
+      // has no re-entrancy guard of its own (each call starts a fresh
+      // runCode()), so an unguarded repeat would fire it many times.
+      if (event.isComposing || event.repeat) return;
+      event.preventDefault();
+      submitProgramInputValue();
+    }
     if (event.key === 'Escape') { event.preventDefault(); cancelProgramInputRequest(); }
   });
   const programSubmit = document.getElementById('programInputSubmitBtn');

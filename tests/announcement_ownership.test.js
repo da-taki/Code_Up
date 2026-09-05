@@ -26,7 +26,7 @@ function extract(startMarker, endMarker) {
 }
 
 const SHOW_AI_SRC = extract('let _aiBubbleAnnounceRestoreTimer = null;', 'function hideAI()');
-const OUT_SRC = extract('function out(t, options = {})', 'let _cuAnnounceRestoreTimer = null;');
+const OUT_SRC = extract('let _outputAnnounceRestoreTimer = null;', 'let _cuAnnounceRestoreTimer = null;');
 const UPDATE_CU_SRC = extract('let _cuAnnounceRestoreTimer = null;', 'window.updateTranscriptStatus');
 
 // --- Fake timers (same pattern as voice_speech_chunking.test.js) ---------
@@ -140,6 +140,58 @@ check('out() still escalates to assertive priority for error text in CodeUp Voic
   sandbox.out('Fix failed.');
   assert.strictEqual(srAnnounceCalls.length, 1);
   assert.strictEqual(srAnnounceCalls[0].priority, 'assertive');
+});
+
+// XRCVC full re-audit: runCode()'s error branch writes the raw error into
+// #output (which has its own native "polite" aria-live in Screen Reader
+// Safe mode) AND separately calls srAlert() with a short summary of the
+// exact same event. {sr:false} only stops out()'s own *manual* srAnnounce()
+// call - it does nothing about #output's native live-region reacting to the
+// textContent write itself - so both fired automatically for one error,
+// confirmed live via MutationObserver + srAnnounce instrumentation (NVDA
+// profile, Browser Speech OFF). out(text, {announce:false}) mutes the
+// native announcement for that one write so srAlert() is the sole owner.
+check('out(text, {announce:false}) silences #output\'s own native aria-live for that write, then restores it', () => {
+  reset(false);
+  sandbox.out('ERROR:\nLine 1: ZeroDivisionError: division by zero', { assertive: true, sr: false, announce: false });
+  assert.strictEqual(outputEl.getAttribute('aria-live'), 'off',
+    'a real screen reader must not announce this write - srAlert() elsewhere owns the runtime-error announcement');
+  assert.strictEqual(outputEl.textContent, 'ERROR:\nLine 1: ZeroDivisionError: division by zero',
+    'the error must still be visibly present in #output');
+  assert.strictEqual(srAnnounceCalls.length, 0, 'sr:false must still suppress the manual announce path too');
+  advance(60);
+  assert.strictEqual(outputEl.getAttribute('aria-live'), 'polite',
+    'must self-heal back to polite so the *next* normal out() call in this mode is still announced');
+});
+
+check('out(text, {announce:false}) restores to "off" (not "polite") in CodeUp Voice mode', () => {
+  reset(true);
+  sandbox.out('ERROR:\nsomething broke', { assertive: true, sr: false, announce: false });
+  assert.strictEqual(outputEl.getAttribute('aria-live'), 'off');
+  advance(60);
+  assert.strictEqual(outputEl.getAttribute('aria-live'), 'off',
+    '#output\'s resting aria-live in this mode is "off" (CodeUp\'s own voice narrates instead) - restoring to "polite" here would newly turn on a duplicate native announcement');
+});
+
+check('a runtime error announces through exactly one automatic source: srAlert, not #output\'s native aria-live', () => {
+  reset(false);
+  // Mirrors runCode()'s actual error branch: out() with announce:false,
+  // immediately followed by the equivalent of srAlert() (srAnnounce at
+  // 'assertive' priority) with a short summary of the same event.
+  sandbox.out('ERROR:\nLine 1: ZeroDivisionError: division by zero', { assertive: true, sr: false, announce: false });
+  sandbox.srAnnounce('Error: Line 1: ZeroDivisionError: division by zero', 'assertive');
+  assert.strictEqual(srAnnounceCalls.length, 1, 'the runtime error must be announced exactly once, not twice');
+  assert.strictEqual(srAnnounceCalls[0].priority, 'assertive');
+});
+
+check('two announce:false out() calls close together do not get #output stuck "off"', () => {
+  reset(false);
+  sandbox.out('ERROR:\nfirst', { announce: false });
+  advance(10); // well before the first restore (50ms) fires
+  sandbox.out('ERROR:\nsecond', { announce: false });
+  advance(100); // past both restores
+  assert.strictEqual(outputEl.getAttribute('aria-live'), 'polite',
+    'stuck at "off" would silence every future run\'s output announcement, forever, for this whole session');
 });
 
 // ---------------------------------------------------------------------------

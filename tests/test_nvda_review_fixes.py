@@ -88,7 +88,16 @@ def test_live_regions_are_deduplicated_and_errors_use_one_assertive_path():
     assert "<div id=\"srAnnouncer\" role=\"status\" aria-live=\"polite\"" in Path("templates/index.html").read_text(encoding="utf-8")
     assert "<div id=\"srAlert\" role=\"alert\" aria-live=\"assertive\"" in Path("templates/index.html").read_text(encoding="utf-8")
     assert "< 1200" in STATIC_APP
-    assert "out('ERROR:\\n' + (data.error || ''), { assertive: true, sr: false })" in STATIC_APP
+    # XRCVC full re-audit (Sept 2026): this out() call used to read just
+    # {assertive: true, sr: false} - live NVDA-profile instrumentation
+    # (MutationObserver + srAnnounce spy) showed #output's own native
+    # "polite" aria-live still announced this exact write on top of the
+    # srAlert() call a few lines below, duplicating the runtime-error
+    # announcement. announce: false mutes that one native announcement so
+    # srAlert() is the sole automatic owner - see out()'s announce:false
+    # branch and tests/announcement_ownership.test.js for the regression
+    # coverage of that mechanism itself.
+    assert "out('ERROR:\\n' + (data.error || ''), { assertive: true, sr: false, announce: false })" in STATIC_APP
     assert "speak(`Error${lineHint}: ${lastLine}`, { sr: false, priority: 'assertive' })" in STATIC_APP
 
 

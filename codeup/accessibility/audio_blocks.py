@@ -1990,7 +1990,7 @@ def handles(text: str) -> bool:
     }
     return value in exact or value in ENTER_PHRASES or value in PYTHON_MODE_PHRASES or value in ACTIVE_AUDIO_BLOCKS_COMMANDS or bool(
         re.match(
-            r"^(?:list (?:output|variable|math|condition|loop|list|function|input|comment|import|exception) blocks|read block \d+|read selected block|select block (?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)|read children of block \d+|move block \d+ (?:up|down|before block \d+|after block \d+)|(?:indent|outdent|delete) block \d+|put block \d+ inside (?:else of )?block \d+|remove block \d+ from loop|edit block \d+|set block \d+ (?:text|variable|condition) to .+|set (?:selected block )?(?:message|variable name|variable value|import library|import alias|condition|loop variable|range start|range stop|function name|parameter|return value) to .+|rename block variable \w+ to \w+|clear block \d+ value|which block made line \d+|what python did block \d+ create|ask for \w+(?: as (?:number|decimal))?|add .+|set variable .+|append .+ to .+)$",
+            r"^(?:list (?:output|variable|math|condition|loop|list|function|input|comment|import|exception) blocks|read block \d+|read selected block|select block (?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)|read children of block \d+|move block \d+ (?:up|down|before block \d+|after block \d+)|(?:indent|outdent|delete|duplicate) block \d+|put block \d+ inside (?:else of )?block \d+|remove block \d+ from loop|edit block \d+|set block \d+ (?:text|variable|condition) to .+|set (?:selected block )?(?:message|variable name|variable value|import library|import alias|condition|loop variable|range start|range stop|function name|parameter|return value) to .+|rename block variable \w+ to \w+|clear block \d+ value|which block made line \d+|what python did block \d+ create|ask for \w+(?: as (?:number|decimal))?|add .+|set variable .+|append .+ to .+)$",
             value,
         )
     )
@@ -2439,7 +2439,7 @@ def route_command(
     match = re.match(r"^remove block (\d+) from loop$", t)
     if match:
         return _message(outdent_block(workspace, int(match.group(1))), workspace)
-    match = re.match(r"^(indent|outdent|delete) block (\d+)$", t)
+    match = re.match(r"^(indent|outdent|delete|duplicate) block (\d+)$", t)
     if match:
         action, block_id = match.group(1), int(match.group(2))
         result = (
@@ -2448,6 +2448,8 @@ def route_command(
             else outdent_block(workspace, block_id)
             if action == "outdent"
             else delete_block(workspace, block_id)
+            if action == "delete"
+            else duplicate_block(workspace, block_id)
         )
         return _message(result, workspace)
     if t == "undo":

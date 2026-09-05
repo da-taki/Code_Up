@@ -15,6 +15,7 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
+const { createNarrationGuard } = require(path.join(__dirname, '..', 'static', 'narration-guard.js'));
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'static', 'app.js'), 'utf8');
 
@@ -64,6 +65,47 @@ t('runCode() finishes the guard and treats an aborted fetch as a silent no-op', 
   const body = extractFunctionBody(source, 'runCode');
   assert(/_runGuard\.finish\(\)/.test(body), 'runCode must release its guard when done');
   assert(/e\.name === 'AbortError'/.test(body), 'an aborted (superseded) run must not surface a "System error" to the user');
+});
+
+// XRCVC full-functional re-audit (Audio Blocks "Run Blocks" stuck on
+// "Running..." forever): the post-fetch staleness check re-derived its
+// comparison context with narrationContext() (no args), which defaults to
+// getCode() - the *live Monaco editor* value. runCode() is also called with
+// an explicit codeOverride (the compiled Audio Blocks program, which is
+// never synced into Monaco), so for every Audio-Blocks-triggered run the
+// snapshot ('codeToCheck') and the re-check (getCode()) were guaranteed to
+// differ, so guard.active() always reported stale and runCode() returned
+// right before out()/speak() ever displayed the real output - confirmed
+// live: #output stayed on "Running..." with a 200 OK /run response sitting
+// unused. Fixed by re-checking with the same snapshot value the guard began
+// with (narrationContext(codeToCheck)) instead of an unconditional getCode().
+t('runCode() re-checks staleness against the same code it snapshotted, not a fresh getCode()', () => {
+  const body = extractFunctionBody(source, 'runCode');
+  const jsonIdx = body.indexOf('await res.json()');
+  const afterJson = body.slice(jsonIdx);
+  const checkIdx = afterJson.indexOf('_runGuard.active(');
+  assert(checkIdx !== -1, 'runCode must re-check the guard after parsing the /run response');
+  assert(
+    afterJson.startsWith('_runGuard.active(narrationContext(codeToCheck))', checkIdx),
+    'the staleness re-check must reuse codeToCheck (the same value passed to NarrationRequests.begin above) - ' +
+      'calling narrationContext() with no argument silently falls back to getCode(), the live Monaco editor value, ' +
+      'which is a different string from an Audio Blocks codeOverride and made every "Run Blocks" look permanently stale'
+  );
+});
+
+t('a codeOverride run is recognized as still-active against its own snapshot (regression for the Audio Blocks stuck-"Running..." bug)', () => {
+  const guard = createNarrationGuard();
+  const compiledBlocksCode = "print('hello from blocks')\n";
+  const liveEditorCode = "for i in range(400):\n    print('x' * 20)"; // unrelated leftover Code Mode content
+  const runGuard = guard.begin('run', { code: compiledBlocksCode, file: '' });
+
+  // The bug: re-checking against the live editor's code (what an argument-less
+  // narrationContext() resolves to) wrongly reports stale for a codeOverride run.
+  assert.strictEqual(runGuard.active({ code: liveEditorCode, file: '' }), false);
+
+  // The fix: re-checking against the same code that was snapshotted at begin()
+  // correctly reports the run as still active, so out()/speak() actually run.
+  assert.strictEqual(runGuard.active({ code: compiledBlocksCode, file: '' }), true);
 });
 
 console.log(passed + ' runCode narration guard tests passed');

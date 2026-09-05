@@ -68,7 +68,7 @@
       <button id="nightToggle" class="theme-toggle" aria-pressed="false" aria-label="Toggle night mode">
         Night Mode
       </button>
-      <button id="tutorialBtn" class="cu-button cu-button-secondary" aria-label="Start interactive tutorial" style="font-size:0.8rem;padding:6px 12px;">
+      <button id="tutorialBtn" class="cu-button cu-button-secondary" aria-label="Start interactive tutorial">
         Tutorial
       </button>
 
@@ -100,9 +100,9 @@
       Python editor with voice, screen-reader, debugging, and tutorial tools. Press <span class="cu-hotkey">Ctrl+Enter</span> to run.
     </div>
     <nav class="cu-secondary-nav" aria-label="More CodeUp features"
-         style="font-size:0.85rem;color:var(--text-dim);display:flex;gap:14px;flex-wrap:wrap;margin-top:4px;align-items:center;">
-      <button type="button" id="guideBtn" class="cu-button cu-button-secondary" style="font-size:0.8rem;padding:4px 10px;" aria-label="Open the CodeUp getting started guide" aria-haspopup="dialog">Getting started guide</button>
-      <button type="button" id="shortcutHelpBtn" class="cu-button cu-button-secondary" style="font-size:0.8rem;padding:4px 10px;" aria-label="Open the keyboard shortcuts reference" aria-haspopup="dialog">Keyboard shortcuts</button>
+         style="font-size:0.9rem;color:var(--text-dim);display:flex;gap:14px;flex-wrap:wrap;margin-top:4px;align-items:center;">
+      <button type="button" id="guideBtn" class="cu-button cu-button-secondary" style="padding:4px 10px;" aria-label="Open the CodeUp getting started guide" aria-haspopup="dialog">Getting started guide</button>
+      <button type="button" id="shortcutHelpBtn" class="cu-button cu-button-secondary" style="padding:4px 10px;" aria-label="Open the keyboard shortcuts reference" aria-haspopup="dialog">Keyboard shortcuts</button>
       <a href="/classroom">Classroom</a>
       <a href="/classroom/instructor">Instructor tools</a>
       <a href="/accessible-coding-tools">Accessible coding tools</a>
@@ -126,7 +126,7 @@
       </details>
     </div>
     <button id="cuStartBannerDismiss" class="cu-button cu-button-secondary"
-            style="font-size:0.8rem;padding:4px 10px;white-space:nowrap;" aria-label="Dismiss getting-started banner">Dismiss</button>
+            style="padding:4px 10px;white-space:nowrap;" aria-label="Dismiss getting-started banner">Dismiss</button>
   </div>
 
   <div class="cu-main">
@@ -143,13 +143,13 @@
               type="text"
               placeholder="Snippet name..."
               aria-label="Snippet name"
-              style="flex:1;padding:7px 10px;border-radius:var(--radius-sm);border:1px solid var(--border-soft);background:var(--bg-soft);color:var(--text-main);font-family:inherit;font-size:0.85rem;"
+              style="flex:1;padding:7px 10px;border-radius:var(--radius-sm);border:1px solid var(--border-soft);background:var(--bg-soft);color:var(--text-main);font-family:inherit;font-size:0.9rem;"
             />
             <button
               id="snippetSaveBtn"
               class="cu-button cu-button-secondary"
               aria-label="Save snippet with this name"
-              style="padding:6px 10px;font-size:0.8rem;"
+              style="padding:6px 10px;"
             >Save</button>
           </div>
           <div id="snippetList" class="cu-snippet-list" role="group" aria-label="Saved snippets" style="max-height:180px;"></div>
@@ -161,7 +161,7 @@
         <div class="cu-disclosure-body">
           <h3 class="sr-only">Project files</h3>
           <div id="projectFileList" class="cu-snippet-list" role="group" aria-label="Project files" style="max-height:180px;">
-            <div style="color:var(--text-dim);font-style:italic;padding:6px 0;font-size:0.8rem;">Single-file mode</div>
+            <div style="color:var(--text-dim);font-style:italic;padding:6px 0;font-size:0.875rem;">Single-file mode</div>
           </div>
         </div>
       </details>
@@ -182,21 +182,21 @@
               type="text"
               placeholder="Add an input value..."
               aria-label="Add a pre-flight input value"
-              style="flex:1;padding:7px 10px;border-radius:var(--radius-sm);border:1px solid var(--border-soft);background:var(--bg-soft);color:var(--text-main);font-family:inherit;font-size:0.85rem;"
+              style="flex:1;padding:7px 10px;border-radius:var(--radius-sm);border:1px solid var(--border-soft);background:var(--bg-soft);color:var(--text-main);font-family:inherit;font-size:0.9rem;"
             />
             <button
               id="inputAddBtn"
               class="cu-button cu-button-secondary"
               aria-label="Add this input value"
-              style="padding:6px 10px;font-size:0.8rem;"
+              style="padding:6px 10px;"
             >+</button>
           </div>
           <div id="inputsPanelList" role="group" aria-label="Pre-flight inputs">
-            <div style="color:var(--text-dim);font-style:italic;padding:6px 0;font-size:0.8rem;">No inputs declared</div>
+            <div style="color:var(--text-dim);font-style:italic;padding:6px 0;font-size:0.875rem;">No inputs declared</div>
           </div>
           <div style="display:flex;gap:6px;margin-top:8px;">
-            <button id="clearInputsBtn" class="cu-button" style="flex:1;font-size:0.75rem;padding:6px 8px;" aria-label="Clear all pre-flight inputs">Clear</button>
-            <button id="toggleInputModeBtn" class="cu-button" style="flex:1;font-size:0.75rem;padding:6px 8px;" aria-label="Toggle between pre-flight and live input mode">Live</button>
+            <button id="clearInputsBtn" class="cu-button" style="flex:1;padding:6px 8px;" aria-label="Clear all pre-flight inputs">Clear</button>
+            <button id="toggleInputModeBtn" class="cu-button" style="flex:1;padding:6px 8px;" aria-label="Toggle between pre-flight and live input mode">Live</button>
           </div>
         </div>
       </details>
@@ -368,10 +368,10 @@
         <p id="liveAssistantHeard" class="cu-live-assistant-line">You said: (nothing yet)</p>
         <p id="liveAssistantResponse" class="cu-live-assistant-line">CodeUp said: (nothing yet)</p>
         <div class="cu-live-assistant-controls" role="group" aria-label="Live Assistant controls">
-          <button type="button" id="liveAssistantStartBtn" aria-pressed="false" aria-label="Start live assistant">Start live assistant</button>
-          <button type="button" id="liveAssistantPauseBtn" disabled aria-label="Pause or resume listening">Pause listening</button>
-          <button type="button" id="liveAssistantStopSpeakBtn" aria-label="Stop speaking">Stop speaking</button>
-          <button type="button" id="liveAssistantRepeatBtn" aria-label="Repeat last response">Repeat last response</button>
+          <button type="button" class="cu-button cu-button-secondary" id="liveAssistantStartBtn" aria-pressed="false" aria-label="Start live assistant">Start live assistant</button>
+          <button type="button" class="cu-button cu-button-secondary" id="liveAssistantPauseBtn" disabled aria-label="Pause or resume listening">Pause listening</button>
+          <button type="button" class="cu-button cu-button-secondary" id="liveAssistantStopSpeakBtn" aria-label="Stop speaking">Stop speaking</button>
+          <button type="button" class="cu-button cu-button-secondary" id="liveAssistantRepeatBtn" aria-label="Repeat last response">Repeat last response</button>
         </div>
       </div>
 
@@ -451,7 +451,7 @@
         <button class="cu-button cu-button-primary" id="submitApiKeyBtn">Configure</button>
         <button class="cu-button" id="closeApiKeyModalBtn">Cancel</button>
       </div>
-      <p style="font-size: 0.85rem; margin-top: 10px; color: var(--text-dim);">
+      <p style="font-size: 0.9rem; margin-top: 10px; color: var(--text-dim);">
         Get a free API key at <a href="https://console.groq.com" target="_blank" rel="noopener noreferrer">console.groq.com</a>
       </p>
     </div>

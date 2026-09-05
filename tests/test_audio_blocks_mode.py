@@ -970,6 +970,20 @@ def test_audio_blocks_selected_block_voice_editing_and_history(client):
     assert len(redone["audio_blocks"]["blocks"]) == 1
 
 
+def test_audio_blocks_duplicate_accepts_a_numbered_block_target(client):
+    # XRCVC full functional pass (Finding 10b): "duplicate selected block"
+    # worked, but every sibling action (move/indent/outdent/delete) also
+    # accepts a numbered "<action> block N" form and duplicate silently
+    # didn't - reproduced live as "That block command is not available
+    # yet." for the very phrasing a user would reach for after already
+    # using "delete block 1"/"move block 1 up" successfully.
+    typed(client, "open audio blocks")
+    typed(client, "add print block hello")
+    duplicated = typed(client, "duplicate block 1")
+    assert len(duplicated["audio_blocks"]["blocks"]) == 2
+    assert "Duplicated block 1" in duplicated["speech"]
+
+
 def test_audio_blocks_variable_import_condition_range_function_and_return_edits(client):
     typed(client, "open audio blocks")
     typed(client, "add variable block")

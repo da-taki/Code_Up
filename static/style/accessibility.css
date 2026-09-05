@@ -20,6 +20,39 @@ body.theme-tritanopia {
   --accent-soft:  rgba(139, 26, 5, 0.12);
 }
 
+/* XRCVC full re-audit (Sept 2026): these three color-vision accents were
+   tuned for the default light theme (a dark hue meant to sit under white
+   button text on a light page). Night Mode swaps to a bright accent
+   (#ff7a47) for the same reason in reverse - so stacking a color-vision
+   mode on top of Night Mode left the dark, light-mode-tuned accent as the
+   background of every primary button while Night Mode's own dark button
+   text rule (`body.theme-night .cu-button-primary { color: #1a0800 }`)
+   still applied on top of it: near-black text on a near-black-navy/brick
+   button. Measured live: Run/Compile/Run blocks/Configure/Close and the
+   mode badge all fell to a ~1.65-1.69 contrast ratio (needs 4.5). Each
+   variant below keeps the same hue family the light-theme version chose
+   (blue for protanopia/deuteranopia, red for tritanopia) so the underlying
+   colorblind-safety intent is unchanged, just brightened enough to read
+   against Night Mode's near-black panels and to leave Night Mode's own
+   dark-button-text rule correctly contrasted again. */
+body.theme-night.theme-protanopia {
+  --accent:       #6fa4d8;
+  --accent-hover: #94c0e8;
+  --accent-soft:  rgba(111, 164, 216, 0.16);
+}
+
+body.theme-night.theme-deuteranopia {
+  --accent:       #5f97cf;
+  --accent-hover: #85b3e0;
+  --accent-soft:  rgba(95, 151, 207, 0.16);
+}
+
+body.theme-night.theme-tritanopia {
+  --accent:       #e8734a;
+  --accent-hover: #f0906c;
+  --accent-soft:  rgba(232, 115, 74, 0.16);
+}
+
 body.theme-high-contrast {
   --bg-main:  #ffffff;
   --bg-panel: #ffffff;
@@ -97,7 +130,7 @@ body.theme-reduced-motion *::after {
   position: absolute; left: -9999px; top: 0; z-index: 10000;
   padding: 12px 20px;
   background: var(--text-main); color: var(--bg-main);
-  font-family: var(--font-mono); font-size: 13px; font-weight: 700;
+  font-family: var(--font-mono); font-size: 14px; font-weight: 700;
   border-radius: 0 0 8px 0;
   text-decoration: none;
 }

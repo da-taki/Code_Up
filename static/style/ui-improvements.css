@@ -35,6 +35,24 @@
   white-space: normal; max-width: 220px; width: max-content;
   z-index: 20; pointer-events: none;
 }
+/* XRCVC Finding 9 (Run tooltip, full closure): centering under #runBtn puts
+   the tooltip's left edge at a negative offset whenever the button sits
+   near the left edge of a narrow/zoomed layout - #runBtn is always the
+   first control in .cu-command-bar, so this is every narrow viewport, not
+   an edge case. <body>'s own `overflow-x: hidden` (a couple of rules above
+   this file) then silently clips that portion instead of scrolling to it,
+   so part of the tooltip is simply invisible - reproduced and measured at
+   640px (button left offset ~36px, tooltip would start at roughly -45px).
+   Left-aligning just this one tooltip to the button's own left edge (which
+   is always >= 0, since the button itself is on-screen) keeps its right
+   edge bounded by max-width above instead of by how centered it happens to
+   be - no JS measurement needed, and every other [data-tooltip] control is
+   unaffected. */
+#runBtn[data-tooltip]:hover::after,
+#runBtn[data-tooltip]:focus-visible::after {
+  left: 0;
+  transform: none;
+}
 .cu-shortcut-list, .cu-guide-list {
   font-size: 0.9rem; line-height: 1.6; color: var(--text-main);
   margin: 0 0 16px; padding-left: 1.4em;
@@ -76,8 +94,8 @@
 }
 .command-palette-header {
   padding: 11px 16px;
-  font-family: var(--font-mono); font-size: 11px; font-weight: 700;
-  letter-spacing: 0.18em; text-transform: uppercase;
+  font-family: var(--font-mono); font-size: 14px; font-weight: 700;
+  letter-spacing: 0.1em; text-transform: uppercase;
   color: var(--text-dim);
   background: var(--bg-soft);
   border-bottom: 1px solid var(--border-soft);
@@ -176,7 +194,7 @@
 #inputsPanelList > div {
   padding: 7px 10px !important;
   border-radius: 6px !important;
-  font-family: var(--font-mono); font-size: 0.82rem;
+  font-family: var(--font-mono); font-size: 0.9rem;
 }
 
 .cu-snippet-save input,
@@ -284,14 +302,14 @@
   border: 1px solid var(--border-strong);
   color: var(--text-dim);
   cursor: pointer;
-  font-size: 0.75rem;
+  font-size: 0.9rem;
   font-family: var(--font-main);
   border-radius: var(--radius-sm, 6px);
   padding: 3px 8px;
 }
 .cu-tutorial-exit:hover { color: var(--accent); border-color: var(--accent); }
 .cu-tutorial-status {
-  font-size: 0.85rem;
+  font-size: 0.92rem;
   color: var(--text-dim);
   margin: 0 0 8px;
   font-style: italic;
@@ -312,12 +330,12 @@
 }
 .cu-tutorial-controls[hidden] { display: none !important; }
 .cu-tutorial-controls .cu-button {
-  font-size: 0.8rem;
+  font-size: 0.88rem;
   padding: 7px 10px;
   flex: 1 1 auto;
 }
 .cu-tutorial-help {
-  font-size: 0.85rem;
+  font-size: 0.92rem;
   color: var(--text-dim);
   margin: 4px 0 0;
   line-height: 1.4;

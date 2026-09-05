@@ -13,6 +13,7 @@ INTEGRATION_MODULES = {
     "test_conversation_orchestrator.py",
     "test_grounded_ai.py",
     "test_multifile_projects.py",
+    "test_run_tooltip_reflow.py",
     "test_tutorial_frontend.py",
     "test_voice_engine.py",
     "test_voice_recognition_frontend.py",

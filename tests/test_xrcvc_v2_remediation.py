@@ -7,6 +7,7 @@ instead of silently regressing. Follows the codebase's existing convention
 the actual served HTML and the literal static/app.js source rather than
 executing JS, since there is no JS DOM test runner wired into pytest.
 """
+import re
 from pathlib import Path
 
 import pytest
@@ -274,9 +275,26 @@ def test_accessibility_help_page_respects_dark_mode_preference():
     assert "background: #0a0703" in dark_block
 
 
+def _rule_font_size_rem(css_text, selector):
+    """Find `selector { ... font-size: N rem ... }` and return N as a float.
+
+    Numeric extraction instead of a hardcoded substring check: the XRCVC
+    full re-audit (Sept 2026) raised these floors again (0.86rem->0.9rem,
+    0.85rem->0.9rem/0.92rem), and an exact-string assertion on the old
+    values would fail on every future genuine improvement, not just on a
+    regression - so this asserts a numeric floor instead of a fixed number.
+    """
+    pattern = re.compile(re.escape(selector) + r"\s*\{[^}]*font-size:\s*([\d.]+)rem", re.DOTALL)
+    match = pattern.search(css_text)
+    assert match, f"could not find a font-size rule for {selector!r}"
+    return float(match.group(1))
+
+
 def test_secondary_help_text_is_not_tiny():
     # Command tips / settings descriptions / tutorial status+help text are
-    # real reading content (not decorative badges) and must clear a 13px+
+    # real reading content (not decorative badges) and must clear a 13.6px+
     # floor (0.85rem+ at a 16px root) rather than the old ~11-13px sizes.
-    assert "font-size: 0.86rem;" in CORE_CSS  # .cu-settings-description / .cu-command-tip
-    assert "font-size: 0.85rem;" in UI_CSS    # .cu-tutorial-status / .cu-tutorial-help
+    assert _rule_font_size_rem(CORE_CSS, ".cu-settings-description") >= 0.85
+    assert _rule_font_size_rem(CORE_CSS, ".cu-command-tip") >= 0.85
+    assert _rule_font_size_rem(UI_CSS, ".cu-tutorial-status") >= 0.85
+    assert _rule_font_size_rem(UI_CSS, ".cu-tutorial-help") >= 0.85

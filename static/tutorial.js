@@ -601,7 +601,7 @@
       var first = this._currentStep();
       this._lastInstruction = first ? first.prompt : (m.task || '');
       this.render();
-      this._setStatus(first ? ('Say: ' + first.say) : ('Activity: ' + m.title));
+      this._setStatus(first ? ('Say: ' + first.say) : ('Activity: ' + m.title), { announce: false });
       _speak('Now let us build it together, one line at a time, with your voice.');
       if (first) _speak(first.prompt);
       // Deduplication: see the comment in open() - the _speak() calls
@@ -629,12 +629,12 @@
         var next = steps[this._stepIndex];
         this._lastInstruction = next.prompt;
         this.render();
-        this._setStatus('Next, say: ' + next.say);
+        this._setStatus('Next, say: ' + next.say, { announce: false });
         _speak('Next. ' + next.prompt);
       } else {
         this._lastInstruction = 'Say run code, or press Control and Enter, to run your program.';
         this.render();
-        this._setStatus('All lines added. Say: run code.');
+        this._setStatus('All lines added. Say: run code.', { announce: false });
         _speak('Your program is complete. Now run it. Say: run code. Or press Control and Enter.');
       }
     },
@@ -717,7 +717,7 @@
       this._lastInstruction = prompt;
       this.render();
       _speak(prompt);
-      this._setStatus(nextId ? 'Choose: continue, practise again, recap, or exit.' : 'All topics complete. Choose: practise again, recap, or exit.');
+      this._setStatus(nextId ? 'Choose: continue, practise again, recap, or exit.' : 'All topics complete. Choose: practise again, recap, or exit.', { announce: false });
       // Move keyboard focus to the most likely next action.
       var focusBtn = document.getElementById(nextId ? 'tutorialContinueBtn' : 'tutorialStopBtn');
       if (focusBtn) { try { focusBtn.focus(); } catch (e) {} }
@@ -886,9 +886,30 @@
       var p = document.getElementById('tutorialOverlay');
       if (p) p.setAttribute('hidden', '');
     },
-    _setStatus: function (msg) {
+    // Announcement-ownership pass: #tutorialStatus is role="status"
+    // aria-live="polite", never toggled, so a real screen reader announces
+    // this on its own - reproduced live (Browser Speech on + a real
+    // screen reader alongside): several callers pair this with a _speak()
+    // that already says the same instruction aloud through VoiceEngine
+    // (e.g. "Say: insert print hello world" here vs "...Say, or type into
+    // the command box: insert print, hello world" already spoken a moment
+    // earlier), so a screen reader hears it twice. opts.announce === false
+    // keeps the visible status text but briefly silences just that write,
+    // same technique/timer-not-rAF reasoning as updateCommandUnderstanding()
+    // and showAI() in static/app.js.
+    _statusAnnounceRestoreTimer: null,
+    _setStatus: function (msg, opts) {
       var el = document.getElementById('tutorialStatus');
-      if (el) el.textContent = msg || '';
+      if (!el) return;
+      if (opts && opts.announce === false) {
+        clearTimeout(this._statusAnnounceRestoreTimer);
+        el.setAttribute('aria-live', 'off');
+        el.textContent = msg || '';
+        var self = this;
+        this._statusAnnounceRestoreTimer = setTimeout(function () { el.setAttribute('aria-live', 'polite'); }, 50);
+        return;
+      }
+      el.textContent = msg || '';
     },
     _setText: function (el, txt) { if (el) el.textContent = txt; },
 

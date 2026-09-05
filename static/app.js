@@ -695,7 +695,9 @@ async function listVariables() {
   const model = getModel();
   if (!model) return;
   const pos = editor.getPosition() || { lineNumber: 1 };
-  showAI('Analyzing variables...');
+  // announce:false: reproduced live with CodeUp Voice on - #aiBubble's
+  // native aria-live otherwise duplicates the speak() call right below.
+  showAI('Analyzing variables...', { announce: false });
   speak('Analyzing variables in scope.');
   try {
     const res  = await fetch('/track-variables', {
@@ -767,7 +769,9 @@ async function findVariable(varName) {
 async function checkSyntaxErrors() {
   SpeechManager.cancelAll();
   if (!ensurePythonEditorContent('check syntax')) return;
-  showAI('Checking for errors...');
+  // announce:false: reproduced live with CodeUp Voice on - #aiBubble's
+  // native aria-live otherwise duplicates the speak() call right below.
+  showAI('Checking for errors...', { announce: false });
   speak('Checking code for errors.');
   try {
     const res  = await fetch('/check-syntax', {
@@ -2460,7 +2464,12 @@ async function runCode(runFile, codeOverride) {
     ? `Running ${runFileLabel}...`
     : (getLanguage() === 'hi' ? 'Code run ho raha hai...' : 'Running code...');
   if (!usesInput) out(_runMsgOut, { sr: false });
-  showAI(_runMsgAI);
+  // announce:false: #aiBubble's aria-live is never toggled by speech mode
+  // (unlike #output), so with CodeUp Voice on, this near-duplicate of the
+  // speak() call two lines below was independently announced by a real
+  // screen reader at the same moment VoiceEngine spoke it aloud - the
+  // exact clash reproduced live for the Run flow.
+  showAI(_runMsgAI, { announce: false });
   // sr:false only when out() actually wrote #runMsgOut just above - its
   // native aria-live (Screen Reader Safe mode) already announces that, so
   // this speak() call would otherwise be a second announcement of the
@@ -2747,11 +2756,13 @@ async function analyzeCode() {
     }, narrationContext(codeSnapshot));
     if (staleResult(result)) return;
     const data = result.value;
-    // out() here (no sr:false) already relies on #output's own aria-live
-    // in Screen Reader Safe mode - see out()'s own comment - so the
-    // speak() calls below (near-identical content) need sr:false to avoid
-    // announcing the same result a second time.
-    out(data.analysis || 'No analysis.');
+    // sr:false: without it, out() manually announces this in CodeUp Voice
+    // mode too (its own early-return only covers Screen Reader Safe mode -
+    // #output's aria-live is "off" here, so nothing else would announce it
+    // otherwise) - reproduced live as a real clash with the audible
+    // speak() call below via VoiceEngine. In Screen Reader Safe mode,
+    // #output's own aria-live still covers it either way.
+    out(data.analysis || 'No analysis.', { sr: false });
     maybePromptForApiKey(data.analysis);
     if (data.analysis) {
       const spoken = data.analysis

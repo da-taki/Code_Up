@@ -204,3 +204,67 @@ def test_tutorial_srannounce_no_longer_shadows_speak_anywhere():
         f"found live _srAnnounce(...) call site(s) outside the helper's own "
         f"definition: {live_calls!r} - does it duplicate a nearby _speak()?"
     )
+
+
+# ---------------------------------------------------------------------------
+# Follow-up gate (2026-09-05): live testing with CodeUp Voice ON and a real
+# screen reader instrumented alongside (VoiceEngine.speak / srAnnounce /
+# every aria-live mutation traced) found that the two risks disclosed in the
+# prior pass ("out() still self-announces unconditionally in CodeUp Voice
+# mode" and "#tutorialStatus/showAI() call sites retain always-on
+# aria-live") were not hypothetical - they reproduced as real duplicate
+# announcements (audible VoiceEngine narration *and* an independent native
+# aria-live announcement of near-identical text for the same event) in:
+# Run start (#aiBubble), State Watch (#aiBubble), Error Trace (#aiBubble),
+# Explain's result (#output, via out() missing sr:false), and three tutorial
+# events (#tutorialStatus). Each was confirmed clean in the *other* 3 of the
+# 4 speech/screen-reader-mode combinations already - these are precisely
+# the gaps that combination exposed.
+# ---------------------------------------------------------------------------
+
+def test_run_start_ai_bubble_does_not_duplicate_the_speak_call():
+    block, _, _ = _slice(STATIC_APP, "const _runMsgAI = runFileLabel", "try {\n    const payload")
+    assert "showAI(_runMsgAI, { announce: false });" in block
+
+
+def test_list_variables_ai_bubble_does_not_duplicate_the_speak_call():
+    fn_start = STATIC_APP.index("async function listVariables(")
+    fn_block = STATIC_APP[fn_start:fn_start + 700]
+    assert "showAI('Analyzing variables...', { announce: false });" in fn_block
+
+
+def test_check_syntax_errors_ai_bubble_does_not_duplicate_the_speak_call():
+    fn_start = STATIC_APP.index("async function checkSyntaxErrors(")
+    fn_block = STATIC_APP[fn_start:fn_start + 700]
+    assert "showAI('Checking for errors...', { announce: false });" in fn_block
+
+
+def test_analyze_code_result_out_does_not_self_announce():
+    fn_start = STATIC_APP.index("async function analyzeCode(")
+    fn_end = STATIC_APP.index("\nasync function analyzeDeep(")
+    fn_block = STATIC_APP[fn_start:fn_end]
+    assert "out(data.analysis || 'No analysis.', { sr: false });" in fn_block, (
+        "out() self-announces via its own manual srAnnounce() whenever CodeUp "
+        "Voice is on (its early-return only covers Screen Reader Safe mode) - "
+        "reproduced live as a real clash with the speak() call right after it"
+    )
+
+
+def test_setstatus_supports_announce_false_and_uses_a_real_timer():
+    fn_start = TUTORIAL_JS.index("_setStatus: function")
+    fn_end = TUTORIAL_JS.index("_setText: function", fn_start)
+    fn_block = TUTORIAL_JS[fn_start:fn_end]
+    assert "opts.announce === false" in fn_block
+    assert "setTimeout(function () { el.setAttribute('aria-live', 'polite'); }, 50);" in fn_block
+    assert "requestAnimationFrame(" not in fn_block
+
+
+def test_tutorial_setstatus_calls_are_silenced_where_reproduced():
+    for needle in (
+        "this._setStatus(first ? ('Say: ' + first.say) : ('Activity: ' + m.title), { announce: false });",
+        "this._setStatus('Next, say: ' + next.say, { announce: false });",
+        "this._setStatus('All lines added. Say: run code.', { announce: false });",
+        "this._setStatus(nextId ? 'Choose: continue, practise again, recap, or exit.' "
+        ": 'All topics complete. Choose: practise again, recap, or exit.', { announce: false });",
+    ):
+        assert needle in TUTORIAL_JS, needle

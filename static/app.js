@@ -1588,9 +1588,28 @@ async function requestProjectReport() {
   }
 }
 
-function showAI(msg) {
+let _aiBubbleAnnounceRestoreTimer = null;
+function showAI(msg, opts = {}) {
   const b = document.getElementById('aiBubble');
   if (!b) return;
+  // Announcement-ownership pass: #aiBubble is role="status" aria-live=
+  // "polite" (static, never toggled), so a real screen reader announces
+  // this "in progress" text on its own. Some callers (analyzeCode,
+  // fixCode, describeLine, generateCode) pair it with their own explicit
+  // speak() call for the exact same "starting" moment, which is then a
+  // second, redundant announcement. opts.announce === false silences just
+  // that one call (same technique as updateCommandUnderstanding()) -
+  // deliberately opt-in rather than the default, since most showAI()
+  // calls have no paired speak() and rely on this to say anything at all
+  // about the operation starting.
+  if (opts.announce === false) {
+    clearTimeout(_aiBubbleAnnounceRestoreTimer);
+    b.setAttribute('aria-live', 'off');
+    b.textContent = msg;
+    showEl(b);
+    _aiBubbleAnnounceRestoreTimer = setTimeout(() => b.setAttribute('aria-live', 'polite'), 50);
+    return;
+  }
   b.textContent = msg;
   showEl(b);
 }
@@ -2236,12 +2255,60 @@ function out(t, options = {}) {
   if (output) output.textContent = t;
   const text = String(t || '').trim();
   if (options.sr === false) return;
+  // Announcement-ownership pass: #output carries its own static aria-live,
+  // set to "polite" whenever browser speech is off (Screen Reader Safe
+  // mode - see updateSpeechModeUI()), so a real screen reader already
+  // announces this exact textContent change on its own the instant it
+  // happens. A *manual* srAnnounce() of the identical text right after was
+  // a second, redundant announcement of the same event for every caller
+  // that didn't already know to pass {sr:false} - confirmed live: the
+  // native #output mutation AND a separate srAnnounce() call both fired
+  // for one out() call. In CodeUp Voice mode #output's aria-live is "off"
+  // instead (so it doesn't clash with CodeUp's own spoken narration), and
+  // this manual announcement remains the only live-region signal there -
+  // left unchanged, since suppressing it too could silence an out() call
+  // that has no paired speak().
+  if (!_browserSpeechEnabled) return;
   const isError = options.assertive || /^(?:error\b|found \d+ errors?\b|mentor error\b)/i.test(text) ||
     /\b(?:failed|failure)\.?$/i.test(text);
   srAnnounce(text, isError ? 'assertive' : 'polite');
 }
 
+let _cuAnnounceRestoreTimer = null;
 function updateCommandUnderstanding(update = {}) {
+  // Announcement-ownership pass: #commandUnderstanding's aria-live is
+  // always "polite" (unlike #output/#mentorTranscript, it is never
+  // toggled off), so a real screen reader announces every change here on
+  // its own. Several callers (applyCommandUnderstanding, for every
+  // successfully-dispatched command) update this status line with a
+  // terse, generic label - "Action: Generating code." - in the same
+  // synchronous step as a far richer out()/speak() announcement of the
+  // actual result for that same event. Left alone, that is a second,
+  // redundant automatic announcement of the same event. update.announce
+  // === false keeps the visible text (and isError styling) exactly as
+  // before but briefly silences just this one DOM write so it can't
+  // trigger its own announcement, leaving the richer companion
+  // announcement as sole owner. Failure updates (isError:true) have no
+  // such companion, so they never pass this - the status line stays the
+  // owner there, unchanged from the earlier accessibility gate.
+  const container = document.getElementById('commandUnderstanding');
+  const suppressAnnounce = update.announce === false && !!container;
+  if (suppressAnnounce) {
+    // #commandUnderstanding's resting aria-live is always "polite" - no
+    // other code ever sets it otherwise - so restoring to that literal
+    // value (rather than whatever was read back a moment ago) is always
+    // correct and sidesteps a real race: two announce:false updates close
+    // together would otherwise have the second one capture "off" (set by
+    // the first, not yet restored) as its own "previous" value and
+    // restore to that, leaving the region permanently silenced. A single
+    // shared timer means only the last of several rapid updates actually
+    // restores it, which is fine since they'd all restore to the same
+    // value anyway. setTimeout (not requestAnimationFrame) because rAF
+    // callbacks are paused entirely in a backgrounded tab, which would
+    // leave this stuck off indefinitely.
+    clearTimeout(_cuAnnounceRestoreTimer);
+    container.setAttribute('aria-live', 'off');
+  }
   const heardEl = document.getElementById('heardTranscript');
   const understoodEl = document.getElementById('understoodCommand');
   const nextEl = document.getElementById('nextCommandAction');
@@ -2266,6 +2333,9 @@ function updateCommandUnderstanding(update = {}) {
     // failure into a fresh attempt.
     nextEl.style.color = update.isError ? 'var(--danger)' : '';
     nextEl.style.fontWeight = update.isError ? '700' : '';
+  }
+  if (suppressAnnounce) {
+    _cuAnnounceRestoreTimer = setTimeout(() => container.setAttribute('aria-live', 'polite'), 50);
   }
 }
 window.updateTranscriptStatus = updateCommandUnderstanding;
@@ -2296,10 +2366,17 @@ function applyCommandUnderstanding(data, heardText) {
   if (!data) return;
   const understood = data.normalized_text || data.understood || data.spoken_summary || heardText || '';
   const nextAction = data.next_action || data.label || describeCommandAction(data.action);
+  // announce:false: this fires for every successfully-dispatched command
+  // (run, generate code, analyze, fix, ...), immediately before that
+  // command's own, far more informative out()/speak() announcement of
+  // what actually happened - see updateCommandUnderstanding()'s own
+  // comment. The visible status line still updates; it just isn't a
+  // second automatic announcer for the same event.
   updateCommandUnderstanding({
     heard: data.heard || heardText || '',
     understood,
     nextAction,
+    announce: false,
   });
 }
 
@@ -2384,7 +2461,13 @@ async function runCode(runFile, codeOverride) {
     : (getLanguage() === 'hi' ? 'Code run ho raha hai...' : 'Running code...');
   if (!usesInput) out(_runMsgOut, { sr: false });
   showAI(_runMsgAI);
-  speak(_runMsgSpoken);
+  // sr:false only when out() actually wrote #runMsgOut just above - its
+  // native aria-live (Screen Reader Safe mode) already announces that, so
+  // this speak() call would otherwise be a second announcement of the
+  // same "run started" event. When usesInput is true, out() is skipped
+  // entirely above, so this remains the only announcement - suppressing
+  // it too would be a silent start with nothing said at all.
+  speak(_runMsgSpoken, usesInput ? {} : { sr: false });
   try {
     const payload = {
       code: codeToCheck,
@@ -2440,7 +2523,14 @@ async function runCode(runFile, codeOverride) {
       _lastOutput = data.output || '';
 
       if (data.speech_summary) speak(data.speech_summary, { sr: false });
-      speak(formatRunOutputSpeech(data.output), { forceFull: true, speechKind: 'program-output' });
+      // sr:false: out(data.output, {sr:false}) just above already relies on
+      // #output's own aria-live for the Screen Reader Safe announcement
+      // (see that comment) - without sr:false here too, this formatted
+      // version was a second, separate srAnnounce() of the same run-output
+      // event on top of that native one. CodeUp Voice audio (VoiceEngine)
+      // is unaffected; "Read output again" (speakOutput(), explicit:true)
+      // still gets the full formatted/structured narration on demand.
+      speak(formatRunOutputSpeech(data.output), { forceFull: true, speechKind: 'program-output', sr: false });
       if (data.clear_inputs_after_run) {
         _preflightInputs = [];
         _preflightInputPlaceholders = [];
@@ -2644,7 +2734,11 @@ async function sendStreamingInput(value) {
 async function analyzeCode() {
   if (!ensurePythonEditorContent('analyze')) return;
   const codeSnapshot = getCode();
-  cueSuccess(); out('Analyzing...', { sr: false }); showAI('Analyzing code with AI...'); speak('Analyzing code.');
+  // Deduplication: #output ("Analyzing...") and #aiBubble ("Analyzing code
+  // with AI...") both carry their own aria-live for this same "started"
+  // moment; speak() adds a third. sr:false / announce:false leave #output
+  // as the sole automatic announcer in Screen Reader Safe mode.
+  cueSuccess(); out('Analyzing...', { sr: false }); showAI('Analyzing code with AI...', { announce: false }); speak('Analyzing code.', { sr: false });
   try {
     const result = await guardedJson('analysis', '/analyze', {
       method:  'POST',
@@ -2653,6 +2747,10 @@ async function analyzeCode() {
     }, narrationContext(codeSnapshot));
     if (staleResult(result)) return;
     const data = result.value;
+    // out() here (no sr:false) already relies on #output's own aria-live
+    // in Screen Reader Safe mode - see out()'s own comment - so the
+    // speak() calls below (near-identical content) need sr:false to avoid
+    // announcing the same result a second time.
     out(data.analysis || 'No analysis.');
     maybePromptForApiKey(data.analysis);
     if (data.analysis) {
@@ -2660,13 +2758,13 @@ async function analyzeCode() {
         .replace(/^\[offline mode\]\s*/i, '')
         .replace(/\s*want a deeper line by line walkthrough\??.*$/i, '')
         .replace(/\s*just say:?\s*analyze deeper\.?\s*$/i, '');
-      speak(spoken);
+      speak(spoken, { sr: false });
       window._lastAnalyzeContext = { code: codeSnapshot, at: Date.now() };
     } else {
-      speak('No analysis available.');
+      speak('No analysis available.', { sr: false });
     }
   } catch (e) {
-    out('Analyze failed.', { sr: false }); console.error(e); cueError(); speak('Analyze failed.');
+    out('Analyze failed.', { sr: false }); console.error(e); cueError(); speak('Analyze failed.', { sr: false });
   } finally {
     hideAI();
   }
@@ -2908,7 +3006,7 @@ async function adviseCode() {
 async function fixCode() {
   const before = getCode();
   if (!ensurePythonEditorContent('fix')) return;
-  cueSuccess(); out('Fixing...', { sr: false }); showAI('Fixing code with AI...'); speak('Fixing code.');
+  cueSuccess(); out('Fixing...', { sr: false }); showAI('Fixing code with AI...', { announce: false }); speak('Fixing code.', { sr: false });
   try {
     const res  = await fetch('/fix', {
       method:  'POST',
@@ -2935,20 +3033,20 @@ async function fixCode() {
       } else {
         setCode(data.code);
         const fixedSpeech = data.speech || data.explanation || 'Code has been fixed.';
-        out(fixedSpeech, { sr: false }); speak(fixedSpeech);
+        out(fixedSpeech, { sr: false }); speak(fixedSpeech, { sr: false });
         const diffRes  = await fetch('/diff-explain', {
           method:  'POST',
           headers: { 'Content-Type': 'application/json' },
           body:    JSON.stringify({ before, after: data.code, language: getLanguage() }),
         });
         const diffData = await diffRes.json();
-        if (diffData.explanation) { out(diffData.explanation, { sr: false }); speak(diffData.explanation); }
+        if (diffData.explanation) { out(diffData.explanation, { sr: false }); speak(diffData.explanation, { sr: false }); }
       }
     } else {
-      out('Fix failed.', { sr: false }); speak('Fix failed.');
+      out('Fix failed.', { sr: false }); speak('Fix failed.', { sr: false });
     }
   } catch (e) {
-    console.error(e); out('Fix failed.', { sr: false }); speak('Fix failed.');
+    console.error(e); out('Fix failed.', { sr: false }); speak('Fix failed.', { sr: false });
   } finally {
     hideAI();
   }
@@ -2956,7 +3054,7 @@ async function fixCode() {
 
 async function describeLine(line) {
   if (!ensurePythonEditorContent('describe line')) return;
-  showAI('Describing line ' + line); speak('Describing line ' + line);
+  showAI('Describing line ' + line, { announce: false }); speak('Describing line ' + line);
   try {
     const res  = await fetch('/describe', {
       method:  'POST',
@@ -2964,10 +3062,10 @@ async function describeLine(line) {
       body:    JSON.stringify({ code: getCode(), line, language: getLanguage() }),
     });
     const data = await res.json();
-    if (data.success) { out(data.description, { sr: false }); speak(data.description); }
-    else { const msg = data.message || 'Describe failed.'; out(msg, { sr: false }); speak(msg); }
+    if (data.success) { out(data.description, { sr: false }); speak(data.description, { sr: false }); }
+    else { const msg = data.message || 'Describe failed.'; out(msg, { sr: false }); speak(msg, { sr: false }); }
   } catch (e) {
-    out('Describe failed.', { sr: false }); console.error(e); cueError(); speak('Describe failed.');
+    out('Describe failed.', { sr: false }); console.error(e); cueError(); speak('Describe failed.', { sr: false });
   } finally {
     hideAI();
   }
@@ -2984,8 +3082,8 @@ async function generateCode(prompt, context = {}) {
 
   cueSuccess();
   out('Generating code for: ' + prompt, { sr: false });
-  showAI('Generating code for: ' + prompt);
-  speak('Generating code for ' + prompt + '. One moment please.');
+  showAI('Generating code for: ' + prompt, { announce: false });
+  speak('Generating code for ' + prompt + '. One moment please.', { sr: false });
 
   try {
     const res = await fetch('/generate-code', {
@@ -3009,30 +3107,30 @@ async function generateCode(prompt, context = {}) {
       if (data.exact_symbol) {
         const message = data.message || 'Exact-symbol code generated and inserted into editor. Press Control Enter to run.';
         out(message + '\n\nCode inserted. Press Control Enter to run.', { sr: false });
-        speak(data.speech || message);
+        speak(data.speech || message, { sr: false });
       } else if (usesInput) {
         const inputCount = (data.code.match(/\binput\s*\(/g) || []).length;
         out(`Code generated with ${inputCount} input() call${inputCount === 1 ? '' : 's'}.\n\nBefore running, declare your inputs by saying:\n  "set inputs to value1 and value2"`, { sr: false });
-        speak(`Code is ready. Heads up: it uses input ${inputCount} time${inputCount === 1 ? '' : 's'}. Before pressing run, say "set inputs to" followed by your values.`);
+        speak(`Code is ready. Heads up: it uses input ${inputCount} time${inputCount === 1 ? '' : 's'}. Before pressing run, say "set inputs to" followed by your values.`, { sr: false });
       } else {
         out('Code generated and inserted into editor. Press Control Enter to run, or say "analyze" to hear an explanation.', { sr: false });
-        speak('Code is ready in the editor. Press Control Enter to run it, or say "walk through code" to hear it explained.');
+        speak('Code is ready in the editor. Press Control Enter to run it, or say "walk through code" to hear it explained.', { sr: false });
       }
     } else if (data.clarification) {
       const reason = data.message || data.error || 'Please type a more precise command.';
       out(reason, { sr: false });
-      speak(data.speech || reason);
+      speak(data.speech || reason, { sr: false });
     } else {
       const reason = data.error || 'the AI returned an empty response. Please try rephrasing your request.';
       out('Code generation failed: ' + reason, { sr: false });
       cueError();
-      speak('Code generation did not work. ' + reason);
+      speak('Code generation did not work. ' + reason, { sr: false });
     }
   } catch (e) {
     console.error(e);
     out('Code generation failed.', { sr: false });
     cueError();
-    speak('Code generation failed.');
+    speak('Code generation failed.', { sr: false });
   } finally {
     hideAI();
   }
@@ -3684,8 +3782,14 @@ async function handleConfirmedAction(action, payload) {
   else if (action === 'generate_code') await generateCode(payload && payload.prompt ? payload.prompt : '', payload || {});
   else if (action === 'exact_symbol_clarification' || action === 'orchestrator_clarification' || action === 'deterministic_message' || action === 'clarify') {
     const message = (payload && (payload.message || payload.speech)) || 'No guidance available.';
+    // sr:false on out() is already correct (Screen Reader Safe mode relies
+    // on #output's own aria-live for this); sr:false on speak() too - the
+    // spoken text usually matches (or nearly matches) what out() just
+    // wrote, and without it speak()'s own srAnnounce() fallback announces
+    // the same event a second time in that mode. Audible speech when
+    // CodeUp Voice is on is unaffected (opts.sr is never read there).
     out((payload && payload.report) ? `${message}\n\n${payload.report}` : message, { sr: false });
-    speak((payload && payload.speech) || message);
+    speak((payload && payload.speech) || message, { sr: false });
   }
   else if (action === 'set_speech_rate') {
     applySpeechRate(payload && payload.rate ? payload.rate : 1.0);

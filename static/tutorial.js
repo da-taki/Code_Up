@@ -521,8 +521,13 @@
         }
         _speak('Welcome to the CodeUp guided tutorial. CodeUp lets you build Python programs by speaking instructions. In each lesson I will first explain a concept, then tell you an insert command to say. When you say it, I will place the code in the editor and read it back to you. You can also type the same command into the command box if voice is unavailable.' + completedNote);
         _speak('We will begin with print statements. After each topic you can stop, practise again, or continue. You are always in control.');
+        // Deduplication: no separate _srAnnounce() here - it repeated the
+        // same "tutorial started" event a screen reader already hears via
+        // the _speak() calls above (their own srAnnounce() fallback when
+        // browser speech is off; VoiceEngine audio when it's on, per
+        // CodeUp Voice mode's own policy of staying quiet on the
+        // live-region side so the two don't talk over each other).
         _speak('At any time you can say, or type: repeat, to hear the instruction again. hint, for a clue. read my code, to hear what you have written. run code, to run it. or exit tutorial, to stop. You can also press Tab to reach the tutorial buttons.');
-        _srAnnounce('Guided tutorial started. Topic 1 of ' + self.content.count + ', print statements.');
         self._enterModuleIntro(self.model.moduleId, { skipModelReset: true });
       });
     },
@@ -539,8 +544,9 @@
         self._hintIndex = 0;
         self._showPanel();
         self.render();
+        // Deduplication: see the matching comment in open() - _speak()
+        // already covers this announcement in both speech modes.
         _speak('Okay. Let us practise ' + self.content.modules[moduleId].title + '.');
-        _srAnnounce('Practising ' + self.content.modules[moduleId].title);
         self._enterModuleIntro(moduleId, { skipModelReset: true });
       });
     },
@@ -556,7 +562,8 @@
       } else {
         _speak('Tutorial closed. Say start tutorial any time to open it again.');
       }
-      _srAnnounce('Tutorial closed.');
+      // Deduplication: see the matching comment in open() - both branches
+      // above already say "Tutorial closed" via _speak().
       _focusEditor();
     },
 
@@ -597,8 +604,9 @@
       this._setStatus(first ? ('Say: ' + first.say) : ('Activity: ' + m.title));
       _speak('Now let us build it together, one line at a time, with your voice.');
       if (first) _speak(first.prompt);
+      // Deduplication: see the comment in open() - the _speak() calls
+      // above already cover this in both speech modes.
       _speak('Say the command, or type it into the command box and press Enter.');
-      _srAnnounce('Activity: ' + m.title + '. Say the insert command.');
       _focusCommandBox();
     },
 
@@ -623,13 +631,11 @@
         this.render();
         this._setStatus('Next, say: ' + next.say);
         _speak('Next. ' + next.prompt);
-        _srAnnounce('Next step. ' + next.say);
       } else {
         this._lastInstruction = 'Say run code, or press Control and Enter, to run your program.';
         this.render();
         this._setStatus('All lines added. Say: run code.');
         _speak('Your program is complete. Now run it. Say: run code. Or press Control and Enter.');
-        _srAnnounce('All lines added. Say run code.');
       }
     },
 
@@ -658,7 +664,6 @@
           if (cur) _speak('Try this command again. ' + cur.prompt);
           else _speak('Adjust your program and run again, or say give me an example.');
           self._setStatus('Not yet — listen to the hint, then say the command again.');
-          _srAnnounce('Not yet. Hint given.');
           _focusCommandBox();
         }
       });
@@ -713,7 +718,6 @@
       this.render();
       _speak(prompt);
       this._setStatus(nextId ? 'Choose: continue, practise again, recap, or exit.' : 'All topics complete. Choose: practise again, recap, or exit.');
-      _srAnnounce('Topic complete. Choose what to do next.');
       // Move keyboard focus to the most likely next action.
       var focusBtn = document.getElementById(nextId ? 'tutorialContinueBtn' : 'tutorialStopBtn');
       if (focusBtn) { try { focusBtn.focus(); } catch (e) {} }
@@ -742,12 +746,10 @@
         if (cur) _speak('You are building it now. ' + cur.prompt);
         else _speak(this._lastInstruction || 'Say run code when you are ready.');
       }
-      _srAnnounce('Recap given.');
     },
 
     _repeatInstruction: function () {
       _speak(this._lastInstruction || 'There is nothing to repeat yet.');
-      _srAnnounce('Repeating the instruction.');
     },
 
     // learner can hear the structure they have built so far.
@@ -755,7 +757,6 @@
       var trimmed = String(_getCode() || '').replace(/\s+$/, '');
       if (!trimmed.trim()) {
         _speak('Your program is empty so far. ' + (this._lastInstruction || ''));
-        _srAnnounce('Program empty.');
         return;
       }
       var lines = trimmed.split('\n');
@@ -766,19 +767,17 @@
         var body = lines[i].trim();
         _speak('Line ' + (i + 1) + '. ' + note + (body || 'blank') + '.');
       }
-      _srAnnounce('Read your code.');
     },
 
     _giveHint: function () {
       if (this.model.stage === 'activity') {
         var cur = this._currentStep();
-        if (cur && cur.hint) { _speak('Hint. ' + cur.hint); _srAnnounce('Hint given'); return; }
+        if (cur && cur.hint) { _speak('Hint. ' + cur.hint); return; }
       }
       var m = this._module();
       if (!m || !m.hints || !m.hints.length) { _speak('Try saying: give me an example.'); return; }
       var idx = Math.min(this._hintIndex, m.hints.length - 1);
       _speak('Hint. ' + m.hints[idx]);
-      _srAnnounce('Hint ' + (idx + 1) + ' of ' + m.hints.length);
       if (this._hintIndex < m.hints.length - 1) this._hintIndex++;
       else _speak('If you would like, say give me an example and I will fill it in for you.');
     },
@@ -793,7 +792,6 @@
       this._setStatus('Example loaded. Say: run code.');
       _speak('I have filled in a complete example for you. ' + (m.example_spoken || ''));
       _speak('When you are ready, say run code, or press Control and Enter. Or say practise again to build it yourself.');
-      _srAnnounce('Example loaded into the editor.');
       _focusCommandBox();
     },
 
@@ -820,7 +818,7 @@
       })
         .then(function (r) { return r.ok ? r.json() : null; })
         .then(function (d) {
-          if (d && d.handled && d.text) { _speak(d.text); _srAnnounce('Coach replied.'); }
+          if (d && d.handled && d.text) { _speak(d.text); }
           else { self._coachLocalFallback(requestType); }
         })
         .catch(function () { self._coachLocalFallback(requestType); });

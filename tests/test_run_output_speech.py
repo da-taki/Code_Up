@@ -52,7 +52,7 @@ class TestRunOutputSpeechWiring:
         assert "function formatFullOutputSpeech(" in app_js
 
     def test_run_handler_speaks_output_through_the_formatter(self, app_js):
-        assert "speak(formatRunOutputSpeech(data.output), { forceFull: true, speechKind: 'program-output' })" in app_js
+        assert "speak(formatRunOutputSpeech(data.output), { forceFull: true, speechKind: 'program-output', sr: false })" in app_js
         assert "speak('Program output:');" not in app_js
 
     def test_run_handler_still_stores_full_output(self, app_js):

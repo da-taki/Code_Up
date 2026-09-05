@@ -144,7 +144,7 @@ class TestMultiStepContentEndpoints:
 class TestRunAndReadbackSpeechWiring:
 
     def test_run_output_is_spoken_via_formatter(self, app_js):
-        assert "speak(formatRunOutputSpeech(data.output), { forceFull: true, speechKind: 'program-output' })" in app_js
+        assert "speak(formatRunOutputSpeech(data.output), { forceFull: true, speechKind: 'program-output', sr: false })" in app_js
         assert "speak('Program output:');" not in app_js
 
     def test_run_error_speaks_kind_and_line_not_just_error(self, app_js):

@@ -174,7 +174,8 @@ def test_voice_command_failure_is_visually_distinct_via_the_status_line_only():
 
 def test_update_command_understanding_toggles_visible_error_styling():
     fn_start = STATIC_APP.index("function updateCommandUnderstanding(")
-    fn_block = STATIC_APP[fn_start:fn_start + 1700]
+    fn_end = STATIC_APP.index("window.updateTranscriptStatus = updateCommandUnderstanding;", fn_start)
+    fn_block = STATIC_APP[fn_start:fn_end]
     assert "update.isError ? 'var(--danger)' : ''" in fn_block
 
 

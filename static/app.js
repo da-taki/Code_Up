@@ -5984,6 +5984,46 @@ function leaveEditor() {
   srAnnounce('Left editor. Press Tab to continue through CodeUp controls.');
 }
 
+// XRCVC V1 Finding 4 / V2 Finding 4B (Tab keyboard trap): Tab exiting the
+// editor is NOT governed by accessibilitySupport - that only affects
+// ARIA/textarea presentation. The actual switch is Monaco's separate
+// `tabFocusMode`, a single global flag (not a per-editor option, so it
+// cannot be passed to monaco.editor.create()) normally flipped by Monaco's
+// own built-in Ctrl+M action - a binding this file replaces with
+// leaveEditor() below, so nothing in CodeUp could ever turn it on. The
+// underlying TabFocus service isn't part of the public standalone `monaco`
+// API surface in this bundle (confirmed: monaco.editor exposes no such
+// service, editor.getAction('editor.action.toggleTabFocusMode') returns
+// null, and editor.trigger() for that id is a silent no-op - it's an
+// internal AMD module never re-exported to the curated public surface).
+// With no reachable native switch, Tab/Shift+Tab are handled directly
+// below, the same way Escape and Ctrl+M already are.
+function _getFocusableElements() {
+  return Array.from(document.querySelectorAll(
+    'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+  )).filter(el => {
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0 && getComputedStyle(el).visibility !== 'hidden';
+  });
+}
+function leaveEditorBackward() {
+  // Real previous focusable element in DOM order, not a hardcoded
+  // destination: document.activeElement here is Monaco's own hidden
+  // textarea (it carries tabindex="0", so it appears in this same list at
+  // its natural position), so the element immediately before it in the
+  // list is exactly what native Shift+Tab would have focused if the
+  // textarea weren't intercepting the key itself.
+  const focusable = _getFocusableElements();
+  const idx = focusable.indexOf(document.activeElement);
+  const prev = idx > 0 ? focusable[idx - 1] : null;
+  if (prev && typeof prev.focus === 'function') {
+    prev.focus();
+  } else {
+    focusEditor();
+  }
+  srAnnounce('Left editor backward. Press Shift+Tab to continue back through CodeUp controls.');
+}
+
 // XRCVC Issue 18: "Accessibility Options shortcut does not work" - there was
 // no keyboard shortcut that opened the Accessibility settings disclosure at
 // all, so any documentation/expectation of one was simply a mismatch. This
@@ -6020,9 +6060,10 @@ function registerEditorShortcuts() {
     }
   });
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyM, () => { leaveEditor(); });
-  // accessibilitySupport:'on' (above) puts Monaco in tab-focus-move mode, so plain
-  // Tab moves focus out of the editor instead of indenting - these are the only
-  // reachable keyboard shortcuts to indent/outdent a line (see ariaLabel above).
+  // Tab/Shift+Tab move focus out of the editor (handled below, since no
+  // Monaco option reaches that natively here - see leaveEditorBackward's
+  // comment) instead of indenting, so these are the only reachable
+  // keyboard shortcuts to indent/outdent a line (see ariaLabel above).
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.BracketRight, () => { editor.trigger('keyboard', 'editor.action.indentLines', {}); });
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.BracketLeft, () => { editor.trigger('keyboard', 'editor.action.outdentLines', {}); });
   const editorDom = editor.getDomNode();
@@ -6037,6 +6078,13 @@ function registerEditorShortcuts() {
         } else {
           leaveEditor();
         }
+      } else if (e.key === 'Tab' && !e.altKey && !e.ctrlKey && !e.metaKey) {
+        // Capture phase on the editor's own container, ahead of Monaco's
+        // internal textarea handler, so preventDefault+stopPropagation here
+        // stops Monaco from ever seeing the key and inserting an indent.
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.shiftKey) leaveEditorBackward(); else leaveEditor();
       }
     }, true);
   }

@@ -12,6 +12,7 @@ INTEGRATION_MODULES = {
     "test_chrome_english_onboarding.py",
     "test_conversation_orchestrator.py",
     "test_grounded_ai.py",
+    "test_monaco_tab_focus.py",
     "test_multifile_projects.py",
     "test_run_tooltip_reflow.py",
     "test_tutorial_frontend.py",

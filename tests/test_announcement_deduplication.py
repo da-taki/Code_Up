@@ -268,3 +268,56 @@ def test_tutorial_setstatus_calls_are_silenced_where_reproduced():
         ": 'All topics complete. Choose: practise again, recap, or exit.', { announce: false });",
     ):
         assert needle in TUTORIAL_JS, needle
+
+
+# ---------------------------------------------------------------------------
+# CodeUp User Guide + WCAG audit finding D2: a run-time error was reported
+# as triggering "two live-region announcement events" - a short assertive
+# alert plus a long automatic explanation. Investigation confirmed this is
+# CodeUp's intended two-owner architecture for two semantically distinct
+# events (the raw error, and a separate beginner-facing explanation with a
+# fix suggestion), each already routed through exactly one automatic
+# channel, with existing engineering to avoid a *second* announcement of
+# the *same* event (see the codeup-voice branch below, and the
+# IndentationError near-duplicate skip in app.py). No code change was
+# needed for D2; this test locks that architecture in so a future edit
+# cannot silently turn it into either a true duplicate (same message,
+# two owners) or an accidental total suppression of the explanation.
+# ---------------------------------------------------------------------------
+
+def test_run_error_keeps_exactly_two_distinct_single_owner_announcements():
+    block, _, _ = _slice(
+        STATIC_APP,
+        "out('ERROR:\\n' + (data.error || ''), { assertive: true, sr: false, announce: false });",
+        "maybeOfferSlowWalkthroughAfterErrors();",
+    )
+    # Event 1 - the raw error: out() is told not to self-announce (announce:
+    # false) and not to push into the SR live region (sr: false) because
+    # speak() with sr:false + srAlert() together are this event's one
+    # automatic path.
+    assert "speak(`Error${lineHint}: ${lastLine}`, { sr: false, priority: 'assertive' });" in block
+    # In CodeUp Voice mode, speak() above already spoke the error aloud, so
+    # srAlert() (which would push the *same* text into the ARIA live region
+    # too) is deliberately skipped there - this is the "no true duplicate"
+    # guarantee for Event 1 specifically.
+    assert "if (_speechMode !== 'codeup-voice') srAlert(`Error${lineHint}: ${lastLine}`);" in block
+
+    # Event 2 - the explanation: a distinct message, only sent when the
+    # backend actually returned one, through the single normal speak()
+    # channel (no sr:false here, so Screen Reader Safe mode routes it to
+    # the polite #srAnnouncer region same as any other unprompted speak()
+    # call - it is not re-announced a second time anywhere else for this
+    # event).
+    assert "if (data.explanation) {\n        speak(data.explanation);\n      }" in block
+    assert "srAlert(data.explanation)" not in block
+    assert "srAnnounce(data.explanation" not in STATIC_APP
+
+
+def test_syntax_error_explanation_skips_near_duplicate_indentation_case():
+    # app.py: the one case where the deterministic explanation would say
+    # almost exactly what the raw error already says (a missing indented
+    # block) is explicitly suppressed rather than sent as a second, mostly
+    # redundant announcement - proof the two-owner model already accounts
+    # for near-duplicate content, not just identical content.
+    app_py = Path("app.py").read_text(encoding="utf-8")
+    assert 'if isinstance(e, IndentationError) and "expected an indented block" in str(e.msg or "").lower():\n            explanation = None' in app_py

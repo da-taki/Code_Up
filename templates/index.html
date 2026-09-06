@@ -627,8 +627,22 @@
         }
         if (dismiss) {
           dismiss.addEventListener('click', function () {
+            // XRCVC audit D4: hiding the banner used to leave focus on the
+            // removed Dismiss button, which silently fell back to <body>
+            // with no visible focus indicator anywhere. Look up the next
+            // focusable control in real DOM order (the same
+            // _getFocusableElements() helper leaveEditorBackward() already
+            // uses) *before* the banner disappears, then hide the banner
+            // and move focus there - never an arbitrary hardcoded target.
+            var next = null;
+            if (typeof _getFocusableElements === 'function') {
+              var focusable = _getFocusableElements();
+              var idx = focusable.indexOf(dismiss);
+              if (idx > -1 && idx + 1 < focusable.length) next = focusable[idx + 1];
+            }
             if (banner) banner.style.display = 'none';
             safeStorage(function () { localStorage.setItem('cuStartBannerDismissed', 'true'); });
+            if (next && typeof next.focus === 'function') next.focus();
           });
         }
       });

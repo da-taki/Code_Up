@@ -1904,6 +1904,19 @@ GLOBAL_PASS_THROUGH = {
     "resume voice",
     "repeat",
     "clear output",
+    # XRCVC audit D3: the User Guide (section 8) documents these as
+    # general onboarding commands with no Audio Blocks Mode caveat, and
+    # the getting-started banner keeps advertising "start tutorial" even
+    # while Audio Blocks Mode is active. Unlike the Python-lesson commands
+    # in learning_moat (which get an explicit "switch to Python Code Mode"
+    # redirect because they need actual Python code to operate on), the
+    # tutorial walkthrough is mode-agnostic, so - same as "stop"/"repeat"
+    # above - it should reach the normal handler instead of dead-ending in
+    # "That block command is not available yet."
+    "start tutorial",
+    "restart tutorial",
+    "next tutorial step",
+    "skip tutorial",
 }
 
 AUDIO_MODE_REQUIRED = (

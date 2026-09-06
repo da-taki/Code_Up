@@ -1154,3 +1154,30 @@ def test_audio_blocks_project_report_and_export_use_block_workspace(client):
     assert "Generated Python" in report["report"]
     export = typed(client, "export this project")
     assert export["action"] == "export_audio_blocks"
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["start tutorial", "restart tutorial", "next tutorial step", "skip tutorial"],
+)
+def test_tutorial_commands_reach_normal_handler_while_in_audio_blocks_mode(client, command):
+    # XRCVC audit D3: the User Guide presents "start tutorial" (section 8)
+    # as a general onboarding command with no Audio Blocks Mode caveat, and
+    # the getting-started banner keeps advertising it even while Audio
+    # Blocks Mode is active. Before the fix, audio_blocks.route_command()
+    # had no entry for these phrases and fell through to the generic
+    # "That block command is not available yet." dead end instead of
+    # deferring to the normal tutorial handler.
+    typed(client, "open audio blocks")
+    response = typed(client, command)
+    assert "not available yet" not in str(response.get("speech") or response.get("message") or "").lower()
+    assert response.get("action") not in (None, "deterministic_message")
+
+
+def test_audio_blocks_own_commands_still_rejected_when_unsupported(client):
+    # Guard against the D3 fix accidentally loosening Audio Blocks Mode's
+    # own "unsupported block command" behavior for phrases that are NOT on
+    # the documented general-command allow list.
+    typed(client, "open audio blocks")
+    response = typed(client, "add turtle block")
+    assert "not available yet" in response["speech"]

@@ -298,3 +298,61 @@ def test_secondary_help_text_is_not_tiny():
     assert _rule_font_size_rem(CORE_CSS, ".cu-command-tip") >= 0.85
     assert _rule_font_size_rem(UI_CSS, ".cu-tutorial-status") >= 0.85
     assert _rule_font_size_rem(UI_CSS, ".cu-tutorial-help") >= 0.85
+
+
+# ---------------------------------------------------------------------------
+# CodeUp User Guide + WCAG audit finding D1: Ctrl+Shift+P was documented in
+# three different places (the accessibility help page, the User Guide, and
+# the app's own in-product shortcut dialog) with two different, conflicting
+# names for the same shortcut ("command help" vs. "Command palette").
+# Application behavior (Ctrl+Shift+P opens a fuzzy command-search overlay,
+# Alt+Shift+K opens the actual keyboard shortcut reference) is intentional
+# and correctly implemented, so the fix corrects the one outlier - the
+# /accessibility page - to match the app's own consistent labeling instead
+# of touching any keybinding.
+# ---------------------------------------------------------------------------
+
+def test_accessibility_help_page_agrees_with_in_app_shortcut_labels():
+    # The in-app "Keyboard shortcuts" dialog and the help-command text in
+    # app.js are the source of truth for what each shortcut is actually
+    # called; both already call Ctrl+Shift+P "Command palette" and
+    # Alt+Shift+K the shortcut-list opener.
+    index_html = Path("templates/index.html").read_text(encoding="utf-8")
+    assert "Ctrl+Shift+P</span> — Command palette" in index_html
+    assert "Alt+Shift+K</span> — Open this shortcut list" in index_html
+    assert "- Ctrl+Shift+P: Command palette" in STATIC_APP
+    assert "- Alt+Shift+K: Show this full shortcut list" in STATIC_APP
+
+    # The standalone /accessibility page used to call the same Ctrl+Shift+P
+    # chord "command help" - a different feature - and never mentioned
+    # Alt+Shift+K at all. It must now describe both shortcuts the same way
+    # the rest of the product does.
+    assert "Press Control+Shift+P to open command help." not in ACCESSIBILITY_HTML
+    assert "Press Control+Shift+P to open the command palette." in ACCESSIBILITY_HTML
+    assert "Alt+Shift+K" in ACCESSIBILITY_HTML
+
+
+# ---------------------------------------------------------------------------
+# CodeUp User Guide + WCAG audit finding D4: dismissing the getting-started
+# banner removed the focused Dismiss button from layout without first
+# moving focus anywhere, so focus silently fell back to <body> with no
+# visible indicator on screen.
+# ---------------------------------------------------------------------------
+
+def test_dismissing_start_banner_moves_focus_to_next_focusable_control(client):
+    html = ide_html(client)
+    # The fix must look up the real next-in-DOM-order focusable element via
+    # the same helper leaveEditorBackward() already uses for the analogous
+    # backward case, not a hardcoded destination.
+    assert "_getFocusableElements()" in html or "_getFocusableElements" in STATIC_APP
+    assert 'id="cuStartBannerDismiss"' in html
+    script_start = html.index("dismiss.addEventListener('click'")
+    handler = html[script_start:script_start + 1200]
+    assert "_getFocusableElements" in handler
+    assert "next.focus()" in handler
+    # The lookup must happen (or be captured) before the banner is hidden,
+    # not after - otherwise the Dismiss button is already out of layout
+    # and _getFocusableElements() would never find it.
+    idx_lookup = handler.index("focusable.indexOf(dismiss)")
+    idx_hide = handler.index("banner.style.display = 'none'")
+    assert idx_lookup < idx_hide

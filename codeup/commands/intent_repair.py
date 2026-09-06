@@ -489,7 +489,7 @@ def repair(utterance: str, *, code: str = "",
     if re.search(r"\bstop\s+(?:speaking|talking|narrating|the\s+narration|the\s+voice|the\s+speech)\b"
                  r"|\bstop\s+narration\b|\bbe\s+quiet\b|\bpause\s+(?:the\s+)?speech\b|\bquiet\s+down\b|\bshut\s+up\b", t):
         return _decision("control_speech", "stop_speaking", 0.95, "stop speaking")
-    if re.search(r"\bstop\s+listening\b|\bturn\s+off\s+(?:the\s+)?mic(?:rophone)?\b|\bmute\s+(?:the\s+)?mic"
+    if re.search(r"\bstop\s+listening\b|\bpause\s+listening\b|\bturn\s+off\s+(?:the\s+)?mic(?:rophone)?\b|\bmute\s+(?:the\s+)?mic"
                  r"|\b(?:pause|disable|turn\s+off|stop)\s+voice\s+input\b|\bdisable\s+(?:the\s+)?mic(?:rophone)?\b|\bgo\s+silent\b", t):
         return _decision("control_voice", "stop_listening", 0.95, "stop listening")
     if re.search(r"\bstart\s+listening\b|\bunmute\b|\bwake\s+up\b|\bresume\s+listening\b|\bturn\s+on\s+(?:the\s+)?mic", t):

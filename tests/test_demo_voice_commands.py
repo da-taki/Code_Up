@@ -123,6 +123,20 @@ class TestHinglishCoreFlow:
         assert _action(client, "mere snippets dikhao")["action"] == "list_snippets"
         assert _action(client, "first loop wala snippet load karo")["action"] == "load_snippet"
 
+    @pytest.mark.parametrize("text", ["save snippet", "save this snippet"])
+    def test_bare_save_snippet_matches_the_guide_canonical_phrase(self, client, text):
+        # CodeUp User Guide section 9 documents the bare "save snippet"
+        # (no name) as its own canonical command, distinct from the named
+        # "save snippet as <name>" form - it previously fell through to
+        # "as a snippet" wording that this exact phrase never contains.
+        assert _action(client, text)["action"] == "save_snippet_auto"
+
+    def test_named_save_snippet_still_matches_after_the_bare_phrase_fix(self, client):
+        # Guard against the new bare pattern shadowing the named form.
+        named = _action(client, "save code as a snippet called greeting")
+        assert named["action"] == "save_snippet_named"
+        assert named["name"].lower() == "greeting"
+
     @pytest.mark.parametrize("text", [
         "range three ka matlab kya hai?",
         "loop kya hota hai?",

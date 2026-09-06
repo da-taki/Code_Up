@@ -44,6 +44,21 @@ class TestNaturalCommands:
     def test_start_tutorial_phrase(self, client):
         assert _vc(client, "hey code up start tutorial")["action"] == "start_tutorial"
 
+    def test_pause_listening_matches_stop_listening_like_its_resume_counterpart(self, client):
+        # CodeUp User Guide sections 10/14 document "pause listening" /
+        # "resume listening" as a symmetric pair. "resume listening" was
+        # already an explicit synonym in the start_listening pattern
+        # (line ~495), but "pause listening" was missing from the
+        # stop_listening pattern (line ~492) - an asymmetry, not an
+        # intentional restriction.
+        assert _vc(client, "pause listening")["action"] == "pause_voice"
+        assert _vc(client, "resume listening")["action"] == "resume_voice"
+
+    def test_pause_voice_input_phrase_still_matches(self, client):
+        # Guard against the "pause listening" fix accidentally narrowing
+        # the existing "pause voice input" phrasing on the same line.
+        assert _vc(client, "pause voice input")["action"] == "pause_voice"
+
     def test_could_you_map_my_code(self, client):
         assert _vc(client, "could you map my code", code="def f():\n    pass\n")["action"] == "code_map"
 

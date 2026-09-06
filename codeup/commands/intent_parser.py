@@ -491,6 +491,11 @@ class IntentParser:
     SAVE_SNIPPET_AUTO_PATTERNS = [
         r"^save\s+(?:this\s+)?(?:code|program)?\s+as\s+(?:a\s+)?snippet$",
         r"^save\s+(?:this\s+)?(?:code|program)\s+as\s+(?:a\s+)?snippet$",
+        # Guide section 9's bare canonical phrase ("save snippet", no name
+        # and no "as") - distinct from the "as a snippet" forms above and
+        # from SAVE_SNIPPET_NAMED_PATTERNS below (which always require
+        # trailing text after "snippet"), so this cannot shadow either.
+        r"^save\s+(?:this\s+)?snippet$",
         r"^is\s+code\s+ko\s+snippet\s+save\s+karo$",
     ]
 

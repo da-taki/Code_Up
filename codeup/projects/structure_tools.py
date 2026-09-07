@@ -4,7 +4,7 @@ import ast
 import io
 import re
 import tokenize
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 _NUM_WORDS = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six",
               7: "seven", 8: "eight", 9: "nine", 10: "ten"}
@@ -201,21 +201,25 @@ def build_structure_snapshot(code: str) -> Dict[str, Any]:
     }
 
 
-def _build_hierarchy(node: ast.AST) -> List[Dict[str, Any]]:
+def _build_hierarchy(node: ast.AST, code: str = "") -> List[Dict[str, Any]]:
     children: List[Dict[str, Any]] = []
     for child in ast.iter_child_nodes(node):
         if isinstance(child, tuple(_BLOCK_TYPES.keys())):
             name = getattr(child, "name", "") if isinstance(
                 child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) else ""
             kind = _block_label(child)
+            if isinstance(child, ast.If) and code:
+                # Reuse the same condition-text extraction _ancestor_chain uses,
+                # so hierarchy labels and "where am I" labels stay consistent.
+                kind = f"condition {_cond_text(code, child.test)}"
             children.append({
                 "label": f"{kind} {name}" if name else kind,
                 "line": int(getattr(child, "lineno", 0) or 0),
                 "end_line": _end_line(child),
-                "children": _build_hierarchy(child),
+                "children": _build_hierarchy(child, code),
             })
         else:
-            children.extend(_build_hierarchy(child))
+            children.extend(_build_hierarchy(child, code))
     return children
 
 
@@ -238,12 +242,153 @@ def code_map_hierarchy(code: str) -> Dict[str, Any]:
     tree = _safe_parse(code)
     if tree is None:
         return {"hierarchy": [], "speech": "I cannot read the structure because of a syntax error."}
-    hierarchy = _build_hierarchy(tree)
+    hierarchy = _build_hierarchy(tree, code)
     if not hierarchy:
         return {"hierarchy": [], "speech": "This program has no functions, loops, classes, or "
                                             "conditions to map -- just simple top-level statements."}
     lines = _speak_hierarchy(hierarchy)
     return {"hierarchy": hierarchy, "speech": " ".join(lines)}
+
+
+def orientation_cue(code: str, line: Optional[int], verb: str = "Moved to") -> str:
+    """A SHORT one-line cue for automatic CodeUp-driven navigation events -- e.g.
+    "Moved to line 42, inside function main, inside the loop beginning on line 38."
+    This is deliberately NOT the full 'where am I' ancestor chain (that stays the
+    explicit "where am I" command): it names only the innermost 1-2 enclosing
+    blocks so a semantic jump doesn't turn into a paragraph. Reuses the same
+    AST ancestor chain as cursor_context() -- no separate orientation parser.
+    """
+    code_lines = (code or "").splitlines()
+    if not code_lines or line is None:
+        return ""
+    tree = _safe_parse(code)
+    if tree is None:
+        return f"{verb} line {line}."
+    n = _clamp_line(code_lines, line)
+    ancestors = _ancestor_chain(code, n)
+    if not ancestors:
+        return f"{verb} line {n}, at the top level."
+    innermost = ancestors[-1]
+    container = next((a for a in ancestors if a["kind"] in ("function", "class")), None)
+    if container and container is not innermost:
+        phrase = f"{container['label']}, inside {innermost['label']} beginning on line {innermost['line']}"
+    elif container:
+        phrase = container["label"]
+    else:
+        phrase = f"{innermost['label']} beginning on line {innermost['line']}"
+    return f"{verb} line {n}, {phrase}."
+
+
+def _locate_in_hierarchy(
+    nodes: List[Dict[str, Any]], line: int
+) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]], int]:
+    """Find the deepest hierarchy node (from code_map_hierarchy's tree) whose span
+    contains `line`. Returns (node, its_sibling_list, its_index_in_that_list), or
+    (None, nodes, -1) if `line` isn't inside any node at this level."""
+    for i, n in enumerate(nodes):
+        if n["line"] <= line <= n["end_line"]:
+            deeper = _locate_in_hierarchy(n["children"], line)
+            if deeper[0] is not None:
+                return deeper
+            return (n, nodes, i)
+    return (None, nodes, -1)
+
+
+def block_navigation(code: str, line: Optional[int], direction: str) -> Dict[str, Any]:
+    """'go to parent block' / 'first child' / 'next sibling' / 'previous sibling',
+    relative to the block containing the cursor. Reuses _ancestor_chain (for
+    "parent") and code_map_hierarchy's tree (for child/sibling) -- no separate
+    tree data structure or parent back-pointers needed.
+    """
+    code_lines = (code or "").splitlines()
+    if not code_lines:
+        return {"found": False, "message": "There is no code to navigate yet."}
+    tree = _safe_parse(code)
+    if tree is None:
+        return {"found": False, "message": "I cannot navigate because of a syntax error."}
+    n = _clamp_line(code_lines, line)
+
+    if direction == "parent":
+        ancestors = _ancestor_chain(code, n)
+        if len(ancestors) < 2:
+            return {"found": False,
+                    "message": "This is already at the top level; there is no parent block."}
+        parent = ancestors[-2]
+        return {"found": True, "line": parent["line"], "end_line": None,
+                "message": f"Parent block: {parent['label']}, starting on line {parent['line']}."}
+
+    hierarchy = _build_hierarchy(tree, code)
+    node, siblings, idx = _locate_in_hierarchy(hierarchy, n)
+    if node is None:
+        return {"found": False,
+                "message": "This is at the top level; there is no enclosing block here."}
+
+    if direction == "first_child":
+        if not node["children"]:
+            return {"found": False, "message": f"{node['label']} has no nested blocks inside it."}
+        child = node["children"][0]
+        return {"found": True, "line": child["line"], "end_line": child["end_line"],
+                "message": f"First child: {child['label']}, starting on line {child['line']}."}
+
+    if direction in ("next_sibling", "previous_sibling"):
+        if direction == "next_sibling":
+            if idx + 1 >= len(siblings):
+                return {"found": False, "message": f"{node['label']} is the last block at this level."}
+            sib, word = siblings[idx + 1], "Next"
+        else:
+            if idx - 1 < 0:
+                return {"found": False, "message": f"{node['label']} is the first block at this level."}
+            sib, word = siblings[idx - 1], "Previous"
+        return {"found": True, "line": sib["line"], "end_line": sib["end_line"],
+                "message": f"{word} sibling: {sib['label']}, starting on line {sib['line']}."}
+
+    return {"found": False, "message": f"I do not understand the navigation direction '{direction}'."}
+
+
+def _pick_landmark(hierarchy: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    for node in hierarchy:
+        if node["children"]:
+            return node
+    return None
+
+
+def _describe_landmark(node: Dict[str, Any]) -> str:
+    parts = [f"{node['label']} starts on line {node['line']}."]
+    parent, child = node, node["children"][0] if node["children"] else None
+    while child and len(parts) < 3:
+        parts.append(f"{parent['label']} contains {child['label']} from lines "
+                     f"{child['line']} to {child['end_line']}.")
+        parent = child
+        child = child["children"][0] if child["children"] else None
+    return " ".join(parts)
+
+
+def program_overview(code: str) -> str:
+    """A 'two-second glance' overview: line count, named functions with their
+    start lines, and ONE structural landmark (a function's internal nesting),
+    not every AST node. Pure composition of build_structure_snapshot() and
+    _build_hierarchy() -- no new parsing. Session-level facts (recent error,
+    recent change) are layered on by the caller, since those aren't AST facts.
+    """
+    tree = _safe_parse(code)
+    snap = build_structure_snapshot(code)
+    if not snap.get("has_code") or tree is None:
+        return snap.get("summary", "There is no code to summarize yet.")
+
+    parts = [f"{snap['line_count']} line{'s' if snap['line_count'] != 1 else ''}."]
+    funcs = [it for it in snap["items"] if it["type"] == "function"]
+    if funcs:
+        names = ", ".join(f"{f['name']} (line {f['line']})" for f in funcs[:5])
+        parts.append(f"{_count_word(len(funcs))} function{'s' if len(funcs) != 1 else ''}: {names}.")
+
+    landmark = _pick_landmark(_build_hierarchy(tree, code))
+    if landmark:
+        parts.append(_describe_landmark(landmark))
+
+    inputs = (snap.get("counts") or {}).get("inputs", 0)
+    if inputs:
+        parts.append(f"{_count_word(inputs)} input call{'s' if inputs != 1 else ''}.")
+    return " ".join(parts)
 
 
 def _join(pieces: List[str]) -> str:
@@ -876,6 +1021,122 @@ def explain_indentation_error(code: str) -> Optional[str]:
         return f"There is an indentation problem near line {err_line}: {msg}."
     except SyntaxError:
         return None
+
+
+def braille_compact_view(code: str, line: Optional[int] = None, radius: int = 6) -> Dict[str, Any]:
+    """EXPERIMENTAL. A Braille-display-oriented compaction of LEADING indentation
+    only -- e.g. 12 leading spaces becomes a short "D3 | " marker instead of
+    burning 12 cells on whitespace (one D-level per 4 spaces, matching CodeUp's
+    standard indent width). Source code is never modified; this is a read-only
+    display transform, one row per line: {line, marker, text, exact_source}.
+    Only leading whitespace is touched -- meaningful mid-line spacing (inside
+    strings, alignment, etc.) is left completely alone, and exact_source always
+    carries the untouched original line. Tabs are marked with T (one level per
+    tab character) instead of D so they are never silently conflated with
+    spaces. Deliberately independent of AST/parsing -- it works even on code
+    with a syntax error, which is exactly when a learner most needs to proofread
+    indentation. This needs real Braille-user validation before being trusted
+    as more than a first prototype.
+    """
+    code_lines = (code or "").splitlines()
+    if not code_lines:
+        return {"lines": [], "text": "There is no code yet."}
+    if line is not None:
+        center = _clamp_line(code_lines, line)
+        start, end = max(1, center - radius), min(len(code_lines), center + radius)
+    else:
+        start, end = 1, len(code_lines)
+
+    rows: List[Dict[str, Any]] = []
+    for i in range(start, end + 1):
+        raw = code_lines[i - 1]
+        stripped = raw.lstrip(" \t")
+        leading = raw[:len(raw) - len(stripped)]
+        if "\t" in leading:
+            marker = f"T{leading.count(chr(9))}"
+        else:
+            marker = f"D{len(leading) // 4}"
+        rows.append({"line": i, "marker": marker, "text": stripped, "exact_source": raw})
+
+    parts = []
+    for r in rows:
+        shown = r["text"] if r["text"].strip() else "(blank)"
+        parts.append(f"{r['line']}: {r['marker']} | {shown}")
+    return {"lines": rows, "text": " / ".join(parts)}
+
+
+_FLOW_SIMPLE_STATEMENTS = (
+    ast.Assign, ast.AugAssign, ast.AnnAssign, ast.Expr, ast.Import, ast.ImportFrom,
+    ast.Pass, ast.Break, ast.Continue, ast.Global, ast.Nonlocal,
+)
+_FLOW_MAX_STEPS = 40
+
+
+def _flow_statements(stmts: List[ast.AST], code: str, parts: List[str]) -> None:
+    for stmt in stmts:
+        if len(parts) >= _FLOW_MAX_STEPS:
+            parts.append("-> Flow becomes more complex here. Use Code Map or Step "
+                         "Narration for the rest.")
+            return
+        line = getattr(stmt, "lineno", None)
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            parts.append(f"-> function {stmt.name} is defined on line {line}.")
+            parts.append(f"Inside {stmt.name}:")
+            _flow_statements(stmt.body, code, parts)
+            parts.append(f"-> end of {stmt.name}.")
+        elif isinstance(stmt, ast.If):
+            cond = _cond_text(code, stmt.test)
+            parts.append(f"-> condition {cond} on line {line}.")
+            parts.append("true ->")
+            _flow_statements(stmt.body, code, parts)
+            if stmt.orelse:
+                if len(stmt.orelse) == 1 and isinstance(stmt.orelse[0], ast.If):
+                    parts.append("false -> check the next condition:")
+                    _flow_statements(stmt.orelse, code, parts)
+                else:
+                    parts.append("false ->")
+                    _flow_statements(stmt.orelse, code, parts)
+            parts.append("-> after the condition.")
+        elif isinstance(stmt, (ast.For, ast.AsyncFor)):
+            iterable = _speak_expr(ast.get_source_segment(code, stmt.iter) or "")
+            parts.append(f"-> loop through {iterable} on line {line}.")
+            _flow_statements(stmt.body, code, parts)
+            parts.append("-> after the loop.")
+        elif isinstance(stmt, ast.While):
+            cond = _cond_text(code, stmt.test)
+            parts.append(f"-> while {cond} on line {line}.")
+            _flow_statements(stmt.body, code, parts)
+            parts.append("-> after the loop.")
+        elif isinstance(stmt, ast.Return):
+            expr = ast.get_source_segment(code, stmt.value) if stmt.value else None
+            parts.append(f"-> return{' ' + _speak_expr(expr) if expr else ''} on line {line}.")
+        elif isinstance(stmt, _FLOW_SIMPLE_STATEMENTS):
+            parts.append(f"-> line {line}: {explain_line(code, line)}")
+        else:
+            # try/except, with, class, comprehension-heavy code, etc. -- do not
+            # pretend a simplified beginner flow is a formal control-flow graph.
+            parts.append(f"-> flow becomes more complex here (line {line}). Use Code "
+                         "Map or Step Narration for exact execution.")
+
+
+def describe_program_flow(code: str) -> str:
+    """A conservative, beginner-safe LINEAR flow description (not a compiler-grade
+    CFG): sequential statements, if/elif/else with true/false paths, for/while,
+    return, input/print (via explain_line), and function bodies. Anything else
+    (try/except, with, classes, comprehensions, ...) gets an honest "flow becomes
+    more complex here" instead of a guess. Composes explain_line() (per-statement
+    wording) with a source-order AST walk, reusing _cond_text()'s condition
+    extraction from _ancestor_chain -- no new parsing engine.
+    """
+    if not (code or "").strip():
+        return "There is no code to describe yet."
+    tree = _safe_parse(code)
+    if tree is None:
+        return "I cannot describe the flow because of a syntax error."
+    parts: List[str] = ["Start."]
+    _flow_statements(tree.body, code, parts)
+    parts.append("End.")
+    return " ".join(parts)
 
 
 def assigned_variable_names(code: str) -> List[str]:

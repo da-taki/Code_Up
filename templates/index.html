@@ -57,6 +57,13 @@
         <option value="high-contrast">High Contrast</option>
       </select>
 
+      <label for="textSizeMode">Text size</label>
+      <select id="textSizeMode" class="theme-selector" aria-label="Text size">
+        <option value="default">Normal text size</option>
+        <option value="large">Large text</option>
+        <option value="xlarge">Extra large text</option>
+      </select>
+
       <button id="dyslexiaToggle" class="theme-toggle" aria-pressed="false" aria-label="Toggle dyslexia-friendly mode">
         Dyslexia Mode
       </button>
@@ -666,8 +673,32 @@
         if (!silent) speak((modeNames[mode] || mode) + ' activated.');
       }
 
+      var TEXT_SIZE_MONACO = { 'default': { fontSize: 16, lineHeight: 24 },
+                               'large':   { fontSize: 20, lineHeight: 30 },
+                               'xlarge':  { fontSize: 26, lineHeight: 38 } };
+
+      function applyTextSizeMode(mode, silent) {
+        // On <html>, not <body>: rem units are relative to the root element's
+        // own font-size, and that rule lives on html itself (see core.css) --
+        // a class/variable on body cannot reach a CSS rule on its own parent.
+        var root = document.documentElement;
+        root.classList.remove('theme-text-large', 'theme-text-xlarge');
+        if (mode === 'large') root.classList.add('theme-text-large');
+        else if (mode === 'xlarge') root.classList.add('theme-text-xlarge');
+        try {
+          if (typeof editor !== 'undefined' && editor && editor.updateOptions) {
+            editor.updateOptions(TEXT_SIZE_MONACO[mode] || TEXT_SIZE_MONACO['default']);
+          }
+        } catch (e) {}
+        if (!silent) {
+          var names = { 'default': 'Normal text size', 'large': 'Large text', 'xlarge': 'Extra large text' };
+          speak((names[mode] || mode) + ' activated.');
+        }
+      }
+
       function loadAccessibilityPreferences() {
         var colorMode     = safeStorage(function () { return localStorage.getItem('colorVisionMode'); }) || 'default';
+        var textSizeMode  = safeStorage(function () { return localStorage.getItem('textSizeMode'); }) || 'default';
         var dyslexiaMode  = safeStorage(function () { return localStorage.getItem('dyslexiaMode'); }) === 'true';
         var reducedMotion = safeStorage(function () { return localStorage.getItem('reducedMotion'); }) === 'true';
         var nightMode     = safeStorage(function () { return localStorage.getItem('nightMode'); }) === 'true';
@@ -675,6 +706,10 @@
         var sel = document.getElementById('colorVisionMode');
         if (sel) sel.value = colorMode;
         applyColorVisionMode(colorMode, true);   // restore silently on page load
+
+        var sizeSel = document.getElementById('textSizeMode');
+        if (sizeSel) sizeSel.value = textSizeMode;
+        applyTextSizeMode(textSizeMode, true);   // restore silently on page load
 
         var dyslexiaBtn = document.getElementById('dyslexiaToggle');
         if (dyslexiaMode && dyslexiaBtn) {
@@ -705,6 +740,10 @@
       }
 
       document.getElementById('colorVisionMode').addEventListener('change', function (e) { applyColorVisionMode(e.target.value); });
+      document.getElementById('textSizeMode').addEventListener('change', function (e) {
+        applyTextSizeMode(e.target.value);
+        safeStorage(function () { localStorage.setItem('textSizeMode', e.target.value); });
+      });
       document.getElementById('dyslexiaToggle').addEventListener('click', function () {
         var isActive = document.body.classList.toggle('theme-dyslexia');
         this.classList.toggle('active', isActive);

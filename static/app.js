@@ -1759,17 +1759,28 @@ require.config({ paths: { vs: '/static/vendor/monaco/min/vs' } });
 require(['vs/editor/editor.main'], function () {
   if (editor) { console.warn('Editor already initialized, skipping'); return; }
 
+  // Low-vision text size: read the saved preference directly at creation time
+  // (same pattern as the theme-night check above) since loadAccessibilityPreferences()
+  // in index.html runs before Monaco finishes loading and can't call
+  // editor.updateOptions() on an editor that doesn't exist yet.
+  let _initialFontSize = 16, _initialLineHeight = 24;
+  try {
+    const savedTextSize = localStorage.getItem('textSizeMode');
+    if (savedTextSize === 'large') { _initialFontSize = 20; _initialLineHeight = 30; }
+    else if (savedTextSize === 'xlarge') { _initialFontSize = 26; _initialLineHeight = 38; }
+  } catch (e) {}
+
   editor = monaco.editor.create(document.getElementById('editor'), {
     value:                'print("Hello CodeUp!")',
     language:             'python',
     theme:                document.body.classList.contains('theme-night') ? 'vs-dark' : 'vs',
-    fontSize:             16,
+    fontSize:             _initialFontSize,
     minimap:              { enabled: false },
     glyphMargin:          true,
     automaticLayout:      true,
     accessibilitySupport: 'on',
     ariaLabel:            'Python code editor. Use arrow keys to navigate and type to edit. Tab moves focus out of the editor; use Control right bracket to indent a line and Control left bracket to outdent it. Press Escape when speech is quiet, or Control M, to leave the editor. Press Control Enter to run.',
-    lineHeight:           24,
+    lineHeight:           _initialLineHeight,
     tabSize:              4,
     insertSpaces:         true,
     wordWrap:             'on',
@@ -3823,7 +3834,22 @@ async function handleConfirmedAction(action, payload) {
     out(message, { sr: false });
     speak(message);
   }
-  else if (action === 'focus_target') focusNamedTarget(payload && payload.target);
+  else if (action === 'open_accessibility_settings') {
+    // Same panel/function the Alt+Shift+O shortcut already opens (XRCVC
+    // Issue 18) -- this just adds a typed/voice trigger for it.
+    if (typeof openAccessibilityOptionsPanel === 'function') openAccessibilityOptionsPanel();
+  }
+  else if (action === 'focus_target') {
+    focusNamedTarget(payload && payload.target);
+    // Context Resume ("back to code"/"where was I") attaches a short custom
+    // orientation cue on top of the plain focus-move announcement above --
+    // same out()+speak() pairing already used for next_step/previous_step.
+    // Existing nav_focus responses (e.g. "go to output") deliberately send an
+    // EMPTY speech field to stay silent beyond focusNamedTarget's own
+    // announcement, so only `speech` (never `message`) opts into this.
+    const resumeSpeech = payload && payload.speech;
+    if (resumeSpeech) { out(resumeSpeech, { sr: false }); speak(resumeSpeech); }
+  }
   else if (action === 'navigate') {
     const msg = (payload && payload.speech) || (payload && payload.message) || '';
     if (msg) speak(msg);

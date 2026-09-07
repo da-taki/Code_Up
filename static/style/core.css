@@ -44,7 +44,22 @@
 
   --font-main: system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* Low-vision text scaling: one variable, cascades through every existing
+     rem-based size in this file. body.theme-text-large/xlarge override it
+     below, same body-class-toggle convention as theme-night/theme-dyslexia. */
+  --ui-scale: 1;
 }
+
+html { font-size: calc(100% * var(--ui-scale)); }
+
+/* NOTE: these classes go on <html>, not <body> (unlike theme-night/theme-
+   dyslexia/etc.) -- rem units are always relative to the ROOT element's
+   font-size specifically, and CSS custom properties only inherit DOWNWARD
+   from an ancestor, so setting --ui-scale on body would never reach html's
+   own font-size rule above. */
+html.theme-text-large  { --ui-scale: 1.25; }
+html.theme-text-xlarge { --ui-scale: 1.6; }
 
 body.theme-night {
   --bg-main:  #0a0703;

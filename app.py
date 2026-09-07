@@ -79,6 +79,7 @@ from codeup.learning import ask_code
 from codeup.learning import trainer_review
 from codeup.learning import lesson_builder
 from codeup.accessibility import screen_reader_bridge
+from codeup.accessibility import precision_reader
 from codeup.commands import natural_command_mapper
 from codeup.commands import natural_code_editor
 from codeup.commands import beginner_templates
@@ -8875,12 +8876,155 @@ def _extract_error_line(error: str) -> Optional[int]:
     return None
 
 
-def _nav_response(nav, text, mem):
+def _recent_context_bits(mem, code):
+    """Recent-change-count + recent-error-line facts. Shared by /breadcrumbs,
+    'overview', and Mental Map so this composition logic has one owner instead
+    of being copy-pasted at each call site. Session facts, not AST facts -- lives
+    here (app.py) rather than in structure_tools.py, same split as /breadcrumbs
+    already uses."""
+    bits = []
+    try:
+        history = mem.get("change_history") if isinstance(mem.get("change_history"), list) else []
+        if history:
+            n = len(history)
+            bits.append(f"There {'is' if n == 1 else 'are'} {n} recent change{'s' if n != 1 else ''}.")
+        err = str(mem.get("last_run_error") or "")
+        if err:
+            analysis = error_trace.analyze(err, traceback_text=str(mem.get("last_run_traceback") or ""), code=code)
+            if analysis.get("line"):
+                bits.append(f"The latest error is on line {analysis['line']}.")
+    except Exception:
+        pass
+    return bits
+
+
+def _store_explanation_context(mem, *, kind, summary, details="", exact=""):
+    """Progressive Disclosure: remember the one most recent layered response so
+    'more'/'details'/'exact' can deepen it (see session_memory.set_explanation_context).
+    Only used for the handful of features rich enough to have real layers."""
+    session_memory.set_explanation_context(mem, {
+        "kind": kind, "summary": summary, "details": details or summary, "exact": exact or details or summary,
+    })
+
+
+def _disclosure_response(mem, text, confidence, level):
+    """'more' / 'details' / 'exact' -- deepen the last stored explanation context,
+    if there is one. Returns None (not handled) when there's nothing pending, so
+    the caller falls through to the existing generic 'more help' handling."""
+    ctx = session_memory.get_explanation_context(mem)
+    if not ctx:
+        return None
+    speech = ctx.get(level) or ctx.get("summary") or ""
+    if not speech:
+        return None
+    return {
+        "success": True, "action": "deterministic_message", "intent": f"disclosure_{level}",
+        "message": speech, "speech": speech, "heard": text, "confidence": confidence,
+    }
+
+
+def _unified_execution_speech(mem, current_code):
+    """'what is my program doing' / 'what just happened' / 'why did that happen'
+    / 'what happened on that step' / 'what changed on this step' / 'what
+    condition just ran'. Pure composition: reuses the already-stored trace
+    bundle (state_watch.build_steps/condition_outcomes via _build_state_bundle),
+    merging the current step's event with any condition on the same line --
+    no new trace engine, no new parsing.
+    """
+    bundle = session_memory.get_state_trace(mem)
+    if bundle is None:
+        return "I do not have a state trace yet. Say 'step through this' first."
+    if (bundle.get("code") or "") != (current_code or ""):
+        return "The code changed after the last trace. Say 'step through this' to refresh the state."
+    if bundle.get("error"):
+        return _state_error_message(bundle["error"])
+    steps = bundle.get("steps") or []
+    if not steps:
+        return "I traced the program but found no steps to read."
+    cursor = max(0, min(int(bundle.get("cursor", 0) or 0), len(steps) - 1))
+    step = steps[cursor]
+    where = f" on line {step['line']}" if step.get("line") else ""
+    parts = [f"Step {cursor + 1} of {len(steps)}: {step.get('text', '')}{where}."]
+    conditions = bundle.get("conditions") or []
+    match = next((c for c in conditions if c.get("line") == step.get("line")), None)
+    if match:
+        parts.append(state_watch.narrate_condition(match))
+    loop_still_running = bool(bundle.get("loop")) and cursor < len(steps) - 1
+    if loop_still_running:
+        parts.append("You are still inside the loop.")
+    return " ".join(p for p in parts if p)
+
+
+def _mental_map_speech(mem, current_code, cursor_line):
+    """'explain my mental map' / 'mental map' / "what's my current context" /
+    'what should I know right now'. Composes ALREADY-EXISTING facts (no new
+    tracer/diff/structure engine): cursor_context() for structure, the stored
+    state-trace bundle for runtime facts, error_trace for the current error,
+    the last recorded change's summary, and the current lesson if any. Omits
+    any section with nothing useful to say -- never "No error." / "No lesson."
+    """
+    parts = []
+
+    active_file = str(mem.get("last_active_file") or mem.get("last_opened_file") or "").strip()
+    if cursor_line:
+        parts.append(f"{active_file}, line {cursor_line}." if active_file else f"Line {cursor_line}.")
+        ctx = structure_tools.cursor_context(current_code, cursor_line)
+        if ctx.get("found") and ctx.get("ancestors"):
+            phrase = ", inside ".join(f"{a['label']} on line {a['line']}" for a in ctx["ancestors"])
+            parts.append(f"Inside {phrase}.")
+    elif active_file:
+        parts.append(f"{active_file}.")
+
+    bundle = session_memory.get_state_trace(mem)
+    if bundle and (bundle.get("code") or "") == (current_code or "") and not bundle.get("error"):
+        variables = bundle.get("vars") or {}
+        if variables:
+            shown = list(variables.items())[:3]
+            var_bits = [f"{name} is {state_watch.summarize_value(info.get('value'), full=True)}"
+                        for name, info in shown]
+            parts.append("From the last run: " + ", ".join(var_bits) + ".")
+        conditions = bundle.get("conditions") or []
+        if conditions:
+            parts.append(state_watch.narrate_condition(conditions[-1]))
+
+    # A real /run stores last_run_error; a state-trace bundle (from "step
+    # through this") computes its own error independently -- check both so
+    # Mental Map doesn't miss an error the learner just saw.
+    err = str(mem.get("last_run_error") or "") or str((bundle or {}).get("error") or "")
+    if err:
+        analysis = error_trace.analyze(err, traceback_text=str(mem.get("last_run_traceback") or ""),
+                                       code=current_code)
+        if analysis.get("has_error"):
+            parts.append(error_trace.brief(analysis))
+
+    last_change = session_memory.get_last_change(mem)
+    if last_change and last_change.get("summary"):
+        parts.append(f"Your latest change: {last_change['summary']}")
+
+    lesson = str(mem.get("current_lesson_id") or mem.get("tutorial_module") or "").strip()
+    if lesson:
+        parts.append(f"Current lesson: {lesson}.")
+
+    parts = [p for p in parts if p]
+    if not parts:
+        return "There is not much context yet -- write or run some code first."
+    return " ".join(parts)
+
+
+def _nav_response(nav, text, mem, code=""):
     if nav.get("found"):
         session_memory.record_navigation(mem, nav)
+        message = nav.get("message", "")
+        # Automatic orientation (short cue, not the full "where am I" chain):
+        # every semantic CodeUp-driven jump gets one short "you are now here"
+        # sentence, reusing the same ancestor-chain data as cursor_context().
+        if code and nav.get("line"):
+            cue = structure_tools.orientation_cue(code, nav["line"])
+            if cue:
+                message = f"{message} {cue}".strip() if message else cue
         resp = {"success": True, "action": "navigate_code", "heard": text,
                 "line": nav.get("line"), "end_line": nav.get("end_line"),
-                "message": nav.get("message", ""), "speech": nav.get("message", ""),
+                "message": message, "speech": message,
                 "code_excerpt": nav.get("code", ""), "block_type": nav.get("block_type", "")}
         return resp
     msg = nav.get("message", "I could not find that in your code.")
@@ -8953,19 +9097,19 @@ def _sprint2_command(text, code, mem, cursor_line, error_context, mistake_snapsh
         target = _NAV_GOTO_RE.match(t).group(1)
         last_err_line = _extract_error_line(error_context) or _extract_error_line(mem.get("last_run_error", ""))
         nav = structure_tools.navigate(code, target, cursor_line=cursor_line, last_error_line=last_err_line)
-        return _nav_response(nav, text, mem)
+        return _nav_response(nav, text, mem, code)
     if _NAV_BLOCK_RE.match(t):
         rel = _NAV_BLOCK_RE.match(t).group(1)
         nav = structure_tools.navigate(code, f"{rel} block", cursor_line=cursor_line,
                                        last_block=session_memory.get_last_navigated(mem))
-        return _nav_response(nav, text, mem)
+        return _nav_response(nav, text, mem, code)
     m = _WHERE_IS_RE.match(t)
     if m:
         name, verb = m.group(1).strip(), m.group(2).lower()
         mode = "changed" if verb in ("changed", "calculated", "computed", "updated", "set", "modified", "assigned") \
             else ("defined" if verb in ("defined", "created") else "used")
         result = structure_tools.find_symbol(code, name.split()[-1], mode)
-        return _nav_response(result, text, mem)
+        return _nav_response(result, text, mem, code)
 
     level = None
     if _HINT_SMALL_RE.match(t):
@@ -9794,7 +9938,7 @@ def voice():
     mem = session_memory.get_memory(storage)
     mem["_current_voice_code"] = current_code
     try:
-        session_memory.record_editor_code(mem, current_code)
+        session_memory.record_editor_code(mem, current_code, cursor_line)
     except Exception:
         pass
     if active_mode:
@@ -10093,6 +10237,13 @@ def voice():
             )
             return _learning_msg(result, codex_handoff=True, report_preview=result.get("message", ""))
 
+        if learning_kind == "help_request":
+            project_state = _project_state_from_voice_body(body, current_code)
+            result = learning_moat.build_help_request_pack(
+                mem, current_code, project_state=project_state, error_text=error_context
+            )
+            return _learning_msg(result, help_request=True, report_preview=result.get("message", ""))
+
         if learning_kind.startswith("understanding_"):
             result = learning_moat.build_understanding_check(
                 learning_kind, mem, current_code, error_context
@@ -10209,6 +10360,10 @@ def voice():
                   if intent == "goto_definition"
                   else deterministic_code_tools.find_references(current_code, name))
         message = result.get("message") or "I could not find that name."
+        if result.get("line"):
+            cue = structure_tools.orientation_cue(current_code, result["line"])
+            if cue:
+                message = f"{message} {cue}"
         return _store_and_return({
             "success": True, "action": "navigate_code", "intent": intent,
             "line": result.get("line"), "end_line": result.get("end_line"),
@@ -10257,6 +10412,13 @@ def voice():
                 slots.get("direction", "next"),
             )
         message = result.get("message") or "I could not find that block."
+        # adjacent_symbol genuinely moves the cursor to a new function/class;
+        # current_block just describes where the cursor already is, so it gets
+        # no extra orientation cue (that would just repeat itself).
+        if intent == "adjacent_symbol" and result.get("line"):
+            cue = structure_tools.orientation_cue(current_code, result["line"])
+            if cue:
+                message = f"{message} {cue}"
         return _store_and_return({
             "success": True, "action": "navigate_code", "intent": intent,
             "line": result.get("line"), "end_line": result.get("end_line"),
@@ -10266,7 +10428,8 @@ def voice():
 
     if confidence >= 0.75 and intent in {"why_indented", "what_contains_line",
                                           "indentation_level", "block_contents",
-                                          "code_hierarchy", "graduation_mapping"}:
+                                          "code_hierarchy", "graduation_mapping",
+                                          "program_flow"}:
         indent_handlers = {
             "why_indented": lambda: structure_tools.why_indented(current_code, cursor_line),
             "what_contains_line": lambda: structure_tools.what_contains(current_code, cursor_line),
@@ -10274,11 +10437,146 @@ def voice():
             "block_contents": lambda: structure_tools.describe_contents(current_code, cursor_line),
             "code_hierarchy": lambda: structure_tools.code_map_hierarchy(current_code)["speech"],
             "graduation_mapping": lambda: screen_reader_bridge.graduation_mapping(),
+            "program_flow": lambda: structure_tools.describe_program_flow(current_code),
         }
         speech = indent_handlers[intent]()
         return _store_and_return({
             "success": True, "action": "deterministic_message", "intent": intent,
             "message": speech, "speech": speech, "heard": text, "confidence": confidence,
+        })
+
+    if confidence >= 0.75 and intent == "program_overview":
+        # Composition only: structure_tools.program_overview() (AST facts) plus
+        # the same recent-error/recent-change facts /breadcrumbs already uses.
+        speech = structure_tools.program_overview(current_code)
+        bits = _recent_context_bits(mem, current_code)
+        if bits:
+            speech = speech + " " + " ".join(bits)
+        _store_explanation_context(mem, kind="program_overview", summary=speech,
+                                   details=structure_tools.code_map_hierarchy(current_code)["speech"])
+        return _store_and_return({
+            "success": True, "action": "deterministic_message", "intent": intent,
+            "message": speech, "speech": speech, "heard": text, "confidence": confidence,
+        })
+
+    if confidence >= 0.75 and intent == "open_accessibility_settings":
+        speech = "Opening accessibility settings."
+        return _store_and_return({
+            "success": True, "action": "open_accessibility_settings", "intent": intent,
+            "message": speech, "speech": speech, "heard": text, "confidence": confidence,
+        })
+
+    if confidence >= 0.75 and intent in {"read_line_exact", "read_punctuation", "spell_token",
+                                          "read_char_by_char", "compare_exact",
+                                          "read_indentation_exactly"}:
+        if intent == "compare_exact":
+            last_change = session_memory.get_last_change(mem)
+            if not last_change:
+                speech = "There is no recent change to compare yet."
+            else:
+                speech = precision_reader.compare_exact(
+                    last_change.get("before", ""), last_change.get("after", ""))
+        else:
+            precision_handlers = {
+                "read_line_exact": lambda: precision_reader.read_line_exact(current_code, cursor_line),
+                "read_punctuation": lambda: precision_reader.read_punctuation(current_code, cursor_line),
+                "spell_token": lambda: precision_reader.spell_token(current_code, cursor_line),
+                "read_char_by_char": lambda: precision_reader.read_char_by_char(current_code, cursor_line),
+                "read_indentation_exactly": lambda: structure_tools.indentation_level(current_code, cursor_line),
+            }
+            speech = precision_handlers[intent]()
+        return _store_and_return({
+            "success": True, "action": "deterministic_message", "intent": intent,
+            "message": speech, "speech": speech, "heard": text, "confidence": confidence,
+        })
+
+    if confidence >= 0.75 and intent in {"braille_compact_view", "braille_compact_off"}:
+        if intent == "braille_compact_off":
+            speech = ("Braille compact view is read on demand only -- it does not run "
+                      "continuously, so there is nothing to turn off. Just ask for it again "
+                      "any time you want it.")
+        else:
+            view = structure_tools.braille_compact_view(current_code, cursor_line)
+            speech = ("Braille compact view (experimental -- leading indentation only, "
+                      "everything else is your exact code): " + view["text"])
+        return _store_and_return({
+            "success": True, "action": "deterministic_message", "intent": intent,
+            "message": speech, "speech": speech, "heard": text, "confidence": confidence,
+        })
+
+    if confidence >= 0.75 and intent in {"context_back_to_code", "context_back_to_output",
+                                          "context_resume"}:
+        if intent == "context_back_to_code":
+            line = mem.get("last_cursor_line")
+            speech = (structure_tools.orientation_cue(current_code, line, verb="Back in the code,")
+                      if line else "Back in the code editor.")
+            session_memory.push_context_surface(mem, "code", line=line)
+            return _store_and_return({
+                "success": True, "action": "focus_target", "target": "__editor__", "intent": intent,
+                "message": speech, "speech": speech, "heard": text, "confidence": confidence,
+            })
+        if intent == "context_back_to_output":
+            speech = "Back in the output panel."
+            session_memory.push_context_surface(mem, "output")
+            return _store_and_return({
+                "success": True, "action": "focus_target", "target": "output", "intent": intent,
+                "message": speech, "speech": speech, "heard": text, "confidence": confidence,
+            })
+        # context_resume: "where was I" / "resume where I was" / "what was I
+        # doing" -- restore whatever surface was active before the current one.
+        previous = session_memory.get_previous_surface(mem)
+        if not previous:
+            speech = "I do not have a previous location recorded yet."
+            return _store_and_return({
+                "success": True, "action": "deterministic_message", "intent": intent,
+                "message": speech, "speech": speech, "heard": text, "confidence": confidence,
+            })
+        surface = previous.get("surface", "code")
+        if surface == "code":
+            line = previous.get("line")
+            speech = (structure_tools.orientation_cue(current_code, line, verb="Back in the code,")
+                      if line else "Back in the code editor.")
+            target = "__editor__"
+        else:
+            speech = f"You were in the {surface.replace('_', ' ')} panel. Back there now."
+            target = {"output": "output", "errors": "output", "audio_diff": "output"}.get(surface, "output")
+        session_memory.push_context_surface(mem, surface, line=previous.get("line"))
+        return _store_and_return({
+            "success": True, "action": "focus_target", "target": target, "intent": intent,
+            "message": speech, "speech": speech, "heard": text, "confidence": confidence,
+        })
+
+    if confidence >= 0.75 and intent == "mental_map":
+        speech = _mental_map_speech(mem, current_code, cursor_line)
+        _store_explanation_context(mem, kind="mental_map", summary=speech)
+        return _store_and_return({
+            "success": True, "action": "deterministic_message", "intent": intent,
+            "message": speech, "speech": speech, "heard": text, "confidence": confidence,
+        })
+
+    if confidence >= 0.75 and intent == "unified_execution":
+        speech = _unified_execution_speech(mem, current_code)
+        return _store_and_return({
+            "success": True, "action": "deterministic_message", "intent": intent,
+            "message": speech, "speech": speech, "heard": text, "confidence": confidence,
+        })
+
+    if confidence >= 0.75 and intent in {"nav_parent_block", "nav_first_child",
+                                          "nav_next_sibling", "nav_previous_sibling"}:
+        direction = {"nav_parent_block": "parent", "nav_first_child": "first_child",
+                     "nav_next_sibling": "next_sibling",
+                     "nav_previous_sibling": "previous_sibling"}[intent]
+        result = structure_tools.block_navigation(current_code, cursor_line, direction)
+        message = result.get("message", "")
+        if result.get("found"):
+            session_memory.record_navigation(mem, result)
+        # No extra orientation_cue here: block_navigation's own message already
+        # names the target block ("Parent block: X, starting on line N") --
+        # appending a cue would just repeat the same fact.
+        return _store_and_return({
+            "success": True, "action": "navigate_code" if result.get("found") else "deterministic_message",
+            "intent": intent, "line": result.get("line"), "end_line": result.get("end_line"),
+            "message": message, "speech": message, "heard": text, "confidence": confidence,
         })
 
     if confidence >= 0.75 and intent == "next_error":
@@ -10426,6 +10724,21 @@ def voice():
             "success": True, "action": "start_tutorial",
             "confidence": 0.92, "heard": text, "onboarding": True,
         })
+
+    # Progressive Disclosure (checked BEFORE the generic "more"/say-more/help
+    # handling below): only acts when a rich layered response (Mental Map,
+    # Overview, Error Trace, Code Map, ...) was just shown. Falls through to
+    # the existing generic handling otherwise, so it never steals bare "more"
+    # from the unrelated help-pagination path.
+    if early_text in ("more", "tell me more", "details", "give me details", "more details"):
+        disclosure = _disclosure_response(mem, text, confidence, "details")
+        if disclosure is not None:
+            return _store_and_return(disclosure)
+    if early_text in ("exact", "exactly", "read exact details", "give me the exact details"):
+        disclosure = _disclosure_response(mem, text, confidence, "exact")
+        if disclosure is not None:
+            return _store_and_return(disclosure)
+
     if early_text == "more":
         last_action = storage.get("last_voice_action")
         last_response = last_action[0] if isinstance(last_action, tuple) and last_action else {}
@@ -10483,6 +10796,7 @@ def voice():
         "read_full_traceback", "test_next", "fix_with_explanation",
     }
     if confidence >= 0.75 and intent in error_trace_intents:
+        session_memory.push_context_surface(mem, "errors")
         project_state = _project_state_from_voice_body(body, current_code)
         project_files = project_state.get("files") if project_state.get("is_project") else None
         executed_file = ""
@@ -10521,6 +10835,10 @@ def voice():
             speech = _build_fix_proposal(analysis, current_code, mem, text)
         else:  # explain_error_trace
             speech = error_trace.narrate(analysis)
+        if analysis.get("has_error") and intent in ("explain_error_trace", "crash_location", "error_cause"):
+            _store_explanation_context(
+                mem, kind="error_trace", summary=error_trace.brief(analysis),
+                details=error_trace.narrate(analysis), exact=error_trace.narrate(analysis, full=True))
         return _store_and_return({
             "success": True, "action": "deterministic_message", "intent": intent,
             "message": speech, "speech": speech, "heard": text, "confidence": confidence,
@@ -10538,6 +10856,7 @@ def voice():
         "reject_all_changes", "undo_last_change", "change_apply",
     }
     if confidence >= 0.75 and intent in diff_review_intents:
+        session_memory.push_context_surface(mem, "audio_diff")
         history = session_memory.get_change_history(mem)
 
         if intent == "change_apply":
@@ -10668,6 +10987,7 @@ def voice():
 
         # Printed output from the most recent run.
         if intent == "program_output":
+            session_memory.push_context_surface(mem, "output")
             out = (mem.get("last_run_output") or "").strip()
             existing = session_memory.get_state_trace(mem)
             if not out and existing and not existing.get("error"):

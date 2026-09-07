@@ -20,6 +20,7 @@ __all__ = [
     "command_kind",
     "handle_tutor_command",
     "build_handoff_pack",
+    "build_help_request_pack",
     "build_understanding_check",
     "redact",
 ]
@@ -76,6 +77,19 @@ def command_kind(text: str) -> Optional[str]:
         "copy handoff for codex",
     }:
         return "handoff"
+    if t in {
+        "make help request",
+        "prepare help request",
+        "prepare a help request",
+        "prepare a help request for my teacher",
+    }:
+        # NOTE: "I need help from my teacher" is deliberately NOT claimed here --
+        # ide_commands.py's classroom "ask my teacher for help" flow already
+        # substring-matches "i need help" for live/async teacher notification
+        # inside a classroom, a different concept from this static copyable
+        # pack. Adding a second, conflicting owner for overlapping phrasing
+        # would violate "do not solve an existing problem twice."
+        return "help_request"
     if t in {"check my understanding", "quiz me on this code", "ask me a question"}:
         return "understanding_question"
     if t == "what mistake did i make":
@@ -272,6 +286,66 @@ def build_handoff_pack(
         "I made a Codex handoff pack. It summarizes your goal, code, error, "
         "recent changes, program state, and questions to ask next."
     )
+    return {"message": "\n".join(lines).strip(), "speech": speech}
+
+
+def build_help_request_pack(
+    mem: Dict[str, Any],
+    code: str = "",
+    project_state: Optional[Dict[str, Any]] = None,
+    error_text: str = "",
+    question: str = "",
+) -> Dict[str, str]:
+    """'make help request' / 'prepare help request' / 'I need help from my
+    teacher': a concise, copyable package addressed to a HUMAN teacher.
+    Reuses the exact same data-gathering helpers build_handoff_pack already
+    uses (goal / code summary / project structure / error / recent changes /
+    program state / what was tried, all through report_support, error_trace,
+    project_map, and audio_diff -- no new report engine), swapping only the
+    framing text. Unlike build_handoff_pack, empty sections are OMITTED
+    entirely rather than padded with "not recorded yet" filler, since a
+    teacher-facing note should be short.
+    """
+    mem = mem or {}
+    state = _project_state(mem, project_state, code)
+    analysis = _error_analysis(mem, code, error_text)
+    goal = mem.get("latest_user_request") or mem.get("last_gen_prompt") or mem.get("last_edit_request")
+    goal = _clip(redact(goal), 240) if goal else ""
+    code_summary = _code_summary(code)
+    if code_summary.startswith("No current code"):
+        code_summary = ""
+    structure = _clip(redact(project_map.narrate(state)), 900)
+    if "not recorded" in structure.lower() or "no code" in structure.lower():
+        structure = ""
+    current_error = redact(error_trace.narrate(analysis)) if analysis.get("has_error") else ""
+    changes = _changes(mem)
+    if changes.startswith("No reviewed"):
+        changes = ""
+    state_text = _state(mem)
+    if state_text.startswith("No program state"):
+        state_text = ""
+    tried = redact(_tried(mem))
+    if tried.startswith("No attempts"):
+        tried = ""
+
+    sections = [
+        ("What I am trying to do", goal),
+        ("My code", code_summary),
+        ("Project structure", structure),
+        ("My error", current_error),
+        ("What changed recently", changes),
+        ("Program state", state_text),
+        ("What I already tried", tried),
+    ]
+    lines = ["# Help Request for My Teacher", ""]
+    for title, body in sections:
+        if body:
+            lines.extend([f"## {title}", body, ""])
+    lines.append("## My question")
+    lines.append(_clip(redact(question), 300) if str(question or "").strip()
+                 else "I am not sure exactly what to ask -- please look at what I have so far.")
+    speech = ("I made a help request for your teacher. It includes what you were doing, "
+             "your code, any error, and what you already tried.")
     return {"message": "\n".join(lines).strip(), "speech": speech}
 
 

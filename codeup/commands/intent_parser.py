@@ -997,6 +997,30 @@ class IntentParser:
         r"^give\s+me\s+a\s+nested\s+code\s+map$",
         r"^read\s+the\s+code\s+hierarchy$",
     ]
+    PROGRAM_OVERVIEW_PATTERNS = [
+        r"^overview$",
+        r"^give\s+me\s+an\s+overview$",
+        r"^program\s+overview$",
+    ]
+    NAV_PARENT_BLOCK_PATTERNS = [
+        r"^parent$",
+        r"^go\s+to\s+(?:the\s+)?parent\s+block$",
+        r"^parent\s+block$",
+    ]
+    NAV_FIRST_CHILD_PATTERNS = [
+        r"^first\s+child$",
+        r"^next\s+child$",
+        r"^go\s+to\s+(?:the\s+)?first\s+child$",
+    ]
+    NAV_NEXT_SIBLING_PATTERNS = [
+        r"^next\s+sibling$",
+        r"^go\s+to\s+(?:the\s+)?next\s+sibling$",
+    ]
+    NAV_PREVIOUS_SIBLING_PATTERNS = [
+        r"^previous\s+sibling$",
+        r"^prev\s+sibling$",
+        r"^go\s+to\s+(?:the\s+)?previous\s+sibling$",
+    ]
     BLOCK_CONTENTS_PATTERNS = [
         r"^what\s+is\s+inside\s+this\s+loop$",
         r"^what\s+is\s+inside\s+this\s+condition$",
@@ -1122,6 +1146,7 @@ class IntentParser:
     EXPLAIN_STEP_PATTERNS = [r"^explain\s+(?:the\s+)?current\s+step$", r"^explain\s+this\s+step$"]
     LOOP_STATE_PATTERNS = [
         r"^explain\s+loop\s+state$", r"^loop\s+state$", r"^what\s+is\s+the\s+loop\s+doing$",
+        r"^what\s+loop\s+am\s+i\s+in$",
     ]
     # Note: the bare "why did it pass/fail" forms are intentionally NOT matched
     # here; "why did it fail" is an existing error follow-up. Use the explicit
@@ -1129,10 +1154,81 @@ class IntentParser:
     CONDITION_PASS_PATTERNS = [
         r"^why\s+did\s+(?:this\s+|the\s+)?condition\s+pass$",
         r"^why\s+was\s+(?:the\s+)?condition\s+true$",
+        r"^why\s+was\s+that\s+true$",
     ]
     CONDITION_FAIL_PATTERNS = [
         r"^why\s+did\s+(?:this\s+|the\s+)?condition\s+fail$",
         r"^why\s+was\s+(?:the\s+)?condition\s+false$",
+        r"^why\s+was\s+that\s+false$",
+    ]
+    UNIFIED_EXECUTION_PATTERNS = [
+        r"^what\s+is\s+my\s+program\s+doing$",
+        r"^what\s+just\s+happened$",
+        r"^why\s+did\s+that\s+happen$",
+        r"^what\s+happened\s+on\s+that\s+step$",
+        r"^what\s+changed\s+on\s+this\s+step$",
+        r"^what\s+condition\s+(?:just\s+)?ran$",
+    ]
+    OPEN_ACCESSIBILITY_SETTINGS_PATTERNS = [
+        r"^accessibility\s+setup$",
+        r"^set\s+up\s+codeup\s+for\s+me$",
+        r"^accessibility\s+preferences$",
+        r"^open\s+accessibility\s+settings$",
+    ]
+    READ_LINE_EXACT_PATTERNS = [
+        r"^read\s+exact\s+line$",
+        r"^read\s+this\s+line\s+exactly$",
+    ]
+    READ_PUNCTUATION_PATTERNS = [
+        r"^read\s+punctuation$",
+        r"^read\s+punctuation\s+on\s+this\s+line$",
+    ]
+    SPELL_TOKEN_PATTERNS = [
+        r"^spell\s+current\s+token$",
+        r"^spell\s+this\s+token$",
+        r"^read\s+current\s+token$",
+    ]
+    READ_CHAR_BY_CHAR_PATTERNS = [
+        r"^read\s+character\s+by\s+character$",
+    ]
+    COMPARE_EXACT_PATTERNS = [
+        r"^compare\s+exact$",
+        r"^what\s+changed\s+character\s+by\s+character$",
+    ]
+    READ_INDENTATION_EXACTLY_PATTERNS = [
+        r"^read\s+indentation\s+exactly$",
+    ]
+    PROGRAM_FLOW_PATTERNS = [
+        r"^describe\s+program\s+flow$",
+        r"^explain\s+program\s+flow$",
+        r"^how\s+does\s+this\s+program\s+flow$",
+    ]
+    BRAILLE_COMPACT_VIEW_PATTERNS = [
+        r"^braille\s+compact\s+view$",
+        r"^show\s+compact\s+line$",
+        r"^read\s+compact\s+line$",
+    ]
+    BRAILLE_COMPACT_OFF_PATTERNS = [
+        r"^turn\s+off\s+braille\s+compact\s+view$",
+        r"^stop\s+braille\s+compact\s+view$",
+    ]
+    CONTEXT_BACK_TO_CODE_PATTERNS = [
+        r"^back\s+to\s+code$", r"^back\s+to\s+the\s+code$", r"^back\s+to\s+the\s+editor$",
+    ]
+    CONTEXT_BACK_TO_OUTPUT_PATTERNS = [
+        r"^back\s+to\s+output$", r"^back\s+to\s+the\s+output$",
+    ]
+    CONTEXT_RESUME_PATTERNS = [
+        r"^where\s+was\s+i$",
+        r"^resume\s+where\s+i\s+was$",
+        r"^what\s+was\s+i\s+doing$",
+        r"^return\s+to\s+(?:the\s+)?previous\s+context$",
+    ]
+    MENTAL_MAP_PATTERNS = [
+        r"^explain\s+my\s+mental\s+map$",
+        r"^mental\s+map$",
+        r"^what'?s\s+my\s+current\s+context$",
+        r"^what\s+should\s+i\s+know\s+right\s+now$",
     ]
     PROGRAM_OUTPUT_PATTERNS = [
         r"^what\s+did\s+the\s+program\s+print$", r"^what\s+was\s+printed$",
@@ -1461,6 +1557,26 @@ class IntentParser:
             "indentation_level": self.INDENTATION_LEVEL_PATTERNS,
             "block_contents": self.BLOCK_CONTENTS_PATTERNS,
             "code_hierarchy": self.CODE_HIERARCHY_PATTERNS,
+            "program_overview": self.PROGRAM_OVERVIEW_PATTERNS,
+            "nav_parent_block": self.NAV_PARENT_BLOCK_PATTERNS,
+            "nav_first_child": self.NAV_FIRST_CHILD_PATTERNS,
+            "nav_next_sibling": self.NAV_NEXT_SIBLING_PATTERNS,
+            "nav_previous_sibling": self.NAV_PREVIOUS_SIBLING_PATTERNS,
+            "unified_execution": self.UNIFIED_EXECUTION_PATTERNS,
+            "mental_map": self.MENTAL_MAP_PATTERNS,
+            "open_accessibility_settings": self.OPEN_ACCESSIBILITY_SETTINGS_PATTERNS,
+            "read_line_exact": self.READ_LINE_EXACT_PATTERNS,
+            "read_punctuation": self.READ_PUNCTUATION_PATTERNS,
+            "spell_token": self.SPELL_TOKEN_PATTERNS,
+            "read_char_by_char": self.READ_CHAR_BY_CHAR_PATTERNS,
+            "compare_exact": self.COMPARE_EXACT_PATTERNS,
+            "read_indentation_exactly": self.READ_INDENTATION_EXACTLY_PATTERNS,
+            "program_flow": self.PROGRAM_FLOW_PATTERNS,
+            "braille_compact_view": self.BRAILLE_COMPACT_VIEW_PATTERNS,
+            "braille_compact_off": self.BRAILLE_COMPACT_OFF_PATTERNS,
+            "context_back_to_code": self.CONTEXT_BACK_TO_CODE_PATTERNS,
+            "context_back_to_output": self.CONTEXT_BACK_TO_OUTPUT_PATTERNS,
+            "context_resume": self.CONTEXT_RESUME_PATTERNS,
             "graduation_mapping": self.GRADUATION_MAPPING_PATTERNS,
             "list_imports": self.LIST_IMPORTS_PATTERNS,
             "sandbox_check": self.SANDBOX_CHECK_PATTERNS,

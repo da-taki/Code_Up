@@ -103,6 +103,10 @@ def new_memory() -> Dict[str, Any]:
         "error_type_counts": {},
         "landmarks": {},
         "last_navigated": None,       # last navigate-by-meaning target block
+        "last_explanation_context": None,  # progressive disclosure: kind/summary/details/exact
+        "last_cursor_line": None,       # context resume: last known Monaco cursor line
+        "current_surface": None,        # context resume: {surface, file, line} -- where we are now
+        "previous_surface": None,       # context resume: where we were before the last switch
     }
 
 
@@ -239,8 +243,40 @@ def record_generation(mem: Dict[str, Any], prompt: str, code: Optional[str] = No
         mem["last_gen_summary"] = _clip(f"{len(lines)} lines, starts with: {first}", 200)
 
 
-def record_editor_code(mem: Dict[str, Any], code: str) -> None:
+def record_editor_code(mem: Dict[str, Any], code: str, line: Optional[int] = None) -> None:
     mem["current_editor_code_hash"] = code_hash(code)
+    if line is not None:
+        mem["last_cursor_line"] = int(line)
+
+
+def push_context_surface(mem: Dict[str, Any], surface: str, *, file: str = "",
+                         line: Optional[int] = None) -> None:
+    """Context Resume: a 2-entry stack (current + previous) of which surface the
+    learner was using (code/output/help/errors/audio_diff/...), so 'back to
+    code'/'where was I' can restore it. Deliberately not a full history."""
+    surface = (surface or "").strip().lower()
+    if not surface:
+        return
+    current = mem.get("current_surface")
+    if not isinstance(current, dict) or current.get("surface") != surface:
+        if isinstance(current, dict):
+            mem["previous_surface"] = current
+        mem["current_surface"] = {"surface": surface, "file": file, "line": line}
+    else:
+        if file:
+            current["file"] = file
+        if line is not None:
+            current["line"] = line
+
+
+def get_current_surface(mem: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    cur = mem.get("current_surface")
+    return cur if isinstance(cur, dict) else None
+
+
+def get_previous_surface(mem: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    prev = mem.get("previous_surface")
+    return prev if isinstance(prev, dict) else None
 
 
 def record_run(mem: Dict[str, Any], *, output: str = "", error: str = "",
@@ -456,6 +492,34 @@ def get_pending(mem: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 def clear_pending(mem: Dict[str, Any]) -> None:
     mem["pending_clarification"] = None
+
+
+def set_explanation_context(mem: Dict[str, Any], context: Optional[Dict[str, Any]]) -> None:
+    """Progressive Disclosure: remember the ONE most recent rich, layered
+    response (kind/summary/details/exact) so a follow-up 'more'/'details'/
+    'exact' command can deepen it without re-deriving anything. Same TTL-slot
+    shape as set_pending/set_change_proposal -- one more mem key, no new
+    storage subsystem."""
+    if not context:
+        mem["last_explanation_context"] = None
+        return
+    record = dict(context)
+    record["timestamp"] = time.time()
+    mem["last_explanation_context"] = record
+
+
+def get_explanation_context(mem: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    ctx = mem.get("last_explanation_context")
+    if not isinstance(ctx, dict):
+        return None
+    if time.time() - float(ctx.get("timestamp", 0) or 0) > _PENDING_TTL_SECONDS:
+        mem["last_explanation_context"] = None
+        return None
+    return ctx
+
+
+def clear_explanation_context(mem: Dict[str, Any]) -> None:
+    mem["last_explanation_context"] = None
 
 
 _MAX_CHANGE_HISTORY = 10

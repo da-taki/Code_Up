@@ -87,6 +87,21 @@ class IntentParser:
         r"^where\s+do\s+i\s+use\s+([A-Za-z_]\w*)$",
     ]
 
+    # Product-differentiation pass (accessibility pass 2): disambiguate EVERY
+    # occurrence of a word by semantic role (assignment/condition/call/string/
+    # comment/etc.) instead of just line numbers -- goto_definition and
+    # find_references above already own the "defined"/"used" phrasings, so
+    # these patterns require exactly one bare word after "find"/"search for"/
+    # "locate" to avoid ever matching those (or any other multi-word "find ..."
+    # command already registered elsewhere in this file).
+    SEMANTIC_FIND_PATTERNS = [
+        r"^find\s+([A-Za-z_]\w*)$",
+        r"^search\s+for\s+([A-Za-z_]\w*)$",
+        r"^locate\s+([A-Za-z_]\w*)$",
+        r"^where\s+does\s+([A-Za-z_]\w*)\s+appear$",
+        r"^where\s+do\s+([A-Za-z_]\w*)\s+appear$",
+    ]
+
     FILE_OUTLINE_PATTERNS = [
         r"^outline\s+this\s+file$", r"^summarize\s+file\s+structure$", r"^read\s+file\s+outline$",
     ]
@@ -1044,6 +1059,15 @@ class IntentParser:
     REPEAT_LAST_OUTPUT_PATTERNS = [
         r"^read\s+last\s+output$", r"^repeat\s+output$", r"^what\s+did\s+it\s+print$",
     ]
+    # Line-indexed output orientation (accessibility pass 2, hypothesis 4):
+    # the minimum useful subset -- count, first line, last line -- reusing
+    # the same mem["last_run_output"] repeat_last_output already reads.
+    OUTPUT_LINE_INFO_PATTERNS = [
+        r"^how\s+many\s+lines\s+(?:of\s+output|did\s+it\s+print)$",
+        r"^how\s+many\s+output\s+lines$",
+        r"^(?:read\s+the\s+)?(first|last)\s+line\s+of\s+output$",
+        r"^what(?:'s|\s+is)\s+the\s+(first|last)\s+line\s+of\s+output$",
+    ]
     REPEAT_LAST_ERROR_PATTERNS = [
         r"^read\s+last\s+error$", r"^repeat\s+error$", r"^what\s+was\s+the\s+error$",
     ]
@@ -1202,6 +1226,16 @@ class IntentParser:
     COMPARE_EXACT_PATTERNS = [
         r"^compare\s+exact$",
         r"^what\s+changed\s+character\s+by\s+character$",
+    ]
+    # On-demand identifier disambiguation (accessibility pass 2, hypothesis 2):
+    # requires the literal word "and" between two bare names, which "compare
+    # exact" (no argument) never has -- so this can never collide with it.
+    COMPARE_IDENTIFIERS_PATTERNS = [
+        # Negative lookahead excludes "compare blocks and code" -- that exact
+        # phrase is Audio Blocks Mode's own pre-existing block-vs-editor diff
+        # command (audio_blocks.py), not an identifier comparison.
+        r"^compare\s+(?!blocks\s+and\s+code$)([A-Za-z_]\w*)\s+and\s+([A-Za-z_]\w*)$",
+        r"^what(?:'s|\s+is)\s+the\s+difference\s+between\s+([A-Za-z_]\w*)\s+and\s+([A-Za-z_]\w*)$",
     ]
     READ_INDENTATION_EXACTLY_PATTERNS = [
         r"^read\s+indentation\s+exactly$",
@@ -1528,6 +1562,7 @@ class IntentParser:
             "read_function":  self.READ_FUNCTION_PATTERNS,
             "goto_definition": self.GOTO_DEFINITION_PATTERNS,
             "find_references": self.FIND_REFERENCES_PATTERNS,
+            "semantic_find": self.SEMANTIC_FIND_PATTERNS,
             "file_outline": self.FILE_OUTLINE_PATTERNS,
             "safe_rename": self.SAFE_RENAME_PATTERNS,
             "name_conflicts": self.NAME_CONFLICT_PATTERNS,
@@ -1583,6 +1618,7 @@ class IntentParser:
             "spell_token": self.SPELL_TOKEN_PATTERNS,
             "read_char_by_char": self.READ_CHAR_BY_CHAR_PATTERNS,
             "compare_exact": self.COMPARE_EXACT_PATTERNS,
+            "compare_identifiers": self.COMPARE_IDENTIFIERS_PATTERNS,
             "read_indentation_exactly": self.READ_INDENTATION_EXACTLY_PATTERNS,
             "program_flow": self.PROGRAM_FLOW_PATTERNS,
             "braille_compact_view": self.BRAILLE_COMPACT_VIEW_PATTERNS,
@@ -1594,6 +1630,7 @@ class IntentParser:
             "list_imports": self.LIST_IMPORTS_PATTERNS,
             "sandbox_check": self.SANDBOX_CHECK_PATTERNS,
             "repeat_last_output": self.REPEAT_LAST_OUTPUT_PATTERNS,
+            "output_line_info": self.OUTPUT_LINE_INFO_PATTERNS,
             "repeat_last_error": self.REPEAT_LAST_ERROR_PATTERNS,
             "project_health": self.PROJECT_HEALTH_PATTERNS,
             "project_file_tree": self.PROJECT_FILE_TREE_PATTERNS,
@@ -1871,6 +1908,10 @@ class IntentParser:
                     continue
                 if intent in ("watch_var", "stop_watching") and "variable" not in slots:
                     continue
+                if intent == "semantic_find" and "term" not in slots:
+                    continue
+                if intent == "compare_identifiers" and ("name_a" not in slots or "name_b" not in slots):
+                    continue
                 
                 return {
                     "intent": intent,
@@ -1903,6 +1944,19 @@ class IntentParser:
         elif intent in ("goto_definition", "find_references"):
             if match.groups() and match.group(1):
                 slots["name"] = match.group(1).strip()
+
+        elif intent == "semantic_find":
+            if match.groups() and match.group(1):
+                slots["term"] = match.group(1).strip()
+
+        elif intent == "compare_identifiers":
+            if len(match.groups()) >= 2 and match.group(1) and match.group(2):
+                slots["name_a"] = match.group(1).strip()
+                slots["name_b"] = match.group(2).strip()
+
+        elif intent == "output_line_info":
+            groups = match.groups()
+            slots["which"] = groups[0].strip().lower() if groups and groups[0] else "count"
 
         elif intent == "safe_rename":
             if len(match.groups()) >= 2 and match.group(1) and match.group(2):

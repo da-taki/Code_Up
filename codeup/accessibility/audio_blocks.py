@@ -1931,6 +1931,20 @@ GLOBAL_PASS_THROUGH = {
     "what was i doing",
     "return to the previous context",
     "return to previous context",
+    # Output orientation (accessibility pass 2): the program's console output
+    # exists no matter which editing mode is active, so these are mode-
+    # agnostic like "repeat"/"clear output" above, not Python-AST-specific.
+    "how many lines of output",
+    "how many lines did it print",
+    "how many output lines",
+    "first line of output",
+    "read the first line of output",
+    "what's the first line of output",
+    "what is the first line of output",
+    "last line of output",
+    "read the last line of output",
+    "what's the last line of output",
+    "what is the last line of output",
 }
 
 AUDIO_MODE_REQUIRED = (
@@ -1990,7 +2004,12 @@ PYTHON_STRUCTURE_RE = re.compile(
     r"parent|go to (?:the )?parent block|parent block|go up one block|"
     r"first child|next child|go to (?:the )?first child|go inside this block|"
     r"next sibling|go to (?:the )?next sibling|"
-    r"previous sibling|prev sibling|go to (?:the )?previous sibling)$",
+    r"previous sibling|prev sibling|go to (?:the )?previous sibling|"
+    r"find [a-z_]\w*|search for [a-z_]\w*|locate [a-z_]\w*|"
+    r"where does [a-z_]\w* appear|where do [a-z_]\w* appear|"
+    r"compare(?! blocks and code\b) [a-z_]\w* and [a-z_]\w*|"
+    r"what'?s the difference between [a-z_]\w* and [a-z_]\w*|"
+    r"what is the difference between [a-z_]\w* and [a-z_]\w*)$",
     re.IGNORECASE,
 )
 

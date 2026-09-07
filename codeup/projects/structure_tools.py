@@ -584,6 +584,149 @@ def find_symbol(code: str, name: str, mode: str = "used") -> Dict[str, Any]:
             "message": f"{name} is {label} on {where}."}
 
 
+def _classify_name_occurrences(tree: ast.AST, term: str) -> List[Dict[str, Any]]:
+    """Walk the AST once, labeling every occurrence of an identifier with WHY
+    it appears on that line (assignment/condition/call/etc.) instead of just
+    a bare line number. Deterministic: a role is only ever assigned by a
+    specific syntactic rule below, never guessed -- anything not matched by a
+    specific rule keeps the conservative default "used"."""
+    occurrences: List[Dict[str, Any]] = []
+
+    def add(node: ast.AST, role: str) -> None:
+        line = int(getattr(node, "lineno", 0) or 0)
+        if line:
+            occurrences.append({"line": line, "role": role})
+
+    def visit(node: ast.AST, role_hint: str = "used") -> None:
+        if isinstance(node, ast.Name) and node.id == term:
+            if isinstance(node.ctx, ast.Store):
+                add(node, role_hint if role_hint != "used" else "assignment")
+            elif isinstance(node.ctx, ast.Del):
+                add(node, "deleted")
+            else:
+                add(node, role_hint)
+            return
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.name == term:
+                add(node, "function definition")
+            all_args = (list(node.args.args) + list(node.args.posonlyargs)
+                        + list(node.args.kwonlyargs))
+            for arg in all_args:
+                if arg.arg == term:
+                    add(arg, "parameter")
+            if node.args.vararg and node.args.vararg.arg == term:
+                add(node.args.vararg, "parameter")
+            if node.args.kwarg and node.args.kwarg.arg == term:
+                add(node.args.kwarg, "parameter")
+            for dec in node.decorator_list:
+                visit(dec, "used")
+            for stmt in node.body:
+                visit(stmt, "used")
+            return
+        if isinstance(node, ast.ClassDef):
+            if node.name == term:
+                add(node, "class definition")
+            for stmt in node.body:
+                visit(stmt, "used")
+            return
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                visit(t, "assignment")
+            visit(node.value, "used")
+            return
+        if isinstance(node, ast.AnnAssign):
+            visit(node.target, "assignment")
+            if node.value is not None:
+                visit(node.value, "used")
+            return
+        if isinstance(node, ast.AugAssign):
+            visit(node.target, "updated")
+            visit(node.value, "used")
+            return
+        if isinstance(node, (ast.For, ast.AsyncFor)):
+            visit(node.target, "loop variable")
+            visit(node.iter, "used")
+            for stmt in node.body:
+                visit(stmt, "used")
+            for stmt in node.orelse:
+                visit(stmt, "used")
+            return
+        if isinstance(node, (ast.If, ast.While)):
+            visit(node.test, "condition")
+            for stmt in node.body:
+                visit(stmt, "used")
+            for stmt in node.orelse:
+                visit(stmt, "used")
+            return
+        if isinstance(node, (ast.Compare, ast.BoolOp)):
+            for child in ast.iter_child_nodes(node):
+                visit(child, role_hint if role_hint == "condition" else "used")
+            return
+        if isinstance(node, ast.Call):
+            visit(node.func, "used to call a function")
+            for a in node.args:
+                visit(a, "used in a call")
+            for kw in node.keywords:
+                visit(kw.value, "used in a call")
+            return
+        if isinstance(node, ast.Return):
+            if node.value is not None:
+                visit(node.value, "returned")
+            return
+        for child in ast.iter_child_nodes(node):
+            visit(child, role_hint)
+
+    visit(tree, "used")
+    return occurrences
+
+
+def semantic_find(code: str, term: str) -> Dict[str, Any]:
+    """'find <word>': every occurrence of an identifier, function/class name,
+    or the word appearing inside a string literal or comment -- each one
+    labeled by WHY it is there (assignment, condition, used in a call,
+    returned, text inside a string, in a comment...) instead of a bare line
+    number, so a screen-reader user does not have to open every match to
+    find the one they meant. AST-based + collect_comments (both already
+    exist); no new search engine. Never invents a role: string/comment hits
+    use whole-word matching so 'total' does not also match 'totals'."""
+    code = code or ""
+    term = (term or "").strip()
+    if not term:
+        return {"found": False, "count": 0, "occurrences": [],
+                "message": "Say a word to search for, like 'find total'."}
+    if not code.strip():
+        return {"found": False, "count": 0, "occurrences": [],
+                "message": "There is no code to search yet."}
+    tree = _safe_parse(code)
+    occurrences: List[Dict[str, Any]] = []
+    if tree is not None:
+        occurrences.extend(_classify_name_occurrences(tree, term))
+        word_re = re.compile(r"\b" + re.escape(term) + r"\b")
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str) and word_re.search(node.value):
+                line = int(getattr(node, "lineno", 0) or 0)
+                if line:
+                    occurrences.append({"line": line, "role": "text inside a string"})
+    else:
+        word_re = re.compile(r"\b" + re.escape(term) + r"\b")
+    for comment in collect_comments(code):
+        if word_re.search(comment.get("text", "")):
+            occurrences.append({"line": comment["line"], "role": "in a comment"})
+    occurrences.sort(key=lambda o: o["line"])
+    if not occurrences:
+        return {"found": False, "count": 0, "occurrences": [],
+                "message": f"I could not find '{term}' anywhere in this code."}
+    n = len(occurrences)
+    first = occurrences[0]
+    summary = f"{term} appears {_count_word(n)} time{'s' if n != 1 else ''}. First, {first['role']} on line {first['line']}."
+    if n > 1:
+        summary += " Say 'more' to hear all of them."
+    details = (f"{term} appears {_count_word(n)} time{'s' if n != 1 else ''}. "
+               + "; ".join(f"line {o['line']}: {o['role']}" for o in occurrences) + ".")
+    return {"found": True, "count": n, "occurrences": occurrences, "line": first["line"],
+            "summary": summary, "details": details, "message": summary}
+
+
 def _clamp_line(code_lines: List[str], line: Optional[int]) -> int:
     n = line if isinstance(line, int) and line >= 1 else 1
     return min(n, len(code_lines)) if code_lines else 1

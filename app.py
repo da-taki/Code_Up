@@ -8876,6 +8876,25 @@ def _extract_error_line(error: str) -> Optional[int]:
     return None
 
 
+def _output_line_info_speech(mem, which):
+    """'how many lines of output' / 'first line of output' / 'last line of
+    output': line-indexed orientation over the SAME mem["last_run_output"]
+    repeat_last_output already reads -- no new output storage, no output
+    navigator panel, just the minimum questions a screen-reader user cannot
+    otherwise answer without replaying the whole blob."""
+    output = str(mem.get("last_run_output") or "")
+    if not output.strip():
+        return "There is no previous output yet."
+    lines = output.splitlines()
+    if which == "count":
+        n = len(lines)
+        return f"The output has {n} line{'s' if n != 1 else ''}."
+    label, line = ("First", lines[0]) if which == "first" else ("Last", lines[-1])
+    if not line.strip():
+        return f"{label} line of output is blank."
+    return f"{label} line of output: {line}"
+
+
 def _recent_context_bits(mem, code):
     """Recent-change-count + recent-error-line facts. Shared by /breadcrumbs,
     'overview', and Mental Map so this composition logic has one owner instead
@@ -10342,6 +10361,7 @@ def voice():
         "preflight_check", "check_indentation", "list_functions", "list_imports",
         "sandbox_check", "repeat_last_output", "repeat_last_error", "project_health",
         "project_file_tree", "project_map", "loop_summary", "intel_toolkit_status",
+        "output_line_info",
     }
     if confidence >= 0.75 and intent in deterministic_code_intents:
         project_state = _project_state_from_voice_body(body, current_code)
@@ -10360,6 +10380,7 @@ def voice():
             "project_map": lambda: project_map.narrate(project_state),
             "loop_summary": lambda: deterministic_code_tools.loop_summary(current_code),
             "intel_toolkit_status": lambda: intel_showcase.format_status_for_speech(),
+            "output_line_info": lambda: _output_line_info_speech(mem, slots.get("which", "count")),
         }
         speech = handlers[intent]()
         return _store_and_return({
@@ -10382,6 +10403,48 @@ def voice():
             "line": result.get("line"), "end_line": result.get("end_line"),
             "message": message, "speech": message, "heard": text,
             "confidence": confidence,
+        })
+
+    if confidence >= 0.75 and intent == "semantic_find":
+        # "find <word>": disambiguates EVERY occurrence by role (assignment,
+        # condition, used in a call, text inside a string, in a comment...)
+        # instead of goto_definition/find_references' plain line lists --
+        # reuses structure_tools.semantic_find (AST + collect_comments, no
+        # new engine). Jumps to the first match like the sibling commands
+        # above; 'more' (existing Progressive Disclosure) reads the rest.
+        term = slots.get("term", "")
+        result = structure_tools.semantic_find(current_code, term)
+        message = result.get("message") or f"I could not find '{term}'."
+        if result.get("found"):
+            cue = structure_tools.orientation_cue(current_code, result["line"])
+            if cue:
+                message = f"{message} {cue}"
+            _store_explanation_context(mem, kind="semantic_find", summary=result["summary"],
+                                       details=result["details"], code=current_code)
+        return _store_and_return({
+            "success": True, "action": "navigate_code" if result.get("found") else "deterministic_message",
+            "intent": intent, "line": result.get("line"),
+            "message": message, "speech": message, "heard": text,
+            "confidence": confidence,
+        })
+
+    if confidence >= 0.75 and intent == "compare_identifiers":
+        # On-demand identifier disambiguation (Precision Mode extension):
+        # a character-level diff of two SPELLINGS, e.g. "compare userID and
+        # userId" -> pinpoints the exact letter/case that differs. Reuses
+        # precision_reader.compare_exact as-is (it already diffs two
+        # arbitrary strings); only new here is accepting two names instead
+        # of the last recorded code change. On-demand only, so it never
+        # flags names the user did not ask about.
+        name_a, name_b = slots.get("name_a", ""), slots.get("name_b", "")
+        diff = precision_reader.compare_exact(name_a, name_b)
+        if diff.startswith("No character-level difference"):
+            message = f"Comparing {name_a} and {name_b}: they are spelled exactly the same."
+        else:
+            message = f"Comparing {name_a} and {name_b}: {diff}"
+        return _store_and_return({
+            "success": True, "action": "deterministic_message", "intent": intent,
+            "message": message, "speech": message, "heard": text, "confidence": confidence,
         })
 
     if confidence >= 0.75 and intent in {"file_outline", "name_conflicts"}:

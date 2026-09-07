@@ -8881,10 +8881,33 @@ def _output_line_info_speech(mem, which):
     output': line-indexed orientation over the SAME mem["last_run_output"]
     repeat_last_output already reads -- no new output storage, no output
     navigator panel, just the minimum questions a screen-reader user cannot
-    otherwise answer without replaying the whole blob."""
-    output = str(mem.get("last_run_output") or "")
-    if not output.strip():
+    otherwise answer without replaying the whole blob.
+
+    mem["last_run_output"] is whitespace-STRIPPED by session_memory's
+    _clip_output (shared by repeat_last_output/narration) -- .strip() does
+    not just collapse an all-blank run to "", it also silently drops a
+    genuine leading/trailing blank line from otherwise-normal output (e.g.
+    print(""); print("x") -> stored as "x", losing the blank first line).
+    run_count (already tracked by record_run) distinguishes "never ran" from
+    "ran"; whenever the last run succeeded, the exact raw text is read from
+    _last_outputs, the existing per-session cache /run already keeps from
+    that same run for output-diffing -- no new storage added. The stripped
+    mem value is used only as a defensive fallback if that cache is ever
+    missing."""
+    run_count = int(mem.get("run_count") or 0)
+    if run_count == 0:
         return "There is no previous output yet."
+    output = None
+    if mem.get("last_run_ok"):
+        with _last_outputs_lock:
+            cached = _last_outputs.get(get_session_id())
+        if cached is not None:
+            output = str(cached.get("output") or "")
+    if output is None:
+        output = str(mem.get("last_run_output") or "")
+    if not output:
+        return ("The program ran but produced no output." if mem.get("last_run_ok")
+                else "There is no previous output yet.")
     lines = output.splitlines()
     if which == "count":
         n = len(lines)

@@ -680,6 +680,31 @@ def _classify_name_occurrences(tree: ast.AST, term: str) -> List[Dict[str, Any]]
     return occurrences
 
 
+def _lexical_find_occurrences(code: str, term: str, word_re: "re.Pattern") -> List[Dict[str, Any]]:
+    """Conservative source-text fallback for semantic_find when the code does
+    NOT parse -- a beginner is very often mid-edit or has a syntax error
+    while searching/debugging, and that must not be reported as "the name
+    does not exist". Finds every whole-word occurrence per line, splitting
+    each line into a comment part and a code part with the same safe,
+    quote-aware '#' heuristic collect_comments' own fallback already uses
+    (so a '#' inside an unbalanced string on that line is not mistaken for a
+    comment). Comment hits are labeled "in a comment"; everything else is
+    labeled the honest "found in code" -- NEVER "assignment"/"condition"/etc,
+    because without a parse those roles cannot actually be verified, and
+    guessing them from regex would be inventing a fact."""
+    occurrences: List[Dict[str, Any]] = []
+    for i, raw in enumerate((code or "").splitlines(), start=1):
+        code_part, comment_part = raw, ""
+        m = re.search(r"(?<!['\"])#(.*)$", raw)
+        if m and raw.count("'") % 2 == 0 and raw.count('"') % 2 == 0:
+            code_part, comment_part = raw[:m.start()], raw[m.start():]
+        for _ in word_re.finditer(code_part):
+            occurrences.append({"line": i, "role": "found in code"})
+        for _ in word_re.finditer(comment_part):
+            occurrences.append({"line": i, "role": "in a comment"})
+    return occurrences
+
+
 def semantic_find(code: str, term: str) -> Dict[str, Any]:
     """'find <word>': every occurrence of an identifier, function/class name,
     or the word appearing inside a string literal or comment -- each one
@@ -688,7 +713,10 @@ def semantic_find(code: str, term: str) -> Dict[str, Any]:
     number, so a screen-reader user does not have to open every match to
     find the one they meant. AST-based + collect_comments (both already
     exist); no new search engine. Never invents a role: string/comment hits
-    use whole-word matching so 'total' does not also match 'totals'."""
+    use whole-word matching so 'total' does not also match 'totals'. When the
+    code does not parse (a live syntax error -- very common while a beginner
+    is actively searching/debugging), falls back to _lexical_find_occurrences
+    instead of silently dropping to comment-only results."""
     code = code or ""
     term = (term or "").strip()
     if not term:
@@ -697,21 +725,22 @@ def semantic_find(code: str, term: str) -> Dict[str, Any]:
     if not code.strip():
         return {"found": False, "count": 0, "occurrences": [],
                 "message": "There is no code to search yet."}
+    word_re = re.compile(r"\b" + re.escape(term) + r"\b")
     tree = _safe_parse(code)
     occurrences: List[Dict[str, Any]] = []
     if tree is not None:
         occurrences.extend(_classify_name_occurrences(tree, term))
-        word_re = re.compile(r"\b" + re.escape(term) + r"\b")
         for node in ast.walk(tree):
-            if isinstance(node, ast.Constant) and isinstance(node.value, str) and word_re.search(node.value):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
                 line = int(getattr(node, "lineno", 0) or 0)
                 if line:
-                    occurrences.append({"line": line, "role": "text inside a string"})
+                    for _ in word_re.finditer(node.value):
+                        occurrences.append({"line": line, "role": "text inside a string"})
+        for comment in collect_comments(code):
+            for _ in word_re.finditer(comment.get("text", "")):
+                occurrences.append({"line": comment["line"], "role": "in a comment"})
     else:
-        word_re = re.compile(r"\b" + re.escape(term) + r"\b")
-    for comment in collect_comments(code):
-        if word_re.search(comment.get("text", "")):
-            occurrences.append({"line": comment["line"], "role": "in a comment"})
+        occurrences.extend(_lexical_find_occurrences(code, term, word_re))
     occurrences.sort(key=lambda o: o["line"])
     if not occurrences:
         return {"found": False, "count": 0, "occurrences": [],

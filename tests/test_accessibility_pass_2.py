@@ -113,6 +113,104 @@ def test_semantic_find_never_hallucinates_role_on_multiple_matches():
     assert roles[3] == "used in a call"
 
 
+# ---- correctness pass: broken-Python lexical fallback ---------------------
+
+BROKEN_CODE = "total = 0\nif total >:\n    print(total)\n"
+
+
+def test_semantic_find_broken_python_does_not_report_missing():
+    # The exact bug report: ast.parse fails on "if total >:", and the old
+    # code fell back to comment-only scanning, wrongly claiming 'total' was
+    # not found even though it plainly appears three times.
+    result = structure_tools.semantic_find(BROKEN_CODE, "total")
+    assert result["found"] is True
+    assert result["count"] == 3
+    assert [o["line"] for o in result["occurrences"]] == [1, 2, 3]
+
+
+def test_semantic_find_broken_python_never_invents_roles():
+    # Without a parse, no role can be verified as "assignment"/"condition"/
+    # etc -- must use the honest, conservative "found in code" label.
+    result = structure_tools.semantic_find(BROKEN_CODE, "total")
+    roles = {o["role"] for o in result["occurrences"]}
+    assert roles == {"found in code"}
+    invented = {"assignment", "condition", "updated", "used in a call",
+                "returned", "loop variable", "parameter"}
+    assert not (roles & invented)
+
+
+def test_semantic_find_broken_python_still_finds_comments():
+    code = "total = 0\nif total >:\n    # total needs fixing\n    print(total)\n"
+    result = structure_tools.semantic_find(code, "total")
+    roles = {o["line"]: o["role"] for o in result["occurrences"]}
+    assert roles[3] == "in a comment"
+    assert roles[1] == "found in code"
+
+
+def test_semantic_find_broken_python_whole_word_safety():
+    # 'total' must still not match inside 'totals' when the code is broken.
+    result = structure_tools.semantic_find("totals = 0\nif totals >:\n    pass\n", "total")
+    assert result["found"] is False
+
+
+def test_semantic_find_broken_strings_do_not_crash():
+    result = structure_tools.semantic_find('x = "total\nprint(total)\n', "total")
+    assert result["found"] is True
+    assert result["count"] >= 1
+
+
+def test_semantic_find_broken_indentation_does_not_crash():
+    result = structure_tools.semantic_find("if total:\nprint(total)\n", "total")
+    assert result["found"] is True
+    assert result["count"] == 2
+
+
+def test_semantic_find_empty_code_still_graceful():
+    result = structure_tools.semantic_find("", "total")
+    assert result["found"] is False
+    assert "no code" in result["message"].lower()
+
+
+# ---- correctness pass: truthful multi-occurrence-per-line counting -------
+
+def test_semantic_find_counts_twice_in_one_string():
+    result = structure_tools.semantic_find('print("total total")\n', "total")
+    assert result["found"] is True
+    assert result["count"] == 2
+    assert all(o["line"] == 1 and o["role"] == "text inside a string" for o in result["occurrences"])
+
+
+def test_semantic_find_counts_three_times_in_one_comment():
+    result = structure_tools.semantic_find("x = 1\n# total total total\n", "total")
+    assert result["found"] is True
+    assert result["count"] == 3
+    assert all(o["line"] == 2 and o["role"] == "in a comment" for o in result["occurrences"])
+
+
+def test_semantic_find_counts_twice_as_identifiers_on_one_line():
+    result = structure_tools.semantic_find("total = 1\nprint(total, total)\n", "total")
+    assert result["count"] == 3  # line 1 assignment + two uses on line 2
+    line2_roles = [o["role"] for o in result["occurrences"] if o["line"] == 2]
+    assert line2_roles == ["used in a call", "used in a call"]
+
+
+def test_semantic_find_counts_identifier_plus_string_same_line():
+    result = structure_tools.semantic_find('total = 1\nprint(total, "total")\n', "total")
+    line2_roles = sorted(o["role"] for o in result["occurrences"] if o["line"] == 2)
+    assert line2_roles == ["text inside a string", "used in a call"]
+
+
+def test_semantic_find_counts_identifier_plus_comment_same_line():
+    result = structure_tools.semantic_find("total = 1\nprint(total)  # total\n", "total")
+    line2_roles = sorted(o["role"] for o in result["occurrences"] if o["line"] == 2)
+    assert line2_roles == ["in a comment", "used in a call"]
+
+
+def test_semantic_find_substring_safety_string_and_comment():
+    result = structure_tools.semantic_find('print("totals")\n# totals here\n', "total")
+    assert result["found"] is False
+
+
 # ---- intents registered ---------------------------------------------------
 
 def test_new_intents_registered():
@@ -222,6 +320,69 @@ def test_output_first_and_last_line(client):
 
 
 def test_output_line_info_no_previous_output(client):
+    data = vc(client, "how many lines of output")
+    assert "no previous output" in data["speech"].lower()
+
+
+# ---- correctness pass: blank output is still output ------------------------
+#
+# session_memory._clip_output() strips whitespace before storing
+# mem["last_run_output"] (shared with repeat_last_output/narration), so a
+# program that printed ONLY blank lines (print("") -> "\n") used to be
+# indistinguishable from "never ran" -- both stored "". These tests pin the
+# fixed three-way distinction: never ran / ran with blank line(s) / ran with
+# real content, using run_count + the existing _last_outputs raw-output cache.
+
+def test_output_count_one_blank_line(client):
+    client.post("/run", json={"code": "print('')\n"})
+    data = vc(client, "how many lines of output")
+    assert "1 line" in data["speech"] and "lines" not in data["speech"]
+
+
+def test_output_count_two_blank_lines(client):
+    client.post("/run", json={"code": "print('')\nprint('')\n"})
+    data = vc(client, "how many lines of output")
+    assert "2 lines" in data["speech"]
+
+
+def test_output_count_normal_one_line(client):
+    client.post("/run", json={"code": "print('hello')\n"})
+    data = vc(client, "how many lines of output")
+    assert "1 line" in data["speech"] and "lines" not in data["speech"]
+
+
+def test_output_count_normal_multiline_ending_in_newline(client):
+    client.post("/run", json={"code": "print('a')\nprint('b')\n"})
+    data = vc(client, "how many lines of output")
+    assert "2 lines" in data["speech"]
+
+
+def test_output_first_line_blank(client):
+    client.post("/run", json={"code": "print('')\nprint('x')\n"})
+    data = vc(client, "first line of output")
+    assert "first line of output is blank" in data["speech"].lower()
+
+
+def test_output_last_line_blank(client):
+    client.post("/run", json={"code": "print('x')\nprint('')\n"})
+    data = vc(client, "last line of output")
+    assert "last line of output is blank" in data["speech"].lower()
+
+
+def test_output_line_info_program_ran_with_truly_no_output(client):
+    # Distinct third case: a successful run that printed nothing at all
+    # (not even a blank line) is neither "never ran" nor "1 blank line".
+    client.post("/run", json={"code": "x = 1\n"})
+    data = vc(client, "how many lines of output")
+    assert "no previous output" not in data["speech"].lower()
+    assert "no output" in data["speech"].lower()
+
+
+def test_output_line_info_after_error_does_not_leak_stale_output(client):
+    # A prior successful run's raw output must not leak through _last_outputs
+    # after a SUBSEQUENT run errors -- last_run_ok gates the fallback.
+    client.post("/run", json={"code": "print('')\n"})
+    client.post("/run", json={"code": "print(undefined_name)\n"})
     data = vc(client, "how many lines of output")
     assert "no previous output" in data["speech"].lower()
 

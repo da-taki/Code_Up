@@ -296,9 +296,11 @@ def build_help_request_pack(
     error_text: str = "",
     question: str = "",
 ) -> Dict[str, str]:
-    """'make help request' / 'prepare help request' / 'I need help from my
-    teacher': a concise, copyable package addressed to a HUMAN teacher.
-    Reuses the exact same data-gathering helpers build_handoff_pack already
+    """'make help request' / 'prepare help request' (see command_kind() for the
+    exact trigger set -- "I need help from my teacher" is deliberately NOT one,
+    since ide_commands.py's classroom flow already owns that phrasing): a
+    concise, copyable package addressed to a HUMAN teacher. Reuses the exact
+    same data-gathering helpers build_handoff_pack already
     uses (goal / code summary / project structure / error / recent changes /
     program state / what was tried, all through report_support, error_trace,
     project_map, and audio_diff -- no new report engine), swapping only the

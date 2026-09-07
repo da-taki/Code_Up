@@ -23,6 +23,8 @@ import difflib
 import re
 from typing import Dict, List, Optional
 
+from codeup.projects.structure_tools import _clamp_line
+
 __all__ = [
     "read_line_exact", "read_punctuation", "spell_token", "read_char_by_char",
     "compare_exact",
@@ -56,11 +58,6 @@ _TOKEN_RE = re.compile(
 )
 
 _MAX_SPOKEN_CHARS = 900
-
-
-def _clamp_line(lines: List[str], line: Optional[int]) -> int:
-    n = line if isinstance(line, int) and line >= 1 else 1
-    return min(n, len(lines)) if lines else 1
 
 
 def _leading_whitespace_note(raw: str) -> str:

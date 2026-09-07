@@ -1917,6 +1917,20 @@ GLOBAL_PASS_THROUGH = {
     "restart tutorial",
     "next tutorial step",
     "skip tutorial",
+    # Context Resume must be able to get a learner OUT of Audio Blocks Mode --
+    # gating it behind "That block command is not available yet." would make
+    # the exact commands meant to escape a mode unusable from inside it.
+    "back to code",
+    "back to the code",
+    "back to the editor",
+    "back to output",
+    "back to the output",
+    "where was i",
+    "resume where i was",
+    "continue where i was",
+    "what was i doing",
+    "return to the previous context",
+    "return to previous context",
 }
 
 AUDIO_MODE_REQUIRED = (
@@ -1945,6 +1959,38 @@ PYTHON_ONLY_RE = re.compile(
     r"read (?:current |this )?line|read line \d+|read imports?|read functions?|"
     r"go to main function|read current function|read surrounding code|"
     r"next function|previous function|prev function|jump to changed line|next error)$",
+    re.IGNORECASE,
+)
+
+# Product-differentiation / efficiency-pass commands that read the PYTHON
+# editor's AST/trace (structure_tools, state_watch) -- meaningless against the
+# Audio Blocks JSON workspace, so they get the same friendly "switch to Python
+# Code Mode" redirect as the PYTHON_ONLY_RE commands above, instead of falling
+# through to the generic, unhelpful "That block command is not available yet."
+PYTHON_STRUCTURE_RE = re.compile(
+    r"^(?:overview|give me an overview|program overview|show me the program|"
+    r"what does this program look like|give me the big picture|"
+    r"mental map|explain my mental map|what'?s my current context|"
+    r"what should i know right now|what'?s going on|give me my context|"
+    r"(?:describe|explain) (?:the |program )?flow|how does this program (?:flow|work)|"
+    r"why is this line indented|explain this indentation|"
+    r"what (?:block )?contains this line|what block is this(?: line in)?|"
+    r"how deep am i|what(?:'s| is) my indentation level|read indentation (?:around me|exactly)|"
+    r"what is inside this (?:loop|condition|function|block)|"
+    r"read code hierarchy|show (?:the )?nested structure|give me a nested code map|"
+    r"what is my program doing|what just happened|why did that happen|"
+    r"what happened on that step|what changed on this step|what condition (?:just )?ran|"
+    r"read exact line|read this line exactly|read this exactly|"
+    r"read punctuation(?: on this line)?|"
+    r"spell (?:current|this) token|read current token|spell this|"
+    r"read character by character|"
+    r"compare exact|what changed character by character|"
+    r"braille compact view|show compact line|read compact line|"
+    r"turn off braille compact view|stop braille compact view|"
+    r"parent|go to (?:the )?parent block|parent block|go up one block|"
+    r"first child|next child|go to (?:the )?first child|go inside this block|"
+    r"next sibling|go to (?:the )?next sibling|"
+    r"previous sibling|prev sibling|go to (?:the )?previous sibling)$",
     re.IGNORECASE,
 )
 
@@ -2020,14 +2066,15 @@ def route_command(
     t = command_text.lower()
     existing = get_workspace(mem)
     mode = active_mode(existing) if existing else "python"
-    if mode == "audio_blocks" and PYTHON_ONLY_RE.match(t):
+    if mode == "audio_blocks" and (PYTHON_ONLY_RE.match(t) or PYTHON_STRUCTURE_RE.match(t)):
         return _message(PYTHON_MODE_REQUIRED, existing)
     if not handles(t):
         if t in GLOBAL_PASS_THROUGH:
             return None
         return (
             _message(
-                PYTHON_MODE_REQUIRED if PYTHON_ONLY_RE.match(t) else "That block command is not available yet.",
+                PYTHON_MODE_REQUIRED if (PYTHON_ONLY_RE.match(t) or PYTHON_STRUCTURE_RE.match(t))
+                else "That block command is not available yet.",
                 existing,
             )
             if existing and mode == "audio_blocks"

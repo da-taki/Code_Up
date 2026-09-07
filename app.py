@@ -8898,22 +8898,35 @@ def _recent_context_bits(mem, code):
     return bits
 
 
-def _store_explanation_context(mem, *, kind, summary, details="", exact=""):
+def _store_explanation_context(mem, *, kind, summary, details="", exact="", code=""):
     """Progressive Disclosure: remember the one most recent layered response so
     'more'/'details'/'exact' can deepen it (see session_memory.set_explanation_context).
-    Only used for the handful of features rich enough to have real layers."""
+    Only used for the handful of features rich enough to have real layers.
+    Stores a hash of the code it was computed from, so a later 'details'/'exact'
+    can detect the code changed underneath it and refuse to repeat now-stale
+    facts as if they were still current (same staleness check state_watch's
+    trace bundle already uses)."""
     session_memory.set_explanation_context(mem, {
-        "kind": kind, "summary": summary, "details": details or summary, "exact": exact or details or summary,
+        "kind": kind, "summary": summary, "details": details or summary,
+        "exact": exact or details or summary,
+        "code_hash": session_memory.code_hash(code) if code else "",
     })
 
 
-def _disclosure_response(mem, text, confidence, level):
+def _disclosure_response(mem, text, confidence, level, current_code=""):
     """'more' / 'details' / 'exact' -- deepen the last stored explanation context,
     if there is one. Returns None (not handled) when there's nothing pending, so
     the caller falls through to the existing generic 'more help' handling."""
     ctx = session_memory.get_explanation_context(mem)
     if not ctx:
         return None
+    stored_hash = ctx.get("code_hash") or ""
+    if stored_hash and current_code and stored_hash != session_memory.code_hash(current_code):
+        speech = "The code changed since I said that. Ask again for up-to-date details."
+        return {
+            "success": True, "action": "deterministic_message", "intent": "disclosure_stale",
+            "message": speech, "speech": speech, "heard": text, "confidence": confidence,
+        }
     speech = ctx.get(level) or ctx.get("summary") or ""
     if not speech:
         return None
@@ -10453,7 +10466,8 @@ def voice():
         if bits:
             speech = speech + " " + " ".join(bits)
         _store_explanation_context(mem, kind="program_overview", summary=speech,
-                                   details=structure_tools.code_map_hierarchy(current_code)["speech"])
+                                   details=structure_tools.code_map_hierarchy(current_code)["speech"],
+                                   code=current_code)
         return _store_and_return({
             "success": True, "action": "deterministic_message", "intent": intent,
             "message": speech, "speech": speech, "heard": text, "confidence": confidence,
@@ -10548,7 +10562,7 @@ def voice():
 
     if confidence >= 0.75 and intent == "mental_map":
         speech = _mental_map_speech(mem, current_code, cursor_line)
-        _store_explanation_context(mem, kind="mental_map", summary=speech)
+        _store_explanation_context(mem, kind="mental_map", summary=speech, code=current_code)
         return _store_and_return({
             "success": True, "action": "deterministic_message", "intent": intent,
             "message": speech, "speech": speech, "heard": text, "confidence": confidence,
@@ -10731,11 +10745,11 @@ def voice():
     # the existing generic handling otherwise, so it never steals bare "more"
     # from the unrelated help-pagination path.
     if early_text in ("more", "tell me more", "details", "give me details", "more details"):
-        disclosure = _disclosure_response(mem, text, confidence, "details")
+        disclosure = _disclosure_response(mem, text, confidence, "details", current_code)
         if disclosure is not None:
             return _store_and_return(disclosure)
     if early_text in ("exact", "exactly", "read exact details", "give me the exact details"):
-        disclosure = _disclosure_response(mem, text, confidence, "exact")
+        disclosure = _disclosure_response(mem, text, confidence, "exact", current_code)
         if disclosure is not None:
             return _store_and_return(disclosure)
 
@@ -10838,7 +10852,8 @@ def voice():
         if analysis.get("has_error") and intent in ("explain_error_trace", "crash_location", "error_cause"):
             _store_explanation_context(
                 mem, kind="error_trace", summary=error_trace.brief(analysis),
-                details=error_trace.narrate(analysis), exact=error_trace.narrate(analysis, full=True))
+                details=error_trace.narrate(analysis), exact=error_trace.narrate(analysis, full=True),
+                code=current_code)
         return _store_and_return({
             "success": True, "action": "deterministic_message", "intent": intent,
             "message": speech, "speech": speech, "heard": text, "confidence": confidence,

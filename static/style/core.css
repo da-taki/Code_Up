@@ -154,7 +154,7 @@ body.cu-body.theme-high-contrast::before { display: none; }
   border-bottom-width: 2px;
   font-family: var(--font-mono); font-size: 0.9rem; font-weight: 600;
 }
-.cu-theme-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.cu-theme-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; min-width: 0; }
 .cu-settings-description { flex-basis: 100%; margin: 0; color: var(--text-dim); font-size: 0.9rem; line-height: 1.4; }
 .cu-settings-subheading { flex-basis: 100%; margin: 6px 0 0; color: var(--text-main); font-size: 0.9rem; font-weight: 700; }
 .cu-speech-rate { min-width: 150px; accent-color: var(--accent); }
@@ -242,6 +242,16 @@ body.cu-body.theme-high-contrast::before { display: none; }
   font-family: var(--font-main);
   box-shadow: none;
   transition: background .12s, border-color .12s, color .12s;
+}
+.theme-selector {
+  /* A <select> sizes to its widest option's text by default (e.g. "Screen
+     Reader Safe (for NVDA, JAWS, VoiceOver, Narrator)") and does not shrink
+     for a narrow viewport on its own. Combined with min-width:0 on the
+     ancestor flex chain (.cu-header-settings et al.) below, this keeps the
+     closed control within its container instead of forcing the whole page
+     into horizontal scroll. The dropdown's own popup when opened is
+     unaffected by this. */
+  max-width: 100%;
 }
 .cu-button:hover:not(:disabled),
 .cu-button-secondary:hover:not(:disabled),
@@ -357,6 +367,11 @@ body.theme-night .cu-output { background: #06030a; }
 .cu-voice-console { margin-top: 12px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .cu-voice-input {
   flex: 1; padding: 10px 12px;
+  /* Without this, a flex item's default min-width:auto refuses to shrink
+     below its intrinsic content width -- which scales with font-size, so at
+     large text settings + a narrow viewport this input stopped shrinking to
+     fit and pushed the whole page into horizontal scroll. */
+  min-width: 0;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-strong);
   background: var(--bg-main);
@@ -715,7 +730,15 @@ body.theme-high-contrast .audio-blocks-palette .cu-button[data-category]::before
   text-transform: uppercase;
   white-space: nowrap;
 }
-.cu-header-settings { margin-left: auto; background: transparent; border: none; box-shadow: none; }
+.cu-header-settings {
+  margin-left: auto; background: transparent; border: none; box-shadow: none;
+  /* .cu-header-top is a flex row and this disclosure is one of its items;
+     without min-width:0, a flex item's default min-width:auto refuses to
+     shrink below the natural (max-content) width of everything inside it --
+     including the settings controls below -- which forced the whole page
+     into horizontal scroll at narrow viewports whenever this panel was open. */
+  min-width: 0;
+}
 .cu-header-settings > .cu-disclosure-summary {
   border: 1px solid var(--border-strong);
   background: var(--bg-main);

@@ -597,6 +597,22 @@ class TestProgressiveDisclosure:
         assert d["action"] == "deterministic_message"
         assert "condition" in d["speech"] or "for loop" in d["speech"]
 
+    def test_details_refuses_stale_content_after_code_changes(self, client):
+        # Regression: "details" must not silently repeat facts about code that
+        # has since changed underneath it -- that's presenting stale analysis
+        # as if it were current, which is worse than saying nothing.
+        _vc(client, "overview", code="x = 1\n")
+        different_code = "def f():\n    if True:\n        return 1\n"
+        d = _vc(client, "details", code=different_code)
+        assert "changed" in d["speech"].lower()
+        assert "no functions" not in d["speech"].lower()  # not the stale x=1 answer
+
+    def test_details_still_works_when_code_is_unchanged(self, client):
+        _vc(client, "overview", code=NESTED_CODE)
+        d = _vc(client, "details", code=NESTED_CODE)
+        assert "changed" not in d["speech"].lower()
+        assert "for loop" in d["speech"] or "condition" in d["speech"]
+
     def test_exact_after_error_trace(self, client):
         _run(client, BAD_INDENT_CODE)
         _vc(client, "explain error", code=BAD_INDENT_CODE)
@@ -620,3 +636,38 @@ class TestProgressiveDisclosure:
         assert ctx["summary"] == "s" and ctx["details"] == "d" and ctx["exact"] == "e"
         session_memory.clear_explanation_context(mem)
         assert session_memory.get_explanation_context(mem) is None
+
+
+class TestAudioBlocksModeDoesNotSwallowContextResume:
+    """Hostile-pass regression: 'back to code'/'where was I' must be able to
+    get a learner OUT of Audio Blocks Mode. They were being caught by the
+    mode's own "not a recognized block command" gate before ever reaching
+    Context Resume, which defeats the entire point of the feature."""
+
+    def test_back_to_code_escapes_audio_blocks_mode(self, client):
+        _vc(client, "enter block mode", active_mode="audio_blocks")
+        d = _vc(client, "back to code", active_mode="audio_blocks", cursor_line=1)
+        assert d["action"] == "focus_target"
+        assert d["target"] == "__editor__"
+        assert "not available" not in d["speech"].lower()
+
+    def test_where_was_i_escapes_audio_blocks_mode(self, client):
+        _vc(client, "enter block mode", active_mode="audio_blocks")
+        d = _vc(client, "where was i", active_mode="audio_blocks", cursor_line=1)
+        assert "not available" not in d["speech"].lower()
+
+    def test_python_structure_commands_get_a_helpful_redirect_in_audio_blocks(self, client):
+        # These genuinely don't apply to the block workspace (they read the
+        # Python editor's AST), so they should stay gated -- but with the same
+        # helpful redirect pre-existing Python-only commands get, not the
+        # generic "not available yet" dead end.
+        _vc(client, "enter block mode", active_mode="audio_blocks")
+        for cmd in ("overview", "mental map", "why is this line indented", "read exact line"):
+            d = _vc(client, cmd, active_mode="audio_blocks", cursor_line=1)
+            assert "python code mode" in d["speech"].lower(), cmd
+
+    def test_real_audio_blocks_commands_still_work(self, client):
+        d = _vc(client, "enter block mode", active_mode="audio_blocks")
+        assert "not available" not in d["speech"].lower()
+        d2 = _vc(client, "read block order", active_mode="audio_blocks")
+        assert "workspace" in d2["speech"].lower()

@@ -978,6 +978,7 @@ class IntentParser:
         r"^what\s+block\s+contains\s+this\s+line$",
         r"^what\s+contains\s+this\s+line$",
         r"^what\s+block\s+is\s+this\s+line\s+in$",
+        r"^what\s+block\s+is\s+this$",
     ]
     INDENTATION_LEVEL_PATTERNS = [
         r"^how\s+deep\s+am\s+i$",
@@ -1001,16 +1002,21 @@ class IntentParser:
         r"^overview$",
         r"^give\s+me\s+an\s+overview$",
         r"^program\s+overview$",
+        r"^show\s+me\s+the\s+program$",
+        r"^what\s+does\s+this\s+program\s+look\s+like$",
+        r"^give\s+me\s+the\s+big\s+picture$",
     ]
     NAV_PARENT_BLOCK_PATTERNS = [
         r"^parent$",
         r"^go\s+to\s+(?:the\s+)?parent\s+block$",
         r"^parent\s+block$",
+        r"^go\s+up\s+one\s+block$",
     ]
     NAV_FIRST_CHILD_PATTERNS = [
         r"^first\s+child$",
         r"^next\s+child$",
         r"^go\s+to\s+(?:the\s+)?first\s+child$",
+        r"^go\s+inside\s+this\s+block$",
     ]
     NAV_NEXT_SIBLING_PATTERNS = [
         r"^next\s+sibling$",
@@ -1178,6 +1184,7 @@ class IntentParser:
     READ_LINE_EXACT_PATTERNS = [
         r"^read\s+exact\s+line$",
         r"^read\s+this\s+line\s+exactly$",
+        r"^read\s+this\s+exactly$",
     ]
     READ_PUNCTUATION_PATTERNS = [
         r"^read\s+punctuation$",
@@ -1187,6 +1194,7 @@ class IntentParser:
         r"^spell\s+current\s+token$",
         r"^spell\s+this\s+token$",
         r"^read\s+current\s+token$",
+        r"^spell\s+this$",
     ]
     READ_CHAR_BY_CHAR_PATTERNS = [
         r"^read\s+character\s+by\s+character$",
@@ -1199,9 +1207,10 @@ class IntentParser:
         r"^read\s+indentation\s+exactly$",
     ]
     PROGRAM_FLOW_PATTERNS = [
-        r"^describe\s+program\s+flow$",
-        r"^explain\s+program\s+flow$",
+        r"^describe\s+(?:the\s+|program\s+)?flow$",
+        r"^explain\s+(?:the\s+|program\s+)?flow$",
         r"^how\s+does\s+this\s+program\s+flow$",
+        r"^how\s+does\s+this\s+program\s+work$",
     ]
     BRAILLE_COMPACT_VIEW_PATTERNS = [
         r"^braille\s+compact\s+view$",
@@ -1223,12 +1232,15 @@ class IntentParser:
         r"^resume\s+where\s+i\s+was$",
         r"^what\s+was\s+i\s+doing$",
         r"^return\s+to\s+(?:the\s+)?previous\s+context$",
+        r"^continue\s+where\s+i\s+was$",
     ]
     MENTAL_MAP_PATTERNS = [
         r"^explain\s+my\s+mental\s+map$",
         r"^mental\s+map$",
         r"^what'?s\s+my\s+current\s+context$",
         r"^what\s+should\s+i\s+know\s+right\s+now$",
+        r"^what'?s\s+going\s+on$",
+        r"^give\s+me\s+my\s+context$",
     ]
     PROGRAM_OUTPUT_PATTERNS = [
         r"^what\s+did\s+the\s+program\s+print$", r"^what\s+was\s+printed$",
@@ -1433,7 +1445,8 @@ class IntentParser:
         r"^what\s+is\s+this\s+file\s+for$",
     ]
     WHERE_AM_I_PATTERNS = [
-        r"^where\s+am\s+i(?:\s+in\s+execution)?$",
+        r"^where\s+am\s+i(?:\s+in\s+execution|\s+right\s+now|\s+currently)?$",
+        r"^what\s+am\s+i\s+inside$",
         r"^what\s+block\s+am\s+i\s+in$",
         r"^where\s+is\s+my\s+cursor$",
         r"^(?:current\s+)?(?:execution\s+)?position$",

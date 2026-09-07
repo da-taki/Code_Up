@@ -226,7 +226,11 @@ def _build_hierarchy(node: ast.AST, code: str = "") -> List[Dict[str, Any]]:
 def _speak_hierarchy(nodes: List[Dict[str, Any]], depth: int = 0) -> List[str]:
     lines: List[str] = []
     for n in nodes:
-        prefix = "At the top level, " if depth == 0 else f"At depth {depth}, inside it, "
+        # "indentation depth" -- same term cursor_context()/indentation_level()
+        # use for "where am I"/"how deep am I", so a learner hears one
+        # consistent vocabulary across commands instead of "depth" here and
+        # "indentation depth" there for the same concept.
+        prefix = "At the top level, " if depth == 0 else f"At indentation depth {depth}, inside it, "
         lines.append(f"{prefix}{n['label']}, lines {n['line']} to {n['end_line']}.")
         lines.extend(_speak_hierarchy(n["children"], depth + 1))
     return lines

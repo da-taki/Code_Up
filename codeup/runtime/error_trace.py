@@ -11,6 +11,7 @@ is actually present in the error text. An AI layer may add colour later, but it
 must be grounded in the facts ``analyze`` returns.
 """
 
+import ast
 import re
 from typing import Any, Dict, List, Optional
 
@@ -123,6 +124,75 @@ def _extract_value(exc_type: str, message: str) -> str:
         if m:
             return f"'{m.group(1)}'"
     return ""
+
+
+_SUBSCRIPT_RE = re.compile(r"([A-Za-z_]\w*)\s*\[\s*(-?\d+)\s*\]")
+
+_MUTATING_LIST_METHODS = frozenset({
+    "append", "extend", "insert", "pop", "remove", "clear", "sort", "reverse",
+})
+
+
+def _index_error_detail(code: str, code_line: str) -> Optional[Dict[str, Any]]:
+    """For an IndexError: find the literal index attempted on the failing source
+    line, and -- ONLY when it is unambiguous -- the sequence's length.
+
+    'Unambiguous' means the name is assigned exactly once anywhere in the file,
+    to a list/tuple/string literal, and never mutated (append/pop/... or
+    reassigned) anywhere else. If we cannot prove the length that way, we still
+    report the attempted index (it is read directly off the failing line, not
+    guessed) but leave length as None so the caller can say so honestly instead
+    of inventing a number.
+    """
+    if not code_line:
+        return None
+    m = _SUBSCRIPT_RE.search(code_line)
+    if not m:
+        return None
+    name, index_s = m.group(1), int(m.group(2))
+    detail: Dict[str, Any] = {"name": name, "index": index_s, "length": None}
+    if not code:
+        return detail
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return detail
+
+    literal_lengths: List[int] = []
+    mutated = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == name:
+                    if isinstance(node.value, (ast.List, ast.Tuple)):
+                        literal_lengths.append(len(node.value.elts))
+                    elif isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                        literal_lengths.append(len(node.value.value))
+                    else:
+                        mutated = True
+        elif isinstance(node, (ast.AugAssign, ast.AnnAssign)):
+            target = node.target
+            if isinstance(target, ast.Name) and target.id == name:
+                mutated = True
+        elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+              and isinstance(node.func.value, ast.Name) and node.func.value.id == name
+              and node.func.attr in _MUTATING_LIST_METHODS):
+            mutated = True
+
+    if not mutated and len(literal_lengths) == 1:
+        detail["length"] = literal_lengths[0]
+    return detail
+
+
+def _valid_range_words(length: int) -> str:
+    if length <= 0:
+        return "none -- the list is empty"
+    positions = list(range(length))
+    if len(positions) == 1:
+        return "0"
+    if len(positions) == 2:
+        return f"{positions[0]} and {positions[1]}"
+    return ", ".join(str(p) for p in positions[:-1]) + f", and {positions[-1]}"
 
 
 def _explain(exc_type: str, message: str, line: Optional[int]) -> Dict[str, str]:
@@ -253,6 +323,13 @@ def analyze(error_text: str, *, traceback_text: str = "", code: str = "",
     result["beginner_explanation"] = explanation["cause"]
     result["next_steps"] = explanation["next"]
     result["value"] = _extract_value(exc_type, message)
+    result["index_error_detail"] = None
+    if exc_type == "IndexError":
+        detail = _index_error_detail(code, result["code_line"])
+        if detail:
+            result["index_error_detail"] = detail
+            if not result["value"]:
+                result["value"] = str(detail["index"])
     return result
 
 
@@ -312,8 +389,19 @@ def value_narration(analysis: Dict[str, Any]) -> str:
     """Answer 'what value caused this' without ever inventing a value."""
     if not analysis or not analysis.get("has_error"):
         return "There is no recent Python error to inspect. Run your code first."
-    value = analysis.get("value")
     line = analysis.get("line")
+    detail = analysis.get("index_error_detail")
+    if analysis.get("exception_type") == "IndexError" and detail:
+        loc = f" on line {line}" if line else ""
+        if detail.get("length") is not None:
+            length = detail["length"]
+            return (f"The {detail['name']} list has {length} item{'s' if length != 1 else ''}, so its "
+                    f"valid positions are {_valid_range_words(length)}. The program tried position "
+                    f"{detail['index']}{loc}.")
+        return (f"The program tried position {detail['index']}{loc}, on the list {detail['name']}. "
+                "I cannot determine how many items are in that list from the code, so I cannot "
+                "confirm whether that position was valid.")
+    value = analysis.get("value")
     if value:
         return (f"The value that caused the {analysis['exception_type']} was {value}. "
                 f"{analysis.get('beginner_explanation', '')}").strip()

@@ -10264,6 +10264,23 @@ def voice():
             "confidence": confidence,
         })
 
+    if confidence >= 0.75 and intent in {"why_indented", "what_contains_line",
+                                          "indentation_level", "block_contents",
+                                          "code_hierarchy", "graduation_mapping"}:
+        indent_handlers = {
+            "why_indented": lambda: structure_tools.why_indented(current_code, cursor_line),
+            "what_contains_line": lambda: structure_tools.what_contains(current_code, cursor_line),
+            "indentation_level": lambda: structure_tools.indentation_level(current_code, cursor_line),
+            "block_contents": lambda: structure_tools.describe_contents(current_code, cursor_line),
+            "code_hierarchy": lambda: structure_tools.code_map_hierarchy(current_code)["speech"],
+            "graduation_mapping": lambda: screen_reader_bridge.graduation_mapping(),
+        }
+        speech = indent_handlers[intent]()
+        return _store_and_return({
+            "success": True, "action": "deterministic_message", "intent": intent,
+            "message": speech, "speech": speech, "heard": text, "confidence": confidence,
+        })
+
     if confidence >= 0.75 and intent == "next_error":
         error_line = _extract_error_line(error_context or str(mem.get("last_run_error") or ""))
         message = (f"The last error is on line {error_line}." if error_line
@@ -11509,66 +11526,21 @@ def breadcrumbs():
         return jsonify({"success": False, "error": "Invalid line"}), 400
 
     if not code.strip():
-        return jsonify({"success": True, "breadcrumb": "empty file", "trail": []})
+        return jsonify({"success": True, "breadcrumb": "empty file", "trail": [], "depth": 0})
 
     try:
-        tree = ast.parse(code)
+        ast.parse(code)
     except SyntaxError as e:
-        return jsonify({"success": False, "message": _syntax_error_message(e, code)})
+        indentation_message = structure_tools.explain_indentation_error(code)
+        return jsonify({"success": False,
+                        "message": indentation_message or _syntax_error_message(e, code)})
 
-    trail = []
-
-    def end_line(node):
-        explicit_end = getattr(node, 'end_lineno', None)
-        if explicit_end is not None:
-            return explicit_end
-        line_numbers = [n.lineno for n in ast.walk(node) if hasattr(n, 'lineno')]
-        return max(line_numbers) if line_numbers else None
-
-    def walk(node, depth=0):
-        for child in ast.iter_child_nodes(node):
-            start = getattr(child, 'lineno', None)
-            if start is None:
-                continue
-            stop = end_line(child)
-            if stop is None:
-                continue
-            if not (start <= line <= stop):
-                continue
-            kind = None
-            name = None
-            if isinstance(child, ast.FunctionDef):
-                kind, name = "function", child.name
-            elif isinstance(child, ast.AsyncFunctionDef):
-                kind, name = "async function", child.name
-            elif isinstance(child, ast.ClassDef):
-                kind, name = "class", child.name
-            elif isinstance(child, ast.For):
-                kind, name = "for loop", None
-            elif isinstance(child, ast.While):
-                kind, name = "while loop", None
-            elif isinstance(child, ast.If):
-                kind, name = "if block", None
-            elif isinstance(child, ast.With):
-                kind, name = "with block", None
-            elif isinstance(child, ast.Try):
-                kind, name = "try block", None
-            if kind:
-                trail.append({"kind": kind, "name": name, "line": start})
-            walk(child, depth + 1)
-
-    walk(tree)
-
-    if not trail:
-        breadcrumb = f"line {line}, top level of file"
-    else:
-        parts = []
-        for item in trail:
-            if item["name"]:
-                parts.append(f"{item['kind']} {item['name']}")
-            else:
-                parts.append(item["kind"])
-        breadcrumb = ", inside ".join(parts) + f", line {line}"
+    # Deterministic, AST-based ancestor chain + exact indentation depth at the cursor
+    # line (slice 2/3 of the product-differentiation pass): no AI, no hallucination.
+    ctx = structure_tools.cursor_context(code, line)
+    trail = [{"kind": a["kind"], "name": a["name"], "line": a["line"], "label": a["label"]}
+             for a in ctx["ancestors"]]
+    breadcrumb = ctx["speech"]
 
     # Recent change / error context makes "where am I" richer (slice 7).
     context_bits = []
@@ -11589,6 +11561,7 @@ def breadcrumbs():
         pass
 
     return jsonify({"success": True, "breadcrumb": breadcrumb, "trail": trail,
+                    "depth": ctx["depth"], "indent_spaces": ctx.get("indent_spaces", 0),
                     "context": " ".join(context_bits)})
 
 

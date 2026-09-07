@@ -2304,7 +2304,16 @@ def route_command(
         blocks = workspace.get("blocks", [])
         if not blocks:
             return _message("The Audio Blocks workspace is empty.", workspace)
-        summary = " ".join(f"Block {b['id']}: {b['label']}." for b in blocks)
+        parts = []
+        for b in blocks:
+            parent_id = b.get("parent_id")
+            if parent_id is not None:
+                parent = _find(workspace, int(parent_id))
+                parent_kind = BLOCK_LABELS.get(parent["type"], "block") if parent else "block"
+                parts.append(f"Block {b['id']}: {b['label']}, inside block {parent_id}'s {parent_kind}.")
+            else:
+                parts.append(f"Block {b['id']}: {b['label']}, at the top level.")
+        summary = " ".join(parts)
         return _message(f"Workspace has {len(blocks)} blocks. {summary}", workspace)
     if t in {"read current block", "read selected block", "where am i in blocks", "where am i"}:
         block = _find(workspace, int(workspace.get("cursor_id") or 0))

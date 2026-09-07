@@ -710,7 +710,7 @@ _TRIGGERS = [
                 "what are the quotes for", "what do quotes do", "why use quotes", "why the quotes",
                 "why quotes", "why is there a quote", "what do the quotes mean"]),
     ("indentation", ["why indentation", "why do we indent", "why is this indented",
-                     "why is this line indented", "what is indentation", "why the indentation",
+                     "what is indentation", "why the indentation",
                      "why four spaces", "why is it indented"]),
     ("colon", ["why do we need a colon", "why do we need colon", "why the colon",
                "what is the colon for"]),

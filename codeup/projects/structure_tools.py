@@ -201,6 +201,51 @@ def build_structure_snapshot(code: str) -> Dict[str, Any]:
     }
 
 
+def _build_hierarchy(node: ast.AST) -> List[Dict[str, Any]]:
+    children: List[Dict[str, Any]] = []
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, tuple(_BLOCK_TYPES.keys())):
+            name = getattr(child, "name", "") if isinstance(
+                child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) else ""
+            kind = _block_label(child)
+            children.append({
+                "label": f"{kind} {name}" if name else kind,
+                "line": int(getattr(child, "lineno", 0) or 0),
+                "end_line": _end_line(child),
+                "children": _build_hierarchy(child),
+            })
+        else:
+            children.extend(_build_hierarchy(child))
+    return children
+
+
+def _speak_hierarchy(nodes: List[Dict[str, Any]], depth: int = 0) -> List[str]:
+    lines: List[str] = []
+    for n in nodes:
+        prefix = "At the top level, " if depth == 0 else f"At depth {depth}, inside it, "
+        lines.append(f"{prefix}{n['label']}, lines {n['line']} to {n['end_line']}.")
+        lines.extend(_speak_hierarchy(n["children"], depth + 1))
+    return lines
+
+
+def code_map_hierarchy(code: str) -> Dict[str, Any]:
+    """A NESTED code map: every function/class/loop/condition/try/with block with
+    its own start-end line range, and its children -- so a learner can hear which
+    blocks are inside which, not just a flat 'N loops, M functions' count.
+    Deterministic, AST-based, no AI. Spoken linearly (outer to inner, in source
+    order) since a tree cannot be read aloud as a picture.
+    """
+    tree = _safe_parse(code)
+    if tree is None:
+        return {"hierarchy": [], "speech": "I cannot read the structure because of a syntax error."}
+    hierarchy = _build_hierarchy(tree)
+    if not hierarchy:
+        return {"hierarchy": [], "speech": "This program has no functions, loops, classes, or "
+                                            "conditions to map -- just simple top-level statements."}
+    lines = _speak_hierarchy(hierarchy)
+    return {"hierarchy": hierarchy, "speech": " ".join(lines)}
+
+
 def _join(pieces: List[str]) -> str:
     if len(pieces) == 1:
         return pieces[0]
@@ -504,6 +549,333 @@ def read_around(code: str, line: Optional[int], radius: int = 2) -> str:
     end = min(len(code_lines), n + radius)
     parts = [f"Line {i}: {_spoken_source_line(code_lines[i - 1])}." for i in range(start, end + 1)]
     return " ".join(parts)
+
+
+_CONTAINER_TYPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.For, ast.AsyncFor,
+                     ast.While, ast.If, ast.With, ast.AsyncWith, ast.Try, ast.ExceptHandler)
+
+
+def _cond_text(code: str, node: Optional[ast.AST]) -> str:
+    seg = None
+    if node is not None:
+        try:
+            seg = ast.get_source_segment(code, node)
+        except Exception:
+            seg = None
+    if seg:
+        return re.sub(r"\s+", " ", seg.strip())
+    return "the condition"
+
+
+def _find_keyword_line(code_lines: List[str], start: int, end: int, keyword_text: str) -> Optional[int]:
+    """Scan lines [start, end] (1-indexed, inclusive) for a line whose stripped text
+    starts with keyword_text and ends with ':' -- AST records no dedicated node/lineno
+    for bare 'else:'/'finally:' keywords, so this locates them by source scan."""
+    for i in range(max(1, start), max(start, end) + 1):
+        if 1 <= i <= len(code_lines):
+            s = code_lines[i - 1].strip()
+            if s.startswith(keyword_text) and s.rstrip().endswith(":"):
+                return i
+    return None
+
+
+def _ancestor_chain(code: str, line: int) -> List[Dict[str, Any]]:
+    """Ordered outer -> inner list of every block that contains `line`.
+
+    Deterministic, AST-based (no AI). Each entry: {kind, line, name, label} where
+    `label` is a short spoken phrase like "function analyze" or "the condition n > 5",
+    and `line` is the exact start line of that block -- the full ancestor chain the
+    'where am I' / 'why is this line indented' commands are built from.
+    """
+    tree = _safe_parse(code)
+    if tree is None:
+        return []
+    code_lines = code.splitlines()
+    chain: List[Dict[str, Any]] = []
+
+    def visit(node: ast.AST) -> None:
+        for child in ast.iter_child_nodes(node):
+            start = getattr(child, "lineno", None)
+            stop = getattr(child, "end_lineno", None)
+            if start is None or stop is None or not (start <= line <= stop):
+                continue
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                chain.append({"kind": "function", "line": start, "name": child.name,
+                              "label": f"function {child.name}"})
+                visit(child)
+            elif isinstance(child, ast.ClassDef):
+                chain.append({"kind": "class", "line": start, "name": child.name,
+                              "label": f"class {child.name}"})
+                visit(child)
+            elif isinstance(child, (ast.For, ast.AsyncFor)):
+                chain.append({"kind": "for loop", "line": start, "name": None,
+                              "label": "the for loop"})
+                visit(child)
+            elif isinstance(child, ast.While):
+                chain.append({"kind": "while loop", "line": start, "name": None,
+                              "label": "the while loop"})
+                visit(child)
+            elif isinstance(child, (ast.With, ast.AsyncWith)):
+                chain.append({"kind": "with block", "line": start, "name": None,
+                              "label": "the with block"})
+                visit(child)
+            elif isinstance(child, ast.If):
+                body_end = _end_line(child.body[-1]) if child.body else start
+                in_body = bool(child.body) and child.body[0].lineno <= line <= body_end
+                if in_body or not child.orelse:
+                    cond = _cond_text(code, child.test)
+                    is_elif = start - 1 < len(code_lines) and code_lines[start - 1].strip().startswith("elif")
+                    if is_elif:
+                        chain.append({"kind": "elif", "line": start, "name": None,
+                                      "label": f"the elif branch {cond}"})
+                    else:
+                        chain.append({"kind": "if", "line": start, "name": None,
+                                      "label": f"the condition {cond}"})
+                    visit(child)
+                elif len(child.orelse) == 1 and isinstance(child.orelse[0], ast.If):
+                    # elif -- represented as a nested If in orelse; it reports itself.
+                    visit(child)
+                else:
+                    else_line = _find_keyword_line(code_lines, body_end + 1,
+                                                    child.orelse[0].lineno, "else") or child.orelse[0].lineno
+                    chain.append({"kind": "else", "line": else_line, "name": None,
+                                  "label": "the else branch"})
+                    visit(child)
+            elif isinstance(child, ast.Try):
+                body_end = _end_line(child.body[-1]) if child.body else start
+                if bool(child.body) and child.body[0].lineno <= line <= body_end:
+                    chain.append({"kind": "try", "line": start, "name": None, "label": "the try block"})
+                visit(child)
+            elif isinstance(child, ast.ExceptHandler):
+                exc_type = _cond_text(code, child.type) if getattr(child, "type", None) else ""
+                label = f"the except block for {exc_type}" if exc_type else "the except block"
+                chain.append({"kind": "except", "line": start, "name": exc_type or None, "label": label})
+                visit(child)
+            else:
+                visit(child)
+
+    visit(tree)
+    return chain
+
+
+def _join_inside(phrases: List[str]) -> str:
+    if not phrases:
+        return ""
+    if len(phrases) == 1:
+        return phrases[0]
+    return ", inside ".join(phrases[:-1]) + ", and inside " + phrases[-1]
+
+
+def cursor_context(code: str, line: Optional[int]) -> Dict[str, Any]:
+    """Deterministic 'where am I' data for the CURRENT cursor line: exact indentation
+    depth (a number) plus the full ancestor chain of enclosing blocks (block types,
+    names, and start lines) -- AST-based, no AI, no hallucination.
+    """
+    code_lines = (code or "").splitlines()
+    if not code_lines:
+        return {"found": False, "line": None, "depth": 0, "ancestors": [],
+                "speech": "There is no code yet."}
+    tree = _safe_parse(code)
+    if tree is None:
+        return {"found": False, "line": None, "depth": 0, "ancestors": [],
+                "speech": "I cannot tell you where you are because of a syntax error. "
+                          "Fix the syntax error first, then ask again."}
+    n = _clamp_line(code_lines, line)
+    raw = code_lines[n - 1]
+    ancestors = _ancestor_chain(code, n)
+    depth = len(ancestors)
+    indent_spaces = len(raw) - len(raw.lstrip(" \t"))
+
+    if not ancestors:
+        speech = f"Line {n}. Indentation depth 0. You are at the top level of the file."
+    else:
+        phrases = [f"{a['label']} on line {a['line']}" for a in ancestors]
+        speech = f"Line {n}. Indentation depth {depth}. You are inside {_join_inside(phrases)}."
+
+    return {"found": True, "line": n, "depth": depth, "indent_spaces": indent_spaces,
+            "ancestors": ancestors, "speech": speech}
+
+
+def why_indented(code: str, line: Optional[int]) -> str:
+    """Explain WHY a line is indented: which block it belongs to (semantic ownership),
+    not just how many spaces it has."""
+    code_lines = (code or "").splitlines()
+    if not code_lines:
+        return "There is no code yet."
+    tree = _safe_parse(code)
+    if tree is None:
+        return "I cannot explain the indentation because of a syntax error."
+    n = _clamp_line(code_lines, line)
+    raw = code_lines[n - 1]
+    indent_spaces = len(raw) - len(raw.lstrip(" \t"))
+    ancestors = _ancestor_chain(code, n)
+    if not ancestors:
+        if indent_spaces:
+            return (f"Line {n} is indented {indent_spaces} spaces, but it does not belong to any "
+                    "block I can identify.")
+        return f"Line {n} is not indented. It is at the top level of the file."
+    innermost = ancestors[-1]
+    reason = (f"This line is indented {indent_spaces} spaces because it belongs to "
+              f"{innermost['label']} on line {innermost['line']}.")
+    if len(ancestors) > 1:
+        parent = ancestors[-2]
+        reason += f" That block is itself inside {parent['label']} on line {parent['line']}."
+    return reason
+
+
+def indentation_level(code: str, line: Optional[int]) -> str:
+    """'How deep am I' / 'what is my indentation level', at the CURRENT cursor line
+    (not the whole file's maximum nesting depth)."""
+    code_lines = (code or "").splitlines()
+    if not code_lines:
+        return "There is no code yet."
+    tree = _safe_parse(code)
+    if tree is None:
+        return "I cannot compute indentation depth because of a syntax error."
+    n = _clamp_line(code_lines, line)
+    raw = code_lines[n - 1]
+    indent_spaces = len(raw) - len(raw.lstrip(" \t"))
+    depth = len(_ancestor_chain(code, n))
+    if depth == 0:
+        return f"Line {n} is indented {indent_spaces} spaces. It is at the top level of the file, depth 0."
+    return f"Line {n} is indented {indent_spaces} spaces, which is indentation depth {depth}."
+
+
+def innermost_block_label(code: str, line: Optional[int]) -> Optional[str]:
+    """The label of the block immediately containing `line` (e.g. 'the condition
+    n > 5', 'function analyze'), or None if it's at the top level or the code
+    does not parse. Used by audio_diff to explain indentation changes
+    semantically (which block a line moved into/out of) instead of just
+    reporting a spaces-changed count."""
+    code_lines = (code or "").splitlines()
+    if not code_lines:
+        return None
+    tree = _safe_parse(code)
+    if tree is None:
+        return None
+    n = _clamp_line(code_lines, line)
+    ancestors = _ancestor_chain(code, n)
+    return ancestors[-1]["label"] if ancestors else None
+
+
+def what_contains(code: str, line: Optional[int]) -> str:
+    """'What block contains this line' / 'what contains this line' -- the immediate
+    (innermost) enclosing block, named, with its start line."""
+    code_lines = (code or "").splitlines()
+    if not code_lines:
+        return "There is no code yet."
+    tree = _safe_parse(code)
+    if tree is None:
+        return "I cannot tell what contains this line because of a syntax error."
+    n = _clamp_line(code_lines, line)
+    ancestors = _ancestor_chain(code, n)
+    if not ancestors:
+        return f"Line {n} is at the top level of the file. Nothing else contains it."
+    innermost = ancestors[-1]
+    return f"Line {n} is inside {innermost['label']}, which starts on line {innermost['line']}."
+
+
+def _innermost_container(tree: ast.AST, line: int) -> Optional[ast.AST]:
+    best: Optional[ast.AST] = None
+
+    def visit(node: ast.AST) -> None:
+        nonlocal best
+        for child in ast.iter_child_nodes(node):
+            start = getattr(child, "lineno", None)
+            stop = getattr(child, "end_lineno", None)
+            if (isinstance(child, _CONTAINER_TYPES) and start is not None and stop is not None
+                    and start <= line <= stop):
+                best = child
+            visit(child)
+
+    visit(tree)
+    return best
+
+
+def describe_contents(code: str, line: Optional[int]) -> str:
+    """'What is inside this loop/condition/function' at the cursor -- lists the
+    direct child statements of the block containing the cursor, deterministically."""
+    code_lines = (code or "").splitlines()
+    if not code_lines:
+        return "There is no code yet."
+    tree = _safe_parse(code)
+    if tree is None:
+        return "I cannot read the structure because of a syntax error."
+    n = _clamp_line(code_lines, line)
+    container = _innermost_container(tree, n)
+    if container is None:
+        return "That is at the top level of the file, not inside a block."
+    kind = _block_label(container)
+    name = getattr(container, "name", "") or ""
+    label = f"{kind} {name}" if name else kind
+    body = list(getattr(container, "body", []))
+    if not body:
+        return f"The {label} starting on line {container.lineno} has no statements inside it yet."
+    shown = body[:6]
+    parts = [f"line {getattr(stmt, 'lineno', '?')}: {explain_line(code, getattr(stmt, 'lineno', None))}"
+             for stmt in shown]
+    tail = ""
+    if len(body) > len(shown):
+        remaining = len(body) - len(shown)
+        tail = f" And {_count_word(remaining)} more line{'s' if remaining != 1 else ''}."
+    result = f"Inside the {label}, starting on line {container.lineno}: " + " ".join(parts) + tail
+    return result if result.endswith(".") else result + "."
+
+
+def _header_kind(text: str) -> str:
+    text = text.strip()
+    if text.startswith("async def ") or text.startswith("def "):
+        return "a function"
+    if text.startswith("class "):
+        return "a class"
+    if text.startswith("async for ") or text.startswith("for "):
+        return "a for loop"
+    if text.startswith("while "):
+        return "a while loop"
+    if text.startswith("elif "):
+        return "an elif block"
+    if text.startswith("if "):
+        return "an if block"
+    if text.startswith("else"):
+        return "an else block"
+    if text.startswith("finally"):
+        return "a finally block"
+    if text.startswith("except"):
+        return "an except block"
+    if text.startswith("try"):
+        return "a try block"
+    if text.startswith("async with ") or text.startswith("with "):
+        return "a with block"
+    return "a block"
+
+
+def explain_indentation_error(code: str) -> Optional[str]:
+    """If `code` fails to parse with an 'expected an indented block' IndentationError,
+    return a precise deterministic explanation naming both the offending line and the
+    block header above it that required indentation. Returns None if the code parses,
+    or if the SyntaxError is not this specific indentation shape (caller should fall
+    back to its own generic syntax-error message in that case).
+    """
+    try:
+        ast.parse(code or "")
+        return None
+    except IndentationError as exc:
+        msg = str(exc.msg or "")
+        lines = (code or "").splitlines()
+        err_line = exc.lineno or 1
+        if "expected an indented block" in msg:
+            header_line = None
+            for i in range(err_line - 1, 0, -1):
+                if i <= len(lines) and lines[i - 1].rstrip().endswith(":"):
+                    header_line = i
+                    break
+            if header_line:
+                kind = _header_kind(lines[header_line - 1])
+                return f"Line {err_line} should be indented because line {header_line} starts {kind}."
+            return f"Line {err_line} should be indented, but I could not find the block header above it."
+        return f"There is an indentation problem near line {err_line}: {msg}."
+    except SyntaxError:
+        return None
 
 
 def assigned_variable_names(code: str) -> List[str]:

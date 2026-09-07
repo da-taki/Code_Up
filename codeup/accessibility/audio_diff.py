@@ -14,6 +14,8 @@ import difflib
 import re
 from typing import Any, Dict, List, Optional
 
+from codeup.projects import structure_tools
+
 __all__ = [
     "diff_lines", "summarize_change", "narrate", "narrate_before_after",
     "change_meaning", "project_diff", "narrate_project", "RISK_LEVELS",
@@ -39,8 +41,16 @@ def diff_lines(before: str, after: str) -> List[Dict[str, Any]]:
             for k in range(max(i2 - i1, j2 - j1)):
                 b = before_lines[i1 + k] if i1 + k < i2 else ""
                 a = after_lines[j1 + k] if j1 + k < j2 else ""
-                changes.append({"kind": "changed", "line": j1 + k + 1,
-                                "before": b, "after": a})
+                entry: Dict[str, Any] = {"kind": "changed", "line": j1 + k + 1,
+                                         "before": b, "after": a}
+                # Indentation-only edit: figure out WHICH block the line moved
+                # into/out of (AST-based, deterministic) so change_meaning can
+                # explain it semantically instead of just "indented more/less".
+                if (b.strip() and a.strip() and b.strip() == a.strip()
+                        and _indent(a) != _indent(b) and i1 + k < i2 and j1 + k < j2):
+                    entry["block_before"] = structure_tools.innermost_block_label(before, i1 + k + 1)
+                    entry["block_after"] = structure_tools.innermost_block_label(after, j1 + k + 1)
+                changes.append(entry)
         elif tag == "delete":
             for k in range(i1, i2):
                 changes.append({"kind": "removed", "line": k + 1,
@@ -64,6 +74,12 @@ def change_meaning(change: Dict[str, Any]) -> str:
         return f"Line {line} removes: {before}" if before else f"Line {line} removes a blank line."
     # changed
     if before and after and before.lstrip() == after.lstrip() and _indent(change["after"]) != _indent(change["before"]):
+        block_before = change.get("block_before")
+        block_after = change.get("block_after")
+        if block_after and block_after != block_before:
+            return f"Line {line} moved inside {block_after}: {after}"
+        if block_before and not block_after:
+            return f"Line {line} moved out of {block_before} to the top level: {after}"
         direction = "more" if _indent(change["after"]) > _indent(change["before"]) else "less"
         return f"Line {line} is now indented {direction}: {after}"
     return f"Line {line} changes from \"{before}\" to \"{after}\"."

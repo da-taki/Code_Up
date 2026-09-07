@@ -172,3 +172,35 @@ def build_screen_reader_bridge(code: str, project_state: Optional[Dict[str, Any]
     parts.append(_POSITIONING)
     message = " ".join(p for p in parts if p)
     return {"message": message, "speech": message, "target": label}
+
+
+_GRADUATION_MAPPING: List[tuple] = [
+    ("State Watch", "the Variables and Watch panels in the debugger"),
+    ("step narration", "debugger stepping (step over, step into)"),
+    ("conditional audio breakpoints", "conditional breakpoints"),
+    ("Audio Diff", "the Accessible Diff Viewer"),
+    ("the Code Map", "the Outline view and Go to Symbol"),
+    ("spoken error explanation", "the Problems panel and inline diagnostics"),
+]
+
+
+def graduation_mapping() -> str:
+    """'Prepare me for VS Code' / 'graduate to VS Code' / 'how does this map to
+    VS Code': explain each CodeUp concept the learner already knows in terms of
+    the matching VS Code feature, so moving over feels like a translation, not
+    a fresh start. VS Code is framed as the next professional tool, not a
+    competitor to avoid -- and it is never described as inaccessible.
+    """
+    lines = [
+        "You already know these ideas from CodeUp. In VS Code they show up as:",
+    ]
+    for codeup_name, vscode_name in _GRADUATION_MAPPING:
+        lines.append(f"CodeUp's {codeup_name} is like {vscode_name}.")
+    lines.append(
+        "VS Code is a professional editor with strong accessibility support of its "
+        "own, including a screen reader mode. It is the next tool, not a competitor "
+        "to CodeUp -- CodeUp's job was to help you build the mental model; VS Code "
+        "is where you use that model on bigger projects. Say 'export for VS Code' "
+        "when you are ready to bring a project over."
+    )
+    return " ".join(lines)

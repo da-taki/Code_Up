@@ -123,13 +123,45 @@ def test_multifile_traceback_identifies_crash_and_call_chain():
     assert a["code_line"] == "return 10 / 0"
 
 
-def test_what_value_safe_fallback_when_not_in_trace():
+def test_what_value_computes_index_error_range_when_list_is_a_literal():
+    # nums is assigned exactly once, to a 1-item list literal, and never mutated
+    # -- so the valid range is provable from the code alone (no invention).
     a = error_trace.analyze("Line 2: IndexError: list index out of range",
                             code="nums = [1]\nprint(nums[5])\n")
+    assert a["value"] == "5"
+    narration = error_trace.value_narration(a)
+    assert "1 item" in narration
+    assert "valid positions are 0" in narration
+    assert "tried position 5" in narration
+    assert "line 2" in narration
+
+
+def test_what_value_safe_fallback_when_length_cannot_be_proven():
+    # nums comes from a function call, not a literal -- length is not statically
+    # knowable, so CodeUp must say so rather than guess.
+    a = error_trace.analyze("Line 2: IndexError: list index out of range",
+                            code="nums = get_data()\nprint(nums[5])\n")
+    assert a["value"] == "5"
+    narration = error_trace.value_narration(a)
+    assert "cannot determine how many items" in narration
+    assert "tried position 5" in narration
+
+
+def test_what_value_safe_fallback_when_list_is_mutated():
+    # A literal assignment exists, but the list is later mutated, so its static
+    # length is no longer trustworthy -- must not report a stale length.
+    a = error_trace.analyze("Line 3: IndexError: list index out of range",
+                            code="nums = [1, 2, 3]\nnums.append(4)\nprint(nums[10])\n")
+    narration = error_trace.value_narration(a)
+    assert "cannot determine how many items" in narration
+
+
+def test_what_value_no_index_error_evidence_at_all():
+    # No code given at all -> no literal index found on the (unknown) failing line.
+    a = error_trace.analyze("Line 2: IndexError: list index out of range")
     assert a["value"] == ""
     narration = error_trace.value_narration(a)
     assert "cannot see the exact runtime value" in narration
-    assert "nums[5]" in narration  # still points to the failing line
 
 
 def test_full_trace_available_flag():
@@ -184,10 +216,19 @@ def test_what_value_caused_this_does_not_hallucinate(client):
     run(client, 'age = int("abc")\n')
     data = vc(client, "what value caused this")
     assert "'abc'" in data["speech"]
-    # IndexError has no value in the trace -> safe fallback
-    run(client, "nums = [1]\nprint(nums[5])\n")
-    data2 = vc(client, "what value caused this")
-    assert "cannot see the exact runtime value" in data2["speech"]
+    # IndexError: nums is a literal list, so CodeUp can compute the valid range.
+    # (The current editor code is part of every real /voice-command request, same
+    # as the other deterministic commands in this file -- passed explicitly here.)
+    code = "nums = [1]\nprint(nums[5])\n"
+    run(client, code)
+    data2 = vc(client, "what value caused this", code=code)
+    assert "valid positions are 0" in data2["speech"]
+    assert "tried position 5" in data2["speech"]
+    # But when the list's origin is not statically knowable, it says so honestly.
+    code2 = "nums = list(range(3))\nprint(nums[5])\n"
+    run(client, code2)
+    data3 = vc(client, "what value caused this", code=code2)
+    assert "cannot determine how many items" in data3["speech"]
 
 
 def test_read_full_traceback_only_on_request(client):

@@ -14,7 +14,11 @@ def sanitize_speech_text(text: str) -> str:
     value = re.sub(r"(?m)^\s*[-*+]\s+", "", value)
     value = re.sub(r"(?m)^\s*\d+\.\s+", "", value)
     value = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", value)
-    value = re.sub(r"[>#]", " ", value)
+    # Strip markdown blockquote/heading markers only at the start of a line, not a
+    # bare '>' anywhere -- a bare '>' is also Python's greater-than operator, and
+    # spoken condition text (e.g. "the condition n > 5") needs to keep it readable.
+    value = re.sub(r"(?m)^\s*>+\s?", "", value)
+    value = re.sub(r"(?m)^\s*#{1,6}\s+", "", value)
     value = re.sub(r"\s+", " ", value).strip()
     return value
 

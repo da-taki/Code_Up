@@ -120,7 +120,9 @@ def test_jump_to_changed_line(client):
     data = vc(client, "jump to changed line")
     assert data["action"] == "navigate_code"
     assert data["line"] == 2
-    assert "indented" in data["speech"].lower()
+    # Semantic indentation explanation (product-differentiation pass, Part 7):
+    # names the block the line moved into rather than just "indented more".
+    assert "moved inside the for loop" in data["speech"].lower()
 
 
 def test_jump_to_changed_line_no_changes(client):

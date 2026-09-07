@@ -969,6 +969,41 @@ class IntentParser:
     CHECK_INDENTATION_PATTERNS = [
         r"^explain\s+indentation$", r"^check\s+indentation$", r"^where\s+is\s+indentation\s+wrong$",
     ]
+    WHY_INDENTED_PATTERNS = [
+        r"^why\s+is\s+this\s+(?:line\s+)?indented$",
+        r"^explain\s+this\s+indentation$",
+        r"^why\s+is\s+(?:the\s+)?current\s+line\s+indented$",
+    ]
+    WHAT_CONTAINS_LINE_PATTERNS = [
+        r"^what\s+block\s+contains\s+this\s+line$",
+        r"^what\s+contains\s+this\s+line$",
+        r"^what\s+block\s+is\s+this\s+line\s+in$",
+    ]
+    INDENTATION_LEVEL_PATTERNS = [
+        r"^how\s+deep\s+am\s+i$",
+        r"^what\s+is\s+my\s+indentation\s+level$",
+        r"^what'?s\s+my\s+indentation\s+level$",
+        r"^read\s+indentation\s+around\s+me$",
+    ]
+    GRADUATION_MAPPING_PATTERNS = [
+        r"^prepare\s+me\s+for\s+vs\s*code$",
+        r"^graduate\s+to\s+vs\s*code$",
+        r"^how\s+does\s+this\s+map\s+to\s+vs\s*code$",
+        r"^how\s+do\s+(?:these|codeup)\s+features\s+map\s+to\s+vs\s*code$",
+    ]
+    CODE_HIERARCHY_PATTERNS = [
+        r"^read\s+code\s+hierarchy$",
+        r"^show\s+(?:the\s+)?nested\s+structure$",
+        r"^give\s+me\s+a\s+nested\s+code\s+map$",
+        r"^read\s+the\s+code\s+hierarchy$",
+    ]
+    BLOCK_CONTENTS_PATTERNS = [
+        r"^what\s+is\s+inside\s+this\s+loop$",
+        r"^what\s+is\s+inside\s+this\s+condition$",
+        r"^what\s+is\s+inside\s+this\s+function$",
+        r"^what\s+is\s+inside\s+this\s+block$",
+        r"^what'?s\s+inside\s+this\s+(?:loop|condition|function|block)$",
+    ]
     LIST_IMPORTS_PATTERNS = [
         r"^list\s+imports$", r"^what\s+imports\s+am\s+i\s+using$", r"^check\s+imports$",
         r"^read\s+(?:my\s+|the\s+)?imports$",
@@ -1421,6 +1456,12 @@ class IntentParser:
             "list_functions":  self.LIST_FUNCTIONS_PATTERNS,
             "preflight_check": self.PREFLIGHT_CHECK_PATTERNS,
             "check_indentation": self.CHECK_INDENTATION_PATTERNS,
+            "why_indented": self.WHY_INDENTED_PATTERNS,
+            "what_contains_line": self.WHAT_CONTAINS_LINE_PATTERNS,
+            "indentation_level": self.INDENTATION_LEVEL_PATTERNS,
+            "block_contents": self.BLOCK_CONTENTS_PATTERNS,
+            "code_hierarchy": self.CODE_HIERARCHY_PATTERNS,
+            "graduation_mapping": self.GRADUATION_MAPPING_PATTERNS,
             "list_imports": self.LIST_IMPORTS_PATTERNS,
             "sandbox_check": self.SANDBOX_CHECK_PATTERNS,
             "repeat_last_output": self.REPEAT_LAST_OUTPUT_PATTERNS,

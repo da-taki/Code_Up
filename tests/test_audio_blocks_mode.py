@@ -646,6 +646,10 @@ def test_command_workflow_compile_preview_compare_and_run_action(client):
     voice(client, "add print variable total")
     order = voice(client, "read block order")
     assert "Workspace has 4 blocks" in order["speech"]
+    # Part 9 of the product-differentiation pass: the listing must say WHICH
+    # block a nested block is inside, not just enumerate blocks flatly.
+    assert "Block 3: change total by 1, inside block 2's repeat times." in order["speech"]
+    assert "Block 1: set total to 0, at the top level." in order["speech"]
     preview = voice(client, "preview generated code")
     assert "total += 1" in preview["code_preview"]
     compiled = voice(client, "compile blocks to Python")

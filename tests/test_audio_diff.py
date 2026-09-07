@@ -377,3 +377,50 @@ def test_audio_diff_does_not_call_ai(client, monkeypatch):
     vc(client, "clear editor", code="print('old')\n")
     vc(client, "insert a for loop that prints the first 3 whole numbers", code="")
     assert vc(client, "what changed")["success"] is not False
+
+
+class TestSemanticIndentationDiff:
+    """Part 7 of the product-differentiation pass: an indentation-only edit must be
+    explained by WHICH block the line moved into/out of (AST-based, deterministic),
+    not just a spaces-changed count -- that's the gap versus VS Code's accessible
+    diff viewer, which only reads the raw line text."""
+
+    def test_line_moved_inside_a_new_block(self):
+        before = "def check(n):\n    if n > 5:\n        print(1)\n    print(2)\n"
+        after = "def check(n):\n    if n > 5:\n        print(1)\n        print(2)\n"
+        changes = audio_diff.diff_lines(before, after)
+        assert len(changes) == 1
+        # Before: print(2) was inside the function only. After: also inside the if.
+        assert changes[0]["block_before"] == "function check"
+        assert changes[0]["block_after"] == "the condition n > 5"
+        meaning = audio_diff.change_meaning(changes[0])
+        assert meaning == "Line 4 moved inside the condition n > 5: print(2)"
+
+    def test_line_moved_out_to_top_level(self):
+        before = "if True:\n    x = 1\n    y = 2\n"
+        after = "if True:\n    x = 1\ny = 2\n"
+        changes = audio_diff.diff_lines(before, after)
+        meaning = audio_diff.change_meaning(changes[0])
+        assert meaning == "Line 3 moved out of the condition True to the top level: y = 2"
+
+    def test_same_block_extra_spacing_keeps_generic_wording(self):
+        # Indentation changed but the line's actual block membership did not --
+        # must not claim a block move that did not happen.
+        before = "if True:\n    x = 1\n"
+        after = "if True:\n        x = 1\n"
+        changes = audio_diff.diff_lines(before, after)
+        meaning = audio_diff.change_meaning(changes[0])
+        assert "indented more" in meaning
+        assert "moved" not in meaning
+
+    def test_semantic_wording_reaches_the_voice_command_review(self, client):
+        # Same real workflow as test_apply_proposal_applies_and_records_diff:
+        # a deterministic indentation fix, applied, then reviewed with "what
+        # changed" -- the recorded diff must explain the block move, not just
+        # report a spaces-changed count.
+        broken = "for i in range(3):\nprint(i)\n"
+        run(client, broken)
+        vc(client, "fix with explanation", code=broken)
+        vc(client, "apply", code=broken)
+        review = vc(client, "what changed", code="for i in range(3):\n    print(i)\n")
+        assert "moved inside the for loop" in review["speech"]

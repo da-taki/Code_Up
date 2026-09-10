@@ -5796,6 +5796,19 @@ window.addEventListener('DOMContentLoaded', () => {
   try { restoreAccessibilityPreferences(); } catch (e) {}
   try { _wireLiveAssistantButtons(); } catch (e) {}
 
+  // XRCVC v1 Finding 3 ("Getting focus on the Command Prompt automatically
+  // for taking input from the End-user") - originally satisfied by the old
+  // blocking #startGate modal's startWithLang(), which focused the command
+  // box right after the user dismissed the gate. When the gate was removed
+  // (commit 42c04b0, "Open IDE directly without blocking start gate") so
+  // /ide would load straight into a usable IDE, that startup focus move was
+  // removed with it and never replaced - confirmed via this session's XRCVC
+  // final closure pass that a fresh page load now leaves focus on <body>,
+  // silently regressing this finding despite it having been marked Fixed.
+  // Restored here as a direct focus() on load, since there is no longer a
+  // gate to do it after.
+  try { document.getElementById('voiceText').focus(); } catch (e) {}
+
   // Regression: "Jump to editor" only scrolled #editor into view - Monaco's
   // real focusable element is a hidden textarea nested deep inside that
   // div, and a plain div with no tabindex is not a native browser focus

@@ -82,17 +82,45 @@ def test_settings_heading_is_connected_not_orphaned(client):
     assert html.count('aria-label="CodeUp display and accessibility settings"') == 0
 
 
-def test_show_commands_help_has_a_heading_but_no_extra_landmark(client):
+def test_show_commands_help_is_a_real_named_landmark(client):
+    # XRCVC v2 retest, Finding 15: an earlier pass gave this disclosure a
+    # heading (for NVDA/JAWS heading-list, "H" key) but deliberately did NOT
+    # make it a landmark, reasoning that the IDE's three-region cap should
+    # stay fixed. XRCVC's literal ask was a landmark "similar to other
+    # landmark[s]", so this pass gives it one - following the app's own
+    # existing, established pattern (test_ide_accessibility_semantics.py's
+    # "named <section> -> implicit region" mapping, the same technique
+    # editor/output/commands already use) rather than an explicit
+    # role="region" attribute, which test_no_explicit_role_region_anywhere
+    # still (correctly) forbids everywhere in the document.
     html = ide_html(client)
-    # A real heading makes the disclosure discoverable by heading-list
-    # navigation (NVDA/JAWS "H" key) once expanded...
     assert '<h3 id="cuHelpPanelHeading" class="sr-only">Commands and help</h3>' in html
-    # ...but does NOT add a 4th `role="region"` landmark - the IDE has a
-    # deliberately bounded set of exactly three (editor/output/commands),
-    # enforced by test_nvda_review_fixes.py::test_landmark_labels_are_unique_and_regions_are_limited
-    # and test_ide_accessibility_semantics.py::test_no_explicit_role_region_anywhere.
-    help_content_start = html.index('<div class="cu-help-content">')
-    assert 'role="region"' not in html[help_content_start:help_content_start + 60]
+    assert '<section class="cu-help-content" aria-labelledby="cuHelpPanelHeading">' in html
+    # It is nested one level inside the existing "Commands" region
+    # (cu-voice-console) rather than hoisted to the top level - XRCVC asked
+    # for a landmark tag, not a page restructure, and a region nested inside
+    # a differently-named region is valid ARIA landmark nesting, not
+    # duplicate/nested landmark noise (there is exactly one new landmark
+    # here, with one name, not a stack of redundant wrappers).
+    voice_console_start = html.index('<section class="cu-voice-console"')
+    help_section_start = html.index('<section class="cu-help-content"')
+    details_end = html.index('</details>', help_section_start)
+    assert voice_console_start < help_section_start < details_end
+    # No plain, un-landmarked <div class="cu-help-content"> should remain.
+    assert '<div class="cu-help-content">' not in html
+
+
+def test_show_commands_help_landmark_is_reachable_only_once_expanded(client):
+    # Native <details> hides its non-<summary> children from the
+    # accessibility tree while collapsed, so this landmark - like the
+    # disclosure body itself - only appears in NVDA/JAWS's region list once
+    # the user has expanded "Show commands & help". This is expected, not a
+    # bug: flagged here so a future change doesn't "fix" it by hoisting the
+    # section out of the <details> (which would defeat the disclosure).
+    html = ide_html(client)
+    details_start = html.index('<details id="cuHelpPanel"')
+    section_start = html.index('<section class="cu-help-content"')
+    assert details_start < section_start
 
 
 # ---------------------------------------------------------------------------
@@ -275,6 +303,33 @@ def test_accessibility_help_page_respects_dark_mode_preference():
     assert "background: #0a0703" in dark_block
 
 
+# ---------------------------------------------------------------------------
+# XRCVC v2 retest, Issue 13b: "In Night Mode the text size feels so small and
+# not a compatible Colour Contrast." The media-query fix above only follows
+# the OS/browser prefers-color-scheme setting - it ignored CodeUp's own
+# in-app Night Mode toggle (templates/index.html #nightToggle, stored in
+# localStorage under 'nightMode'). A visitor who turned Night Mode on inside
+# the IDE and then followed the "Accessibility help" link still landed on a
+# light, un-matching page unless their OS also happened to be dark -
+# reproducing this exact complaint on this specific page. The page must read
+# the same stored preference and let it override the system setting, exactly
+# like index.html's own #nightToggle handler does (stored value wins over
+# prefers-color-scheme when a stored value exists).
+# ---------------------------------------------------------------------------
+
+def test_accessibility_help_page_honors_the_ides_own_stored_night_mode_preference():
+    assert "localStorage.getItem('nightMode')" in ACCESSIBILITY_HTML
+    assert "cu-a11y-dark" in ACCESSIBILITY_HTML
+    assert "cu-a11y-light" in ACCESSIBILITY_HTML
+    # The class-based override must exist for both directions and must be
+    # capable of overriding the OS-preference media query (not just add to
+    # it), so an explicit stored 'false' truly wins over a dark OS setting.
+    assert "html.cu-a11y-dark body" in ACCESSIBILITY_HTML
+    light_rule_start = ACCESSIBILITY_HTML.index("html.cu-a11y-light body")
+    light_rule = ACCESSIBILITY_HTML[light_rule_start:light_rule_start + 120]
+    assert "!important" in light_rule
+
+
 def _rule_font_size_rem(css_text, selector):
     """Find `selector { ... font-size: N rem ... }` and return N as a float.
 
@@ -356,3 +411,40 @@ def test_dismissing_start_banner_moves_focus_to_next_focusable_control(client):
     idx_lookup = handler.index("focusable.indexOf(dismiss)")
     idx_hide = handler.index("banner.style.display = 'none'")
     assert idx_lookup < idx_hide
+
+
+# ---------------------------------------------------------------------------
+# XRCVC final closure pass (this pass distrusts every prior "Fixed" claim,
+# including this codebase's own, and re-verifies from scratch against the
+# live app rather than test names): Report Version 1, Finding 3, "Getting
+# focus on the Command Prompt automatically for taking input from the
+# End-user" - marked Fixed by XRCVC's own Version 1 report and by every
+# prior remediation pass in this repo.
+#
+# Live re-testing a genuinely fresh page load in this pass found
+# document.activeElement === <body> - the finding had silently regressed.
+# Root cause, found via `git log -S autofocus`: the original fix lived in
+# the old blocking #startGate modal's startWithLang(), which called
+# .focus() on the command box right after the user dismissed the gate.
+# Commit 42c04b0 ("Open IDE directly without blocking start gate") removed
+# that whole gate - its own commit message says "...and the startup focus
+# move" - so /ide would load straight into a usable IDE, but never added a
+# replacement focus call for the no-longer-existing "after the gate"
+# moment. No test caught this because the removal was intentional and
+# correct for the gate itself; only the loss of the focus behavior it used
+# to carry was missed.
+# ---------------------------------------------------------------------------
+
+def test_command_input_receives_focus_automatically_on_page_load():
+    fn_start = STATIC_APP.index("window.addEventListener('DOMContentLoaded', () => {")
+    fn_block = STATIC_APP[fn_start:fn_start + 1400]
+    assert "document.getElementById('voiceText').focus();" in fn_block
+    # Restored via direct focus(), not a declarative autofocus attribute -
+    # test_chrome_english_onboarding.py::test_no_autofocus_traps_a_control_on_load
+    # forbids the HTML autofocus attribute anywhere on the page (a narrower,
+    # still-valid guard against a *different* prior bug: a stray
+    # `<select autofocus>` silently trapping focus on an unrelated control
+    # before any JS runs at all). A JS-driven focus() on the app's own
+    # primary input, after the rest of page setup has run, is not that.
+    index_html = Path("templates/index.html").read_text(encoding="utf-8")
+    assert "autofocus" not in index_html

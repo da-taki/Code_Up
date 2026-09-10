@@ -145,15 +145,28 @@ def test_landmark_labels_are_unique_and_regions_are_limited(client):
     freely": every individual toolbar, card, checkpoint, and help-group
     category (Start/Run/Debug/...) explicitly stays un-landmarked, still
     enforced immediately below by
-    test_command_help_groups_keep_headings_without_implicit_regions."""
+    test_command_help_groups_keep_headings_without_implicit_regions.
+
+    Updated again for the XRCVC final closure pass, Finding 15: XRCVC
+    explicitly asked for "Show commands & help" to get a landmark "similar
+    to other landmark[s]" - a direct, literal ask that overrides the
+    "bounded at three" framing above for this one case. It is now a fourth
+    named-<section> region (see test_xrcvc_v2_remediation.py::
+    test_show_commands_help_is_a_real_named_landmark for the implementation
+    detail), nested inside the existing "Commands" region rather than
+    hoisted to the top level. The remaining principle - every individual
+    toolbar/card/help-group category still stays un-landmarked - is
+    unchanged and still enforced below."""
     parser = LandmarkParser()
     parser.feed(ide_html(client))
     labels = [label for _, _, label in parser.landmarks if label]
     assert len(labels) == len(set(labels)), labels
     assert sum(1 for tag, _, _ in parser.landmarks if tag == "main") == 1
     region_labels = [label for _, role, label in parser.landmarks if role == "region"]
-    assert set(region_labels) == {"codeEditorHeading", "programOutputHeading", "command-input-label"}, region_labels
-    assert len(region_labels) == 3, "exactly one region each - no duplicates, no extras"
+    assert set(region_labels) == {
+        "codeEditorHeading", "programOutputHeading", "command-input-label", "cuHelpPanelHeading",
+    }, region_labels
+    assert len(region_labels) == 4, "exactly one region each - no duplicates, no extras"
 
 
 

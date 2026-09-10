@@ -13,12 +13,42 @@
     body { max-width: 52rem; margin: 0 auto; padding: 1rem 1.25rem 3rem; font: 1.05rem/1.65 system-ui, sans-serif; color: #171717; background: #fff; }
     a { color: #0645ad; } code { font-size: 0.95em; background: rgba(0,0,0,0.06); padding: 0.1em 0.3em; border-radius: 3px; } h1, h2 { line-height: 1.3; }
     .skip-link { position: absolute; left: -9999px; } .skip-link:focus { position: static; }
+    /* XRCVC v2 retest, Issue 13b: the block above only followed the OS/browser
+       prefers-color-scheme setting, not CodeUp's own in-app Night Mode toggle
+       (stored in localStorage under 'nightMode' by the IDE's #nightToggle
+       button, templates/index.html). A visitor who turned Night Mode on
+       inside the IDE and then followed the "Accessibility help" link still
+       landed on a light page unless their OS also happened to be dark -
+       reproducing the report's "Night Mode ... not a compatible Colour
+       Contrast" complaint on this page specifically. The inline script below
+       applies the identical stored-preference-wins-over-system-preference
+       logic index.html already uses for #nightToggle, via a class on <html>
+       so it can override the media query below when the user's explicit
+       choice disagrees with their OS setting. */
+    html.cu-a11y-dark body { color: #f3e7d2; background: #0a0703; }
+    html.cu-a11y-dark a { color: #ffb38a; }
+    html.cu-a11y-dark code { background: rgba(255,255,255,0.1); }
     @media (prefers-color-scheme: dark) {
       body { color: #f3e7d2; background: #0a0703; }
       a { color: #ffb38a; }
       code { background: rgba(255,255,255,0.1); }
     }
+    html.cu-a11y-light body { color: #171717 !important; background: #fff !important; }
+    html.cu-a11y-light a { color: #0645ad !important; }
+    html.cu-a11y-light code { background: rgba(0,0,0,0.06) !important; }
   </style>
+  <script>
+    (function () {
+      try {
+        var stored = localStorage.getItem('nightMode');
+        if (stored === 'true') {
+          document.documentElement.className += ' cu-a11y-dark';
+        } else if (stored === 'false') {
+          document.documentElement.className += ' cu-a11y-light';
+        }
+      } catch (e) {}
+    })();
+  </script>
 </head>
 <body>
   <a class="skip-link" href="#main-content">Skip to main content</a>

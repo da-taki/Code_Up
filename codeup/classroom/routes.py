@@ -204,8 +204,12 @@ def create_cohort(instructor):
             instructor, cohort_name_error="Cohort name is required.",
             cohort_name_value=request.form.get("name") or "",
         )
-    db.create_cohort(instructor["id"], name)
-    return redirect(url_for("classroom.instructor_dashboard"))
+    cohort = db.create_cohort(instructor["id"], name)
+    # Vision-Aid build: the normal path is sign in -> create/choose cohort
+    # -> live student dashboard - not the richer assignments/reports
+    # dashboard (still reachable, see cohort_live_dashboard.html's link to
+    # cohort_dashboard, just no longer the default landing page).
+    return redirect(url_for("classroom.cohort_live_dashboard", cohort_id=cohort["id"]))
 
 
 @classroom_bp.route("/cohorts/<int:cohort_id>/rename", methods=["POST"])
@@ -421,6 +425,189 @@ def cohort_live_summary(instructor, cohort_id):
         "events": events,
         "assignments": assignment_rows,
     })
+
+
+# ---- Vision-Aid: live student code + simple AI toggle -----------------------
+#
+# Classroom's one job in this build: let an instructor see what each
+# enrolled learner is currently coding, and flip AI help on/off per class or
+# per learner. Deliberately separate from the richer cohort_dashboard/
+# cohort_live_summary above (assignments, modules, concepts) - those stay
+# intact and reachable, but nothing in the Vision-Aid learner or instructor
+# UI links to them anymore. See codeup.classroom.ai_toggle for the simple
+# effective_ai_enabled = class_ai_enabled AND learner_ai_enabled rule.
+
+def _seconds_since(value: Optional[str]) -> Optional[float]:
+    if not value:
+        return None
+    try:
+        ts = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return max(0.0, (datetime.now(timezone.utc) - ts).total_seconds())
+
+
+_ONLINE_WINDOW_SECONDS = 90
+_RECENT_ACTIVITY_SECONDS = 90
+_JUST_RAN_SECONDS = 10
+
+
+def live_code_status(learner: Dict[str, Any]) -> str:
+    """A small, honest, near-live status label - "near-live is perfectly
+    acceptable" per spec, so this is read straight off the debounced
+    autosave/heartbeat columns on every poll, no background job or
+    websocket involved."""
+    heartbeat_age = _seconds_since(learner.get("heartbeat_at"))
+    if heartbeat_age is None or heartbeat_age > _ONLINE_WINDOW_SECONDS:
+        return "Offline"
+    run_age = _seconds_since(learner.get("last_run_at"))
+    code_age = _seconds_since(learner.get("code_updated_at"))
+    if run_age is not None and run_age <= _JUST_RAN_SECONDS and (code_age is None or run_age <= code_age):
+        return "Running"
+    if code_age is not None and code_age <= _RECENT_ACTIVITY_SECONDS:
+        return "Editing"
+    return "Online"
+
+
+def _live_learner_row(cohort_id: int, learner: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "id": learner["id"],
+        "display_name": learner["display_name"],
+        "status": live_code_status(learner),
+        "ai_enabled": bool(learner.get("ai_enabled", True)),
+        "code_updated_at": learner.get("code_updated_at"),
+        "last_run_at": learner.get("last_run_at"),
+        "live_code_url": url_for("classroom.learner_live_code", cohort_id=cohort_id, learner_id=learner["id"]),
+    }
+
+
+@classroom_bp.route("/cohorts/<int:cohort_id>/live", methods=["GET"])
+@require_instructor
+def cohort_live_dashboard(instructor, cohort_id):
+    cohort = _own_cohort_or_404(instructor, cohort_id)
+    if not cohort:
+        return redirect(url_for("classroom.instructor_dashboard"))
+    learners = db.list_learners_for_cohort(cohort_id)
+    rows = [_live_learner_row(cohort_id, learner) for learner in learners]
+    online_count = sum(1 for r in rows if r["status"] != "Offline")
+    return render_template(
+        "classroom/cohort_live_dashboard.html",
+        instructor=instructor, cohort=cohort, learners=rows,
+        online_count=online_count, total_count=len(rows),
+    )
+
+
+@classroom_bp.route("/cohorts/<int:cohort_id>/live-students", methods=["GET"])
+@require_instructor
+def cohort_live_students(instructor, cohort_id):
+    """Lightweight JSON poll target for cohort_live_dashboard - same data,
+    serialized for a client-side refresh every few seconds instead of a
+    full page reload."""
+    cohort = _own_cohort_or_404(instructor, cohort_id)
+    if not cohort:
+        return jsonify({"success": False, "error": "not_found"}), 404
+    learners = db.list_learners_for_cohort(cohort_id)
+    rows = [_live_learner_row(cohort_id, learner) for learner in learners]
+    return jsonify({
+        "success": True,
+        "class_ai_enabled": bool(cohort.get("ai_enabled", True)),
+        "online_count": sum(1 for r in rows if r["status"] != "Offline"),
+        "total_count": len(rows),
+        "learners": rows,
+    })
+
+
+@classroom_bp.route("/cohorts/<int:cohort_id>/ai-toggle", methods=["POST"])
+@require_instructor
+def set_cohort_ai_toggle(instructor, cohort_id):
+    cohort = _own_cohort_or_404(instructor, cohort_id)
+    if not cohort:
+        return jsonify({"success": False, "error": "not_found"}), 404
+    if request.is_json:
+        body = request.get_json(silent=True) or {}
+        enabled = bool(body.get("enabled"))
+    else:
+        enabled = request.form.get("enabled") == "on" or request.form.get("enabled") == "true"
+    updated = db.set_cohort_ai_enabled(cohort_id, instructor["id"], enabled)
+    if request.is_json:
+        return jsonify({"success": True, "ai_enabled": bool(updated.get("ai_enabled", True))})
+    return redirect(url_for("classroom.cohort_live_dashboard", cohort_id=cohort_id))
+
+
+@classroom_bp.route("/cohorts/<int:cohort_id>/learners/<int:learner_id>/ai-toggle", methods=["POST"])
+@require_instructor
+def set_learner_ai_toggle(instructor, cohort_id, learner_id):
+    cohort = _own_cohort_or_404(instructor, cohort_id)
+    if not cohort:
+        return jsonify({"success": False, "error": "not_found"}), 404
+    if request.is_json:
+        body = request.get_json(silent=True) or {}
+        enabled = bool(body.get("enabled"))
+    else:
+        enabled = request.form.get("enabled") == "on" or request.form.get("enabled") == "true"
+    updated = db.set_learner_ai_enabled(learner_id, cohort_id, instructor["id"], enabled)
+    if not updated or updated["cohort_id"] != cohort_id:
+        return jsonify({"success": False, "error": "not_found"}), 404
+    if request.is_json:
+        return jsonify({"success": True, "ai_enabled": bool(updated.get("ai_enabled", True))})
+    return redirect(url_for("classroom.cohort_live_dashboard", cohort_id=cohort_id))
+
+
+@classroom_bp.route("/cohorts/<int:cohort_id>/learners/<int:learner_id>/live-code", methods=["GET"])
+@require_instructor
+def learner_live_code(instructor, cohort_id, learner_id):
+    cohort = _own_cohort_or_404(instructor, cohort_id)
+    if not cohort:
+        return redirect(url_for("classroom.instructor_dashboard"))
+    learner = db.get_learner(learner_id)
+    if not learner or learner["cohort_id"] != cohort_id:
+        return redirect(url_for("classroom.cohort_live_dashboard", cohort_id=cohort_id))
+    return render_template(
+        "classroom/learner_live_code.html",
+        instructor=instructor, cohort=cohort, learner=learner,
+        status=live_code_status(learner),
+    )
+
+
+@classroom_bp.route("/live-code/sync", methods=["POST"])
+@require_learner
+def live_code_sync(learner):
+    """Near-live autosave for the instructor live-code view - debounced
+    client-side (~1-3s of inactivity) and fired immediately on Run, mirroring
+    the existing per-assignment autosave/run-result routes below but
+    cohort-wide and not tied to any assignment. Never blocks the learner's
+    own editor or Run on failure."""
+    body = request.get_json(silent=True) or {}
+    code = str(body.get("code") or "")[:200_000]
+    ran = bool(body.get("ran"))
+    output = body.get("output")
+    error = body.get("error")
+    try:
+        db.save_learner_live_state(
+            learner["id"], code,
+            ran=ran,
+            output=(str(output)[:20_000] if output is not None else None),
+            error=(str(error)[:20_000] if error is not None else None),
+        )
+    except Exception:
+        return jsonify({"success": False, "error": "sync_failed"})
+    return jsonify({"success": True})
+
+
+@classroom_bp.route("/live-code/heartbeat", methods=["POST"])
+@require_learner
+def live_code_heartbeat(learner):
+    """Cheap presence ping only (no code payload) - fired on the same
+    interval as live_code_sync when there is nothing new to save, so
+    "Online" status does not go stale just because the learner stopped
+    typing."""
+    try:
+        db.touch_learner_heartbeat(learner["id"])
+    except Exception:
+        pass
+    return jsonify({"success": True})
 
 
 @classroom_bp.route("/cohorts/<int:cohort_id>/learners/<int:learner_id>", methods=["GET"])

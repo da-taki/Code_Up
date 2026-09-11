@@ -251,6 +251,11 @@ def test_blocked_ai_capability_never_reaches_groq(instructor_client, learner_cli
         lambda *a, **k: called.__setitem__("groq", True) or "should not run",
     )
     join_code, cohort_id = _make_cohort(instructor_client)
+    # This test is specifically about the assignment-level ai_policy="OFF"
+    # message - opt the class-wide toggle in first (defaults OFF for a new
+    # cohort, see codeup.classroom.ai_toggle) so that's the gate actually
+    # being exercised.
+    instructor_client.post(f"/classroom/cohorts/{cohort_id}/ai-toggle", json={"enabled": True})
     learner_client.post("/classroom/join-api", json={"join_code": join_code, "display_name": "Amir"})
     assignment_id = _publish_assignment(instructor_client, cohort_id, ai_policy="OFF")
     learner_client.get(f"/classroom/assignments/{assignment_id}/open")  # sets the assignment cookie
@@ -269,6 +274,10 @@ def test_allowed_ai_capability_reaches_the_ai_call(instructor_client, learner_cl
         lambda *a, **k: called.__setitem__("groq", True) or "A reply.",
     )
     join_code, cohort_id = _make_cohort(instructor_client)
+    # A new cohort's class-wide AI toggle defaults OFF (see
+    # codeup.classroom.ai_toggle) - opt in so the assignment-level "FULL"
+    # policy under test is actually reachable.
+    instructor_client.post(f"/classroom/cohorts/{cohort_id}/ai-toggle", json={"enabled": True})
     learner_client.post("/classroom/join-api", json={"join_code": join_code, "display_name": "Amir"})
     assignment_id = _publish_assignment(instructor_client, cohort_id, ai_policy="FULL")
     learner_client.get(f"/classroom/assignments/{assignment_id}/open")

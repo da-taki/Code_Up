@@ -168,7 +168,15 @@
       className: 'cu-panel cu-classroom-panel',
     });
     section.setAttribute('aria-labelledby', 'classroomPanelHeading');
-    main.insertBefore(section, main.firstChild);
+    // Vision-Aid build: the primary mental model for a new solo learner is
+    // lesson -> editor -> run -> output -> ask CodeUp, with Classroom as a
+    // secondary, opt-in step - so this mounts as the LAST child of <main>,
+    // after the editor/output/commands workflow, not the first thing a
+    // learner encounters. Once joined, the same disclosure (see
+    // renderDashboardPanel) carries the full cohort/assignment/project
+    // content in place - nothing about the classroom feature itself moves
+    // or is removed, only where this collapsed entry point sits on the page.
+    main.appendChild(section);
     return section;
   }
 
@@ -764,7 +772,27 @@
     });
   }
 
+  // Vision-Aid build: every joined learner's current code reaches their
+  // instructor's live-code view, independent of the assignment/project/
+  // module modes above (which the Vision-Aid UI no longer opens). This is a
+  // no-op 401 from /classroom/live-code/sync (silently swallowed) for an
+  // anonymous, non-cohort learner - the classroom layer must never affect
+  // the existing single-user IDE experience.
+  function syncLiveCode(code, extra) {
+    const body = Object.assign({ code: code }, extra || {});
+    postJsonWithRetry('/classroom/live-code/sync', body).catch(function () {});
+  }
+
+  // Cheap presence-only ping (no code payload) on the same ~30s cadence as
+  // app.js's local-draft-save interval - keeps a joined learner's
+  // instructor-visible status from going stale while they read rather than
+  // type (the real code sync is the 2s post-typing debounce above).
+  function onHeartbeat() {
+    postJsonWithRetry('/classroom/live-code/heartbeat', {}).catch(function () {});
+  }
+
   function onAutosave(code) {
+    syncLiveCode(code);
     if (mode === 'assignment') {
       postJsonWithRetry('/classroom/assignments/' + encodeURIComponent(id) + '/autosave', { code: code })
         .catch(function () { /* local autosave already has this covered */ });
@@ -779,6 +807,11 @@
   }
 
   function onRunResult(code, ranOk, errorText) {
+    syncLiveCode(code, {
+      ran: true,
+      output: (typeof window !== 'undefined' && window.lastRunOutput) ? String(window.lastRunOutput) : '',
+      error: errorText || '',
+    });
     if (mode === 'assignment') {
       postJsonWithRetry('/classroom/assignments/' + encodeURIComponent(id) + '/run-result', {
         code: code, ran_ok: !!ranOk, error: errorText || '',
@@ -832,11 +865,11 @@
   // in place by patchDashboardPanel() during background sync - anonymous
   // "Classroom", joined "Classroom · <cohort> · N pending"/"All caught up".
   function summaryLineText(data) {
-    if (!data || !data.joined) return 'Classroom';
+    if (!data || !data.joined) return 'Join a class';
+    // Vision-Aid build: no assignment-pending count - classroom's whole
+    // job here is a live connection status, not assignment bookkeeping.
     const cohortName = (data.cohort && data.cohort.name) || (data.learner && data.learner.display_name) || '';
-    const remaining = (data.assignment_counts && data.assignment_counts.remaining) || 0;
-    const countText = remaining ? (remaining + ' pending') : 'All caught up';
-    return 'Classroom · ' + cohortName + ' · ' + countText;
+    return 'Class: ' + cohortName + '. Connected.';
   }
 
   function fillContainer(container, nodes) {
@@ -920,6 +953,13 @@
     const status = el('p', { id: 'classroomJoinStatus' });
 
     const heading = el('h2', { id: 'classroomJoinHeading', textContent: 'Join a classroom' });
+    // Student visibility notice: brief and concrete, shown before the
+    // learner joins - not a separate consent screen or dialog to dismiss.
+    const visibilityNotice = el('p', {
+      id: 'classroomVisibilityNotice',
+      className: 'cu-command-tip',
+      textContent: 'While connected to this class, your instructor can view your current code and recent program output to help you during lessons.',
+    });
     const codeField = el('div', { className: 'cu-field' }, [
       el('label', { htmlFor: 'classroomJoinCode', textContent: 'Classroom code' }),
       el('input', { id: 'classroomJoinCode', type: 'text', autocomplete: 'off' }),
@@ -980,7 +1020,7 @@
     const actionsRow = el('div', { className: 'cu-classroom-join-actions' }, [joinBtn]);
 
     const body = el('div', { className: 'cu-disclosure-body' }, [
-      heading, codeField, nameField, actionsRow, status,
+      heading, visibilityNotice, codeField, nameField, actionsRow, status,
       el('p', { className: 'cu-command-tip', textContent: 'You can also type "join a classroom" in the command box.' }),
     ]);
     details.appendChild(body);
@@ -992,40 +1032,24 @@
     }
   }
 
+  // Vision-Aid build: a joined learner is not handed a classroom dashboard
+  // (no assignments, projects, or help queue in this UI) - just a small,
+  // persistent "Class: <name> / Connected" status. The learner keeps coding
+  // normally; their code already reaches the instructor's live view via
+  // syncLiveCode() above, no learner action required.
   function renderDashboardPanel(panel, data) {
     panel.innerHTML = '';
 
-    // Same single Classroom disclosure as the anonymous state, just with a
-    // status-bearing summary line and different body content - never a
-    // second, visually separate "classroom app" bolted onto the IDE.
     const details = el('details', { id: 'classroomDetails', className: 'cu-disclosure' });
     const summary = el('summary', { id: 'classroomPanelHeading', className: 'cu-disclosure-summary', textContent: summaryLineText(data) });
     details.appendChild(summary);
 
-    const body = el('div', { className: 'cu-disclosure-body' });
-
-    body.appendChild(el('p', { className: 'cu-classroom-leave' }, [el('a', { className: 'cu-button cu-button-secondary', href: '/classroom/leave/confirm', textContent: 'Leave this classroom' })]));
-
-    body.appendChild(el('h3', { id: 'classroomCourseHeading', textContent: 'Current learning' }));
-    body.appendChild(el('div', { id: 'classroomCourseBody' }, buildCourseBodyNodes(data)));
-
-    body.appendChild(el('h3', { id: 'classroomAssignmentsHeading', textContent: 'Assignments' }));
-    body.appendChild(el('div', { id: 'classroomAssignmentsBody' }, buildAssignmentsBodyNodes(data, false)));
-
-    body.appendChild(el('h3', { id: 'classroomProjectsHeading', textContent: 'Guided projects' }));
-    body.appendChild(el('div', { id: 'classroomProjectsBody' }, buildProjectsBodyNodes(data)));
-
-    const helpContainer = el('div', { id: 'classroomHelpContainer' });
-    appendHelpWidget(helpContainer, { headingId: 'classroomHelpHeading', currentHelpRequest: data.help_request });
-    body.appendChild(helpContainer);
-
+    // The summary line above already says "Class: <name>. Connected." -
+    // the body only adds what that line doesn't: a way to leave.
+    const body = el('div', { className: 'cu-disclosure-body' }, [
+      el('p', { className: 'cu-classroom-leave' }, [el('a', { className: 'cu-button cu-button-secondary', href: '/classroom/leave/confirm', textContent: 'Leave this classroom' })]),
+    ]);
     details.appendChild(body);
-    // Opening the disclosure is a natural moment to catch up on anything the
-    // last background poll missed - see requestClassroomSync() below. This
-    // never opens the disclosure itself, only reacts to the learner doing so.
-    details.addEventListener('toggle', function () {
-      if (details.open) requestClassroomSync({ immediate: true });
-    });
     panel.appendChild(details);
 
     if (!data.ide_orientation_shown) {
@@ -1036,42 +1060,11 @@
     }
   }
 
-  // Only the specific sub-section whose fingerprint changed gets rebuilt -
-  // patchDashboardPanel() never touches panel.innerHTML, so the outer
-  // <details>'s open state, keyboard focus, and any in-progress help-request
-  // text all survive a background sync untouched (see requestClassroomSync).
   function patchDashboardPanel(previous, data) {
     const summaryEl = document.getElementById('classroomPanelHeading');
     if (summaryEl) {
       const newLine = summaryLineText(data);
       if (summaryEl.textContent !== newLine) summaryEl.textContent = newLine;
-    }
-
-    if (moduleFingerprint(previous && previous.module) !== moduleFingerprint(data.module)) {
-      const courseBody = document.getElementById('classroomCourseBody');
-      if (courseBody) fillContainer(courseBody, buildCourseBodyNodes(data));
-    }
-
-    if (assignmentsFingerprint(previous && previous.assignments) !== assignmentsFingerprint(data.assignments)) {
-      const assignmentsBody = document.getElementById('classroomAssignmentsBody');
-      if (assignmentsBody) {
-        const existingDetails = assignmentsBody.querySelector('details');
-        const keepOpen = existingDetails ? existingDetails.open : false;
-        fillContainer(assignmentsBody, buildAssignmentsBodyNodes(data, keepOpen));
-      }
-    }
-
-    if (projectsFingerprint(previous && previous.projects) !== projectsFingerprint(data.projects)) {
-      const projectsBody = document.getElementById('classroomProjectsBody');
-      if (projectsBody) fillContainer(projectsBody, buildProjectsBodyNodes(data));
-    }
-
-    if (helpFingerprint(previous && previous.help_request) !== helpFingerprint(data.help_request)) {
-      const helpContainer = document.getElementById('classroomHelpContainer');
-      if (helpContainer) {
-        helpContainer.innerHTML = '';
-        appendHelpWidget(helpContainer, { headingId: 'classroomHelpHeading', currentHelpRequest: data.help_request });
-      }
     }
   }
 
@@ -1293,6 +1286,7 @@
     fetchContextAndRender();
     window._classroomOnAutosave = onAutosave;
     window._classroomOnRunResult = onRunResult;
+    window._classroomOnHeartbeat = onHeartbeat;
     if (mode === 'assignment') {
       window._classroomReviewFix = reviewAiFix;
     }

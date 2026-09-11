@@ -202,9 +202,11 @@ def test_shortcut_help_covers_the_core_shortcuts_from_the_ticket(client):
     modal = html[modal_start:modal_end]
     for expected in ("Run your code", "Focus the editor", "Leave the editor",
                       "Focus the command box", "Focus program output",
-                      "accessibility and speech settings", "CodeUp Voice control",
-                      "Audio Blocks"):
+                      "accessibility and speech settings", "CodeUp Voice control"):
         assert expected in modal, expected
+    # Vision-Aid build: Audio Blocks has no learner-facing entry point, so
+    # its shortcut documentation is removed from this modal too.
+    assert "Audio Blocks" not in modal
 
 
 # ---------------------------------------------------------------------------

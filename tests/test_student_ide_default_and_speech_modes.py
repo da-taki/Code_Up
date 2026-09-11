@@ -70,35 +70,25 @@ def test_ide_route_still_serves_the_editor_directly(client):
     assert 'id="mainContent"' in html
 
 
-# ---- secondary navigation: classroom/instructor/settings stay reachable -----
+# ---- classroom/instructor/settings routes stay reachable, just not linked --
 
-def test_ide_exposes_a_labelled_secondary_navigation(client):
+def test_ide_no_longer_exposes_a_secondary_navigation(client):
+    """Vision-Aid build: the "More CodeUp features" nav (Classroom,
+    Instructor tools, Accessible coding tools) is removed from the primary
+    IDE chrome - CodeUp is a zero-setup Python editor, not a feature
+    showcase. Accessibility help stays reachable from the settings
+    disclosure; Join class is its own small, separate control."""
     html = client.get("/ide").get_data(as_text=True)
-    nav_match = re.search(r'<nav\b[^>]*aria-label="More CodeUp features"[^>]*>.*?</nav>', html, re.DOTALL)
-    assert nav_match, "secondary navigation nav landmark not found"
-    nav_html = nav_match.group(0)
-    for href in ("/classroom", "/classroom/instructor", "/accessible-coding-tools", "/accessibility"):
-        assert f'href="{href}"' in nav_html, f"secondary nav missing link to {href}"
+    assert 'aria-label="More CodeUp features"' not in html
 
 
 def test_secondary_nav_link_targets_resolve_without_error(client):
-    # Each secondary-nav destination must be a real route that responds
-    # gracefully (redirect-to-join/login is fine) rather than 404/500.
+    # Each formerly-linked destination is still a real, working route -
+    # not linked from the primary IDE chrome anymore, but not deleted.
     for href in ("/classroom", "/classroom/instructor", "/accessible-coding-tools", "/accessibility"):
         resp = client.get(href)
         assert resp.status_code < 500
         assert resp.status_code != 404
-
-
-def test_secondary_nav_links_have_a_contrast_safe_color_rule():
-    """Regression: the secondary nav's <a> tags don't inherit the nav's own
-    inline color (anchors need their own explicit color rule, or the
-    browser's default link blue wins) - axe-core found this live at 2.09:1
-    contrast against the night-theme panel background, well under the
-    4.5:1 AA threshold for normal text."""
-    css = Path("static/style/core.css").read_text(encoding="utf-8")
-    assert ".cu-secondary-nav a" in css
-    assert "var(--text-dim)" in re.search(r"\.cu-secondary-nav a[^}]*\}", css).group(0)
 
 
 def test_night_theme_primary_buttons_have_readable_text_contrast():
@@ -112,12 +102,10 @@ def test_night_theme_primary_buttons_have_readable_text_contrast():
 
 
 def test_secondary_nav_is_not_counted_as_an_extra_named_region():
-    # A <nav> landmark is expected and fine; it must not add a 4th
-    # aria-labelledby "region" alongside the three deliberately-justified
-    # ones (see test_landmark_labels_are_unique_and_regions_are_limited).
-    assert 'aria-label="More CodeUp features"' in INDEX_HTML
-    nav_tag = re.search(r'<nav[^>]*aria-label="More CodeUp features"[^>]*>', INDEX_HTML).group(0)
-    assert "aria-labelledby" not in nav_tag
+    # Vision-Aid build: there is no "More CodeUp features" nav at all
+    # anymore (see test_ide_no_longer_exposes_a_secondary_navigation), so
+    # by construction it cannot add a 4th aria-labelledby region.
+    assert 'aria-label="More CodeUp features"' not in INDEX_HTML
 
 
 # ---- explicit speech modes ---------------------------------------------------
@@ -140,7 +128,7 @@ def test_skip_to_editor_actually_moves_keyboard_focus():
 
 # ---- axe-core findings (live browser scan against /ide) --------------------
 
-@pytest.mark.parametrize("element_id", ["editor", "structureContent", "snippetList", "projectFileList", "inputsPanelList"])
+@pytest.mark.parametrize("element_id", ["editor"])
 def test_labelled_generic_divs_have_a_supporting_role(element_id, client):
     """Regression: axe-core's aria-prohibited-attr rule flagged these divs
     live - aria-label/aria-labelledby "is not well supported on a div with

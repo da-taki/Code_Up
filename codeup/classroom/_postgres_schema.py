@@ -261,4 +261,20 @@ MIGRATIONS: List[Tuple[int, List[str]]] = [
             "CREATE INDEX idx_custom_project_checkpoints_project ON custom_project_checkpoints(project_id)",
         ],
     ),
+    (
+        2,
+        [
+            # Vision-Aid build: cohort/learner-level AI toggle and live-code-
+            # view state (see codeup.classroom.ai_toggle). Cohorts default
+            # OFF (an instructor opts in); learners default ON.
+            "ALTER TABLE cohorts ADD COLUMN ai_enabled INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE learners ADD COLUMN ai_enabled INTEGER NOT NULL DEFAULT 1",
+            "ALTER TABLE learners ADD COLUMN current_code TEXT",
+            "ALTER TABLE learners ADD COLUMN code_updated_at TEXT",
+            "ALTER TABLE learners ADD COLUMN last_run_at TEXT",
+            "ALTER TABLE learners ADD COLUMN last_output TEXT",
+            "ALTER TABLE learners ADD COLUMN last_error TEXT",
+            "ALTER TABLE learners ADD COLUMN heartbeat_at TEXT",
+        ],
+    ),
 ]

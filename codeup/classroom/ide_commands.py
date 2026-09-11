@@ -150,7 +150,11 @@ def handle_pending_join(raw_text: str, pending: Optional[Dict[str, Any]], ctx: D
             return None, None  # doesn't look like a code - abandon, let it fall through
         name = str(ctx.get("join_name") or "").strip() or remembered_name
         if not name:
-            return (_msg("What name should I use?", focus_hint="classroomJoinName", join_code_hint=code),
+            return (_msg(
+                        "What name should I use? While connected to this class, your instructor "
+                        "can view your current code and recent program output to help you during lessons.",
+                        focus_hint="classroomJoinName", join_code_hint=code,
+                    ),
                     {"state": "waiting_for_name", "code": code})
         return _resolve_join_attempt(code, name)
 
@@ -380,7 +384,10 @@ def handle(intent: str, slots: Dict[str, Any], ctx: Dict[str, Any]) -> Optional[
             return _msg("You're already in a classroom. Say leave this class if you want to switch.")
         name = str(ctx.get("join_name") or "").strip()
         if not name:
-            return _msg("What name should I use?", focus_hint="classroomJoinName",
+            return _msg(
+                        "What name should I use? While connected to this class, your instructor "
+                        "can view your current code and recent program output to help you during lessons.",
+                        focus_hint="classroomJoinName",
                         join_code_hint=slots["code"],
                         _join_pending={"state": "waiting_for_name", "code": slots["code"]})
         response, pending = _resolve_join_attempt(slots["code"], name)

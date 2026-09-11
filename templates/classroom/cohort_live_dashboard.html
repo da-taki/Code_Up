@@ -1,0 +1,71 @@
+{% extends "classroom/_base.html" %}
+{% block title %}{{ cohort.name }} - CodeUp Classroom{% endblock %}
+{% block header_title %}{{ cohort.name }}{% endblock %}
+{% block header_nav %}
+  <nav aria-label="Cohort actions">
+    <a class="cu-button cu-button-secondary" href="{{ url_for('classroom.instructor_dashboard') }}">All classes</a>
+  </nav>
+{% endblock %}
+{% block content %}
+  <p class="cu-crumb"><a href="{{ url_for('classroom.instructor_dashboard') }}">Instructor dashboard</a></p>
+
+  <section class="cu-panel" aria-labelledby="cohortInfoHeading">
+    <h2 id="cohortInfoHeading">Class details</h2>
+    <p>Join code: <span class="cu-join-code">{{ cohort.join_code }}</span> - give this to learners so they can join.</p>
+    <p id="liveCountStatus" role="status" aria-live="polite">{{ online_count }} of {{ total_count }} students online.</p>
+
+    <form method="post" action="{{ url_for('classroom.set_cohort_ai_toggle', cohort_id=cohort.id) }}" id="classAiForm">
+      <div class="cu-field">
+        <label for="classAiToggle">AI assistance for class</label>
+        <select id="classAiToggle" name="enabled">
+          <option value="true" {% if cohort.ai_enabled %}selected{% endif %}>ON</option>
+          <option value="false" {% if not cohort.ai_enabled %}selected{% endif %}>OFF</option>
+        </select>
+        <button type="submit" class="cu-button cu-button-secondary">Save</button>
+      </div>
+    </form>
+    {% if not cohort.ai_enabled %}
+      <p class="cu-command-tip">AI is OFF for everyone in this class, regardless of any individual student setting below.</p>
+    {% endif %}
+  </section>
+
+  <section class="cu-panel" aria-labelledby="studentsHeading">
+    <h2 id="studentsHeading">Students ({{ total_count }})</h2>
+    <div class="cu-table-wrap">
+    {% if learners %}
+    <table class="cu-table" id="liveStudentsTable">
+      <caption class="sr-only">Students in this class, their current status, and AI setting</caption>
+      <thead>
+        <tr>
+          <th scope="col">Student</th>
+          <th scope="col">Status</th>
+          <th scope="col">AI</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in learners %}
+        <tr data-learner-id="{{ row.id }}">
+          <td><a href="{{ row.live_code_url }}">{{ row.display_name }}</a></td>
+          <td><span class="cu-badge">{{ row.status }}</span></td>
+          <td>
+            <form method="post" action="{{ url_for('classroom.set_learner_ai_toggle', cohort_id=cohort.id, learner_id=row.id) }}" class="cu-inline-form">
+              <label class="sr-only" for="aiToggle{{ row.id }}">AI assistance for {{ row.display_name }}</label>
+              <select id="aiToggle{{ row.id }}" name="enabled" {% if not cohort.ai_enabled %}disabled{% endif %}>
+                <option value="true" {% if row.ai_enabled %}selected{% endif %}>ON</option>
+                <option value="false" {% if not row.ai_enabled %}selected{% endif %}>OFF</option>
+              </select>
+              <button type="submit" class="cu-button cu-button-secondary" {% if not cohort.ai_enabled %}disabled{% endif %}>Save</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+      <p>No students have joined this class yet. Share the join code above.</p>
+    {% endif %}
+    </div>
+  </section>
+
+  <p class="cu-crumb"><a href="{{ url_for('classroom.cohort_dashboard', cohort_id=cohort.id) }}">Classic dashboard (assignments, guided projects, help queue, reports)</a></p>
+{% endblock %}

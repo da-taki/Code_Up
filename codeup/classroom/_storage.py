@@ -119,6 +119,10 @@ CREATE TABLE IF NOT EXISTS cohorts (
     name TEXT NOT NULL,
     join_code TEXT UNIQUE NOT NULL,
     status TEXT NOT NULL DEFAULT 'active',
+    -- Vision-Aid build: OFF by default for a newly created cohort - an
+    -- instructor explicitly opts in, rather than AI quietly being on from
+    -- the start (see codeup.classroom.ai_toggle).
+    ai_enabled INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -129,7 +133,14 @@ CREATE TABLE IF NOT EXISTS learners (
     display_name TEXT NOT NULL,
     token TEXT UNIQUE NOT NULL,
     joined_at TEXT NOT NULL,
-    last_active_at TEXT
+    last_active_at TEXT,
+    ai_enabled INTEGER NOT NULL DEFAULT 1,
+    current_code TEXT,
+    code_updated_at TEXT,
+    last_run_at TEXT,
+    last_output TEXT,
+    last_error TEXT,
+    heartbeat_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS assignments (
@@ -322,6 +333,18 @@ _SQLITE_MIGRATIONS = (
     "ALTER TABLE assignments ADD COLUMN locked INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE help_requests ADD COLUMN note TEXT",
     "ALTER TABLE assignments ADD COLUMN published_at TEXT",
+    # Vision-Aid build: cohort/learner-level AI toggle and live-code-view
+    # state (see codeup.classroom.ai_toggle). Cohorts default OFF (an
+    # instructor opts in); individual learners default ON so that once a
+    # class opts in, every student has it unless singled out.
+    "ALTER TABLE cohorts ADD COLUMN ai_enabled INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE learners ADD COLUMN ai_enabled INTEGER NOT NULL DEFAULT 1",
+    "ALTER TABLE learners ADD COLUMN current_code TEXT",
+    "ALTER TABLE learners ADD COLUMN code_updated_at TEXT",
+    "ALTER TABLE learners ADD COLUMN last_run_at TEXT",
+    "ALTER TABLE learners ADD COLUMN last_output TEXT",
+    "ALTER TABLE learners ADD COLUMN last_error TEXT",
+    "ALTER TABLE learners ADD COLUMN heartbeat_at TEXT",
 )
 
 

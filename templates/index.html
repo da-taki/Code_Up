@@ -99,38 +99,25 @@
         <option value="">Default browser voice</option>
       </select>
       <button id="testVoiceBtn" class="cu-button cu-button-secondary" type="button" aria-label="Test selected browser voice">Test Voice</button>
+      <h3 class="cu-settings-subheading">Help</h3>
+      <button type="button" id="guideBtn" class="cu-button cu-button-secondary" aria-label="Open the CodeUp getting started guide" aria-haspopup="dialog">Getting started guide</button>
+      <button type="button" id="shortcutHelpBtn" class="cu-button cu-button-secondary" aria-label="Open the keyboard shortcuts reference" aria-haspopup="dialog">Keyboard shortcuts</button>
       <a href="/accessibility">Accessibility help</a>
         </div>
       </details>
     </div>
     <div class="cu-subtitle">
-      Python editor with voice, screen-reader, debugging, and tutorial tools. Press <span class="cu-hotkey">Ctrl+Enter</span> to run.
+      A zero-setup accessible Python editor. Press <span class="cu-hotkey">Ctrl+Enter</span> to run.
     </div>
-    <nav class="cu-secondary-nav" aria-label="More CodeUp features"
-         style="font-size:0.9rem;color:var(--text-dim);display:flex;gap:14px;flex-wrap:wrap;margin-top:4px;align-items:center;">
-      <button type="button" id="guideBtn" class="cu-button cu-button-secondary" style="padding:4px 10px;" aria-label="Open the CodeUp getting started guide" aria-haspopup="dialog">Getting started guide</button>
-      <button type="button" id="shortcutHelpBtn" class="cu-button cu-button-secondary" style="padding:4px 10px;" aria-label="Open the keyboard shortcuts reference" aria-haspopup="dialog">Keyboard shortcuts</button>
-      <a href="/classroom">Classroom</a>
-      <a href="/classroom/instructor">Instructor tools</a>
-      <a href="/accessible-coding-tools">Accessible coding tools</a>
-      <a href="/accessibility">Accessibility help</a>
-    </nav>
   </header>
 
   <main id="mainContent" class="cu-main-shell" aria-labelledby="pageTitle">
   <div id="cuStartBanner"
        style="background:var(--accent-soft, rgba(0,0,0,0.04));border-bottom:1px solid var(--border-soft);color:var(--text-main);padding:10px 16px;font-size:0.9rem;line-height:1.5;display:flex;gap:12px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;">
     <div style="flex:1;min-width:260px;">
-      <p style="margin:0 0 4px;">
-        <strong>New here?</strong> Type or say <strong>"what can I do here"</strong> or <strong>"start tutorial."</strong>
-        CodeUp works best on Google Chrome. Some browsers, especially Brave or privacy-heavy browsers, may block microphone or speech features. If voice does not work, use Chrome or type a command in the command box.
+      <p style="margin:0;">
+        <strong>New to CodeUp?</strong> Type some Python below and press <strong>Ctrl+Enter</strong> to run it. Ask CodeUp if you need help. <a href="#" id="cuStartTutorialLink">Start tutorial</a>
       </p>
-      <details style="margin-top:2px;">
-        <summary style="cursor:pointer;color:var(--text-dim);">More about CodeUp</summary>
-        <p style="margin:6px 0 0;color:var(--text-dim);">
-          CodeUp is a voice-first place to learn Python basics, in English. It works <em>alongside</em> your screen reader and headphones. It does not replace NVDA, JAWS, Braille, or VS&nbsp;Code. Put on headphones or turn on your speaker, and allow the microphone if you want to talk. If voice does not work, just type the command in the box and press Enter.
-        </p>
-      </details>
     </div>
     <button id="cuStartBannerDismiss" class="cu-button cu-button-secondary"
             style="padding:4px 10px;white-space:nowrap;" aria-label="Dismiss getting-started banner">Dismiss</button>
@@ -138,84 +125,8 @@
 
   <div class="cu-main">
 
-    <aside class="cu-panel cu-snippets" aria-labelledby="learningToolsHeading">
-      <h2 id="learningToolsHeading" class="cu-section-heading">Learning tools</h2>
-      <details class="cu-disclosure">
-        <summary class="cu-disclosure-summary">Snippets</summary>
-        <div class="cu-disclosure-body">
-          <h3 class="sr-only">Snippets</h3>
-          <div class="cu-snippet-save" style="display:flex;gap:6px;margin-bottom:10px;">
-            <input
-              id="snippetNameInput"
-              type="text"
-              placeholder="Snippet name..."
-              aria-label="Snippet name"
-              style="flex:1;padding:7px 10px;border-radius:var(--radius-sm);border:1px solid var(--border-soft);background:var(--bg-soft);color:var(--text-main);font-family:inherit;font-size:0.9rem;"
-            />
-            <button
-              id="snippetSaveBtn"
-              class="cu-button cu-button-secondary"
-              aria-label="Save snippet with this name"
-              style="padding:6px 10px;"
-            >Save</button>
-          </div>
-          <div id="snippetList" class="cu-snippet-list" role="group" aria-label="Saved snippets" style="max-height:180px;"></div>
-        </div>
-      </details>
-
-      <details class="cu-disclosure">
-        <summary class="cu-disclosure-summary">Project files</summary>
-        <div class="cu-disclosure-body">
-          <h3 class="sr-only">Project files</h3>
-          <div id="projectFileList" class="cu-snippet-list" role="group" aria-label="Project files" style="max-height:180px;">
-            <div style="color:var(--text-dim);font-style:italic;padding:6px 0;font-size:0.875rem;">Single-file mode</div>
-          </div>
-        </div>
-      </details>
-
-      <details class="cu-disclosure">
-        <summary class="cu-disclosure-summary">Program inputs</summary>
-        <div class="cu-disclosure-body">
-          <h3 class="sr-only">Pre-flight program inputs</h3>
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-            <span style="font-size:0.72rem;letter-spacing:0.08em;color:var(--text-dim);font-weight:700;">INPUT MODE</span>
-            <span id="inputModeIndicator"
-                  style="font-size:0.65rem;padding:2px 6px;border-radius:4px;background:var(--accent-soft);color:var(--accent);border:1px solid var(--accent);"
-                  title="Pre-flight input mode">PRE-FLIGHT</span>
-          </div>
-          <div style="display:flex;gap:6px;margin-bottom:8px;">
-            <input
-              id="inputAddField"
-              type="text"
-              placeholder="Add an input value..."
-              aria-label="Add a pre-flight input value"
-              style="flex:1;padding:7px 10px;border-radius:var(--radius-sm);border:1px solid var(--border-soft);background:var(--bg-soft);color:var(--text-main);font-family:inherit;font-size:0.9rem;"
-            />
-            <button
-              id="inputAddBtn"
-              class="cu-button cu-button-secondary"
-              aria-label="Add this input value"
-              style="padding:6px 10px;"
-            >+</button>
-          </div>
-          <div id="inputsPanelList" role="group" aria-label="Pre-flight inputs">
-            <div style="color:var(--text-dim);font-style:italic;padding:6px 0;font-size:0.875rem;">No inputs declared</div>
-          </div>
-          <div style="display:flex;gap:6px;margin-top:8px;">
-            <button id="clearInputsBtn" class="cu-button" style="flex:1;padding:6px 8px;" aria-label="Clear all pre-flight inputs">Clear</button>
-            <button id="toggleInputModeBtn" class="cu-button" style="flex:1;padding:6px 8px;" aria-label="Toggle between pre-flight and live input mode">Live</button>
-          </div>
-        </div>
-      </details>
-    </aside>
-
     <section class="cu-panel cu-editor-wrapper" aria-labelledby="codeEditorHeading">
       <h2 id="codeEditorHeading" class="cu-section-heading">Code editor</h2>
-
-      <div class="cu-mode-switch" role="group" aria-label="Programming mode">
-        <button class="cu-button" id="codeModeBtn" aria-label="Switch to Code Mode" aria-pressed="true">Code Mode</button>
-        <button class="cu-button" id="audioBlocksModeBtn" aria-label="Open Audio Blocks Mode" aria-pressed="false">Audio Blocks Mode</button>
-      </div>
 
       <div class="cu-editor-region" id="codeModeRegion">
         <p id="editorHelp" class="cu-editor-help">Tab moves focus out of the editor. Use Control right bracket to indent a line and Control left bracket to outdent it. Press Escape when speech is quiet, or press Control+M, to leave the editor and continue to CodeUp controls.</p>
@@ -227,74 +138,15 @@
         </div>
       </div>
 
-      <div id="audioBlocksPanel" class="audio-blocks-panel" hidden>
-        <h3 id="audioBlocksHeading">Audio Blocks Mode</h3>
-        <p id="audioBlocksStatus" role="status" aria-live="polite">The block workspace is empty.</p>
-        <div class="audio-blocks-palette">
-          <h3>Block palette</h3>
-          <button class="cu-button" data-block-command="list block categories" aria-label="List block categories">Categories</button>
-          <button class="cu-button" data-block-command="add print block" data-category="output" aria-label="Add print text block">Add print</button>
-          <button class="cu-button" data-block-command="add variable total equals 0" data-category="variables" aria-label="Add variable total equals zero">Add variable</button>
-          <button class="cu-button" data-block-command="add repeat 3 times block" data-category="loops" aria-label="Add repeat three times block">Add repeat</button>
-        </div>
-        <div class="audio-blocks-workspace" tabindex="0" aria-describedby="audioBlocksKeyboardHelp">
-          <h3>Numbered block workspace</h3>
-          <p id="audioBlocksKeyboardHelp">Arrow keys read blocks. Control plus arrows move blocks. Left bracket outdents, right bracket indents, Delete removes, Control Enter compiles, and Control Shift Enter runs.</p>
-          <ol id="audioBlocksList" role="list" aria-label="Numbered blocks"></ol>
-          <p id="audioBlocksEmptyState" class="audio-blocks-empty">No blocks yet. Say <strong>add print block</strong> or <strong>list block categories</strong> to add your first block.</p>
-        </div>
-        <div class="audio-blocks-controls" role="toolbar" aria-label="Audio Blocks controls">
-          <button class="cu-button" data-block-command="previous block" aria-label="Read previous block">Previous</button>
-          <button class="cu-button" data-block-command="next block" aria-label="Read next block">Next</button>
-          <button class="cu-button cu-button-primary" data-block-command="compile blocks to Python" aria-label="Compile blocks to Python" data-tooltip="Turn your blocks into Python code, without running it">Compile</button>
-          <button class="cu-button cu-button-primary" data-block-command="run blocks" aria-label="Compile and run blocks" data-tooltip="Compile your blocks to Python, then run them">Run blocks</button>
-          <details class="cu-disclosure cu-block-actions">
-            <summary class="cu-disclosure-summary" aria-label="Block actions" data-tooltip="Move, indent, outdent, or delete the current block">Block actions</summary>
-            <div class="audio-blocks-actions-row">
-              <button class="cu-button" id="audioBlockMoveUpBtn" aria-label="Move current block up">Move up</button>
-              <button class="cu-button" id="audioBlockMoveDownBtn" aria-label="Move current block down">Move down</button>
-              <button class="cu-button" id="audioBlockIndentBtn" aria-label="Indent current block">Indent</button>
-              <button class="cu-button" id="audioBlockOutdentBtn" aria-label="Outdent current block">Outdent</button>
-              <button class="cu-button" id="audioBlockDeleteBtn" aria-label="Delete current block">Delete</button>
-            </div>
-          </details>
-        </div>
-        <div class="audio-blocks-preview">
-          <h3>Generated Python preview</h3>
-          <pre id="audioBlocksCodePreview" tabindex="0">No generated code yet.</pre>
-        </div>
-      </div>
-
       <div class="cu-command-bar" role="toolbar" aria-label="Editor actions">
         <button class="cu-button cu-button-primary" id="runBtn" aria-label="Run Python code (Ctrl+Enter)" data-tooltip="Run your code. Shortcut: Ctrl+Enter">Run</button>
         <button class="cu-button cu-button-voice" id="voiceButton" aria-label="Toggle voice control (Ctrl+Shift+M)" data-tooltip="Toggle CodeUp Voice. Shortcut: Ctrl+Shift+M" aria-pressed="false">
           Voice (Off)
         </button>
         <span id="voiceStateIndicator" class="voice-state-indicator" aria-live="polite" aria-atomic="true"></span>
-        <details class="cu-disclosure cu-tools-disclosure">
-          <summary class="cu-disclosure-summary">More tools</summary>
-          <div class="cu-tools-row">
-            <button class="cu-button" id="analyzeBtn" aria-label="Analyze code with AI" data-tooltip="Hear an explanation of what your code does.">Analyze</button>
-            <button class="cu-button" id="fixBtn" aria-label="Fix code automatically" data-tooltip="Let CodeUp try to automatically fix errors.">Fix</button>
-            <button class="cu-button" id="codeMapBtn" aria-label="Audio code map - hear program structure" data-tooltip="Hear the shape of your program: functions, loops, and classes.">Code Map</button>
-            <button class="cu-button" id="stepNarrationBtn" aria-label="Run with step narration" data-tooltip="Run your code one line at a time, explained aloud.">Step Narration</button>
-            <button class="cu-button" id="mistakeReplayBtn" aria-label="Compare before and after mistake" data-tooltip="Hear what changed since your last run.">Mistake Replay</button>
-            <button class="cu-button cu-button-secondary" id="saveBtn" aria-label="Save current code as snippet">Save</button>
-            <select id="languageSelector" class="cu-language-selector" aria-label="Response language: English" disabled title="CodeUp is English-only for now">
-              <option value="en">English</option>
-            </select>
-          </div>
-        </details>
       </div>
 
     </section>
-
-    <aside class="cu-panel cu-structure" id="structurePanel" hidden aria-labelledby="structure-heading">
-      <h2 class="cu-panel-title" id="structure-heading">Code structure navigator</h2>
-      <div id="structureContent" class="cu-structure-content" role="group" aria-labelledby="structure-heading">
-        <p class="structure-info">Parse code to show structure...</p>
-      </div>
-    </aside>
 
   </div>
 
@@ -302,10 +154,6 @@
     <section class="cu-output-section" aria-labelledby="programOutputHeading">
       <h2 id="programOutputHeading" class="cu-section-heading">Program output</h2>
       <div id="output" class="cu-output" role="log" aria-live="polite" aria-label="Program output" tabindex="0"></div>
-      <div class="cu-output-actions" role="group" aria-label="Program output speech controls">
-        <button class="cu-button cu-button-secondary" id="readOutputAgainBtn" type="button" aria-label="Read output again">Read output again</button>
-        <button class="cu-button cu-button-secondary" id="stopSpeechBtn" type="button" aria-label="Stop speech">Stop speech</button>
-      </div>
 
       <div id="aiBubble" class="ai-bubble" hidden role="status" aria-live="polite">
         Idle.
@@ -329,46 +177,19 @@
       <button class="cu-button cu-button-secondary" id="programInputCancelBtn" type="button" disabled aria-label="Cancel program input">Cancel input</button>
     </div>
 
-    <div class="mentor-transcript-panel">
-      <h2 class="cu-panel-title" id="mentor-transcript-heading">Mentor transcript</h2>
-      <div
-        id="mentorTranscript"
-        class="mentor-transcript"
-        role="log"
-        aria-live="polite"
-        aria-label="Conversation with CodeUp Mentor"
-        tabindex="0"
-      >
-        <p class="mentor-transcript-empty">Mentor transcript will appear here.</p>
-      </div>
-    </div>
-
     <section class="cu-voice-console" aria-labelledby="command-input-label">
-      <h2 class="cu-panel-title" id="command-input-label">Commands</h2>
+      <h2 class="cu-panel-title" id="command-input-label">Ask CodeUp</h2>
       <input
         id="voiceText"
         class="cu-voice-input"
         type="text"
-        placeholder="Voice & typed commands appear here..."
-        aria-label="Command input"
+        placeholder="Ask about your code or an error..."
+        aria-label="Ask CodeUp"
         aria-labelledby="command-input-label"
         aria-describedby="commandPrecisionTip"
       />
-      <button class="cu-button cu-button-secondary" id="sendCommandBtn" aria-label="Send command">Send</button>
-      <p id="commandPrecisionTip" class="cu-command-tip">Tip: Type or speak commands. For exact symbols, patterns, quotes, or long prompts, typing is more reliable.</p>
-      <p id="cuFirstUseHint" class="cu-command-tip" style="color:var(--text-dim);">New here? Type or say "what can I do here" or "start tutorial." Voice works best on Chrome; if it does not work, just type commands here and press Enter.</p>
-      <div
-        id="commandUnderstanding"
-        class="cu-command-understanding"
-        role="status"
-        aria-live="polite"
-        aria-atomic="false"
-        aria-label="Command understanding"
-      >
-        <div><span class="cu-command-understanding-label">Heard:</span> <span id="heardTranscript">Nothing heard yet.</span></div>
-        <div><span class="cu-command-understanding-label">Understood:</span> <span id="understoodCommand">Waiting for a command.</span></div>
-        <div><span class="cu-command-understanding-label">Next action:</span> <span id="nextCommandAction">None yet.</span></div>
-      </div>
+      <button class="cu-button cu-button-secondary" id="sendCommandBtn" aria-label="Send">Send</button>
+      <p id="commandPrecisionTip" class="cu-command-tip">Tip: type or speak. For exact symbols or long prompts, typing is more reliable.</p>
 
       <div id="liveAssistantPanel" class="cu-live-assistant" hidden>
         <p id="liveAssistantStatus" class="cu-live-assistant-status" role="status" aria-live="polite" aria-atomic="true">Live Assistant: off</p>
@@ -386,65 +207,19 @@
         <summary class="cu-disclosure-summary">Show commands &amp; help</summary>
         <section class="cu-help-content" aria-labelledby="cuHelpPanelHeading">
           <h3 id="cuHelpPanelHeading" class="sr-only">Commands and help</h3>
-          <p class="cu-help-intro">Everything works by voice or by typing a command here. You do not need buttons. Say or type any command below, or say <strong>&quot;what can I do here&quot;</strong>.</p>
-          <div class="cu-help-grid">
-            <div class="cu-help-group">
-              <h3>Start</h3>
-              <ul><li>what can I do here</li><li>start tutorial</li><li>start learning path</li></ul>
-            </div>
-            <div class="cu-help-group">
-              <h3>Run</h3>
-              <ul><li>run</li><li>read last output</li><li>read last error</li></ul>
-            </div>
-            <div class="cu-help-group">
-              <h3>Debug</h3>
-              <ul><li>read errors only</li><li>preflight check</li><li>run with step narration</li></ul>
-            </div>
-            <div class="cu-help-group">
-              <h3>Navigate</h3>
-              <ul><li>where is my cursor</li><li>read around me</li><li>give me a code map</li></ul>
-            </div>
-            <div class="cu-help-group">
-              <h3>Edit</h3>
-              <ul><li>insert print hello world</li><li>comment this line</li><li>rename total to score</li></ul>
-            </div>
-            <div class="cu-help-group">
-              <h3>Learn</h3>
-              <ul><li>next lesson</li><li>give lesson hint</li><li>start error practice</li></ul>
-            </div>
-            <div class="cu-help-group">
-              <h3>Audio Blocks</h3>
-              <ul><li>open audio blocks (voice only)</li><li>add print block</li><li>list block categories</li></ul>
-            </div>
-            <div class="cu-help-group">
-              <h3>Accessibility</h3>
-              <ul><li>enable screen reader mode</li><li>show keyboard shortcuts</li><li>set screen reader to NVDA</li></ul>
-            </div>
-            <div class="cu-help-group">
-              <h3>Project</h3>
-              <ul><li>show requirements</li><li>check missing files</li><li>show code stats</li></ul>
-            </div>
-            <div class="cu-help-group">
-              <h3>Export</h3>
-              <ul><li>export project</li><li>export blocks and python</li><li>generate teacher report</li></ul>
-            </div>
-            <div class="cu-help-group">
-              <h3>Understand my code</h3>
-              <ul><li>overview</li><li>mental map</li><li>describe program flow</li></ul>
-            </div>
-            <div class="cu-help-group">
-              <h3>Understand what happened</h3>
-              <ul><li>what just happened</li><li>why did that happen</li><li>what changed</li></ul>
-            </div>
-            <div class="cu-help-group">
-              <h3>Read code exactly</h3>
-              <ul><li>read exact line</li><li>spell current token</li><li>read punctuation</li></ul>
-            </div>
-            <div class="cu-help-group">
-              <h3>Resume my context</h3>
-              <ul><li>where was I</li><li>back to code</li><li>back to output</li></ul>
-            </div>
-          </div>
+          <p class="cu-help-intro">Ask CodeUp anything, by voice or by typing. For example:</p>
+          <ul class="cu-help-examples">
+            <li>what can I do here</li>
+            <li>run</li>
+            <li>explain this code</li>
+            <li>why did I get this error?</li>
+            <li>where am I?</li>
+            <li>why is this line indented?</li>
+            <li>give me a hint</li>
+            <li>read my output</li>
+            <li>start tutorial</li>
+            <li>show keyboard shortcuts</li>
+          </ul>
         </section>
       </details>
     </section>
@@ -544,7 +319,6 @@
         <li><span class="cu-hotkey">Alt+Shift+O</span> — Open accessibility and speech settings</li>
         <li><span class="cu-hotkey">Alt+Shift+K</span> — Open this shortcut list</li>
         <li><span class="cu-hotkey">Ctrl+Shift+P</span> — Command palette</li>
-        <li>In Audio Blocks: <span class="cu-hotkey">Ctrl+Enter</span> compile, <span class="cu-hotkey">Ctrl+Shift+Enter</span> run, arrow keys move between blocks, <span class="cu-hotkey">[</span> / <span class="cu-hotkey">]</span> outdent / indent</li>
       </ul>
       <div class="modal-buttons">
         <button class="cu-button cu-button-primary" id="shortcutHelpCloseBtn" type="button">Close</button>
@@ -560,13 +334,13 @@
         <li>Type Python code in the editor. Tab moves focus out, so use Ctrl+] / Ctrl+[ to indent and outdent.</li>
         <li>Press <strong>Ctrl+Enter</strong>, or the Run button, to run your code.</li>
         <li>Use the <strong>Jump to output</strong> skip link to inspect the program output.</li>
-        <li>Use the <strong>Jump to command input</strong> skip link, or the Commands box, to type or say a command.</li>
-        <li>Say or type "read last error" to hear and explore any error in detail.</li>
+        <li>Use the <strong>Jump to command input</strong> skip link, or the Ask CodeUp box, to type or say a question.</li>
+        <li>Say or type "why did I get this error" to hear and explore any error in detail.</li>
         <li>In Screen Reader Safe mode, CodeUp stays quiet and lets NVDA, JAWS, VoiceOver, or Narrator read everything.</li>
         <li>Switch to CodeUp Voice in the display and accessibility settings if you want CodeUp to narrate automatically.</li>
         <li>Press Alt+Shift+K any time for the full keyboard shortcut list.</li>
         <li>Press Escape (or Ctrl+M) to leave the editor when you are done typing.</li>
-        <li>Use the Classroom and Instructor tools links at the top of the page for classroom features.</li>
+        <li>Say or type "join a classroom" if your instructor gave you a class code.</li>
       </ol>
       <div class="modal-buttons">
         <button class="cu-button cu-button-primary" id="guideCloseBtn" type="button">Close</button>
@@ -597,6 +371,28 @@
       <button id="tutorialStopBtn" class="cu-button cu-button-secondary" aria-label="Stop the tutorial and start coding">Stop &amp; code</button>
     </div>
     <p class="cu-tutorial-help">Say or type the insert command I give you, then say <strong>run code</strong>. Other commands: repeat, hint, read my code, give me an example, continue, practise again, recap, or exit tutorial.</p>
+  </aside>
+
+  <!-- Vision-Aid build: the minimal 5-step "find the editor, run print(Hello),
+       read the output, know Ask CodeUp exists" quick start - what "Start
+       tutorial" actually opens now. The Python-concepts tutorial above
+       (#tutorialOverlay) stays in the page, dormant, reachable only
+       internally - see static/onboarding.js. -->
+  <aside id="onboardingOverlay" hidden
+       aria-labelledby="onboardingTopic"
+       class="cu-tutorial-panel">
+    <div class="cu-tutorial-head">
+      <span id="onboardingTopic" class="cu-tutorial-topic">Quick start</span>
+      <span id="onboardingProgress" class="cu-tutorial-progress" aria-live="polite" aria-atomic="true"></span>
+      <button id="onboardingExitBtn" class="cu-tutorial-exit" aria-label="Exit quick start">Exit</button>
+    </div>
+    <p id="onboardingStatus" class="cu-tutorial-status" role="status" aria-live="polite" aria-atomic="true"></p>
+    <p id="onboardingText" class="cu-tutorial-text"></p>
+    <div id="onboardingControls" class="cu-tutorial-controls" role="group" aria-label="Quick start controls">
+      <button id="onboardingNextBtn" class="cu-button cu-button-primary" aria-label="Continue">Continue</button>
+      <button id="onboardingExampleBtn" class="cu-button" aria-label="Fill in the example for me" hidden>Fill it in for me</button>
+    </div>
+    <p class="cu-tutorial-help">Say or type continue, fill it in for me, repeat, or exit tutorial.</p>
   </aside>
 
   <script>
@@ -788,73 +584,12 @@
       });
 
       document.getElementById('runBtn').addEventListener('click', function () { if (typeof runCode === 'function') runCode(); });
-      document.getElementById('analyzeBtn').addEventListener('click', function () { if (typeof analyzeCode === 'function') analyzeCode(); });
-      document.getElementById('fixBtn').addEventListener('click', function () { if (typeof fixCode === 'function') fixCode(); });
-      document.getElementById('codeMapBtn').addEventListener('click', function () { if (typeof requestCodeMap === 'function') requestCodeMap(); });
-      document.getElementById('stepNarrationBtn').addEventListener('click', function () { if (typeof requestStepNarration === 'function') requestStepNarration(); });
-      document.getElementById('mistakeReplayBtn').addEventListener('click', function () { if (typeof requestMistakeReplay === 'function') requestMistakeReplay(); });
-      document.getElementById('saveBtn').addEventListener('click', function () { if (typeof saveSnippetAccessible === 'function') saveSnippetAccessible(); });
-      document.getElementById('snippetSaveBtn').addEventListener('click', function () { if (typeof saveSnippetAccessible === 'function') saveSnippetAccessible(); });
-      document.getElementById('snippetNameInput').addEventListener('keydown', function (e) {
-        if (e.key === 'Enter') { e.preventDefault(); if (typeof saveSnippetAccessible === 'function') saveSnippetAccessible(); }
-      });
-
-      var inputAddField = document.getElementById('inputAddField');
-      var inputAddBtn   = document.getElementById('inputAddBtn');
-      var clearInputsBtn = document.getElementById('clearInputsBtn');
-      var toggleInputModeBtn = document.getElementById('toggleInputModeBtn');
-
-      function _addInputFromField() {
-        if (!inputAddField) return;
-        var v = inputAddField.value.trim();
-        if (!v) return;
-        if (typeof setPreflightInputs === 'function') {
-          var existing = (typeof window.getPreflightInputs === 'function')
-            ? window.getPreflightInputs() : [];
-          existing.push(v);
-          setPreflightInputs(existing);
-        }
-        inputAddField.value = '';
-      }
-      if (inputAddBtn)   inputAddBtn.addEventListener('click', _addInputFromField);
-      if (inputAddField) inputAddField.addEventListener('keydown', function (e) {
-        if (e.key === 'Enter') { e.preventDefault(); _addInputFromField(); }
-      });
-      if (clearInputsBtn) clearInputsBtn.addEventListener('click', function () {
-        if (typeof clearPreflightInputs === 'function') clearPreflightInputs();
-      });
-      if (toggleInputModeBtn) toggleInputModeBtn.addEventListener('click', function () {
-        if (typeof _liveInputMode !== 'undefined' && _liveInputMode) {
-          if (typeof enablePreflightInputMode === 'function') enablePreflightInputMode();
-          this.textContent = 'Live';
-        } else {
-          if (typeof enableLiveInputMode === 'function') enableLiveInputMode();
-          this.textContent = 'Pre-flight';
-        }
-      });
       document.getElementById('voiceButton').addEventListener('click', function () { if (typeof toggleVoice === 'function') toggleVoice(); });
-      document.getElementById('languageSelector').addEventListener('change', function (e) {
-        if (typeof window.warnIfHindiUnavailable === 'function') {
-          window.warnIfHindiUnavailable(e.target.value);
-        }
-        try { window._apiKeyPromptShown = false; } catch (err) {}
-        try {
-          if (typeof tabState === 'function') {
-            var s = tabState();
-            s._pendingQuizAnswer = null;
-            s._pendingBugChallenge = null;
-          }
-        } catch (err) {}
-        try {
-          if (window.TutorialController && window.TutorialController.active) {
-            window.TutorialController.render();
-          }
-        } catch (err) {}
-        if (typeof isListening !== 'undefined' && isListening) {
-          speak('Language changed. Restarting voice recognition.');
-          stopListening();
-          setTimeout(function () { startListening(); }, 800);
-        }
+      var tutorialLink = document.getElementById('cuStartTutorialLink');
+      if (tutorialLink) tutorialLink.addEventListener('click', function (e) {
+        e.preventDefault();
+        if (window.MinimalOnboarding && typeof window.MinimalOnboarding.open === 'function') window.MinimalOnboarding.open();
+        else if (window.TutorialController && typeof window.TutorialController.open === 'function') window.TutorialController.open();
       });
       document.getElementById('sendCommandBtn').addEventListener('click', function () { if (typeof submitCommand === 'function') submitCommand(); });
       var voiceTextInput = document.getElementById('voiceText');
@@ -893,6 +628,7 @@
   <script src="/static/narration-guard.js"></script>
   <script src="/static/app.js"></script>
   <script src="/static/tutorial.js"></script>
+  <script src="/static/onboarding.js"></script>
   <script src="/static/classroom.js"></script>
 
 </body>

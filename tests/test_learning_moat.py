@@ -6,7 +6,10 @@ from codeup.commands.intent_parser import parse_intent
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
+    # One test below exercises the Audio Blocks cross-mode boundary, which
+    # needs the (disabled-by-default) backend flag enabled.
+    monkeypatch.setenv("CODEUP_AUDIO_BLOCKS_ENABLED", "1")
     app.config.update(TESTING=True)
     with app.test_client() as test_client:
         yield test_client

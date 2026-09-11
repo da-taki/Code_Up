@@ -46,10 +46,27 @@ def _fn_body(name):
 
 def test_anonymous_classroom_closed_by_default():
     """renderJoinPanel's outer <details> must not be created with open:true -
-    the anonymous /ide state shows only the "Classroom" summary line."""
+    the anonymous /ide state shows only the "Join a class" summary line."""
     body = _fn_body("renderJoinPanel")
     details_line = re.search(r"el\('details', \{[^}]*\}\)", body).group(0)
     assert "open" not in details_line
+
+
+def test_anonymous_summary_reads_join_a_class():
+    """Vision-Aid build: the collapsed label for a not-yet-joined learner
+    reads "Join a class", not the generic "Classroom" - a clearer, smaller
+    invitation per the first-ten-hours simplification pass."""
+    js = CLASSROOM_JS
+    assert "if (!data || !data.joined) return 'Join a class';" in js
+
+
+def test_classroom_panel_mounts_after_the_core_workflow_not_first():
+    """Vision-Aid build: the panel must not compete with lesson/editor/run/
+    output as the first thing a new solo learner sees - it mounts as the
+    LAST child of <main>, not the first."""
+    body = _fn_body("buildPanel")
+    assert "main.appendChild(section)" in body
+    assert "insertBefore" not in body
 
 
 def test_joined_classroom_collapsed_by_default():
@@ -131,10 +148,16 @@ def test_hidden_tab_does_not_poll():
 def test_visibility_and_focus_trigger_immediate_sync():
     """Both visibilitychange (tab shown again) and window focus trigger an
     immediate sync - required for the demo's rapid teacher-tab/learner-tab
-    switching, not just the 8-10s interval."""
+    switching, not just the 8-10s interval.
+
+    Vision-Aid build: the disclosure-toggle immediate-sync trigger is gone
+    along with the rich dashboard content it used to catch up on (see
+    test_classroom_panel_mounts_after_the_core_workflow_not_first and the
+    simplified renderDashboardPanel/patchDashboardPanel below) - only
+    visibilitychange and focus remain."""
     assert "document.addEventListener('visibilitychange', function () {" in CLASSROOM_JS
     assert "window.addEventListener('focus', function () {" in CLASSROOM_JS
-    assert CLASSROOM_JS.count("requestClassroomSync({ immediate: true })") >= 3  # visibilitychange, focus, disclosure-toggle
+    assert CLASSROOM_JS.count("requestClassroomSync({ immediate: true })") >= 2  # visibilitychange, focus
 
 
 def test_single_polling_interval_configured():
@@ -213,25 +236,28 @@ def test_patch_function_cannot_touch_whole_panel():
     assert ".focus()" not in body  # never steals focus
 
 
-def test_disclosure_open_state_preserved_across_assignment_patch():
-    """When the assignments list changes, the nested "Show all assignments"
-    <details> is rebuilt with its previous open/closed state carried
-    forward, not reset to closed."""
+def test_patch_dashboard_panel_only_patches_the_summary_line():
+    """Vision-Aid build: renderDashboardPanel no longer builds an
+    assignments list, guided-projects list, or help widget (see
+    test_classroom_panel_shows_simple_connected_status below) - so
+    patchDashboardPanel has nothing left to targeted-patch except the
+    "Join a class"/"Class: X ... Connected" summary line itself."""
     body = _fn_body("patchDashboardPanel")
-    assert "const keepOpen = existingDetails ? existingDetails.open : false;" in body
-    assert "buildAssignmentsBodyNodes(data, keepOpen)" in body
+    assert "summaryLineText(data)" in body
+    for removed in ("buildAssignmentsBodyNodes", "buildProjectsBodyNodes", "appendHelpWidget", "buildCourseBodyNodes"):
+        assert removed not in body
 
 
-def test_help_container_only_rebuilt_on_status_change():
-    """The help widget (and any in-progress typed draft inside it) is only
-    replaced when help_request's fingerprint actually changes - an unrelated
-    poll (e.g. a new assignment) must not touch it, or a learner's
-    in-progress help text would be silently discarded mid-poll."""
-    body = _fn_body("patchDashboardPanel")
-    idx = body.index("helpFingerprint(previous")
-    window = body[idx:idx + 320]
-    assert "classroomHelpContainer" in window
-    assert "appendHelpWidget(helpContainer" in window
+def test_classroom_panel_shows_simple_connected_status():
+    """Vision-Aid build: a joined learner gets a small "Class: <name>.
+    Connected." status (the disclosure's own summary line), not a
+    dashboard of assignments/projects/help - see PHASE 11 of the redesign
+    (classroom's one job is instructor visibility into live code, not an
+    LMS for the learner)."""
+    assert "return 'Class: ' + cohortName + '. Connected.';" in _fn_body("summaryLineText")
+    body = _fn_body("renderDashboardPanel")
+    for removed in ("classroomAssignmentsHeading", "classroomProjectsHeading", "classroomHelpContainer", "appendHelpWidget"):
+        assert removed not in body
 
 
 def test_fingerprints_ignore_irrelevant_fields():

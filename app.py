@@ -1,5 +1,6 @@
 import ast
 import atexit
+import copy
 import errno
 import difflib
 import hashlib
@@ -89,6 +90,7 @@ from codeup.commands.command_normalization import normalize_command_transcript
 from codeup.accessibility.speech_output import sanitize_speech_text
 from codeup.providers import groq_pool
 from codeup.classroom import ai_policy as classroom_ai_policy
+from codeup.classroom import ai_toggle as classroom_ai_toggle
 from codeup.classroom import concepts as classroom_concepts
 from codeup.classroom import db as classroom_db
 from codeup.classroom import ide_commands as classroom_ide_commands
@@ -132,6 +134,22 @@ def _codeup_transition_message() -> str:
 
 def _truthy_env(name: str) -> bool:
     return os.environ.get(name, "").lower() in {"1", "true", "yes", "on"}
+
+
+def _audio_blocks_enabled() -> bool:
+    # Vision-Aid first-ten-hours build: Audio Blocks is disabled by default
+    # and cannot be entered by a learner (no UI, no typed/voice command, no
+    # direct route). The backend implementation is left intact rather than
+    # deleted - internal tests exercise it by setting
+    # CODEUP_AUDIO_BLOCKS_ENABLED=1 (env, not a cached constant, so it can be
+    # toggled per test via monkeypatch.setenv).
+    return _truthy_env("CODEUP_AUDIO_BLOCKS_ENABLED")
+
+
+AUDIO_BLOCKS_UNAVAILABLE_MESSAGE = (
+    "Audio Blocks is not available in this version of CodeUp. "
+    "Continue in the Python editor."
+)
 
 
 def _is_testing_mode():
@@ -1254,7 +1272,21 @@ def _ai_capability_check(capability: str) -> Tuple[bool, Dict[str, bool], str]:
     opens an assignment, or an explicit ``assignment_id`` JSON field) with no
     assignment context resolving to "everything allowed" - anonymous,
     non-cohort IDE usage is never restricted by the classroom layer.
+
+    Vision-Aid build: also enforced here, ahead of the assignment-scoped
+    check, is the simple class-AND-student AI toggle (see
+    codeup.classroom.ai_toggle) - resolved server-side from the learner
+    cookie, never trusted from the request body, so it cannot be bypassed
+    by a hand-crafted request, a typed/voice command, or a page refresh.
     """
+    if has_request_context():
+        token = request.cookies.get(CLASSROOM_LEARNER_COOKIE)
+        learner = classroom_db.get_learner_by_token(token) if token else None
+        if learner is not None:
+            cohort = classroom_db.get_cohort(learner["cohort_id"])
+            if not classroom_ai_toggle.effective_ai_enabled(cohort, learner):
+                return False, classroom_ai_policy.normalize_settings(None), classroom_ai_toggle.AI_DISABLED_MESSAGE
+
     body = request.get_json(silent=True) if has_request_context() else None
     body = body if isinstance(body, dict) else {}
 
@@ -9982,6 +10014,10 @@ def voice():
     active_mode = _safe_text(body.get("active_mode"), limit=30).strip().lower()
     if active_mode not in {"python", "audio_blocks"}:
         active_mode = ""
+    if active_mode == "audio_blocks" and not _audio_blocks_enabled():
+        # A raw API caller cannot force Audio Blocks Mode via this field
+        # either, not just via a typed/voice command.
+        active_mode = ""
     cursor_line = _as_optional_int(body.get("cursor_line"))
     verbosity = _safe_text(body.get("verbosity"), "normal", limit=20).strip().lower() or "normal"
     parsed = parse_intent(text)
@@ -10236,16 +10272,55 @@ def voice():
             "confidence": 0.98,
         })
 
-    audio_blocks_response = audio_blocks.route_command(
-        text, current_code, mem, source=input_source, error_context=error_context
-    )
-    if audio_blocks_response is not None:
-        if not (
+    def _is_rescued_python_insert(response):
+        # A handful of phrases (e.g. "add if score greater than 10") also
+        # match Audio Blocks' own patterns and get answered with "That
+        # command is for Audio Blocks Mode..."; when we are not actually in
+        # Audio Blocks Mode, that answer must not shadow the real Python
+        # insert it was clearly meant to be. Applies whether or not Audio
+        # Blocks itself is enabled - see the callers below.
+        return bool(response) and (
             active_mode != "audio_blocks"
             and intent in {"insert_if", "insert_function", "insert_class", "add_parameter"}
             and "block" not in text.lower()
-            and str(audio_blocks_response.get("speech") or audio_blocks_response.get("message") or "").startswith("That command is for Audio Blocks Mode")
-        ):
+            and str(response.get("speech") or response.get("message") or "").startswith("That command is for Audio Blocks Mode")
+        )
+
+    if not _audio_blocks_enabled():
+        # Ask the real (still-intact) backend whether it would have handled
+        # this text, using its own workspace-mode-aware logic - a plain
+        # text-pattern check (e.g. audio_blocks.handles()) is not precise
+        # enough here, since a couple of phrases like "read block order"
+        # are shared with the unrelated accessible-learning block-practice
+        # drills and must still reach *that* feature. Any workspace state
+        # the trial call would have created is rolled back so a disabled
+        # feature never has a persistent side effect.
+        _ab_had_state = "audio_blocks" in mem
+        _ab_snapshot = copy.deepcopy(mem.get("audio_blocks")) if _ab_had_state else None
+        trial_response = audio_blocks.route_command(
+            text, current_code, mem, source=input_source, error_context=error_context
+        )
+        if _ab_had_state:
+            mem["audio_blocks"] = _ab_snapshot
+        else:
+            mem.pop("audio_blocks", None)
+        if trial_response is not None and not _is_rescued_python_insert(trial_response):
+            return _store_and_return({
+                "success": True,
+                "action": "deterministic_message",
+                "message": AUDIO_BLOCKS_UNAVAILABLE_MESSAGE,
+                "speech": AUDIO_BLOCKS_UNAVAILABLE_MESSAGE,
+                "heard": text,
+                "intent": "audio_blocks_disabled",
+                "confidence": 0.98,
+            })
+        audio_blocks_response = None
+    else:
+        audio_blocks_response = audio_blocks.route_command(
+            text, current_code, mem, source=input_source, error_context=error_context
+        )
+    if audio_blocks_response is not None:
+        if not _is_rescued_python_insert(audio_blocks_response):
             audio_blocks_response.setdefault("heard", text)
             audio_blocks_response.setdefault("confidence", 1.0)
             return _store_and_return(audio_blocks_response)
@@ -13177,6 +13252,13 @@ def export_project_route():
 
 @app.route("/export-audio-blocks", methods=["POST"])
 def export_audio_blocks_route():
+    if not _audio_blocks_enabled():
+        return jsonify({
+            "success": False,
+            "error": AUDIO_BLOCKS_UNAVAILABLE_MESSAGE,
+            "speech": AUDIO_BLOCKS_UNAVAILABLE_MESSAGE,
+            "message": AUDIO_BLOCKS_UNAVAILABLE_MESSAGE,
+        }), 404
     mem = session_memory.get_memory(get_trace_storage())
     workspace = audio_blocks.get_workspace(mem)
     if not workspace:

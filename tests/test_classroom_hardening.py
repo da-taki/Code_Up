@@ -33,6 +33,11 @@ def _make_cohort(client, username):
     r = client.post("/classroom/cohorts", data={"name": "Cohort"}, follow_redirects=True)
     join_code = _extract(rb'cu-join-code">([A-Z0-9]+)<', r.data)
     cohort_id = _extract(rb'cohorts/(\d+)"', r.data)
+    # This whole file exercises the assignment-level granular capability
+    # matrix specifically - a new cohort's class-wide AI toggle now
+    # defaults OFF (see codeup.classroom.ai_toggle), so opt it in here to
+    # keep that unrelated, coarser gate out of the way.
+    client.post(f"/classroom/cohorts/{cohort_id}/ai-toggle", json={"enabled": True})
     return join_code, cohort_id
 
 

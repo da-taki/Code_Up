@@ -1,6 +1,9 @@
-"""CodeUp must always start in Python Code Mode, Audio Blocks Mode is reachable
-by both button and voice command, and the repository keeps a single consolidated
-README instead of the recent extra markdown docs."""
+"""CodeUp must always start in Python Code Mode. In this Vision-Aid
+first-ten-hours build, Audio Blocks Mode has no learner-facing entry point
+(no button, no help-panel listing, no shortcut docs) - the backend module
+and its voice/typed command routing are left intact and dormant, per the
+branch's "hide, don't aggressively delete" approach. The repository keeps a
+single consolidated README instead of the recent extra markdown docs."""
 
 import re
 from pathlib import Path
@@ -29,14 +32,19 @@ def _tag(html, element, element_id):
 
 def test_ide_starts_in_python_code_mode_by_default(client):
     html = _ide_html(client)
-    # The Python editor region is visible and the Audio Blocks panel is hidden.
+    # The Python editor region is visible and always the only mode shown.
     assert "hidden" not in _tag(html, "div", "codeModeRegion")
-    assert "hidden" in _tag(html, "div", "audioBlocksPanel")
-    # The Code Mode button is the pressed/active mode on first load.
-    code_button = _tag(html, "button", "codeModeBtn")
-    assert 'aria-pressed="true"' in code_button
-    blocks_button = _tag(html, "button", "audioBlocksModeBtn")
-    assert 'aria-pressed="false"' in blocks_button
+
+
+def test_ide_has_no_audio_blocks_learner_entry_points(client):
+    html = _ide_html(client)
+    # Vision-Aid build: no mode-switch button, no Audio Blocks panel, no
+    # help-panel listing, and no shortcut-modal documentation for it.
+    assert 'id="audioBlocksModeBtn"' not in html
+    assert 'id="codeModeBtn"' not in html
+    assert 'id="audioBlocksPanel"' not in html
+    assert "In Audio Blocks:" not in html
+    assert "<h3>Audio Blocks</h3>" not in html
 
 
 def test_ide_never_auto_opens_audio_blocks_from_stored_state():

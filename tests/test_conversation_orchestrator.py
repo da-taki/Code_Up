@@ -318,14 +318,20 @@ def test_generate_zero_to_two_fallback_needs_no_ai(client, monkeypatch):
 
 
 def test_transcript_ui_contract_present():
+    """Vision-Aid build: the visible "Heard:"/"Understood:"/"Next action:"
+    diagnostic readout is removed from the learner-facing page (section 5
+    of the redesign - internal/debugging state must not be persistent
+    learner UI), but updateCommandUnderstanding() and the underlying
+    recognition machinery it fed stay intact and callable (it safely
+    no-ops without #commandUnderstanding in the DOM) in case internal
+    callers still need the bookkeeping."""
     html = _read("templates/index.html")
     app_js = _read("static/app.js")
     voice_engine = _read("static/voice-engine.js")
-    assert 'id="commandUnderstanding"' in html
-    assert 'aria-live="polite"' in html
-    assert "Heard:" in html
-    assert "Understood:" in html
-    assert "Next action:" in html
+    assert 'id="commandUnderstanding"' not in html
+    assert "Heard:" not in html
+    assert "Understood:" not in html
+    assert "Next action:" not in html
     assert "function updateCommandUnderstanding" in app_js
     assert "window.updateTranscriptStatus = updateCommandUnderstanding" in app_js
     assert "applyCommandUnderstanding(data" in app_js

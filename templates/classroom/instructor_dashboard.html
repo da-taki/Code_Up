@@ -41,7 +41,7 @@
         <tbody>
           {% for cohort in cohorts %}
           <tr>
-            <td><a href="{{ url_for('classroom.cohort_dashboard', cohort_id=cohort.id) }}">{{ cohort.name }}</a></td>
+            <td><a href="{{ url_for('classroom.cohort_live_dashboard', cohort_id=cohort.id) }}">{{ cohort.name }}</a></td>
             <td><span class="cu-join-code">{{ cohort.join_code }}</span></td>
             <td>{{ cohort.learner_count }}</td>
             <td><span class="cu-badge">{{ cohort.status }}</span></td>

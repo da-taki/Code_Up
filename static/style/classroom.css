@@ -156,6 +156,19 @@ table.cu-table th { background: var(--bg-soft); }
   display: inline;
 }
 
+.cu-readonly-code {
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--bg-main);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  max-height: 420px;
+  overflow: auto;
+}
+
 .cu-badge {
   display: inline-block;
   padding: 2px 8px;

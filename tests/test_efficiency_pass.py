@@ -45,6 +45,9 @@ def client(monkeypatch):
     monkeypatch.setenv("GEMINI_ENABLED", "0")
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     monkeypatch.delenv("GROQ_API_KEY_2", raising=False)
+    # Several tests below exercise Audio Blocks Mode's own cross-mode
+    # redirects, which needs the (disabled-by-default) backend flag.
+    monkeypatch.setenv("CODEUP_AUDIO_BLOCKS_ENABLED", "1")
     app_module.app.config["TESTING"] = True
     with app_module.app.test_client() as c:
         yield c

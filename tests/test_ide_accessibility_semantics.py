@@ -72,7 +72,7 @@ def test_no_explicit_role_region_anywhere(client):
 @pytest.mark.parametrize("section_id_or_class,heading_id,expected_heading_text", [
     ("cu-editor-wrapper", "codeEditorHeading", "Code editor"),
     ("cu-output-section", "programOutputHeading", "Program output"),
-    ("cu-voice-console", "command-input-label", "Commands"),
+    ("cu-voice-console", "command-input-label", "Ask CodeUp"),
     # XRCVC final closure pass, Finding 15: XRCVC explicitly asked for a
     # landmark on "Show commands & help", overriding the "bounded at three"
     # framing above for this one, specifically-requested case. Nested inside
@@ -97,26 +97,25 @@ def test_justified_regions_are_named_sections(client, section_id_or_class, headi
     assert (heading[0].text or "").strip() == expected_heading_text
 
 
-def test_learning_tools_and_structure_panel_are_asides_not_regions(client):
-    """Learning tools (snippets/project files/program inputs) and the code
-    structure navigator are genuinely complementary to the main editing
-    workflow - <aside> with aria-labelledby is correct; they should not
-    additionally claim role="region" (redundant with the native aside
-    mapping) nor lose their accessible name."""
+def test_learning_tools_and_structure_panel_are_removed(client):
+    """Vision-Aid build: the Learning tools sidebar (snippets/project files/
+    program inputs) and the visible Code Structure Navigator panel are
+    removed entirely from the primary IDE - CodeUp is a zero-setup editor,
+    not a project manager with a permanent structure panel. The underlying
+    structural-parsing commands ("overview", "where am I", etc.) stay
+    server-side and are unaffected (see test_ide_layout.py's Ask CodeUp
+    coverage)."""
     tree, _ = _tree(client)
-    learning_tools = tree.xpath('//aside[contains(@class, "cu-snippets")]')
-    assert learning_tools and learning_tools[0].get("aria-labelledby") == "learningToolsHeading"
-    assert learning_tools[0].get("role") is None
-    structure = tree.xpath('//aside[@id="structurePanel"]')
-    assert structure and structure[0].get("aria-labelledby") == "structure-heading"
+    assert not tree.xpath('//aside[contains(@class, "cu-snippets")]')
+    assert not tree.xpath('//*[@id="structurePanel"]')
 
 
 def test_individual_toolbar_buttons_are_not_landmarks(client):
     """Sanity check against landmark spam: none of the small, frequent
-    controls (run/analyze/fix/save/etc.) are wrapped in their own named
-    region - only the few genuinely-justified areas are."""
+    controls (run/voice/etc.) are wrapped in their own named region - only
+    the few genuinely-justified areas are."""
     tree, _ = _tree(client)
-    for btn_id in ("runBtn", "analyzeBtn", "fixBtn", "saveBtn", "voiceButton"):
+    for btn_id in ("runBtn", "voiceButton"):
         btn = tree.xpath(f'//*[@id="{btn_id}"]')
         assert btn
         # A button's own ancestor sections are the 3 justified ones only -
@@ -140,14 +139,14 @@ def test_heading_hierarchy_has_exactly_one_h1_and_no_skipped_levels(client):
         assert cur <= prev + 1, f"heading level jumped from h{prev} to h{cur}: {levels}"
 
 
-def test_mentor_transcript_is_a_peer_section_not_nested_under_program_inputs(client):
-    """Regression: Mentor transcript is a top-level functional area (like
-    Program output/Program inputs/Commands), not a subsection of whichever
-    heading happens to precede it in DOM order - it must be h2, matching
-    its siblings, not h3."""
+def test_mentor_transcript_panel_is_removed(client):
+    """Vision-Aid build: the dedicated Mentor transcript panel is removed -
+    showMentorReply() in app.js already writes every AI reply into #output
+    (the permanent Program output area) and speaks it, so nothing is lost,
+    only a redundant, always-visible second copy of the same text."""
     tree, _ = _tree(client)
-    heading = tree.xpath('//*[@id="mentor-transcript-heading"]')
-    assert heading and heading[0].tag == "h2"
+    assert not tree.xpath('//*[@id="mentor-transcript-heading"]')
+    assert not tree.xpath('//*[@id="mentorTranscript"]')
 
 
 # ---- duplicate transcript / no unused focus targets -----------------------------

@@ -945,7 +945,14 @@
         var el = document.getElementById(id);
         if (el) el.addEventListener('click', function (e) { e.preventDefault(); fn(); });
       }
-      on('tutorialBtn', function () { self.open(); });
+      // Vision-Aid build: the visible "Start tutorial" button opens the
+      // minimal IDE quick-start (static/onboarding.js), not this longer
+      // Python-concepts walkthrough - this controller (and its own
+      // .open()) stays fully intact for internal/future use.
+      on('tutorialBtn', function () {
+        if (window.MinimalOnboarding) window.MinimalOnboarding.open();
+        else self.open();
+      });
       on('tutorialExitBtn', function () { self.exit(true); });
       on('tutorialRunBtn', function () { if (typeof runCode === 'function') runCode(); else if (window.runCode) window.runCode(); });
       on('tutorialExampleBtn', function () { self._loadExample(); });

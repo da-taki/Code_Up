@@ -36,7 +36,10 @@ MARKS_FUNCTION_PROGRAM = (
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
+    # One test below exercises Audio Diff recording through Audio Blocks
+    # Mode itself, which needs the (disabled-by-default) backend flag.
+    monkeypatch.setenv("CODEUP_AUDIO_BLOCKS_ENABLED", "1")
     app.config.update(TESTING=True)
     with app.test_client() as test_client:
         yield test_client

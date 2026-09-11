@@ -3,6 +3,7 @@
 {% block header_title %}{{ cohort.name }}{% endblock %}
 {% block header_nav %}
   <nav aria-label="Cohort actions">
+    <a class="cu-button cu-button-primary" id="liveCodeLink" href="{{ url_for('classroom.cohort_live_dashboard', cohort_id=cohort.id) }}">Live student code</a>
     <a class="cu-button cu-button-secondary" id="helpQueueLink" href="{{ url_for('classroom.help_queue', cohort_id=cohort.id) }}">Help queue ({{ open_help_count }})</a>
     <a class="cu-button cu-button-secondary" href="{{ url_for('classroom.custom_lessons_list', cohort_id=cohort.id) }}">Your lessons</a>
     <a class="cu-button cu-button-secondary" href="{{ url_for('classroom.custom_projects_list', cohort_id=cohort.id) }}">Your projects</a>

@@ -6,7 +6,10 @@ from codeup.commands.intent_parser import parse_intent
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
+    # One test below exercises the Audio Blocks / literacy-mode cross-mode
+    # boundary, which needs the (disabled-by-default) backend flag enabled.
+    monkeypatch.setenv("CODEUP_AUDIO_BLOCKS_ENABLED", "1")
     app.config.update(TESTING=True)
     with app.test_client() as test_client:
         yield test_client
@@ -81,7 +84,6 @@ def test_start_loops_lesson_selects_loop_mission(client):
     assert data["lesson_id"] == "loops"
     assert "For loops" in data["message"]
     assert "for i in range(3)" in data["starter_code"]
-
 
 def test_current_concept_and_next_command(client):
     post_voice(client, "start loops lesson")

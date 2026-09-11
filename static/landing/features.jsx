@@ -26,9 +26,9 @@ function Features() {
           </div>
 
           <div className="reveal delay-1 feat span6">
-            <div className="feat-num">Audio Blocks</div>
-            <h3>Build Python through numbered blocks.</h3>
-            <p>Audio Blocks lets students create real Python through accessible numbered blocks before moving into full syntax.</p>
+            <div className="feat-num">Guided Lessons</div>
+            <h3>Learn Python one guided topic at a time.</h3>
+            <p>From print statements to loops, CodeUp walks a beginner through each topic with a short task, a hint, and a check before moving on to the next.</p>
             <div className="feat-art"><div className="pulse-art"><div className="ring"></div><div className="ring"></div><div className="ring"></div><div className="core"></div></div></div>
           </div>
 
@@ -109,7 +109,7 @@ function Features() {
                 <li>input and output</li>
                 <li>variables while code runs</li>
                 <li>project structure</li>
-                <li>Audio Blocks</li>
+                <li>guided lessons</li>
               </ul>
             </div>
           </div>
@@ -129,7 +129,7 @@ function Stats() {
         </div>
         <div className="reveal delay-1 stat">
           <div className="num">02<span className="accent">.</span></div>
-          <div className="lbl">Audio Blocks</div>
+          <div className="lbl">Guided Lessons</div>
         </div>
         <div className="reveal delay-2 stat">
           <div className="num">03<span className="accent">.</span></div>

@@ -115,7 +115,7 @@ function Hero() {
           CodeUp is a blind-first Python learning IDE for visually impaired
           beginners. It teaches code structure through voice and typed commands,
           with plain feedback for loops, indentation, errors, input, output,
-          project structure, state, safe fixes, teacher reports, and Audio Blocks.
+          project structure, state, safe fixes, teacher reports, and guided lessons.
         </p>
         <div className="hero-cta-row">
           <a className="btn btn-primary" href="/ide">

@@ -20,7 +20,11 @@ from codeup.commands.intent_parser import parse_intent
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
+    # A couple of tests in this file exercise Audio Blocks Mode's own
+    # cross-mode redirects, which requires the (disabled-by-default in the
+    # Vision-Aid build) backend flag explicitly enabled.
+    monkeypatch.setenv("CODEUP_AUDIO_BLOCKS_ENABLED", "1")
     app.config.update(TESTING=True)
     with app.test_client() as test_client:
         yield test_client

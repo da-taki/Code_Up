@@ -12,7 +12,13 @@ from codeup.commands.intent_parser import parse_intent
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
+    # Vision-Aid build: Audio Blocks is disabled by default (see
+    # app._audio_blocks_enabled). This suite tests the still-intact backend
+    # directly, so it explicitly re-enables the flag for its own requests -
+    # see test_audio_blocks_disabled_by_default.py for the disabled-default
+    # behavior these tests are exempted from.
+    monkeypatch.setenv("CODEUP_AUDIO_BLOCKS_ENABLED", "1")
     app.config.update(TESTING=True)
     with app.test_client() as test_client:
         yield test_client
@@ -811,7 +817,11 @@ def test_no_ai_provider_is_called(client, monkeypatch):
         assert voice(client, command)["success"] is True
 
 
-def test_frontend_has_labeled_regions_buttons_keyboard_and_actions(client):
+def test_frontend_has_no_audio_blocks_ui_but_keeps_js_dormant(client):
+    # Vision-Aid build: the learner-facing Audio Blocks markup is removed
+    # from the IDE template (Phase 3 of the first-ten-hours simplification),
+    # but the JS implementation stays intact and dormant rather than
+    # deleted, so it is unreachable without the removed UI, not gone.
     html = client.get("/ide").get_data(as_text=True)
     for token in (
         '<h3 id="audioBlocksHeading">Audio Blocks Mode</h3>',
@@ -824,7 +834,7 @@ def test_frontend_has_labeled_regions_buttons_keyboard_and_actions(client):
         'aria-label="Move current block up"',
         'aria-label="Compile and run blocks"',
     ):
-        assert token in html
+        assert token not in html
     js = Path("static/app.js").read_text(encoding="utf-8")
     for token in (
         "renderAudioBlocks",

@@ -125,7 +125,7 @@ def test_heading_hierarchy_does_not_skip_levels(client):
     headings = parser.headings
     assert headings.count((1, "CodeUp")) == 1
     names = [name for _, name in headings]
-    for expected in ["Learning tools", "Code editor", "Program output", "Program inputs", "Commands"]:
+    for expected in ["Code editor", "Program output", "Program inputs", "Ask CodeUp"]:
         assert expected in names
     previous = 0
     for level, name in headings:
@@ -176,28 +176,30 @@ def test_named_sections_count_as_implicit_region_landmarks():
     assert ("section", "region", "Start commands") in parser.landmarks
 
 
-def test_command_help_groups_keep_headings_without_implicit_regions(client):
+def test_ask_codeup_help_examples_have_no_implicit_regions(client):
+    """Vision-Aid build: the old category-grid help panel (Start/Run/Debug/
+    .../Export, each its own <div class="cu-help-group">) is replaced by a
+    flat list of example phrases - no per-category headings or landmarks to
+    keep un-landmarked at all, since there are no categories anymore."""
     html = ide_html(client)
-    forbidden_named_sections = [
-        "Start commands", "Run commands", "Debug commands", "Navigate commands", "Edit commands",
-        "Learn commands", "Audio Blocks commands", "Accessibility commands", "Project commands", "Export commands",
-    ]
-    for label in forbidden_named_sections:
-        assert f'<section class="cu-help-group" aria-label="{label}">' not in html
+    assert '<ul class="cu-help-examples">' in html
+    for label in ("Start commands", "Run commands", "Audio Blocks commands", "Export commands"):
         assert f'aria-label="{label}"' not in html
-    assert '<div class="cu-help-group">' in html
 
     parser = LandmarkParser()
     parser.feed(html)
     region_labels = [label for _, role, label in parser.landmarks if role == "region"]
-    for label in forbidden_named_sections + ["Commands"]:
+    for label in ("Start", "Run", "Debug", "Navigate", "Edit", "Learn", "Audio Blocks", "Export", "Commands"):
         assert label not in region_labels
 
     heading_parser = HeadingParser()
     heading_parser.feed(html)
     heading_names = [name for _, name in heading_parser.headings]
-    for heading in ["Commands", "Start", "Run", "Debug", "Navigate", "Edit", "Learn", "Audio Blocks", "Accessibility", "Project", "Export"]:
-        assert heading in heading_names
+    for heading in ["Commands", "Start", "Run", "Debug", "Navigate", "Edit", "Learn",
+                     "Accessibility", "Project", "Audio Blocks", "Export"]:
+        assert heading not in heading_names
+
+
 def test_editor_escape_path_and_skip_links_exist(client):
     html = ide_html(client)
     assert 'href="#editor">Jump to editor' in html
@@ -229,9 +231,13 @@ def test_speech_speed_and_voice_preferences_persist(client):
 
 
 def test_output_speech_limit_is_documented_in_code_and_replay_available(client):
+    # Vision-Aid build: the "Read output again" / "Stop speech" buttons are
+    # removed from the IDE (redundant with the "read output again" command
+    # and Escape-to-stop-speech), but speakOutput() and its guarded (now
+    # button-less) listener registration stay in app.js untouched.
     html = ide_html(client)
-    assert 'id="readOutputAgainBtn"' in html
-    assert 'id="stopSpeechBtn"' in html
+    assert 'id="readOutputAgainBtn"' not in html
+    assert 'id="stopSpeechBtn"' not in html
     assert "const CODEUP_SPOKEN_OUTPUT_LIMIT = 4000" in STATIC_APP
     assert "shortened for speech after" in STATIC_APP
     assert "function speakOutput()" in STATIC_APP

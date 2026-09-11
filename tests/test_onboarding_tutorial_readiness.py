@@ -225,15 +225,25 @@ def test_engine_success_and_concept_text_is_speech_safe():
 
 
 def test_ide_start_gate_explains_what_codeup_is_and_how_to_start():
+    """Vision-Aid build: this fuller "what CodeUp is" explanation (not a
+    replacement for NVDA/JAWS/VS Code, headphones/microphone note) moved
+    from a "More about CodeUp" disclosure in the main banner to the
+    /accessibility help page (section 9 of the redesign - the banner
+    itself now only says "you can start coding", nothing else) - still
+    fully documented, just not the first thing a new learner reads. The
+    IDE template keeps the short, load-bearing bits: the tutorial and
+    Ask-CodeUp entry points themselves."""
     src = _read("templates/index.html")
     low = src.lower()
-    assert "python basics" in low
-    assert "nvda" in low and "jaws" in low and "vs" in low  # not-a-replacement note
-    assert "headphone" in low
-    assert "microphone" in low
-    assert "type the command" in low or "type a command" in low or "type the command in the box" in low
     assert 'start tutorial' in low
     assert "what can i do here" in low
+
+    help_low = _read("templates/accessibility.html").lower()
+    assert "python basics" in help_low
+    assert "nvda" in help_low and "jaws" in help_low and "vs code" in help_low
+    assert "headphone" in help_low
+    assert "microphone" in help_low
+    assert "type the command" in help_low or "type a command" in help_low or "type the command in the box" in help_low
 
 
 def test_landing_bundle_has_a_how_to_start_and_scope_section():

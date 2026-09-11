@@ -313,6 +313,10 @@ body.theme-night .cu-button-voice.cu-button-voice--paused {
   display: grid; grid-template-columns: minmax(180px, 1fr) auto auto;
   gap: 8px; align-items: end;
 }
+/* Vision-Aid build: contextual, not permanent - hidden until the running
+   program actually calls input() (showProgramInputControl() in app.js adds
+   the --active class), then hidden again once answered/cancelled. */
+.cu-program-input:not(.cu-program-input--active) { display: none; }
 .cu-program-input .cu-section-heading,
 .cu-program-input .cu-command-tip { grid-column: 1 / -1; }
 .cu-program-input label { grid-column: 1 / -1; font-weight: 700; color: var(--text-main); }
@@ -401,6 +405,7 @@ body.theme-night .cu-output { background: #06030a; }
 }
 
 .cu-structure { width: 260px; min-width: 240px; display: flex; flex-direction: column; max-height: calc(100vh - 200px); }
+.cu-structure[hidden] { display: none; }
 .cu-structure-content { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; font-size: 0.85rem; }
 .structure-info { color: var(--text-dim); font-style: italic; margin: 10px 0; font-size: 0.9rem; }
 .structure-item {
@@ -768,6 +773,16 @@ body.theme-high-contrast .audio-blocks-palette .cu-button[data-category]::before
 }
 .cu-help-group ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.2rem; }
 .cu-help-group li { font-family: var(--font-mono); font-size: 0.9rem; color: var(--text-main); line-height: 1.4; }
+.cu-help-examples {
+  list-style: none; margin: 0; padding: 0;
+  display: grid; gap: 0.3rem;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+.cu-help-examples li {
+  font-family: var(--font-mono); font-size: 0.9rem; color: var(--text-main); line-height: 1.4;
+  border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
+  background: var(--bg-main); padding: 0.3rem 0.55rem;
+}
 
 body.theme-high-contrast .cu-disclosure-summary:hover { background: #000; color: #fff; }
 body.theme-high-contrast .cu-mode-badge { background: #fff; color: #000; border: 1px solid #000; }

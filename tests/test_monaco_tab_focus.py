@@ -181,9 +181,13 @@ def test_trusted_shift_tab_exits_editor_backward_without_modifying_code(live_ser
     assert after == before, f"Shift+Tab must not modify code ({label}): {before!r} -> {after!r}"
     assert dest["tag"] != "TEXTAREA", f"Shift+Tab must move focus out of Monaco ({label}), stayed on {dest}"
     # The real previous focusable element in DOM order (dynamically
-    # determined, not hardcoded) - currently the mode-switch button that
-    # sits immediately before the editor region in the template.
-    assert dest["id"] == "audioBlocksModeBtn", f"Shift+Tab's backward destination should be the real previous control ({label}), got {dest}"
+    # determined, not hardcoded) - the Audio Blocks mode-switch button that
+    # used to sit immediately before the editor region is gone in this
+    # Vision-Aid build. Verified empirically with a real trusted browser
+    # (not guessed from reading the template): the Learning tools sidebar's
+    # collapsed <details> summaries are not the previous stop here - it's
+    # the getting-started banner's Dismiss button.
+    assert dest["id"] == "cuStartBannerDismiss", f"Shift+Tab's backward destination should be the real previous control ({label}), got {dest}"
 
 
 def test_ctrl_bracket_indent_and_outdent_still_work(live_server, page):

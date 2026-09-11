@@ -1,0 +1,40 @@
+{% extends "classroom/_base.html" %}
+{% block title %}{{ learner.display_name }} - {{ cohort.name }} - CodeUp Classroom{% endblock %}
+{% block header_title %}{{ learner.display_name }}{% endblock %}
+{% block header_nav %}
+  <nav aria-label="Learner actions">
+    <a class="cu-button cu-button-secondary" href="{{ url_for('classroom.cohort_live_dashboard', cohort_id=cohort.id) }}">Back to {{ cohort.name }}</a>
+  </nav>
+{% endblock %}
+{% block content %}
+  <p class="cu-crumb">
+    <a href="{{ url_for('classroom.instructor_dashboard') }}">Instructor dashboard</a> /
+    <a href="{{ url_for('classroom.cohort_live_dashboard', cohort_id=cohort.id) }}">{{ cohort.name }}</a>
+  </p>
+
+  <p id="learnerStatus" role="status" aria-live="polite"><span class="cu-badge">{{ status }}</span></p>
+
+  <section class="cu-panel" aria-labelledby="currentCodeHeading">
+    <h2 id="currentCodeHeading">Current code</h2>
+    {% if learner.current_code %}
+      <pre class="cu-readonly-code" tabindex="0">{{ learner.current_code }}</pre>
+    {% else %}
+      <p>No code synced yet.</p>
+    {% endif %}
+    <p class="cu-command-tip">Last code update: {{ learner.code_updated_at or 'never' }}</p>
+  </section>
+
+  <section class="cu-panel" aria-labelledby="lastOutputHeading">
+    <h2 id="lastOutputHeading">Last output</h2>
+    {% if learner.last_output %}
+      <pre class="cu-readonly-code" tabindex="0">{{ learner.last_output }}</pre>
+    {% else %}
+      <p>No run recorded yet.</p>
+    {% endif %}
+    {% if learner.last_error %}
+      <h3>Last error</h3>
+      <pre class="cu-readonly-code" tabindex="0">{{ learner.last_error }}</pre>
+    {% endif %}
+    <p class="cu-command-tip">Last run: {{ learner.last_run_at or 'never' }}</p>
+  </section>
+{% endblock %}

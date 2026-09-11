@@ -96,8 +96,15 @@ def create_cohort(instructor_id: int, name: str) -> Dict[str, Any]:
                 code = new_join_code(conn)
                 ts = now_iso()
                 cur = conn.execute(
-                    "INSERT INTO cohorts (instructor_id, name, join_code, status, created_at, updated_at) "
-                    "VALUES (?, ?, ?, 'active', ?, ?)",
+                    # ai_enabled is set explicitly (not left to the column's
+                    # SQL DEFAULT) because a database that already had this
+                    # column before the default flipped to off keeps its old
+                    # default forever - ALTER TABLE ADD COLUMN bakes the
+                    # default at the time it first runs, and the defensive
+                    # migration list here just swallows "duplicate column"
+                    # on every later startup without ever revisiting it.
+                    "INSERT INTO cohorts (instructor_id, name, join_code, status, ai_enabled, created_at, updated_at) "
+                    "VALUES (?, ?, ?, 'active', 0, ?, ?)",
                     (instructor_id, name.strip(), code, ts, ts),
                 )
                 return _row(
@@ -193,6 +200,66 @@ def list_learners_for_cohort(cohort_id: int) -> List[Dict[str, Any]]:
                 (cohort_id,),
             ).fetchall()
         )
+
+
+# ---- live code view / AI toggle (Vision-Aid) --------------------------------
+#
+# Classroom's one job in the Vision-Aid build: let an instructor see what
+# each enrolled learner is currently coding, and turn AI help on/off per
+# class or per learner. No assignments, grading, or due dates involved.
+
+def set_cohort_ai_enabled(cohort_id: int, instructor_id: int, enabled: bool) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        conn.execute(
+            "UPDATE cohorts SET ai_enabled = ?, updated_at = ? WHERE id = ? AND instructor_id = ?",
+            (1 if enabled else 0, now_iso(), cohort_id, instructor_id),
+        )
+        return _row(conn.execute("SELECT * FROM cohorts WHERE id = ?", (cohort_id,)).fetchone())
+
+
+def set_learner_ai_enabled(learner_id: int, cohort_id: int, instructor_id: int, enabled: bool) -> Optional[Dict[str, Any]]:
+    """Scoped to (learner_id, cohort_id, instructor_id) so an instructor can
+    only ever toggle AI for a learner in a cohort they actually own - the
+    UPDATE simply matches zero rows otherwise."""
+    with connect() as conn:
+        conn.execute(
+            "UPDATE learners SET ai_enabled = ? WHERE id = ? AND cohort_id = ? AND cohort_id IN "
+            "(SELECT id FROM cohorts WHERE instructor_id = ?)",
+            (1 if enabled else 0, learner_id, cohort_id, instructor_id),
+        )
+        return _row(conn.execute("SELECT * FROM learners WHERE id = ?", (learner_id,)).fetchone())
+
+
+def save_learner_live_state(
+    learner_id: int,
+    code: str,
+    *,
+    ran: bool = False,
+    output: Optional[str] = None,
+    error: Optional[str] = None,
+) -> None:
+    """Near-live sync of a learner's current editor state for the
+    instructor live-code view - debounced/on-run from the client (see
+    /classroom/live-code/* routes), never blocking the learner's own
+    editor or Run."""
+    ts = now_iso()
+    with connect() as conn:
+        if ran:
+            conn.execute(
+                "UPDATE learners SET current_code = ?, code_updated_at = ?, "
+                "last_run_at = ?, last_output = ?, last_error = ?, heartbeat_at = ? WHERE id = ?",
+                (code, ts, ts, output, error, ts, learner_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE learners SET current_code = ?, code_updated_at = ?, heartbeat_at = ? WHERE id = ?",
+                (code, ts, ts, learner_id),
+            )
+
+
+def touch_learner_heartbeat(learner_id: int) -> None:
+    with connect() as conn:
+        conn.execute("UPDATE learners SET heartbeat_at = ? WHERE id = ?", (now_iso(), learner_id))
 
 
 # ---- assignments ------------------------------------------------------------

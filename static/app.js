@@ -186,6 +186,14 @@ window.lastMentorReply = '';
 window._mentorSlowWalkthroughOffered = false;
 
 const AUTOSAVE_INTERVAL_MS = 30000;
+// Vision-Aid build: how quickly a joined learner's code reaches their
+// instructor's live-code view - distinct from AUTOSAVE_INTERVAL_MS above,
+// which is the (unchanged) local-draft-recovery cadence. This fires a
+// debounced sync a couple of seconds after the learner stops typing, not
+// on every keystroke; AUTOSAVE_INTERVAL_MS keeps serving as a lightweight
+// presence heartbeat in the meantime (see startAutosave() below).
+const CLASSROOM_SYNC_DEBOUNCE_MS = 2000;
+let _classroomSyncDebounce = null;
 let _autosaveTimer = null;
 let _autosaveLastCode = '';
 const AUTOSAVE_KEY = 'codeup_autosave_draft';
@@ -1793,6 +1801,15 @@ require(['vs/editor/editor.main'], function () {
     syncActiveProjectFileLocal();
     clearTimeout(_structureDebounce);
     _structureDebounce = setTimeout(updateStructurePanel, 600);
+    // Debounced classroom live-code sync: waits for a pause in typing
+    // rather than firing on every keystroke. A no-op 401 for an
+    // anonymous, non-cohort learner (see syncLiveCode() in classroom.js).
+    clearTimeout(_classroomSyncDebounce);
+    _classroomSyncDebounce = setTimeout(() => {
+      if (typeof window._classroomOnAutosave === 'function') {
+        try { window._classroomOnAutosave(getCode()); } catch (e) {}
+      }
+    }, CLASSROOM_SYNC_DEBOUNCE_MS);
   });
 
   window._editorReady = true;
@@ -3988,12 +4005,25 @@ async function handleConfirmedAction(action, payload) {
     }
   }
   else if (action === 'list_variables_voice') await listVariablesWithValues();
-  else if (action === 'start_tutorial')     { if (window.TutorialController) window.TutorialController.open(); }
+  else if (action === 'start_tutorial')     {
+    // Vision-Aid build: "start tutorial" launches the minimal 5-step IDE
+    // quick-start (editor -> type -> run -> output -> Ask CodeUp), not the
+    // longer Python-concepts walkthrough - see static/onboarding.js. The
+    // old TutorialController stays intact and reachable at
+    // TutorialController.open() for any internal/future use, just not
+    // wired to this action anymore.
+    if (window.MinimalOnboarding) window.MinimalOnboarding.open();
+    else if (window.TutorialController) window.TutorialController.open();
+  }
   else if (action === 'skip_tutorial')      {
-    if (window.TutorialController && window.TutorialController.active) window.TutorialController.exit(true);
+    if (window.MinimalOnboarding && window.MinimalOnboarding.active) window.MinimalOnboarding.close(false);
+    else if (window.TutorialController && window.TutorialController.active) window.TutorialController.exit(true);
     else speak('The tutorial is not open right now. Say start tutorial to begin.');
   }
-  else if (action === 'tutorial_next')      { if (window.TutorialController && window.TutorialController.active) window.TutorialController.next(); }
+  else if (action === 'tutorial_next')      {
+    if (window.MinimalOnboarding && window.MinimalOnboarding.active) window.MinimalOnboarding.next();
+    else if (window.TutorialController && window.TutorialController.active) window.TutorialController.next();
+  }
   else if (action === 'tutorial_practice')  {
     if (window.TutorialController && typeof window.TutorialController.practice === 'function') {
       window.TutorialController.practice(payload && payload.module);
@@ -5033,6 +5063,12 @@ async function handleCommandText(txt) {
       if (window.TutorialController.handleUtterance(txt)) return;
     } catch (e) { console.error('Tutorial utterance error:', e); }
   }
+  if (window.MinimalOnboarding && window.MinimalOnboarding.active &&
+      typeof window.MinimalOnboarding.handleUtterance === 'function') {
+    try {
+      if (window.MinimalOnboarding.handleUtterance(txt)) return;
+    } catch (e) { console.error('Onboarding utterance error:', e); }
+  }
 
   const _ts = tabState();
   if (_ts._pendingQuizAnswer && document.hidden) return false;
@@ -5672,6 +5708,12 @@ async function handleVoiceCommand(rawText) {
       if (window.TutorialController.handleUtterance(rawText)) return;
     } catch (e) { _debugLog('Tutorial utterance error:', e); }
   }
+  if (window.MinimalOnboarding && window.MinimalOnboarding.active &&
+      typeof window.MinimalOnboarding.handleUtterance === 'function') {
+    try {
+      if (window.MinimalOnboarding.handleUtterance(rawText)) return;
+    } catch (e) { _debugLog('Onboarding utterance error:', e); }
+  }
 
   // BARGE-IN: cancel any ongoing legacy speech (VoiceEngine handles its own
   if (typeof VoiceEngine !== 'undefined') {
@@ -6157,6 +6199,16 @@ function registerEditorShortcuts() {
 function startAutosave() {
   if (_autosaveTimer) return;
   _autosaveTimer = setInterval(() => {
+    // Vision-Aid build: a lightweight presence ping every tick, whether or
+    // not the code changed - this is what keeps a joined learner's
+    // instructor-visible status from going stale to "Offline" while they
+    // are reading rather than typing. The actual code sync on a real edit
+    // is the 2s debounce in editor.onDidChangeModelContent() above; this
+    // interval no longer duplicates that (a no-op 401 for a non-cohort
+    // learner, see syncLiveCode()/heartbeat() in classroom.js).
+    if (typeof window._classroomOnHeartbeat === 'function') {
+      try { window._classroomOnHeartbeat(); } catch (e) {}
+    }
     try {
       const code = getCode();
       if (code === _autosaveLastCode) return;  // no-op if nothing changed
@@ -6173,9 +6225,6 @@ function startAutosave() {
         app: 'codeup-python',
       }));
       _autosaveLastCode = code;
-      if (typeof window._classroomOnAutosave === 'function') {
-        window._classroomOnAutosave(code);
-      }
     } catch (e) { /* localStorage full or disabled — silent fail */ }
   }, AUTOSAVE_INTERVAL_MS);
 }
@@ -6216,6 +6265,14 @@ async function updateStructurePanel() {
   const code    = editor.getValue();
   const panel   = document.getElementById('structurePanel');
   const content = document.getElementById('structureContent');
+  // Vision-Aid build: the visible Code Structure Navigator panel is
+  // removed from the primary IDE (a blind learner asks CodeUp for
+  // orientation instead of losing screen space to a permanent panel) -
+  // this reactive updater becomes a safe no-op rather than firing a
+  // network request nobody will see. The underlying structural-parsing
+  // commands ("overview", "where am I", etc.) are server-side and do not
+  // depend on this function or its DOM.
+  if (!panel || !content) return;
   if (!code.trim()) { hideEl(panel); return; }
   if (looksLikeNonPythonCode(code)) {
     content.innerHTML = '<p class="structure-info">CodeUp is Python-only. Remove HTML, CSS, or JavaScript.</p>';
@@ -7473,7 +7530,9 @@ async function bugChallenge() {
 }
 
 function restartTutorial() {
-  if (window.TutorialController) {
+  if (window.MinimalOnboarding) {
+    window.MinimalOnboarding.open();
+  } else if (window.TutorialController) {
     window.TutorialController.open();
   }
 }

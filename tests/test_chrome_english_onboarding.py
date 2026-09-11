@@ -62,15 +62,12 @@ def _spoken_literals(html):
 
 
 class TestEnglishOnly:
-    def test_ide_language_selector_is_english_only_and_disabled(self):
+    def test_ide_has_no_language_selector(self):
+        # Vision-Aid build: the always-disabled, always-English "More
+        # tools" language selector is removed entirely rather than shown
+        # disabled - CodeUp is English-only with nothing to configure.
         html = _index_html()
-        m = re.search(r'<select id="languageSelector".*?</select>', html, re.S)
-        assert m, "languageSelector not found"
-        block = m.group(0)
-        assert 'value="en"' in block
-        assert 'value="hi"' not in block
-        assert "हिंदी" not in block
-        assert "disabled" in block  # English shown selected + disabled
+        assert 'id="languageSelector"' not in html
 
     def test_ide_has_no_hindi_start_button_or_voice_language_selector(self):
         html = _index_html()
@@ -102,16 +99,26 @@ class TestEnglishOnly:
 
 
 class TestChromeMessaging:
-    def test_ide_banner_recommends_chrome_and_warns_about_brave(self):
-        low = _index_html().lower()
+    """Vision-Aid build: browser/microphone troubleshooting is no longer in
+    the primary IDE banner (section 9 of the redesign explicitly asks for
+    this - "Do not lead with browser caveats... those can live in Help/
+    settings") - it lives on the /accessibility help page instead, still
+    fully documented, just not the first thing a new learner reads."""
+
+    def test_accessibility_help_recommends_chrome_and_warns_about_brave(self):
+        low = _read("templates/accessibility.html").lower()
         assert "works best on google chrome" in low
         assert "brave" in low
         assert "privacy-heavy" in low
 
-    def test_ide_banner_offers_typed_command_fallback(self):
-        low = _index_html().lower()
-        assert "command box" in low
+    def test_accessibility_help_offers_typed_command_fallback(self):
+        low = _read("templates/accessibility.html").lower()
         assert "type the command in the box" in low or "type a command" in low
+
+    def test_ide_banner_does_not_lead_with_browser_caveats(self):
+        low = _index_html().lower()
+        assert "brave" not in low
+        assert "privacy-heavy" not in low
 
     def test_landing_recommends_chrome_and_warns_about_brave(self):
         bundle = _read("static/landing/dist/bundle.js")
@@ -144,7 +151,10 @@ class TestDirectToIdeNoGate:
         properly labelled Dismiss button, and is not a dialog."""
         html = _index_html()
         assert 'id="cuStartBanner"' in html
-        assert 'id="cuFirstUseHint"' in html
+        # Vision-Aid build: the old #cuFirstUseHint duplicated this same
+        # banner's message a second time, further down the page, in more
+        # words - removed as redundant, not replaced.
+        assert 'id="cuFirstUseHint"' not in html
         m = re.search(r'<div id="cuStartBanner"[^>]*>', html)
         assert m
         assert 'role="region"' not in m.group(0)

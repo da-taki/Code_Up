@@ -8334,14 +8334,15 @@ def _deterministic_concept_voice_response(
         return None
     if concept_kind == concept_qa.UNKNOWN_CONCEPT and not allow_unknown:
         return None
-    _allowed, _settings, _blocked_msg = _ai_capability_check("concept_qa")
-    if not _allowed:
-        return {
-            "success": True, "action": "deterministic_message",
-            "message": _blocked_msg, "speech": _blocked_msg, "heard": text, "concept": concept_kind,
-        }
     answer, facts = concept_qa.answer_concept(concept_kind, current_code)
     if concept_kind == concept_qa.UNKNOWN_CONCEPT:
+        _allowed, _settings, _blocked_msg = _ai_capability_check("concept_qa")
+        if not _allowed:
+            return {
+                "success": True, "action": "deterministic_message",
+                "message": _blocked_msg, "speech": _blocked_msg, "heard": text,
+                "concept": concept_kind,
+            }
         topic = concept_qa.extract_concept_topic(text) or ""
         ai_answer = _python_concept_ai_fallback(topic)
         if ai_answer:

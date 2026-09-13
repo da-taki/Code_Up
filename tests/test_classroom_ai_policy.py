@@ -1,5 +1,6 @@
 import pytest
 
+import app as app_module
 from codeup.classroom import ai_policy
 
 
@@ -145,3 +146,49 @@ def test_resolve_settings_for_request_json_field_overrides_cookie():
         get_assignment,
     )
     assert settings["generate"] is False
+
+
+def test_ai_off_allows_known_local_concepts_but_blocks_unknown_ones(monkeypatch):
+    provider_calls = []
+
+    def fail_provider(*args, **kwargs):
+        provider_calls.append((args, kwargs))
+        raise AssertionError("AI-off deterministic request reached a provider")
+
+    monkeypatch.setattr(
+        app_module.classroom_db,
+        "get_assignment",
+        lambda assignment_id: {"ai_policy": "OFF", "capability_settings": None},
+    )
+    monkeypatch.setattr(app_module, "call_conversation_orchestrator_ai", fail_provider)
+    client = app_module.app.test_client()
+    headers = {"Origin": "http://localhost"}
+    code = "for item in range(2):\n    print(item)\n"
+
+    known = client.post(
+        "/voice-command",
+        json={
+            "text": "why is this indented",
+            "code": code,
+            "cursor_line": 2,
+            "assignment_id": 7,
+        },
+        headers=headers,
+    ).get_json()
+    assert known["action"] == "deterministic_message"
+    assert "AI assistance is disabled" not in known["message"]
+    assert "indent" in known["message"].lower()
+
+    unknown = client.post(
+        "/voice-command",
+        json={
+            "text": "what is flarbology",
+            "code": code,
+            "assignment_id": 7,
+        },
+        headers=headers,
+    ).get_json()
+    assert unknown["action"] == "deterministic_message"
+    assert "instructor" in unknown["message"].lower()
+    assert "concept questions" in unknown["message"].lower()
+    assert provider_calls == []

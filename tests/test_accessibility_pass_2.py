@@ -242,6 +242,11 @@ def test_compare_identifiers_does_not_collide_with_compare_exact():
     assert parse_intent("what changed character by character")["intent"] == "compare_exact"
 
 
+def test_compare_before_after_does_not_collide_with_identifier_comparison():
+    assert parse_intent("compare before and after")["intent"] == "compare_before_after"
+    assert parse_intent("compare score1 and score2")["intent"] == "compare_identifiers"
+
+
 # ---- routing: semantic_find -----------------------------------------------
 
 def test_semantic_find_routes_and_navigates(client):

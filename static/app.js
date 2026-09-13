@@ -121,6 +121,7 @@ let _preflightInputPlaceholders = [];
 window.getPreflightInputs = () => _preflightInputs.slice();
 let _liveInputMode = false;
 let _programInputRequest = null;
+let _programInputSubmitting = false;
 let _editorErrorDecorationIds = [];
 
 const NarrationRequests = (window.CodeUpNarrationGuard && window.CodeUpNarrationGuard.createNarrationGuard)
@@ -4173,6 +4174,7 @@ function showProgramInputControl(req) {
   const message = req.message || inputRequestMessage(req);
   const accessiblePrompt = inputRequestMessage(req);
   const accessibleName = message.includes(req.prompt || '') ? message : `${accessiblePrompt} ${message}`;
+  _programInputSubmitting = false;
   if (status) status.textContent = message;
   if (label) label.textContent = `Program input answer for ${req.prompt || 'input request'}`;
   if (input) {
@@ -4199,6 +4201,7 @@ function hideProgramInputControl(message) {
   const input = document.getElementById('programInputValue');
   const submit = document.getElementById('programInputSubmitBtn');
   const cancel = document.getElementById('programInputCancelBtn');
+  _programInputSubmitting = false;
   if (status) status.textContent = message || 'No program input is being requested.';
   if (input) { input.disabled = true; input.value = ''; input.placeholder = 'Program input will appear here when needed...'; }
   if (submit) submit.disabled = true;
@@ -4223,15 +4226,18 @@ function handleProgramInputRequest(payload) {
   speak(message, { sr: false });
 }
 async function submitProgramInputValue() {
+  if (_programInputSubmitting) return;
   const input = document.getElementById('programInputValue');
   const value = input ? input.value.trim() : '';
   if (!value) { srAnnounce('Type an answer before submitting program input.'); return; }
+  _programInputSubmitting = true;
   if (_activeStreamRun && _activeStreamRun.runId && _activeStreamRun.awaitingPrompt) {
-    await sendStreamingInput(value);
-    hideProgramInputControl('Program input sent. Waiting for the program.');
+    const sent = await sendStreamingInput(value);
+    if (sent) hideProgramInputControl('Program input sent. Waiting for the program.');
+    else _programInputSubmitting = false;
     return;
   }
-  if (!_programInputRequest) { srAnnounce('No program input is being requested.'); return; }
+  if (!_programInputRequest) { _programInputSubmitting = false; srAnnounce('No program input is being requested.'); return; }
   const values = (_programInputRequest.values || []).concat([value]);
   _preflightInputs = values.slice();
   _preflightInputPlaceholders = [];
@@ -5855,10 +5861,25 @@ window.addEventListener('DOMContentLoaded', () => {
     }
     if (event.key === 'Escape') { event.preventDefault(); cancelProgramInputRequest(); }
   });
+  const activateProgramInputButton = (event, action) => {
+    if ((event.key !== 'Enter' && event.key !== ' ') || event.isComposing || event.repeat) return;
+    event.preventDefault();
+    action();
+  };
   const programSubmit = document.getElementById('programInputSubmitBtn');
-  if (programSubmit) programSubmit.addEventListener('click', submitProgramInputValue);
+  if (programSubmit) {
+    programSubmit.addEventListener('click', submitProgramInputValue);
+    programSubmit.addEventListener('keydown', event => {
+      activateProgramInputButton(event, submitProgramInputValue);
+    });
+  }
   const programCancel = document.getElementById('programInputCancelBtn');
-  if (programCancel) programCancel.addEventListener('click', cancelProgramInputRequest);
+  if (programCancel) {
+    programCancel.addEventListener('click', cancelProgramInputRequest);
+    programCancel.addEventListener('keydown', event => {
+      activateProgramInputButton(event, cancelProgramInputRequest);
+    });
+  }
 
   const codeModeBtn = document.getElementById('codeModeBtn');
   const audioBlocksModeBtn = document.getElementById('audioBlocksModeBtn');

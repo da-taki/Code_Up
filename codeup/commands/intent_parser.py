@@ -1233,8 +1233,10 @@ class IntentParser:
     COMPARE_IDENTIFIERS_PATTERNS = [
         # Negative lookahead excludes "compare blocks and code" -- that exact
         # phrase is Audio Blocks Mode's own pre-existing block-vs-editor diff
-        # command (audio_blocks.py), not an identifier comparison.
-        r"^compare\s+(?!blocks\s+and\s+code$)([A-Za-z_]\w*)\s+and\s+([A-Za-z_]\w*)$",
+        # command (audio_blocks.py), not an identifier comparison -- and
+        # "compare before and after", which is the existing mistake-replay
+        # before/after diff command, not two variable names.
+        r"^compare\s+(?!blocks\s+and\s+code$)(?!before\s+and\s+after$)([A-Za-z_]\w*)\s+and\s+([A-Za-z_]\w*)$",
         r"^what(?:'s|\s+is)\s+the\s+difference\s+between\s+([A-Za-z_]\w*)\s+and\s+([A-Za-z_]\w*)$",
     ]
     READ_INDENTATION_EXACTLY_PATTERNS = [

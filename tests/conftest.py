@@ -14,6 +14,7 @@ INTEGRATION_MODULES = {
     "test_grounded_ai.py",
     "test_monaco_tab_focus.py",
     "test_multifile_projects.py",
+    "test_program_input_keyboard_browser.py",
     "test_run_tooltip_reflow.py",
     "test_tutorial_frontend.py",
     "test_voice_engine.py",

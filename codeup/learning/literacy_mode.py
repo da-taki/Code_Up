@@ -212,6 +212,7 @@ def command_kind(text: str) -> Optional[Dict[str, str]]:
         "give me lesson starter code": "starter_code",
         "practice the mistake": "practice_mistake",
         "check lesson understanding": "check_understanding",
+        "check my lesson understanding": "check_understanding",
         "complete lesson": "complete_lesson",
         "teacher lesson report": "teacher_report",
         "graduation report": "graduation_report",
@@ -377,8 +378,9 @@ def handle_command(command: Dict[str, str], mem: Dict[str, Any], code: str = "",
     if kind == "check_understanding":
         checks = mem.setdefault("lesson_checks_requested", {})
         checks[lesson["id"]] = int(checks.get(lesson["id"]) or 0) + 1
-        base = learning_moat.build_understanding_check("understanding_question", mem, code, error_text)
-        msg = f"Lesson check: {lesson['check_question']} {base['message']}"
+        spec = learning_moat.lesson_question_spec(lesson["id"], lesson["check_question"], code)
+        learning_moat.ask_understanding_question(mem, spec, code, source="lesson")
+        msg = f"Lesson check: {spec['question']} Answer when ready, or say \"give me a hint.\""
         return {"message": msg, "speech": msg}
     if kind == "complete_lesson":
         completed = mem.setdefault("completed_lessons", [])

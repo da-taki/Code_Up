@@ -274,13 +274,15 @@ def test_editor_tab_key_behavior_is_accurately_described_and_indent_is_reachable
     label matches actual behavior and that a keyboard indent/outdent path exists.
     """
     assert "accessibilitySupport: 'on'" in STATIC_APP
-    aria_label_match = re.search(r"ariaLabel:\s*'([^']*)'", STATIC_APP)
-    assert aria_label_match, "editor ariaLabel not found"
-    aria_label = aria_label_match.group(1)
-    assert "Tab indents" not in aria_label, "ariaLabel still claims Tab indents, contradicting actual Monaco tab-focus-mode behavior"
-    assert "Tab moves focus" in aria_label
-    assert "Control right bracket to indent" in aria_label
-    assert "Control left bracket to outdent" in aria_label
+    # The label is now built per Tab mode (default: Tab indents, per the How-To
+    # Guide; opt-in "Tab Leaves Editor": Tab moves focus) - each variant must
+    # describe exactly what that mode does, plus the way out of the editor.
+    assert "ariaLabel:            editorAriaLabel(tabMovesFocusEnabled())" in STATIC_APP
+    start = STATIC_APP.index("function editorAriaLabel(tabMovesFocus)")
+    aria_fn = STATIC_APP[start:STATIC_APP.index("function editorHelpText", start)]
+    assert "Tab moves focus out of the editor; use Control right bracket to indent a line and Control left bracket to outdent it." in aria_fn
+    assert "Tab indents code and Shift Tab outdents it" in aria_fn
+    assert "Control M, to leave the editor" in aria_fn
     assert "monaco.KeyCode.BracketRight" in STATIC_APP
     assert "monaco.KeyCode.BracketLeft" in STATIC_APP
     assert "editor.action.indentLines" in STATIC_APP

@@ -75,6 +75,9 @@
       <button id="nightToggle" class="theme-toggle" aria-pressed="false" aria-label="Toggle night mode">
         Night Mode
       </button>
+      <button id="tabFocusToggle" class="theme-toggle" aria-pressed="false" aria-label="Toggle Tab leaves editor. When on, Tab moves focus out of the code editor instead of indenting.">
+        Tab Leaves Editor
+      </button>
       <button id="tutorialBtn" class="cu-button cu-button-secondary" aria-label="Start interactive tutorial">
         Tutorial
       </button>
@@ -218,7 +221,7 @@
       </div>
 
       <div class="cu-editor-region" id="codeModeRegion">
-        <p id="editorHelp" class="cu-editor-help">Tab moves focus out of the editor. Use Control right bracket to indent a line and Control left bracket to outdent it. Press Escape when speech is quiet, or press Control+M, to leave the editor and continue to CodeUp controls.</p>
+        <p id="editorHelp" class="cu-editor-help">Tab indents code and Shift+Tab outdents it (Control right bracket and Control left bracket also work). Press Escape when speech is quiet, or press Control+M, to leave the editor and continue to CodeUp controls. To make Tab leave the editor instead, turn on Tab Leaves Editor in settings.</p>
         <div id="editor" class="cu-editor" role="group" aria-label="Python code editor" aria-describedby="editorHelp"></div>
         <button id="leaveEditorBtn" class="cu-button cu-button-secondary cu-leave-editor" type="button" aria-label="Leave editor and move to editor actions">Leave editor</button>
         <div id="errorSummary" class="cu-error-summary" aria-live="off" hidden>
@@ -536,6 +539,7 @@
       <ul class="cu-shortcut-list">
         <li><span class="cu-hotkey">Ctrl+Enter</span> — Run your code</li>
         <li><span class="cu-hotkey">Jump to editor</span> skip link, or <span class="cu-hotkey">Tab</span> from the top of the page — Focus the editor</li>
+        <li><span class="cu-hotkey">Tab</span> / <span class="cu-hotkey">Shift+Tab</span> in the editor — Indent / outdent code (<span class="cu-hotkey">Ctrl+]</span> / <span class="cu-hotkey">Ctrl+[</span> also work)</li>
         <li><span class="cu-hotkey">Escape</span> (editor quiet) or <span class="cu-hotkey">Ctrl+M</span> — Leave the editor</li>
         <li><span class="cu-hotkey">Escape</span> (while speaking) — Stop speech</li>
         <li><span class="cu-hotkey">Jump to command input</span> skip link — Focus the command box</li>
@@ -557,7 +561,7 @@
       <h2 id="guideTitle">Getting started with CodeUp</h2>
       <ol class="cu-guide-list">
         <li>Use the <strong>Jump to editor</strong> skip link, or Tab from the top of the page, to reach the code editor.</li>
-        <li>Type Python code in the editor. Tab moves focus out, so use Ctrl+] / Ctrl+[ to indent and outdent.</li>
+        <li>Type Python code in the editor. Tab indents and Shift+Tab outdents (Ctrl+] / Ctrl+[ also work).</li>
         <li>Press <strong>Ctrl+Enter</strong>, or the Run button, to run your code.</li>
         <li>Use the <strong>Jump to output</strong> skip link to inspect the program output.</li>
         <li>Use the <strong>Jump to command input</strong> skip link, or the Commands box, to type or say a command.</li>
@@ -785,6 +789,12 @@
           }
         } catch (e) {}
         speak(isActive ? 'Night mode activated.' : 'Night mode deactivated.');
+      });
+
+      document.getElementById('tabFocusToggle').addEventListener('click', function () {
+        if (typeof window.setTabMovesFocus === 'function') {
+          window.setTabMovesFocus(!(typeof window.tabMovesFocusEnabled === 'function' && window.tabMovesFocusEnabled()));
+        }
       });
 
       document.getElementById('runBtn').addEventListener('click', function () { if (typeof runCode === 'function') runCode(); });

@@ -82,6 +82,62 @@ def require_learner(view):
     return wrapped
 
 
+# ---- guest practice ----------------------------------------------------------
+# Learners who have not joined a class can still practice the built-in Python
+# Foundations modules and built-in guided projects. Nothing is written to the
+# classroom database for them: progress lives only in the browser's signed
+# session cookie. Instructor-authored ("custom:") lessons and projects stay
+# class-only.
+
+GUEST_PRACTICE_KEY = "guest_practice"
+
+
+def learner_or_guest(view):
+    @functools.wraps(view)
+    def wrapped(*args, **kwargs):
+        return view(current_learner(), *args, **kwargs)
+
+    return wrapped
+
+
+def _guest_progress() -> Dict[str, Dict[str, List[str]]]:
+    stored = session.get(GUEST_PRACTICE_KEY)
+    stored = stored if isinstance(stored, dict) else {}
+    return {
+        "modules": dict(stored.get("modules") or {}),
+        "projects": dict(stored.get("projects") or {}),
+    }
+
+
+def _guest_record(kind: str, item_id: str, values: List[str]) -> List[str]:
+    progress = _guest_progress()
+    merged = list(dict.fromkeys(list(progress[kind].get(item_id) or []) + [str(v) for v in values]))
+    progress[kind][item_id] = merged
+    session[GUEST_PRACTICE_KEY] = progress
+    session.modified = True
+    return merged
+
+
+def _guest_module_progress(module_id: str) -> Dict[str, Any]:
+    stages = list(_guest_progress()["modules"].get(module_id) or [])
+    status = "completed" if "attempt" in stages else "not_started"
+    return {"module_id": module_id, "status": status, "completed_stages": stages, "guest": True}
+
+
+def _is_builtin_module(module_id: str) -> bool:
+    return not module_id.startswith("custom:") and curriculum.public_module(module_id) is not None
+
+
+def _is_builtin_project(project_id: str) -> bool:
+    return not project_id.startswith("custom:") and guided_projects.get_project(project_id) is not None
+
+
+def _guest_not_available():
+    if request.is_json or request.method == "POST" or request.path.endswith("/context"):
+        return jsonify({"success": False, "error": "not_joined"}), 401
+    return redirect(url_for("classroom.join_page"))
+
+
 def _own_cohort_or_404(instructor: Dict[str, Any], cohort_id: int) -> Optional[Dict[str, Any]]:
     cohort = db.get_cohort(cohort_id)
     if not cohort or cohort["instructor_id"] != instructor["id"]:
@@ -97,6 +153,13 @@ def _assignment_cohort_or_404(instructor: Dict[str, Any], assignment_id: int):
     if not cohort:
         return None, None
     return assignment, cohort
+
+
+def _normalized_concepts_keep_unknown(raw: str) -> List[str]:
+    """Assignments and guided projects only use expected concepts for mastery
+    credit, so canonicalize recognized aliases and keep any other label as typed."""
+    canonical, unknown = concepts_mod.normalize_expected_concepts(raw)
+    return canonical + unknown
 
 
 def _learner_assignment_or_404(learner: Dict[str, Any], assignment_id: int):
@@ -505,7 +568,7 @@ def create_assignment(instructor, cohort_id):
     due_date = (request.form.get("due_date") or "").strip() or None
     start_at = (request.form.get("start_at") or "").strip() or None
     end_at = (request.form.get("end_at") or "").strip() or None
-    expected_concepts = [c.strip() for c in (request.form.get("expected_concepts") or "").split(",") if c.strip()]
+    expected_concepts = _normalized_concepts_keep_unknown(request.form.get("expected_concepts") or "")
     preset = ai_policy.normalize_policy(request.form.get("ai_policy"))
     is_assessment = request.form.get("is_assessment") == "on"
 
@@ -1109,12 +1172,16 @@ def submit_assignment(learner, assignment_id):
 # ---- learner: guided projects (opened inside the IDE) ---------------------------------
 
 @classroom_bp.route("/projects/<project_id>/open", methods=["GET"])
-@require_learner
+@learner_or_guest
 def open_project(learner, project_id):
-    if not guided_projects.get_project(project_id):
+    if learner is None:
+        if not _is_builtin_project(project_id):
+            return _guest_not_available()
+    elif not guided_projects.get_project(project_id):
         return redirect(url_for("classroom.learner_home"))
-    db.get_or_create_project_progress(learner["id"], project_id)
-    db.touch_learner_active(learner["id"])
+    else:
+        db.get_or_create_project_progress(learner["id"], project_id)
+        db.touch_learner_active(learner["id"])
     resp = redirect(url_for("ide") + f"?project={project_id}")
     resp.set_cookie(PROJECT_COOKIE, project_id, httponly=False, samesite="Lax")
     resp.delete_cookie(ASSIGNMENT_COOKIE)
@@ -1157,8 +1224,19 @@ def _project_newly_completed(
 
 
 @classroom_bp.route("/projects/<path:project_id>/context", methods=["GET"])
-@require_learner
+@learner_or_guest
 def project_context(learner, project_id):
+    if learner is None:
+        if not _is_builtin_project(project_id):
+            return _guest_not_available()
+        project = guided_projects.get_project(project_id)
+        completed = list(_guest_progress()["projects"].get(project_id) or [])
+        progress = {"project_id": project_id, "code": "", "checkpoints_completed": completed, "guest": True}
+        intro = (
+            learner_context.project_returning_intro(project, completed) if completed
+            else learner_context.project_intro(project)
+        )
+        return jsonify({"success": True, "project": project, "progress": progress, "intro": intro, "guest": True})
     project = _project_public(project_id, cohort_id=learner["cohort_id"])
     if not project:
         return jsonify({"success": False, "error": "not_found"}), 404
@@ -1172,8 +1250,24 @@ def project_context(learner, project_id):
 
 
 @classroom_bp.route("/projects/<path:project_id>/save", methods=["POST"])
-@require_learner
+@learner_or_guest
 def save_project(learner, project_id):
+    if learner is None:
+        if not _is_builtin_project(project_id):
+            return _guest_not_available()
+        project = guided_projects.get_project(project_id)
+        code = str((request.get_json(silent=True) or {}).get("code") or "")
+        prior = list(_guest_progress()["projects"].get(project_id) or [])
+        newly = guided_projects.newly_completed(project_id, code, prior)
+        completed = _guest_record("projects", project_id, newly) if newly else prior
+        feedback = (
+            learner_context.checkpoint_completion_feedback(project, newly) if newly
+            else learner_context.checkpoint_incomplete_feedback(project, completed)
+        )
+        return jsonify({
+            "success": True, "newly_completed": newly, "checkpoints_completed": completed,
+            "feedback": feedback, "guest": True,
+        })
     project = _project_public(project_id, cohort_id=learner["cohort_id"])
     if not project:
         return jsonify({"success": False, "error": "not_found"}), 404
@@ -1284,7 +1378,9 @@ def _check_lesson_stage(
         lesson = _lesson_context(module_id, cohort_id=cohort_id)
         if not lesson:
             return {"passed": False, "feedback": "This lesson could not be found."}
-        expected = set(lesson.get("expected_concepts") or [])
+        # Only labels the detector can report are checkable; legacy rows saved
+        # before validation may hold aliases ("for loops") or unknown words.
+        expected = set(concepts_mod.normalize_expected_concepts(lesson.get("expected_concepts") or [])[0])
         present = set(concepts_mod.detect_concepts(code))
         if expected:
             passed = bool(code.strip()) and expected.issubset(present)
@@ -1300,8 +1396,19 @@ def _check_lesson_stage(
 
 
 @classroom_bp.route("/curriculum", methods=["GET"])
-@require_learner
+@learner_or_guest
 def curriculum_home(learner):
+    if learner is None:
+        modules = []
+        for mid in curriculum.MODULE_ORDER:
+            m = curriculum.public_module(mid)
+            m["status"] = _guest_module_progress(mid)["status"]
+            modules.append(m)
+        return render_template(
+            "classroom/curriculum_home.html",
+            learner=None, guest=True, modules=modules, continue_module=None,
+            onboarding_completed=False, guided_projects=guided_projects.list_projects(),
+        )
     db.touch_learner_active(learner["id"])
     state = db.get_curriculum_state(learner["id"])
     module_progress = {row["module_id"]: row for row in db.list_module_progress(learner["id"])}
@@ -1337,20 +1444,24 @@ def curriculum_home(learner):
     onboarding_done = db.onboarding_completed(learner["id"])
     return render_template(
         "classroom/curriculum_home.html",
-        learner=learner, modules=modules, continue_module=continue_module,
+        learner=learner, guest=False, modules=modules, continue_module=continue_module,
         onboarding_completed=onboarding_done,
     )
 
 
 @classroom_bp.route("/curriculum/<path:module_id>/open", methods=["GET"])
-@require_learner
+@learner_or_guest
 def open_module(learner, module_id):
-    lesson = _lesson_context(module_id, cohort_id=learner["cohort_id"])
-    if not lesson:
-        return redirect(url_for("classroom.curriculum_home"))
-    db.get_or_create_module_progress_row(learner["id"], module_id)
-    db.set_curriculum_position(learner["id"], module_id, "concept")
-    db.touch_learner_active(learner["id"])
+    if learner is None:
+        if not _is_builtin_module(module_id):
+            return _guest_not_available()
+    else:
+        lesson = _lesson_context(module_id, cohort_id=learner["cohort_id"])
+        if not lesson:
+            return redirect(url_for("classroom.curriculum_home"))
+        db.get_or_create_module_progress_row(learner["id"], module_id)
+        db.set_curriculum_position(learner["id"], module_id, "concept")
+        db.touch_learner_active(learner["id"])
     resp = redirect(url_for("ide") + f"?module={module_id}")
     resp.set_cookie(MODULE_COOKIE, module_id, httponly=False, samesite="Lax")
     resp.delete_cookie(ASSIGNMENT_COOKIE)
@@ -1359,8 +1470,15 @@ def open_module(learner, module_id):
 
 
 @classroom_bp.route("/curriculum/<path:module_id>/context", methods=["GET"])
-@require_learner
+@learner_or_guest
 def module_context(learner, module_id):
+    if learner is None:
+        if not _is_builtin_module(module_id):
+            return _guest_not_available()
+        return jsonify({
+            "success": True, "lesson": _lesson_context(module_id), "progress": _guest_module_progress(module_id),
+            "next_module_id": curriculum.next_module_id(module_id), "guest": True,
+        })
     lesson = _lesson_context(module_id, cohort_id=learner["cohort_id"])
     if not lesson:
         return jsonify({"success": False, "error": "not_found"}), 404
@@ -1370,8 +1488,16 @@ def module_context(learner, module_id):
 
 
 @classroom_bp.route("/curriculum/<path:module_id>/attempt", methods=["POST"])
-@require_learner
+@learner_or_guest
 def submit_module_attempt(learner, module_id):
+    if learner is None:
+        if not _is_builtin_module(module_id):
+            return _guest_not_available()
+        code = str((request.get_json(silent=True) or {}).get("code") or "")
+        result = _check_lesson_stage(module_id, code, "attempt")
+        if result["passed"]:
+            _guest_record("modules", module_id, ["attempt"])
+        return jsonify({"success": True, "passed": result["passed"], "feedback": result["feedback"], "guest": True})
     lesson = _lesson_context(module_id, cohort_id=learner["cohort_id"])
     if not lesson:
         return jsonify({"success": False, "error": "not_found"}), 404
@@ -1383,7 +1509,8 @@ def submit_module_attempt(learner, module_id):
         db.set_curriculum_position(learner["id"], module_id, "attempt")
         db.touch_learner_active(learner["id"])
         if result["passed"]:
-            concepts_to_credit = lesson.get("expected_concepts") or concepts_mod.detect_concepts(code)
+            concepts_to_credit = (concepts_mod.normalize_expected_concepts(lesson.get("expected_concepts") or [])[0]
+                                  or concepts_mod.detect_concepts(code))
             for concept in concepts_to_credit:
                 concepts_mod.record_lesson_passed(learner["id"], learner["cohort_id"], concept)
             db.log_event(learner["id"], learner["cohort_id"], "lesson_progress", {"module": module_id, "passed": True})
@@ -1393,8 +1520,16 @@ def submit_module_attempt(learner, module_id):
 
 
 @classroom_bp.route("/curriculum/<path:module_id>/challenge", methods=["POST"])
-@require_learner
+@learner_or_guest
 def submit_module_challenge(learner, module_id):
+    if learner is None:
+        if not _is_builtin_module(module_id):
+            return _guest_not_available()
+        code = str((request.get_json(silent=True) or {}).get("code") or "")
+        result = _check_lesson_stage(module_id, code, "challenge")
+        if result["passed"]:
+            _guest_record("modules", module_id, ["challenge"])
+        return jsonify({"success": True, "passed": result["passed"], "feedback": result["feedback"], "guest": True})
     lesson = _lesson_context(module_id, cohort_id=learner["cohort_id"])
     if not lesson:
         return jsonify({"success": False, "error": "not_found"}), 404
@@ -1413,18 +1548,22 @@ def submit_module_challenge(learner, module_id):
 
 
 @classroom_bp.route("/curriculum/<path:module_id>/quiz", methods=["GET"])
-@require_learner
+@learner_or_guest
 def module_quiz(learner, module_id):
-    lesson = _lesson_context(module_id, cohort_id=learner["cohort_id"])
+    if learner is None and not _is_builtin_module(module_id):
+        return _guest_not_available()
+    lesson = _lesson_context(module_id, cohort_id=learner["cohort_id"] if learner else None)
     if not lesson or not lesson.get("quiz_question"):
         return redirect(url_for("classroom.curriculum_home"))
     return render_template("classroom/quiz.html", learner=learner, module_id=module_id, lesson=lesson, result=None)
 
 
 @classroom_bp.route("/curriculum/<path:module_id>/quiz", methods=["POST"])
-@require_learner
+@learner_or_guest
 def module_quiz_submit(learner, module_id):
-    lesson = _lesson_context(module_id, cohort_id=learner["cohort_id"])
+    if learner is None and not _is_builtin_module(module_id):
+        return _guest_not_available()
+    lesson = _lesson_context(module_id, cohort_id=learner["cohort_id"] if learner else None)
     if not lesson or not lesson.get("quiz_question"):
         return redirect(url_for("classroom.curriculum_home"))
     try:
@@ -1436,9 +1575,10 @@ def module_quiz_submit(learner, module_id):
         feedback = "Correct." if correct else "Not quite - review the lesson and try again."
     else:
         correct, feedback = curriculum.check_quiz(module_id, choice_index)
-    db.record_quiz_result(learner["id"], module_id, 1 if correct else 0, 1)
-    db.touch_learner_active(learner["id"])
-    db.log_event(learner["id"], learner["cohort_id"], "quiz_submitted", {"module": module_id, "correct": correct})
+    if learner is not None:
+        db.record_quiz_result(learner["id"], module_id, 1 if correct else 0, 1)
+        db.touch_learner_active(learner["id"])
+        db.log_event(learner["id"], learner["cohort_id"], "quiz_submitted", {"module": module_id, "correct": correct})
     return render_template(
         "classroom/quiz.html", learner=learner, module_id=module_id, lesson=lesson,
         result={"correct": correct, "feedback": feedback},
@@ -1505,7 +1645,7 @@ def complete_onboarding(learner):
 # INSTRUCTOR-AUTHORED LESSONS
 # ============================================================================
 
-def _render_custom_lessons(instructor, cohort, *, title_error=None):
+def _render_custom_lessons(instructor, cohort, *, title_error=None, concepts_error=None):
     """Shared by the GET view and create_custom_lesson's validation-failure
     path. The lesson form is re-populated straight from request.form (Flask
     injects `request` as a template global) on failure - see
@@ -1514,7 +1654,8 @@ def _render_custom_lessons(instructor, cohort, *, title_error=None):
     lessons = db.list_custom_lessons(cohort["id"])
     return render_template(
         "classroom/custom_lessons.html", instructor=instructor, cohort=cohort, lessons=lessons,
-        lesson_title_error=title_error,
+        lesson_title_error=title_error, lesson_concepts_error=concepts_error,
+        supported_concepts=concepts_mod.SUPPORTED_CONCEPTS,
     )
 
 
@@ -1536,6 +1677,14 @@ def create_custom_lesson(instructor, cohort_id):
     title = (request.form.get("title") or "").strip()
     if not title:
         return _render_custom_lessons(instructor, cohort, title_error="Lesson title is required.")
+    expected_concepts, unknown_concepts = concepts_mod.normalize_expected_concepts(
+        request.form.get("expected_concepts") or "")
+    if unknown_concepts:
+        return _render_custom_lessons(
+            instructor, cohort,
+            concepts_error="CodeUp cannot automatically check: " + ", ".join(unknown_concepts)
+            + ". Use supported labels such as " + ", ".join(concepts_mod.SUPPORTED_CONCEPTS) + ".",
+        )
     choices = [c.strip() for c in (request.form.get("quiz_choices") or "").split("\n") if c.strip()]
     answer_index = None
     try:
@@ -1551,7 +1700,7 @@ def create_custom_lesson(instructor, cohort_id):
         explanation=request.form.get("explanation") or "",
         starter_code=request.form.get("starter_code") or "",
         instructions=request.form.get("instructions") or "",
-        expected_concepts=[c.strip() for c in (request.form.get("expected_concepts") or "").split(",") if c.strip()],
+        expected_concepts=expected_concepts,
         challenge=request.form.get("challenge") or "",
         expected_output=(request.form.get("expected_output") or "").strip() or None,
         quiz_question=(request.form.get("quiz_question") or "").strip() or None,
@@ -1620,7 +1769,7 @@ def create_custom_project(instructor, cohort_id):
         cohort_id, instructor["id"], title=title,
         instructions=request.form.get("instructions") or "",
         starter_code=request.form.get("starter_code") or "",
-        expected_concepts=[c.strip() for c in (request.form.get("expected_concepts") or "").split(",") if c.strip()],
+        expected_concepts=_normalized_concepts_keep_unknown(request.form.get("expected_concepts") or ""),
         checkpoints=checkpoints,
     )
     return redirect(url_for("classroom.custom_projects_list", cohort_id=cohort_id))

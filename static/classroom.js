@@ -191,6 +191,13 @@
 
   // ---- help widget (shared by assignment/project/module panels) ----------
 
+  function appendGuestPracticeNote(panel) {
+    panel.appendChild(el('p', {
+      id: 'classroomGuestPracticeNote',
+      textContent: 'Practicing without a class: progress is kept in this browser only. Join a class to ask an instructor for help.',
+    }));
+  }
+
   function appendHelpWidget(panel, opts) {
     opts = opts || {};
     const heading = el('h3', { textContent: 'Ask your instructor for help' });
@@ -542,7 +549,8 @@
     panel.appendChild(el('h3', { textContent: 'Checkpoints' }));
     panel.appendChild(list);
 
-    appendHelpWidget(panel);
+    if (data.guest) appendGuestPracticeNote(panel);
+    else appendHelpWidget(panel);
 
     const code = progress.code || project.starter_code;
     if (code && typeof window.setCode === 'function') {
@@ -656,7 +664,8 @@
     const backLink = el('a', { className: 'cu-button cu-button-secondary', href: '/classroom/curriculum', textContent: 'Back to course' });
     panel.appendChild(el('p', {}, [backLink]));
 
-    appendHelpWidget(panel);
+    if (data.guest) appendGuestPracticeNote(panel);
+    else appendHelpWidget(panel);
 
     if (lesson.example_code && (!progress.completed_stages || !progress.completed_stages.length) && typeof window.setCode === 'function') {
       window.setCode('', { preserveSpeech: true });
@@ -979,9 +988,18 @@
     // input) - see .cu-classroom-join-actions in classroom.css.
     const actionsRow = el('div', { className: 'cu-classroom-join-actions' }, [joinBtn]);
 
+    // Built-in Python Foundations and guided projects are open to learners
+    // who have not joined yet (guest practice - progress stays in this
+    // browser; see routes.learner_or_guest).
+    const practice = el('p', {}, [
+      el('a', { id: 'classroomGuestPracticeLink', className: 'cu-button cu-button-secondary', href: '/classroom/curriculum',
+        textContent: 'Practice without a class: Python Foundations and guided projects' }),
+    ]);
+
     const body = el('div', { className: 'cu-disclosure-body' }, [
       heading, codeField, nameField, actionsRow, status,
       el('p', { className: 'cu-command-tip', textContent: 'You can also type "join a classroom" in the command box.' }),
+      practice,
     ]);
     details.appendChild(body);
     panel.appendChild(details);

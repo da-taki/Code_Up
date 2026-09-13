@@ -1272,6 +1272,68 @@ def _ai_capability_check(capability: str) -> Tuple[bool, Dict[str, bool], str]:
     return allowed, settings, message
 
 
+_VOICE_CAPABILITY_BY_INTENT = {
+    "fix": "fix",
+    "fix_with_explanation": "fix",
+    "change_apply": "fix",
+    "walk_through": "explain",
+    "analyze": "explain",
+    "analyze_deep": "explain",
+    "concept_question": "concept_qa",
+    "code_map": "audio_code_map",
+    "inside_loop": "audio_code_map",
+    "step_through": "step_narration",
+    "next_step": "step_narration",
+    "previous_step": "step_narration",
+    "explain_step": "step_narration",
+    "loop_state": "step_narration",
+    "condition_pass": "step_narration",
+    "condition_fail": "step_narration",
+    "program_state": "watch_variable",
+    "summarize_variables": "watch_variable",
+    "variable_now": "watch_variable",
+    "read_watched": "watch_variable",
+    "watch_variable": "watch_variable",
+    "unwatch_variable": "watch_variable",
+}
+
+_VOICE_ERROR_HELP_INTENTS = {
+    "explain_error_trace", "crash_location", "error_cause", "error_value", "test_next",
+}
+
+_VOICE_GENERATE_INTENTS = {
+    "insert_loop", "insert_if", "append_line", "safe_rename", "comment_line",
+    "insert_print", "insert_variable", "insert_input", "insert_function", "insert_class",
+    "add_parameter", "generate_code",
+}
+
+
+def _voice_assignment_capability(text: str, intent: Optional[str], current_code: str) -> Optional[str]:
+    """Map only assignment-controlled assistance commands to policy capabilities.
+
+    Runtime, program input, output reading, focus/navigation, and deterministic
+    structural orientation intentionally return ``None`` and remain available.
+    """
+    if intent in _VOICE_ERROR_HELP_INTENTS:
+        return "error_help"
+    if intent in _VOICE_GENERATE_INTENTS or (intent and intent.startswith("insert_")):
+        return "generate"
+    mapped = _VOICE_CAPABILITY_BY_INTENT.get(intent or "")
+    if mapped:
+        return mapped
+
+    low = str(text or "").strip().lower()
+    if re.search(r"\b(?:hint|nudge|clue)\b", low):
+        return "hint"
+
+    # Several beginner create/transform phrases deliberately bypass the broad
+    # intent parser and use the deterministic template mapper instead.
+    template = beginner_templates.match_template_command(text, current_code=current_code)
+    if template is not None:
+        return "generate"
+    return None
+
+
 _PENDING_JOIN_KEY = "_classroom_pending_join"
 
 
@@ -2311,6 +2373,7 @@ def _enhanced_code_map(code: str) -> dict:
         "summary": "",
         "blocks": [],
         "functions": [],
+        "classes": [],
         "loops": [],
         "conditions": [],
         "assignments": [],
@@ -2354,6 +2417,17 @@ def _enhanced_code_map(code: str) -> dict:
                 "end": getattr(node, 'end_lineno', node.lineno),
                 "params": params,
                 "is_async": isinstance(node, ast.AsyncFunctionDef),
+            })
+        elif isinstance(node, ast.ClassDef):
+            methods = [
+                child.name for child in node.body
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+            ]
+            result["classes"].append({
+                "name": node.name,
+                "start": node.lineno,
+                "end": getattr(node, "end_lineno", node.lineno),
+                "methods": methods,
             })
 
     for node in ast.walk(tree):
@@ -2401,6 +2475,19 @@ def _enhanced_code_map(code: str) -> dict:
     if result["functions"]:
         names = [f["name"] for f in result["functions"]]
         parts.append(f"It defines {len(names)} function{'s' if len(names) != 1 else ''}: {', '.join(names)}.")
+
+    if result["classes"]:
+        class_parts = []
+        for class_info in result["classes"]:
+            methods = class_info["methods"]
+            detail = f"{class_info['name']}"
+            if methods:
+                detail += f" with {'method' if len(methods) == 1 else 'methods'} {', '.join(methods)}"
+            class_parts.append(detail)
+        parts.append(
+            f"It defines {len(class_parts)} {'class' if len(class_parts) == 1 else 'classes'}: "
+            f"{'; '.join(class_parts)}."
+        )
 
     assigns_before_loops = [a for a in result["assignments"]
                             if not result["loops"] or a["line"] < result["loops"][0]["start"]]
@@ -5713,6 +5800,10 @@ def track_variables():
     if blocked:
         return blocked
 
+    _allowed, _policy, _blocked_msg = _ai_capability_check("watch_variable")
+    if not _allowed:
+        return jsonify({"success": False, "error": _blocked_msg})
+
     try:
         line = int(body.get("line", 1))
     except (ValueError, TypeError):
@@ -6210,6 +6301,10 @@ def generate_code():
         return jsonify({"success": False, "error": f"Prompt too large (max {MAX_CODE_SIZE} bytes)"}), 413
     if not prompt.strip():
         return jsonify({"success": False, "error": "Prompt cannot be empty"}), 400
+
+    _allowed, _policy, _blocked_msg = _ai_capability_check("generate")
+    if not _allowed:
+        return jsonify({"success": False, "error": _blocked_msg, "code": ""})
 
     try:
         session_memory.record_generation(mem, prompt)
@@ -10080,11 +10175,38 @@ def voice():
         awaiting_response.setdefault("confidence", 0.99)
         return jsonify(_sanitize_voice_response(awaiting_response))
 
+    # An open understanding question ("check my understanding") claims the
+    # learner's reply before general NLU, so "2" or "i is 2 on the last run"
+    # is graded instead of being read as a suggestion pick or a run command.
+    # A running program waiting for input() still wins (checked just above).
+    if active_mode != "audio_blocks":
+        understanding_reply = learning_moat.route_pending_understanding(text, mem, current_code)
+        if understanding_reply is not None:
+            return _store_and_return({
+                "success": True, "action": "deterministic_message",
+                "message": understanding_reply["message"], "speech": understanding_reply["speech"],
+                "heard": text, "intent": "understanding_answer", "learning_bridge": True,
+                "understanding_check": True,
+                "understanding_result": understanding_reply.get("understanding_result"),
+                "understanding_correct": understanding_reply.get("understanding_correct"),
+                "confidence": 0.98,
+            })
+
     if intent == "repeat":
         last_action = storage.get('last_voice_action', None)
         if not last_action:
             return jsonify({"success": True, "action": "unknown", "heard": "repeat", "message": "No previous command to repeat"})
         return jsonify(last_action[0]), last_action[1]
+
+    assignment_capability = _voice_assignment_capability(text, intent, current_code)
+    if assignment_capability:
+        allowed, _settings, blocked_message = _ai_capability_check(assignment_capability)
+        if not allowed:
+            return _store_and_return({
+                "success": True, "action": "deterministic_message", "intent": intent,
+                "heard": text, "message": blocked_message, "speech": blocked_message,
+                "policy_blocked": True, "capability": assignment_capability,
+            })
 
     if confidence >= 0.75 and intent == "inside_loop":
         code_map_queries = {
@@ -10107,6 +10229,31 @@ def voice():
     _pending_proposal = session_memory.get_change_proposal(mem)
     if _pending_proposal is not None:
         _low = text.strip().lower()
+        if intent == "diff_review":
+            change = audio_diff.summarize_change(
+                _pending_proposal.get("before", ""),
+                _pending_proposal.get("after", ""),
+                reason=_pending_proposal.get("reason", ""),
+            )
+            change_desc = str(_pending_proposal.get("change_desc") or "").strip()
+            msg = f"Proposed change: {change_desc}" if change_desc else audio_diff.narrate(change)
+            if not msg or "no code changes" in msg.lower():
+                msg = _pending_proposal.get("proposal_text") or "I proposed a fix. Say apply or reject."
+            return _store_and_return({"success": True, "action": "deterministic_message",
+                                      "speech": msg, "message": msg, "heard": text,
+                                      "intent": "diff_review"})
+        if intent == "diff_risk":
+            change = audio_diff.summarize_change(
+                _pending_proposal.get("before", ""),
+                _pending_proposal.get("after", ""),
+                reason=_pending_proposal.get("reason", ""),
+            )
+            risk = str(_pending_proposal.get("risk") or change.get("risk") or "unknown")
+            reason = str(change.get("risk_reason") or "Review the proposed change before applying it.")
+            msg = f"Risk: {risk.capitalize()}. {reason}"
+            return _store_and_return({"success": True, "action": "deterministic_message",
+                                      "speech": msg, "message": msg, "heard": text,
+                                      "intent": "diff_risk"})
         if _low in {"apply", "apply it", "apply this change", "apply the change",
                     "apply the fix", "apply all", "do it", "yes apply", "apply the proposal"}:
             after_code = _pending_proposal.get("after") or ""
@@ -10223,7 +10370,7 @@ def voice():
             })
     learning_pre_kind = learning_moat.command_kind(text)
     if active_mode == "audio_blocks" and learning_pre_kind in {
-        "tutor_hint", "tutor_show_fix", "understanding_question",
+        "tutor_hint", "tutor_hint_more", "tutor_hint_small", "tutor_show_fix", "understanding_question",
         "understanding_mistake", "understanding_practice", "understanding_grade",
     }:
         msg = (
@@ -10256,6 +10403,12 @@ def voice():
         return _store_and_return(deterministic_insert)
 
     learning_kind = learning_moat.command_kind(text)
+    if learning_kind in {"tutor_hint_more", "tutor_hint_small"} and any(
+        isinstance(mem.get(key), dict) for key in ("learning_path", "error_practice", "block_practice")
+    ):
+        # An active learning-path / error / block practice owns its own hint
+        # ladder (accessible_learning.route_command, just below).
+        learning_kind = None
     if learning_kind is not None:
         def _learning_msg(result, **extra):
             payload = {
@@ -10272,7 +10425,7 @@ def voice():
             return _store_and_return(payload)
 
         if active_mode == "audio_blocks" and learning_kind in {
-            "tutor_hint", "tutor_show_fix", "understanding_question",
+            "tutor_hint", "tutor_hint_more", "tutor_hint_small", "tutor_show_fix", "understanding_question",
             "understanding_mistake", "understanding_practice", "understanding_grade",
         }:
             msg = (
@@ -10321,7 +10474,10 @@ def voice():
             return _learning_msg({"message": proposal, "speech": speech}, tutor_mode=True, proposed_fix=True)
 
         result = learning_moat.handle_tutor_command(learning_kind, mem, current_code, error_context)
-        return _learning_msg(result, tutor_mode=bool(mem.get("tutor_mode")))
+        extra = {"hint_level": result["hint_level"]} if result.get("hint_level") else {}
+        if result.get("understanding_result"):
+            extra.update(understanding_check=True, understanding_result=result["understanding_result"])
+        return _learning_msg(result, tutor_mode=bool(mem.get("tutor_mode")), **extra)
 
     accessible_response = accessible_learning.route_command(
         text,

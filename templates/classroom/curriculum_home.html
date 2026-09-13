@@ -2,9 +2,20 @@
 {% block title %}Course - CodeUp Classroom{% endblock %}
 {% block header_title %}Python Foundations{% endblock %}
 {% block header_nav %}
+  {% if guest %}
+  <a class="cu-button cu-button-secondary" href="/ide">Back to CodeUp</a>
+  <a class="cu-button cu-button-secondary" href="{{ url_for('classroom.join_page') }}">Join a class</a>
+  {% else %}
   <a class="cu-button cu-button-secondary" href="{{ url_for('classroom.learner_home') }}">Back to my work</a>
+  {% endif %}
 {% endblock %}
 {% block content %}
+  {% if guest %}
+  <section class="cu-panel" aria-labelledby="guestPracticeHeading">
+    <h2 id="guestPracticeHeading">Practicing without a class</h2>
+    <p>You can use Python Foundations and the guided projects now. Your progress is kept in this browser only. Join a class to save progress for your instructor and see lessons from your instructor.</p>
+  </section>
+  {% endif %}
   {% if continue_module %}
   <section class="cu-panel" aria-labelledby="continueHeading">
     <h2 id="continueHeading">Continue learning</h2>
@@ -38,7 +49,7 @@
           <td><span class="cu-badge cu-badge--{{ m.status }}">{{ m.status.replace('_', ' ') }}</span></td>
           <td><a class="cu-button cu-button-secondary" href="{{ url_for('classroom.open_module', module_id=m.id) }}">Open</a></td>
           <td>
-            {% if m.status != 'not_started' %}
+            {% if m.status != 'not_started' and not guest %}
             <a class="cu-button cu-button-secondary" href="{{ url_for('classroom.restart_module_confirm', module_id=m.id) }}">Restart</a>
             {% endif %}
           </td>
@@ -49,9 +60,22 @@
     </div>
   </section>
 
+  {% if guest and guided_projects %}
+  <section class="cu-panel" aria-labelledby="guestProjectsHeading">
+    <h2 id="guestProjectsHeading">Guided projects</h2>
+    <ul>
+      {% for project in guided_projects %}
+      <li><a href="{{ url_for('classroom.open_project', project_id=project.id) }}">{{ project.title }}</a></li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
   <section class="cu-panel" aria-labelledby="startOverHeading">
     <h2 id="startOverHeading">Start over</h2>
     <p><a class="cu-button cu-button-secondary" href="{{ url_for('classroom.open_module', module_id=modules[0].id) }}">Start from the beginning</a></p>
+    {% if not guest %}
     <p><a class="cu-button cu-button-secondary" href="{{ url_for('classroom.restart_course_confirm') }}">Restart the entire course</a></p>
+    {% endif %}
   </section>
 {% endblock %}

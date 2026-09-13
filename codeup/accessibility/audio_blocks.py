@@ -1550,6 +1550,16 @@ def _parse_add(text: str) -> Tuple[Optional[str], Dict[str, Any]]:
             return "set_number", {"variable": variable, "value": normalized_number}
         return "set_text", {"variable": variable, "text": raw_value.strip("\"'")}
 
+    set_variable_match = re.match(
+        r"^set variable (\w+) to (.+)$", text, flags=re.IGNORECASE
+    )
+    if set_variable_match:
+        variable, raw_value = set_variable_match.group(1), set_variable_match.group(2).strip()
+        ok, normalized_number = _number(raw_value)
+        if ok:
+            return "set_number", {"variable": variable, "value": normalized_number}
+        return "set_text", {"variable": variable, "text": raw_value.strip("\"'")}
+
     patterns = [
         (r"^add import block$", "import_module", {"module": "math"}),
         (r"^add import (math|random|datetime|string|statistics|json) block$", "import_module", lambda m: {"module": m.group(1).lower()}),
@@ -1596,11 +1606,6 @@ def _parse_add(text: str) -> Tuple[Optional[str], Dict[str, Any]]:
             r"^add (int|float|str) conversion block for (.+) into (\w+)$",
             "convert_type",
             lambda m: {"conversion": m.group(1), "value": m.group(2), "variable": m.group(3)},
-        ),
-        (
-            r"^set variable (\w+) to (.+)$",
-            "set_text",
-            lambda m: {"variable": m.group(1), "text": m.group(2)},
         ),
         (
             r"^add change (\w+) by (-?[\d.]+)$",

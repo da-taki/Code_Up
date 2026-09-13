@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import ast
 import re
-from typing import Dict, List, Sequence
+from typing import Dict, List, Sequence, Tuple
 
 from codeup.reports import report_support
 from codeup.classroom import db
@@ -35,6 +35,59 @@ CURRICULUM_CONCEPTS = (
 )
 
 _TYPE_CONVERSION_RE = re.compile(r"\b(int|str|float|bool|type)\s*\(")
+
+# Every label detect_concepts() can actually report - the only labels an
+# instructor's "expected concepts" can be automatically checked against.
+SUPPORTED_CONCEPTS = CURRICULUM_CONCEPTS + (
+    "f-strings", "classes", "imports", "list comprehension", "error handling", "file reading",
+)
+
+# Instructors type expected concepts as free text; map the common ways of
+# naming each concept onto the detector's canonical label.
+_CONCEPT_ALIASES = {
+    "print": "print output", "prints": "print output", "printing": "print output", "output": "print output",
+    "print statement": "print output", "print statements": "print output", "print()": "print output",
+    "variable": "variables", "assignment": "variables", "assignments": "variables",
+    "user input": "input", "inputs": "input", "input()": "input", "reading input": "input",
+    "data type": "data types", "types": "data types", "type conversion": "data types",
+    "type casting": "data types", "casting": "data types",
+    "conditionals": "conditionals (if/else)", "conditional": "conditionals (if/else)",
+    "conditions": "conditionals (if/else)", "condition": "conditionals (if/else)",
+    "if": "conditionals (if/else)", "if/else": "conditionals (if/else)", "if else": "conditionals (if/else)",
+    "if-else": "conditionals (if/else)", "if statement": "conditionals (if/else)",
+    "if statements": "conditionals (if/else)", "if/elif/else": "conditionals (if/else)",
+    "loop": "loops", "for loop": "loops", "for loops": "loops", "while loop": "loops",
+    "while loops": "loops", "iteration": "loops",
+    "list": "lists", "dictionary": "dictionaries", "dict": "dictionaries", "dicts": "dictionaries",
+    "function": "functions", "def": "functions",
+    "f-string": "f-strings", "fstring": "f-strings", "fstrings": "f-strings", "f string": "f-strings",
+    "f strings": "f-strings", "string formatting": "f-strings",
+    "class": "classes", "import": "imports", "modules": "imports",
+    "list comprehensions": "list comprehension",
+    "exceptions": "error handling", "exception handling": "error handling", "try/except": "error handling",
+    "try except": "error handling", "files": "file reading", "file handling": "file reading",
+}
+
+
+def normalize_expected_concepts(raw) -> Tuple[List[str], List[str]]:
+    """Map free-text expected concepts (a comma-separated string or a list)
+    onto detector labels. Returns (canonical labels, unrecognized labels);
+    order is preserved and duplicates dropped."""
+    items = raw.split(",") if isinstance(raw, str) else list(raw or [])
+    canonical: List[str] = []
+    unknown: List[str] = []
+    for item in items:
+        text = " ".join(str(item or "").strip().split())
+        if not text:
+            continue
+        key = text.lower()
+        label = key if key in SUPPORTED_CONCEPTS else _CONCEPT_ALIASES.get(key)
+        if label is None:
+            if key not in (u.lower() for u in unknown):
+                unknown.append(text)
+        elif label not in canonical:
+            canonical.append(label)
+    return canonical, unknown
 
 
 def detect_concepts(code: str) -> List[str]:
@@ -122,7 +175,8 @@ def record_assignment_submitted(learner_id: int, cohort_id: int, code: str, expe
     submitted code count as demonstrated - never invent mastery of a concept
     that isn't in the code just because it was assigned."""
     present = set(detect_concepts(code))
-    for concept in expected_concepts:
+    canonical, unknown = normalize_expected_concepts(expected_concepts)
+    for concept in canonical + unknown:
         if concept in present:
             _apply_evidence(learner_id, cohort_id, concept, "assignment_submitted_ok")
         else:

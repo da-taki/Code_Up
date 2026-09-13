@@ -63,27 +63,67 @@ def _literal_type(node: ast.AST) -> str:
     return "value"
 
 
+def _bound_names(target: ast.AST) -> List[str]:
+    """Return names introduced by an assignment target, in source order."""
+    if isinstance(target, ast.Name):
+        return [target.id]
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return [name for item in target.elts for name in _bound_names(item)]
+    return []
+
+
 def list_variables(code: str) -> List[Dict[str, str]]:
-    """Top-level (module) assigned variables with an inferred type. Static only."""
+    """All statically visible variable bindings with a best-effort type.
+
+    The spoken command promises variables found *in the program*, so bindings
+    inside functions and control-flow blocks count too.  This remains a static
+    AST walk: it never executes learner code.
+    """
     try:
         tree = ast.parse(code or "")
     except SyntaxError:
         return []
     seen: Dict[str, str] = {}
-    for node in tree.body:
-        targets = []
+
+    def remember(name: str, kind: str) -> None:
+        # Don't downgrade a known concrete type (e.g. score=0 then score=score+1).
+        if name in seen and kind == "value" and seen[name] != "value":
+            return
+        seen[name] = kind
+
+    for node in ast.walk(tree):
+        bindings: List[Tuple[str, str]] = []
         if isinstance(node, ast.Assign):
-            targets = [(t, node.value) for t in node.targets if isinstance(t, ast.Name)]
-        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-            targets = [(node.target, node.value)]
-        elif isinstance(node, ast.For) and isinstance(node.target, ast.Name):
-            targets = [(node.target, None)]
-        for target, value in targets:
-            kind = _literal_type(value) if value is not None else "loop value"
-            # Don't downgrade a known concrete type (e.g. score=0 then score=score+1).
-            if target.id in seen and kind == "value" and seen[target.id] != "value":
-                continue
-            seen[target.id] = kind
+            kind = _literal_type(node.value)
+            bindings = [(name, kind) for target in node.targets for name in _bound_names(target)]
+        elif isinstance(node, ast.AnnAssign):
+            kind = _literal_type(node.value) if node.value is not None else "value"
+            bindings = [(name, kind) for name in _bound_names(node.target)]
+        elif isinstance(node, ast.AugAssign):
+            bindings = [(name, "value") for name in _bound_names(node.target)]
+        elif isinstance(node, (ast.For, ast.AsyncFor)):
+            bindings = [(name, "loop value") for name in _bound_names(node.target)]
+        elif isinstance(node, ast.comprehension):
+            bindings = [(name, "loop value") for name in _bound_names(node.target)]
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            args = [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs]
+            if node.args.vararg:
+                args.append(node.args.vararg)
+            if node.args.kwarg:
+                args.append(node.args.kwarg)
+            bindings = [(arg.arg, "function input") for arg in args]
+        elif isinstance(node, ast.NamedExpr):
+            bindings = [(name, _literal_type(node.value)) for name in _bound_names(node.target)]
+        elif isinstance(node, ast.With):
+            bindings = [
+                (name, "value")
+                for item in node.items if item.optional_vars is not None
+                for name in _bound_names(item.optional_vars)
+            ]
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            bindings = [(node.name, "error")]
+        for name, kind in bindings:
+            remember(name, kind)
     return [{"name": n, "type": t} for n, t in seen.items()]
 
 
@@ -159,6 +199,19 @@ def _count_items(container_repr: str) -> int:
 def summarize_value(value_repr: str, *, full: bool = False) -> str:
     """Beginner summary of a value. Hides huge values behind a description."""
     kind, v = _classify(value_repr)
+    class_match = re.fullmatch(r"<class ['\"](?:[\w.]+\.)?([\w]+)['\"]>", v)
+    if class_match:
+        return f"the class {class_match.group(1)}"
+    object_match = re.fullmatch(
+        r"<(?:[\w.]+\.)?([A-Za-z_]\w*) object at 0x[0-9a-fA-F]+>", v
+    )
+    if object_match:
+        return f"a {object_match.group(1)} object"
+    function_match = re.fullmatch(
+        r"<function (?:[\w.]+\.)?([A-Za-z_]\w*) at 0x[0-9a-fA-F]+>", v
+    )
+    if function_match:
+        return f"function {function_match.group(1)}"
     if kind == "list":
         n = _count_items(v)
         if n == -1:
@@ -306,6 +359,12 @@ def build_steps(trace: List[Dict[str, Any]], code: str) -> List[Dict[str, Any]]:
     one to the line two steps back (prev2), matching the existing narrator.
     """
     steps: List[Dict[str, Any]] = []
+    class_names = set()
+    try:
+        tree = ast.parse(code or "")
+        class_names = {node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)}
+    except SyntaxError:
+        pass
     prev1 = prev2 = None
     for event in trace or []:
         etype = event.get("type")
@@ -327,8 +386,10 @@ def build_steps(trace: List[Dict[str, Any]], code: str) -> List[Dict[str, Any]]:
         elif etype == "call":
             func = event.get("function", "?")
             if func and func != "<module>":
+                description = (f"Enter class definition {func}"
+                               if func in class_names else f"Enter function {func}")
                 steps.append({"line": event.get("line"), "file": file, "kind": "call",
-                              "text": f"Enter function {func}"})
+                              "text": description})
         elif etype == "return":
             val = event.get("value", "")
             if val and val != "None":

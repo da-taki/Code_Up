@@ -207,7 +207,7 @@ def match(text: str) -> Optional[Tuple[str, Dict[str, Any]]]:
         return "join_prompt", {}
     if _any(n, "what class am i in", "what classroom am i in"):
         return "current_class", {}
-    if _any(n, "leave this class", "leave classroom", "leave my class", "leave this classroom"):
+    if _any(n, "leave class", "leave this class", "leave classroom", "leave my class", "leave this classroom"):
         return "leave_class", {}
 
     # ---- assignments -------------------------------------------------------
@@ -270,9 +270,9 @@ def match(text: str) -> Optional[Tuple[str, Dict[str, Any]]]:
     # ---- help -----------------------------------------------------------------
     if _any(n, "i need help", "ask my teacher for help", "ask my instructor for help"):
         return "help_request", {}
-    if _any(n, "cancel my help request"):
+    if _any(n, "cancel help", "cancel my help request"):
         return "help_cancel", {}
-    if _any(n, "is my teacher helping me", "is my instructor helping me"):
+    if _any(n, "is my teacher helping me", "is my instructor helping", "is my instructor helping me"):
         return "help_status", {}
 
     # ---- general -------------------------------------------------------------

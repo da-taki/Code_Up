@@ -18,7 +18,14 @@
       <div class="cu-field"><label for="l_explanation">Explanation</label><textarea id="l_explanation" name="explanation" rows="4">{{ request.form.get('explanation', '') }}</textarea></div>
       <div class="cu-field"><label for="l_starter">Starter code</label><textarea id="l_starter" name="starter_code" rows="5">{{ request.form.get('starter_code', '') }}</textarea></div>
       <div class="cu-field"><label for="l_instructions">Instructions</label><textarea id="l_instructions" name="instructions" rows="3">{{ request.form.get('instructions', '') }}</textarea></div>
-      <div class="cu-field"><label for="l_concepts">Expected concepts (comma separated)</label><input type="text" id="l_concepts" name="expected_concepts" placeholder="variables, loops" value="{{ request.form.get('expected_concepts', '') }}"></div>
+      <div class="cu-field">
+        <label for="l_concepts">Expected concepts (comma separated)</label>
+        <input type="text" id="l_concepts" name="expected_concepts" placeholder="variables, loops" value="{{ request.form.get('expected_concepts', '') }}"
+               aria-describedby="l_concepts_help{% if lesson_concepts_error %} l_concepts_error{% endif %}"
+               {% if lesson_concepts_error %}aria-invalid="true" data-focus-on-error{% endif %}>
+        <p id="l_concepts_help" class="cu-field-help">Checked automatically. Supported labels: {{ supported_concepts|join(', ') }}. Common wording such as "for loops" or "if statements" is accepted.</p>
+        {% if lesson_concepts_error %}<p id="l_concepts_error" class="cu-field-error">{{ lesson_concepts_error }}</p>{% endif %}
+      </div>
       <div class="cu-field"><label for="l_challenge">Optional challenge</label><textarea id="l_challenge" name="challenge" rows="2">{{ request.form.get('challenge', '') }}</textarea></div>
       <div class="cu-field"><label for="l_expected_output">Optional expected output (reference only, not auto-graded)</label><input type="text" id="l_expected_output" name="expected_output" value="{{ request.form.get('expected_output', '') }}"></div>
       <h3>Optional quiz question</h3>

@@ -190,6 +190,7 @@ const AUTOSAVE_INTERVAL_MS = 30000;
 let _autosaveTimer = null;
 let _autosaveLastCode = '';
 const AUTOSAVE_KEY = 'codeup_autosave_draft';
+const PROJECT_DRAFT_KEY = 'codeup_project_draft';
 const DEFAULT_PYTHON_STARTER = 'print("Hello CodeUp!")';
 const PYTHON_ONLY_MESSAGE = 'CodeUp is Python-only. Remove HTML, CSS, or JavaScript and use valid Python code.';
 
@@ -914,7 +915,7 @@ CODE STRUCTURE:
 
 SNIPPETS:
 - "save snippet named [name]"
-- "load snippet [number]"
+- "load snippet [name]"
 
 EDITING:
 - "clear editor"
@@ -955,6 +956,7 @@ SCREEN READER HANDOFF:
 
 KEYBOARD:
 - Ctrl+Enter: Run
+- Tab / Shift+Tab (in the editor): Indent / outdent code (Ctrl+] / Ctrl+[ also work)
 - Escape (editor quiet) or Ctrl+M: Leave the editor
 - Escape (while speaking): Stop speech
 - Ctrl+Shift+M: Toggle voice control
@@ -1350,6 +1352,7 @@ function buildVoiceCommandPayload(text, source = 'typed') {
     screen_reader_mode: _screenReaderModeEnabled,
     screen_reader_profile: _assistiveTechnologyProfile,
     active_file: (typeof ProjectState !== 'undefined' && ProjectState.activeFile) || '',
+    project: (typeof ProjectState !== 'undefined' && ProjectState.active) ? currentProjectPayload() : null,
     // classroomJoinName is the Join Classroom panel's Name field, if rendered.
     join_name: ((document.getElementById('classroomJoinName') || {}).value || '').trim(),
   };
@@ -1780,7 +1783,7 @@ require(['vs/editor/editor.main'], function () {
     glyphMargin:          true,
     automaticLayout:      true,
     accessibilitySupport: 'on',
-    ariaLabel:            'Python code editor. Use arrow keys to navigate and type to edit. Tab moves focus out of the editor; use Control right bracket to indent a line and Control left bracket to outdent it. Press Escape when speech is quiet, or Control M, to leave the editor. Press Control Enter to run.',
+    ariaLabel:            editorAriaLabel(tabMovesFocusEnabled()),
     lineHeight:           _initialLineHeight,
     tabSize:              4,
     insertSpaces:         true,
@@ -1791,7 +1794,7 @@ require(['vs/editor/editor.main'], function () {
   editor.onDidChangeModelContent(() => {
     try { NarrationRequests.invalidate(); } catch (e) {}
     clearEditorErrorMarkers();
-    syncActiveProjectFileLocal();
+    scheduleActiveProjectSave();
     clearTimeout(_structureDebounce);
     _structureDebounce = setTimeout(updateStructurePanel, 600);
   });
@@ -1904,10 +1907,39 @@ function syncActiveProjectFileLocal() {
   ProjectState.files[ProjectState.activeFile] = getCode();
 }
 
+let _projectSaveTimer = null;
+
+function persistProjectDraftLocal() {
+  if (!ProjectState.active || !ProjectState.activeFile) return;
+  try {
+    localStorage.setItem(PROJECT_DRAFT_KEY, JSON.stringify({
+      active: true,
+      files: Object.assign({}, ProjectState.files),
+      manifest: ProjectState.manifest || {},
+      entry: ProjectState.entry || 'main.py',
+      active_file: ProjectState.activeFile,
+      requirements: ProjectState.requirements || [],
+      timestamp: Date.now(),
+    }));
+  } catch (e) { /* localStorage unavailable or full */ }
+}
+
+function scheduleActiveProjectSave() {
+  if (!ProjectState.active || !ProjectState.activeFile) return;
+  syncActiveProjectFileLocal();
+  persistProjectDraftLocal();
+  clearTimeout(_projectSaveTimer);
+  const path = ProjectState.activeFile;
+  const content = ProjectState.files[path];
+  _projectSaveTimer = setTimeout(() => {
+    saveProjectFile(path, content, true).catch(() => {});
+  }, 500);
+}
+
 function currentProjectPayload(runFile) {
   if (!ProjectState.active) return null;
   syncActiveProjectFileLocal();
-  const entry = normalizeProjectPath(runFile || ProjectState.activeFile || ProjectState.entry || 'main.py') || 'main.py';
+  const entry = normalizeProjectPath(runFile || ProjectState.entry || ProjectState.activeFile || 'main.py') || 'main.py';
   return {
     name: ProjectState.manifest && ProjectState.manifest.name ? ProjectState.manifest.name : 'CodeUp Project',
     files: Object.assign({}, ProjectState.files),
@@ -1964,9 +1996,53 @@ function applyProjectData(data, opts = {}) {
   }
   setCode(ProjectState.files[ProjectState.activeFile] || '', { preserveSpeech: true, projectFile: true, allowNonPython: !ProjectState.activeFile.endsWith('.py') });
   renderProjectFiles();
+  persistProjectDraftLocal();
   const speech = data.speech || `${Object.keys(ProjectState.files).length} project files loaded. Active file is ${ProjectState.activeFile}.`;
   out(speech, { sr: false });
   if (!opts.silent) speak(speech);
+  return true;
+}
+
+async function recoverProjectWorkspace() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.has('assignment') || params.has('project') || params.has('module')) return false;
+
+  let localDraft = null;
+  try {
+    const raw = localStorage.getItem(PROJECT_DRAFT_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      const fresh = Date.now() - Number(parsed.timestamp || 0) <= 7 * 24 * 60 * 60 * 1000;
+      if (parsed.active === false) return false;
+      if (fresh && parsed.files && Object.keys(parsed.files).length) localDraft = parsed;
+      else if (!fresh) localStorage.removeItem(PROJECT_DRAFT_KEY);
+    }
+  } catch (e) { localDraft = null; }
+
+  let serverProject = null;
+  try {
+    const response = await fetch('/project');
+    const data = await response.json();
+    if (response.ok && data.success && data.files && Object.keys(data.files).length) serverProject = data;
+  } catch (e) { /* local draft can still recover the project */ }
+
+  const restored = localDraft || serverProject;
+  if (!restored || !applyProjectData(restored, { silent: true })) return false;
+
+  if (localDraft) {
+    try {
+      const response = await fetch('/project', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(localDraft),
+      });
+      const data = await response.json();
+      if (response.ok && data.success) {
+        ProjectState.manifest = data.manifest || ProjectState.manifest;
+        persistProjectDraftLocal();
+      }
+    } catch (e) { /* keep the recovered local copy available */ }
+  }
   return true;
 }
 
@@ -1995,6 +2071,7 @@ async function saveProjectFile(path, content, active = true) {
     ProjectState.manifest = data.manifest || ProjectState.manifest;
     ProjectState.requirements = (ProjectState.manifest && ProjectState.manifest.requirements) || ProjectState.requirements || [];
     renderProjectFiles();
+    persistProjectDraftLocal();
     return true;
   } catch (e) {
     console.error(e);
@@ -2047,6 +2124,11 @@ async function openProjectFile(path) {
 async function createProjectFile(path) {
   const clean = normalizeProjectPath(path);
   if (!clean) { speak('Please give a valid file name.'); return; }
+  if (!ProjectState.active) {
+    const preserved = await saveProjectFile('main.py', getCode(), false);
+    if (!preserved) return;
+    ProjectState.activeFile = 'main.py';
+  }
   syncActiveProjectFileLocal();
   if (ProjectState.files[clean] != null) {
     await openProjectFile(clean);
@@ -3276,7 +3358,10 @@ function clearEditor() {
   ProjectState.requirements = [];
   ProjectState.manifest = {};
   renderProjectFiles();
-  try { localStorage.removeItem(AUTOSAVE_KEY); } catch (e) {}
+  try {
+    localStorage.removeItem(AUTOSAVE_KEY);
+    localStorage.setItem(PROJECT_DRAFT_KEY, JSON.stringify({ active: false, timestamp: Date.now() }));
+  } catch (e) {}
   _autosaveLastCode = '';
   setCode('');
   out('Editor cleared.', { sr: false });
@@ -6038,6 +6123,48 @@ window.addEventListener('DOMContentLoaded', () => {
 function focusEditor() {
   try { if (editor && editor.focus) editor.focus(); } catch (e) {}
 }
+
+// Tab inside the editor indents code (Shift+Tab outdents) - Monaco's native
+// behavior, and what the CodeUp How-To Guide tells learners. Escape (when
+// speech is quiet) and Ctrl+M always leave the editor, so it is never a
+// keyboard trap. Learners who prefer the XRCVC Finding 4/4B behavior can turn
+// on "Tab Leaves Editor" in settings; Ctrl+] / Ctrl+[ indent in both modes.
+const TAB_MOVES_FOCUS_KEY = 'codeupTabMovesFocus';
+function tabMovesFocusEnabled() {
+  try { return localStorage.getItem(TAB_MOVES_FOCUS_KEY) === 'true'; } catch (e) { return false; }
+}
+function editorAriaLabel(tabMovesFocus) {
+  const tabText = tabMovesFocus
+    ? 'Tab moves focus out of the editor; use Control right bracket to indent a line and Control left bracket to outdent it.'
+    : 'Tab indents code and Shift Tab outdents it; Control right bracket and Control left bracket also indent and outdent.';
+  return 'Python code editor. Use arrow keys to navigate and type to edit. ' + tabText
+    + ' Press Escape when speech is quiet, or Control M, to leave the editor. Press Control Enter to run.';
+}
+function editorHelpText(tabMovesFocus) {
+  return tabMovesFocus
+    ? 'Tab moves focus out of the editor. Use Control right bracket to indent a line and Control left bracket to outdent it. Press Escape when speech is quiet, or press Control+M, to leave the editor and continue to CodeUp controls.'
+    : 'Tab indents code and Shift+Tab outdents it (Control right bracket and Control left bracket also work). Press Escape when speech is quiet, or press Control+M, to leave the editor and continue to CodeUp controls. To make Tab leave the editor instead, turn on Tab Leaves Editor in settings.';
+}
+function applyTabBehaviorDescription() {
+  const on = tabMovesFocusEnabled();
+  try { if (editor && editor.updateOptions) editor.updateOptions({ ariaLabel: editorAriaLabel(on) }); } catch (e) {}
+  const help = document.getElementById('editorHelp');
+  if (help) help.textContent = editorHelpText(on);
+  const toggle = document.getElementById('tabFocusToggle');
+  if (toggle) {
+    toggle.classList.toggle('active', on);
+    toggle.setAttribute('aria-pressed', String(on));
+  }
+}
+function setTabMovesFocus(on) {
+  try { localStorage.setItem(TAB_MOVES_FOCUS_KEY, on ? 'true' : 'false'); } catch (e) {}
+  applyTabBehaviorDescription();
+  speak(on
+    ? 'Tab leaves editor turned on. Tab now moves focus out of the editor. Use Control right bracket to indent.'
+    : 'Tab leaves editor turned off. Tab now indents code. Press Escape or Control M to leave the editor.');
+}
+window.setTabMovesFocus = setTabMovesFocus;
+window.tabMovesFocusEnabled = tabMovesFocusEnabled;
 function leaveEditor() {
   const next = document.getElementById('runBtn') || document.getElementById('voiceText') || document.getElementById('output');
   if (next && next.focus) next.focus();
@@ -6108,6 +6235,7 @@ function registerEditorShortcuts() {
   window._editorShortcutsRegistered = true;
 
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => { runCode(); });
+  applyTabBehaviorDescription();
 
   editor.addCommand(monaco.KeyCode.Escape, () => {
     if (AppState.isSpeaking || (window.speechSynthesis && window.speechSynthesis.speaking)) {
@@ -6120,10 +6248,8 @@ function registerEditorShortcuts() {
     }
   });
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyM, () => { leaveEditor(); });
-  // Tab/Shift+Tab move focus out of the editor (handled below, since no
-  // Monaco option reaches that natively here - see leaveEditorBackward's
-  // comment) instead of indenting, so these are the only reachable
-  // keyboard shortcuts to indent/outdent a line (see ariaLabel above).
+  // Ctrl+] / Ctrl+[ indent/outdent in both Tab modes - the only indent keys
+  // while "Tab Leaves Editor" is on (see tabMovesFocusEnabled above).
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.BracketRight, () => { editor.trigger('keyboard', 'editor.action.indentLines', {}); });
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.BracketLeft, () => { editor.trigger('keyboard', 'editor.action.outdentLines', {}); });
   const editorDom = editor.getDomNode();
@@ -6138,10 +6264,11 @@ function registerEditorShortcuts() {
         } else {
           leaveEditor();
         }
-      } else if (e.key === 'Tab' && !e.altKey && !e.ctrlKey && !e.metaKey) {
-        // Capture phase on the editor's own container, ahead of Monaco's
-        // internal textarea handler, so preventDefault+stopPropagation here
-        // stops Monaco from ever seeing the key and inserting an indent.
+      } else if (e.key === 'Tab' && !e.altKey && !e.ctrlKey && !e.metaKey && tabMovesFocusEnabled()) {
+        // Opt-in "Tab Leaves Editor" mode only. Capture phase on the editor's
+        // own container, ahead of Monaco's internal textarea handler, so
+        // preventDefault+stopPropagation stops Monaco from inserting an
+        // indent. With the setting off, Monaco's native Tab indent runs.
         e.preventDefault();
         e.stopPropagation();
         if (e.shiftKey) leaveEditorBackward(); else leaveEditor();
@@ -6167,6 +6294,7 @@ function registerEditorShortcuts() {
   try { loadSnippets(); } catch (e) {}
   try { startAutosave(); } catch (e) { console.warn('autosave init failed', e); }
   try { recoverAutosaveDraft(); } catch (e) { console.warn('autosave recover failed', e); }
+  recoverProjectWorkspace().catch(e => console.warn('project recover failed', e));
   updateInputModeUI();
   updateInputsPanel();
   if (typeof window._classroomInit === 'function') {
@@ -6381,7 +6509,11 @@ function registerPythonAutocomplete() {
       const suggestions = [];
 
       PYTHON_KEYWORDS.forEach(kw => suggestions.push({ label: kw, kind: monaco.languages.CompletionItemKind.Keyword, insertText: kw, range }));
-      PYTHON_BUILTINS.forEach(fn => suggestions.push({ label: fn + '()', kind: monaco.languages.CompletionItemKind.Function, insertText: fn + '($0)', range, sortText: '1_' + fn }));
+      PYTHON_BUILTINS.forEach(fn => suggestions.push({
+        label: fn + '()', kind: monaco.languages.CompletionItemKind.Function,
+        insertText: fn + '($0)', insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+        range, sortText: '1_' + fn,
+      }));
       Object.entries(PYTHON_SNIPPETS).forEach(([key, sn]) => suggestions.push({
         label: sn.label, kind: monaco.languages.CompletionItemKind.Snippet,
         insertText: sn.insertText, insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,

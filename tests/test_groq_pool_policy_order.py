@@ -46,7 +46,7 @@ def test_policy_blocked_request_never_calls_the_pool(instructor_client, learner_
     )
     r = instructor_client.post("/classroom/cohorts", data={"name": "C"}, follow_redirects=True)
     join_code = _extract(rb'cu-join-code">([A-Z0-9]+)<', r.data)
-    cohort_id = _extract(rb'cohorts/(\d+)"', r.data)
+    cohort_id = _extract(rb'cohorts/(\d+)/ai-toggle"', r.data)
     r = instructor_client.post(
         f"/classroom/cohorts/{cohort_id}/assignments",
         data={"title": "A", "instructions": "i", "starter_code": "", "ai_policy": "OFF"},
@@ -93,7 +93,7 @@ def test_allowed_request_does_reach_the_pool(instructor_client, learner_client, 
     )
     r = instructor_client.post("/classroom/cohorts", data={"name": "C"}, follow_redirects=True)
     join_code = _extract(rb'cu-join-code">([A-Z0-9]+)<', r.data)
-    cohort_id = _extract(rb'cohorts/(\d+)"', r.data)
+    cohort_id = _extract(rb'cohorts/(\d+)/ai-toggle"', r.data)
     r = instructor_client.post(
         f"/classroom/cohorts/{cohort_id}/assignments",
         data={"title": "A", "instructions": "i", "starter_code": "", "ai_policy": "FULL"},

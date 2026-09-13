@@ -225,6 +225,48 @@
       return;
     }
 
+    {
+      const status = el('p', { id: 'classroomHelpStatus', className: 'sr-only' });
+      const requestBtn = el('button', {
+        type: 'button',
+        className: 'cu-button cu-button-primary',
+        textContent: 'Request instructor help',
+      });
+      requestBtn.addEventListener('click', function () {
+        requestBtn.disabled = true;
+        const snapshot = {
+          code: typeof window.getCode === 'function' ? window.getCode() : '',
+          output: window.lastRunOutput || '',
+          error: window.lastRunError || null,
+        };
+        postJsonWithRetry('/classroom/live-code/sync', snapshot)
+          .catch(function () { return null; })
+          .then(function () {
+            return fetch('/classroom/help-requests', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ message: '', assignment_id: assignmentId || null }),
+            });
+          })
+          .then(function (res) { return res.json(); })
+          .then(function (data) {
+            if (data && data.success) {
+              status.textContent = 'Help request sent to your instructor.';
+              announce(status.textContent);
+              if (typeof window._classroomRefreshDashboard === 'function') window._classroomRefreshDashboard();
+            } else {
+              throw new Error('request_failed');
+            }
+          })
+          .catch(function () {
+            requestBtn.disabled = false;
+            status.textContent = 'Could not send the help request. You can still keep working.';
+            announce(status.textContent);
+          });
+      });
+      panel.appendChild(el('div', { className: 'cu-field' }, [heading, requestBtn, status]));
+      return;
+    }
     // No request in flight: the form defaults to collapsed behind a single
     // compact "Request instructor help" control (see the accessibility
     // audit's progressive-disclosure pass) - the permanent textarea used to
@@ -775,10 +817,11 @@
   // Vision-Aid build: every joined learner's current code reaches their
   // instructor's live-code view, independent of the assignment/project/
   // module modes above (which the Vision-Aid UI no longer opens). This is a
-  // no-op 401 from /classroom/live-code/sync (silently swallowed) for an
-  // anonymous, non-cohort learner - the classroom layer must never affect
-  // the existing single-user IDE experience.
+  // no-op for an anonymous learner: the summary request establishes joined
+  // state before any code POST, keeping the normal IDE console clean instead
+  // of relying on a caught 401 response.
   function syncLiveCode(code, extra) {
+    if (!contextData || !contextData.joined) return;
     const body = Object.assign({ code: code }, extra || {});
     postJsonWithRetry('/classroom/live-code/sync', body).catch(function () {});
   }
@@ -788,6 +831,7 @@
   // instructor-visible status from going stale while they read rather than
   // type (the real code sync is the 2s post-typing debounce above).
   function onHeartbeat() {
+    if (!contextData || !contextData.joined) return;
     postJsonWithRetry('/classroom/live-code/heartbeat', {}).catch(function () {});
   }
 
@@ -1051,6 +1095,9 @@
     ]);
     details.appendChild(body);
     panel.appendChild(details);
+    const helpRegion = el('div', { id: 'classroomHelpRegion' });
+    appendHelpWidget(helpRegion, { currentHelpRequest: data.help_request });
+    panel.appendChild(helpRegion);
 
     if (!data.ide_orientation_shown) {
       fetch('/classroom/ide/orientation-seen', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).catch(function () {});
@@ -1065,6 +1112,13 @@
     if (summaryEl) {
       const newLine = summaryLineText(data);
       if (summaryEl.textContent !== newLine) summaryEl.textContent = newLine;
+    }
+    if (helpFingerprint(previous && previous.help_request) !== helpFingerprint(data.help_request)) {
+      const helpRegion = document.getElementById('classroomHelpRegion');
+      if (helpRegion) {
+        helpRegion.innerHTML = '';
+        appendHelpWidget(helpRegion, { currentHelpRequest: data.help_request });
+      }
     }
   }
 

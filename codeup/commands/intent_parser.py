@@ -273,10 +273,21 @@ class IntentParser:
 
     ANALYZE_DEEP_PATTERNS = [
         r"^analyze\s+deeper$",
+        r"^analyse\s+deeper$",
         r"^(?:go\s+)?deeper$",
+        r"^analyze\s+more$",
+        r"^explain\s+more$",
+        r"^break\s+it\s+down\s+more$",
         r"^more\s+detail(?:s)?$",
         r"^line\s+by\s+line$",
+        r"^explain\s+every\s+line$",
+        r"^explain\s+(?:the\s+)?(?:syntax|symbols)$",
+        r"^what\s+do\s+(?:these|the)\s+symbols\s+mean$",
+        r"^tell\s+me\s+more\s+about\s+each\s+line$",
+        r"^walk\s+through\s+this\s+carefully$",
         r"^explain\s+(?:in\s+)?more\s+detail$",
+        r"^(?:continue|next)\s+analysis$",
+        r"^next\s+lines$",
         r"^गहराई\s+से\s+(?:analyze|समझाओ)$",
         r"^और\s+detail$",
     ]
@@ -1233,8 +1244,16 @@ class IntentParser:
     COMPARE_IDENTIFIERS_PATTERNS = [
         # Negative lookahead excludes "compare blocks and code" -- that exact
         # phrase is Audio Blocks Mode's own pre-existing block-vs-editor diff
-        # command (audio_blocks.py), not an identifier comparison.
-        r"^compare\s+(?!blocks\s+and\s+code$)([A-Za-z_]\w*)\s+and\s+([A-Za-z_]\w*)$",
+        # command (audio_blocks.py), not an identifier comparison -- and
+        # "compare before and after", which is COMPARE_BEFORE_AFTER_PATTERNS'
+        # own exact phrase (mistake-replay's before/after diff, not a
+        # comparison of two variables literally named "before" and "after").
+        # Both intents are registered in the same _build_intent_map() dict
+        # (see its ordering-is-precedence comment above), and
+        # compare_identifiers is registered first, so without this exclusion
+        # it always won the match ahead of compare_before_after ever getting
+        # a chance to run.
+        r"^compare\s+(?!blocks\s+and\s+code$)(?!before\s+and\s+after$)([A-Za-z_]\w*)\s+and\s+([A-Za-z_]\w*)$",
         r"^what(?:'s|\s+is)\s+the\s+difference\s+between\s+([A-Za-z_]\w*)\s+and\s+([A-Za-z_]\w*)$",
     ]
     READ_INDENTATION_EXACTLY_PATTERNS = [

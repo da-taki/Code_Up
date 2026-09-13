@@ -127,8 +127,9 @@ def test_analyze_code_has_one_owner():
     fn_start = STATIC_APP.index("async function analyzeCode(")
     fn_end = STATIC_APP.index("\nasync function analyzeDeep(")
     fn_block = STATIC_APP[fn_start:fn_end]
-    assert "showAI('Analyzing code with AI...', { announce: false });" in fn_block
-    assert "speak('Analyzing code.', { sr: false });" in fn_block
+    assert "showAI(" not in fn_block
+    assert "out('Explaining your code...', { sr: false });" in fn_block
+    assert "speak('Explaining your code.', { sr: false });" in fn_block
     assert "speak(spoken, { sr: false });" in fn_block
     assert "speak('Analyze failed.', { sr: false });" in fn_block
 

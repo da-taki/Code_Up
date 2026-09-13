@@ -101,18 +101,23 @@ def test_vscode_export_aliases(command, client):
     assert data["vscode_handoff"] is True
 
 
-def test_onboarding_help_mentions_accessibility_commands(client):
+def test_onboarding_help_stays_concise_and_avoids_setup_commands(client):
     speech = voice(client, "what can I do here")["speech"].lower()
-    assert "enable screen reader mode" in speech
-    assert "set screen reader to nvda" in speech
-    assert "open accessibility page" in speech
+    for expected in ("write python", "control enter", "ask codeup"):
+        assert expected in speech
+    for removed in (
+        "enable screen reader mode",
+        "set screen reader to nvda",
+        "open accessibility page",
+    ):
+        assert removed not in speech
 
 
 def test_ide_has_live_regions_and_labeled_controls(client):
     html = client.get("/ide").get_data(as_text=True)
     assert 'id="srAnnouncer" role="status" aria-live="polite" aria-atomic="true"' in html
     assert 'id="srAlert" role="alert" aria-live="assertive" aria-atomic="true"' in html
-    assert '<label for="assistiveTechnologyProfile">Assistive technology profile</label>' in html
+    assert 'id="assistiveTechnologyProfile"' not in html
     # The separate "Toggle screen reader mode" / "Toggle browser speech"
     # buttons were replaced by a single speechModeSelect control - two
     # independently-clickable toggles could drift into a contradictory

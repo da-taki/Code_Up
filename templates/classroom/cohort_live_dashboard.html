@@ -29,6 +29,30 @@
     {% endif %}
   </section>
 
+  <section class="cu-panel" aria-labelledby="helpRequestsHeading">
+    <h2 id="helpRequestsHeading">Help requests</h2>
+    {% if help_requests %}
+      <ul>
+        {% for help_request in help_requests %}
+          <li>
+            <a href="{{ help_request.live_code_url }}">{{ help_request.display_name }}</a>
+            - {{ help_request.waiting_minutes }} min ago
+            {% if help_request.status == 'open' %}
+            <form method="post" action="{{ url_for('classroom.start_helping', help_request_id=help_request.id) }}" class="cu-inline-form">
+              <button type="submit" class="cu-button cu-button-primary">Start helping</button>
+            </form>
+            {% endif %}
+            <form method="post" action="{{ url_for('classroom.resolve_help_request', help_request_id=help_request.id) }}" class="cu-inline-form">
+              <button type="submit" class="cu-button cu-button-secondary">Mark resolved</button>
+            </form>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p>No help requests.</p>
+    {% endif %}
+  </section>
+
   <section class="cu-panel" aria-labelledby="studentsHeading">
     <h2 id="studentsHeading">Students ({{ total_count }})</h2>
     <div class="cu-table-wrap">
@@ -67,5 +91,4 @@
     </div>
   </section>
 
-  <p class="cu-crumb"><a href="{{ url_for('classroom.cohort_dashboard', cohort_id=cohort.id) }}">Classic dashboard (assignments, guided projects, help queue, reports)</a></p>
 {% endblock %}

@@ -45,7 +45,7 @@ def test_full_acceptance_flow(instructor_client, learner_client, monkeypatch):
     r = instructor_client.post("/classroom/cohorts", data={"name": "Python Beginners"}, follow_redirects=True)
     assert b"Python Beginners" in r.data
     join_code = _extract(rb'cu-join-code">([A-Z0-9]+)<', r.data)
-    cohort_id = _extract(rb'cohorts/(\d+)"', r.data)
+    cohort_id = _extract(rb'cohorts/(\d+)/ai-toggle"', r.data)
     # Vision-Aid build: a new cohort's class-wide AI toggle defaults OFF
     # (see codeup.classroom.ai_toggle); this flow is specifically about the
     # assignment-level capability policy below, so opt the class in first.
@@ -169,7 +169,7 @@ def test_off_policy_blocks_everything_but_editor_stays_usable(instructor_client,
     )
     r = instructor_client.post("/classroom/cohorts", data={"name": "Assessment Cohort"}, follow_redirects=True)
     join_code = _extract(rb'cu-join-code">([A-Z0-9]+)<', r.data)
-    cohort_id = _extract(rb'cohorts/(\d+)"', r.data)
+    cohort_id = _extract(rb'cohorts/(\d+)/ai-toggle"', r.data)
     # This test is specifically about the assignment-level ai_policy="OFF"
     # message - opt the class-wide toggle in first so that's the gate
     # actually being exercised, not the (also OFF-by-default) class toggle.

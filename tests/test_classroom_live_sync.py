@@ -237,14 +237,13 @@ def test_patch_function_cannot_touch_whole_panel():
 
 
 def test_patch_dashboard_panel_only_patches_the_summary_line():
-    """Vision-Aid build: renderDashboardPanel no longer builds an
-    assignments list, guided-projects list, or help widget (see
-    test_classroom_panel_shows_simple_connected_status below) - so
-    patchDashboardPanel has nothing left to targeted-patch except the
-    "Join a class"/"Class: X ... Connected" summary line itself."""
+    """Vision-Aid updates only the connected summary and the tiny help
+    state; dormant LMS/course sections never re-enter the live patch path."""
     body = _fn_body("patchDashboardPanel")
     assert "summaryLineText(data)" in body
-    for removed in ("buildAssignmentsBodyNodes", "buildProjectsBodyNodes", "appendHelpWidget", "buildCourseBodyNodes"):
+    assert "helpFingerprint" in body
+    assert "appendHelpWidget" in body
+    for removed in ("buildAssignmentsBodyNodes", "buildProjectsBodyNodes", "buildCourseBodyNodes"):
         assert removed not in body
 
 
@@ -256,8 +255,9 @@ def test_classroom_panel_shows_simple_connected_status():
     LMS for the learner)."""
     assert "return 'Class: ' + cohortName + '. Connected.';" in _fn_body("summaryLineText")
     body = _fn_body("renderDashboardPanel")
-    for removed in ("classroomAssignmentsHeading", "classroomProjectsHeading", "classroomHelpContainer", "appendHelpWidget"):
+    for removed in ("classroomAssignmentsHeading", "classroomProjectsHeading", "classroomHelpContainer"):
         assert removed not in body
+    assert "appendHelpWidget" in body  # one-click instructor help is a core classroom action
 
 
 def test_fingerprints_ignore_irrelevant_fields():
@@ -298,7 +298,7 @@ def _make_cohort(instructor_client, name="Python Beginners", username="synctest_
     )
     r = instructor_client.post("/classroom/cohorts", data={"name": name}, follow_redirects=True)
     join_code = _extract(rb'cu-join-code">([A-Z0-9]+)<', r.data)
-    cohort_id = _extract(rb'cohorts/(\d+)"', r.data)
+    cohort_id = _extract(rb'cohorts/(\d+)/ai-toggle"', r.data)
     return join_code, cohort_id
 
 

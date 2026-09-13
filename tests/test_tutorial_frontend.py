@@ -153,8 +153,8 @@ class TestIndexHtmlPanel:
         assert 'role="complementary"' not in overlay.group(0)
         assert 'aria-live="polite"' in src
 
-    def test_loads_tutorial_js(self, src):
-        assert "/static/tutorial.js" in src
+    def test_removed_tutorial_bundle_is_not_loaded(self, src):
+        assert "/static/tutorial.js" not in src
 
     def test_old_static_slides_removed(self, src):
         assert "TUTORIAL_STEPS" not in src

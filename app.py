@@ -81,6 +81,7 @@ from codeup.learning import trainer_review
 from codeup.learning import lesson_builder
 from codeup.accessibility import screen_reader_bridge
 from codeup.accessibility import precision_reader
+from codeup.accessibility import code_explainer
 from codeup.commands import natural_command_mapper
 from codeup.commands import natural_code_editor
 from codeup.commands import beginner_templates
@@ -1304,6 +1305,26 @@ def _ai_capability_check(capability: str) -> Tuple[bool, Dict[str, bool], str]:
     return allowed, settings, message
 
 
+def _classroom_ai_disabled_for_request() -> bool:
+    """Whether the current learner's class currently has AI turned off via
+    the simple classroom toggle (codeup.classroom.ai_toggle) - used ONLY to
+    decide, before ever attempting the natural-language AI command mapper,
+    whether to show "AI help is currently disabled by your instructor."
+    instead of a generic clarification (PART H: an unresolved command and
+    an instructor-disabled one are different situations and must not be
+    worded the same). Defaults to False (AI not disabled) for anonymous,
+    non-cohort IDE usage, matching every other classroom-toggle check in
+    this file."""
+    if not has_request_context():
+        return False
+    token = request.cookies.get(CLASSROOM_LEARNER_COOKIE)
+    learner = classroom_db.get_learner_by_token(token) if token else None
+    if learner is None:
+        return False
+    cohort = classroom_db.get_cohort(learner["cohort_id"])
+    return not classroom_ai_toggle.effective_ai_enabled(cohort, learner)
+
+
 _PENDING_JOIN_KEY = "_classroom_pending_join"
 
 
@@ -1399,6 +1420,24 @@ def call_gemini_capability(capability, system_prompt, user_prompt, temperature=0
 
 
 def call_conversation_orchestrator_ai(system_prompt: str, user_prompt: str) -> str:
+    # Vision-Aid: this function is the transport under several different
+    # AI-assisted features (the natural-language command mapper, teaching-
+    # note rephrasing, the input concierge...) - some of which, unlike the
+    # rest of this file's AI-backed routes, previously reached Groq without
+    # ever checking the classroom's class/student AI toggle first
+    # (_ai_capability_check does this same check, but only guards routes
+    # that call it explicitly). Checking here instead, once, for every
+    # caller uniformly, closes that gap: an instructor turning AI off must
+    # mean no cloud AI call happens on that learner's behalf for ANY
+    # purpose, including merely classifying what a typed/voice command
+    # meant - not just the routes that already remembered to ask.
+    if has_request_context():
+        token = request.cookies.get(CLASSROOM_LEARNER_COOKIE)
+        learner = classroom_db.get_learner_by_token(token) if token else None
+        if learner is not None:
+            cohort = classroom_db.get_cohort(learner["cohort_id"])
+            if not classroom_ai_toggle.effective_ai_enabled(cohort, learner):
+                return ""
     if _env_flag_disabled("CODEUP_AI_ENABLED") or _env_flag_disabled("AI_ENABLED") or _env_flag_disabled("GROQ_ENABLED"):
         return ""
     extra_keys = _configured_extra_cloud_keys()
@@ -5161,6 +5200,9 @@ def analyze():
     blocked = _reject_non_python_response(code)
     if blocked:
         return blocked
+    result = code_explainer.explain_code(code, deep=False, start=body.get("start", 0))
+    result.update({"speech": result["analysis"], "auto_speak": True})
+    return jsonify(result)
 
     if language == "hi":
         system = (
@@ -5223,6 +5265,9 @@ def analyze_deep():
     blocked = _reject_non_python_response(code)
     if blocked:
         return blocked
+    result = code_explainer.explain_code(code, deep=True, start=body.get("start", 0))
+    result.update({"speech": result["analysis"], "auto_speak": True})
+    return jsonify(result)
 
     if language == "hi":
         system = (
@@ -7656,17 +7701,12 @@ def get_voice_telemetry():
 
 
 _ONBOARDING_MESSAGE = (
-    "Learn Python by speaking or typing. Say start tutorial. "
-    "Try insert a loop, run code, explain it, generate code, or fix this code to debug. "
-    "No microphone? Type the command and press Enter. "
-    "For accessibility: enable screen reader mode, set screen reader to NVDA, or "
-    "open accessibility page. Say more examples."
+    "Write Python in the editor and press Control Enter or Run. "
+    "Ask CodeUp whenever you need help."
 )
 _FIRST_STEP_MESSAGE = (
-    "The best first step is to say: start tutorial. I will then guide you, one "
-    "small step at a time, to write and run your very first Python program. If "
-    "speaking does not work, type start tutorial into the command box and press "
-    "Enter. You can also say: what can I do here, to hear more options."
+    "Write Python in the editor and press Control Enter or Run. "
+    "Ask CodeUp whenever you need help."
 )
 _FIRST_HELP_RE = re.compile(
     r"^\s*(?:what\s+can\s+i\s+do(?:\s+here)?|what\s+can\s+you\s+do|help\s+me\s+start|"
@@ -8366,14 +8406,15 @@ def _deterministic_concept_voice_response(
         return None
     if concept_kind == concept_qa.UNKNOWN_CONCEPT and not allow_unknown:
         return None
-    _allowed, _settings, _blocked_msg = _ai_capability_check("concept_qa")
-    if not _allowed:
-        return {
-            "success": True, "action": "deterministic_message",
-            "message": _blocked_msg, "speech": _blocked_msg, "heard": text, "concept": concept_kind,
-        }
     answer, facts = concept_qa.answer_concept(concept_kind, current_code)
     if concept_kind == concept_qa.UNKNOWN_CONCEPT:
+        _allowed, _settings, _blocked_msg = _ai_capability_check("concept_qa")
+        if not _allowed:
+            return {
+                "success": True, "action": "deterministic_message",
+                "message": _blocked_msg, "speech": _blocked_msg, "heard": text,
+                "concept": concept_kind,
+            }
         topic = concept_qa.extract_concept_topic(text) or ""
         ai_answer = _python_concept_ai_fallback(topic)
         if ai_answer:
@@ -11991,6 +12032,21 @@ def voice():
             "options": options,
             "heard": text,
             "confidence": bscore / 100.0
+        })
+
+    # PART H: this is the point where nothing deterministic resolved the
+    # command and the only remaining option is asking a cloud AI to
+    # classify it - if this learner's class currently has AI turned off,
+    # say so plainly instead of attempting a call that would just come
+    # back empty and read as a generic "I didn't understand" (which is a
+    # different, misleading message - the learner didn't phrase it badly,
+    # AI is simply unavailable to them right now).
+    if _classroom_ai_disabled_for_request():
+        return _store_and_return({
+            "success": True, "action": "deterministic_message",
+            "message": classroom_ai_toggle.AI_DISABLED_MESSAGE,
+            "speech": classroom_ai_toggle.AI_DISABLED_MESSAGE,
+            "heard": text, "confidence": 0.0,
         })
 
     mapped_ai = _route_ai_natural_command_mapper(

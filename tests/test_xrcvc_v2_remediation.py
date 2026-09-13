@@ -82,45 +82,18 @@ def test_settings_heading_is_connected_not_orphaned(client):
     assert html.count('aria-label="CodeUp display and accessibility settings"') == 0
 
 
-def test_show_commands_help_is_a_real_named_landmark(client):
-    # XRCVC v2 retest, Finding 15: an earlier pass gave this disclosure a
-    # heading (for NVDA/JAWS heading-list, "H" key) but deliberately did NOT
-    # make it a landmark, reasoning that the IDE's three-region cap should
-    # stay fixed. XRCVC's literal ask was a landmark "similar to other
-    # landmark[s]", so this pass gives it one - following the app's own
-    # existing, established pattern (test_ide_accessibility_semantics.py's
-    # "named <section> -> implicit region" mapping, the same technique
-    # editor/output/commands already use) rather than an explicit
-    # role="region" attribute, which test_no_explicit_role_region_anywhere
-    # still (correctly) forbids everywhere in the document.
+def test_help_is_a_compact_disclosure_without_nested_landmark(client):
     html = ide_html(client)
-    assert '<h3 id="cuHelpPanelHeading" class="sr-only">Commands and help</h3>' in html
-    assert '<section class="cu-help-content" aria-labelledby="cuHelpPanelHeading">' in html
-    # It is nested one level inside the existing "Commands" region
-    # (cu-voice-console) rather than hoisted to the top level - XRCVC asked
-    # for a landmark tag, not a page restructure, and a region nested inside
-    # a differently-named region is valid ARIA landmark nesting, not
-    # duplicate/nested landmark noise (there is exactly one new landmark
-    # here, with one name, not a stack of redundant wrappers).
-    voice_console_start = html.index('<section class="cu-voice-console"')
-    help_section_start = html.index('<section class="cu-help-content"')
-    details_end = html.index('</details>', help_section_start)
-    assert voice_console_start < help_section_start < details_end
-    # No plain, un-landmarked <div class="cu-help-content"> should remain.
-    assert '<div class="cu-help-content">' not in html
+    assert '<summary class="cu-disclosure-summary">Help</summary>' in html
+    assert '<div class="cu-help-content">' in html
+    assert '<section class="cu-help-content"' not in html
 
 
-def test_show_commands_help_landmark_is_reachable_only_once_expanded(client):
-    # Native <details> hides its non-<summary> children from the
-    # accessibility tree while collapsed, so this landmark - like the
-    # disclosure body itself - only appears in NVDA/JAWS's region list once
-    # the user has expanded "Show commands & help". This is expected, not a
-    # bug: flagged here so a future change doesn't "fix" it by hoisting the
-    # section out of the <details> (which would defeat the disclosure).
+def test_help_content_is_reachable_only_once_expanded(client):
     html = ide_html(client)
     details_start = html.index('<details id="cuHelpPanel"')
-    section_start = html.index('<section class="cu-help-content"')
-    assert details_start < section_start
+    content_start = html.index('<div class="cu-help-content"')
+    assert details_start < content_start < html.index('</details>', content_start)
 
 
 # ---------------------------------------------------------------------------
@@ -183,13 +156,11 @@ def test_accessibility_options_shortcut_has_a_real_working_target():
 # Issue 19: keyboard shortcut reference reachable without knowing a shortcut
 # ---------------------------------------------------------------------------
 
-def test_shortcut_help_is_reachable_from_a_visible_button(client):
+def test_shortcut_help_is_in_the_visible_help_disclosure(client):
     html = ide_html(client)
-    assert '<button type="button" id="shortcutHelpBtn"' in html
-    assert 'id="shortcutHelpModal"' in html
-    assert 'role="dialog"' in html[html.index('id="shortcutHelpModal"'):html.index('id="shortcutHelpModal"') + 120]
+    assert 'id="shortcutHelpBtn"' not in html
+    assert 'Keyboard: Ctrl+Enter runs your code. Ctrl+M leaves the editor.' in html
     assert "function openShortcutHelp()" in STATIC_APP
-    assert "shortcutHelpBtn.addEventListener('click', () => openShortcutHelp());" in STATIC_APP
     # Alt+Shift+K opens the same concise modal, not just the giant
     # "what can I do here" command wall.
     assert "} else if (key === 'K') {\n          openShortcutHelp();" in STATIC_APP
@@ -213,12 +184,12 @@ def test_shortcut_help_covers_the_core_shortcuts_from_the_ticket(client):
 # Issue 20: Getting Started guide
 # ---------------------------------------------------------------------------
 
-def test_getting_started_guide_is_reachable_from_a_visible_button(client):
+def test_getting_started_guidance_is_inline_without_a_modal_button(client):
     html = ide_html(client)
-    assert '<button type="button" id="guideBtn"' in html
-    assert 'id="guideModal"' in html
-    assert "function openGettingStartedGuide()" in STATIC_APP
-    assert "guideBtn.addEventListener('click', () => openGettingStartedGuide());" in STATIC_APP
+    assert '<button type="button" id="guideBtn"' not in html
+    assert 'id="cuStartBanner"' in html
+    assert 'Write Python below and press <strong>Ctrl+Enter</strong> or Run.' in html
+    assert 'Start tutorial' not in html[html.index('id="cuStartBanner"'):html.index('</div>\n\n  <div class="cu-main">')]
 
 
 # ---------------------------------------------------------------------------

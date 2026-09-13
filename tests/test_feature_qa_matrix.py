@@ -16,7 +16,7 @@ def client():
 @pytest.mark.parametrize(
     "text,payload,expected",
     [
-        ("what can I do here?", {}, "generate code"),
+        ("what can I do here?", {}, "write python"),
         ("read errors only", {"error": "NameError: name 'total' is not defined"}, "used before it has a value"),
         ("preflight check", {"code": "print('ready')\n"}, "ready to run"),
         ("show code stats", {"code": "for i in range(3):\n    print(i)\n"}, "1 loop"),

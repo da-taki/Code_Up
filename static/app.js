@@ -121,6 +121,7 @@ let _preflightInputPlaceholders = [];
 window.getPreflightInputs = () => _preflightInputs.slice();
 let _liveInputMode = false;
 let _programInputRequest = null;
+let _programInputSubmitting = false;
 let _editorErrorDecorationIds = [];
 
 const NarrationRequests = (window.CodeUpNarrationGuard && window.CodeUpNarrationGuard.createNarrationGuard)
@@ -883,17 +884,18 @@ async function showHelp() {
   const lang = getLanguage();
   let msg;
   if (lang === 'hi') {
-    msg = 'मुख्य commands: चलाओ कोड चलाने के लिए, कोड समझाओ analysis के लिए, कोड ठीक करो fix के लिए, सारांश दो summary के लिए, लाइन पांच पर जाओ navigate करने के लिए, tutorial खोलने के लिए "tutorial" कहें, "quiz करो" practice के लिए, "bug challenge" debugging के लिए, "मदद और" पूरी list के लिए।';
+    msg = 'CodeUp से सहज भाषा में पूछें: यह क्यों टूटा? इसने क्या प्रिंट किया? मैं कहाँ हूँ? यह लाइन इंडेंट क्यों है? या मुझे एक संकेत दो। कीबोर्ड: Control Enter कोड चलाता है। Control M एडिटर से बाहर जाता है।';
   } else {
-    msg = BEGINNER_COMMAND_GUIDE_VISIBLE;
+    msg = 'Ask CodeUp naturally: Why did this break? What did it print? Where am I? Why is this line indented? Or give me a hint. Keyboard: Control Enter runs your code. Control M leaves the editor.';
   }
-  const speech = lang === 'hi' ? msg : BEGINNER_COMMAND_GUIDE_SPEECH;
+  const speech = msg;
   out(msg, { sr: false });
   speak(speech);
 }
 
 function showFullHelp() {
   if (!ensureNotExecuting(() => showFullHelp(), 'show full help')) return;
+  return showHelp();
   const helpText = `
 CODEUP COMMANDS:
 
@@ -1209,8 +1211,6 @@ function renderAudioBlocks(state) {
   if (codeRegion) codeRegion.hidden = isBlocks;
   if (blockButton) blockButton.setAttribute('aria-pressed', String(isBlocks));
   if (codeButton) codeButton.setAttribute('aria-pressed', String(!isBlocks));
-  const modeBadge = document.getElementById('cuModeStatus');
-  if (modeBadge) modeBadge.textContent = isBlocks ? 'Audio Blocks Mode' : 'Python Code Mode';
   if (previousMode !== activeMode) {
     srAnnounce(isBlocks ? 'Audio Blocks Mode opened.' : 'Python Code Mode opened.');
   }
@@ -1695,7 +1695,14 @@ function _closeInfoModal(modalId) {
   if (opener && opener.focus) opener.focus();
 }
 
-function openShortcutHelp() { _openInfoModal('shortcutHelpModal', 'shortcutHelpCloseBtn'); }
+function openShortcutHelp() {
+  const help = document.getElementById('cuHelpPanel');
+  if (help) {
+    help.open = true;
+    const summary = help.querySelector('summary');
+    if (summary) summary.focus();
+  }
+}
 function closeShortcutHelp() { _closeInfoModal('shortcutHelpModal'); }
 function openGettingStartedGuide() { _openInfoModal('guideModal', 'guideCloseBtn'); }
 function closeGettingStartedGuide() { _closeInfoModal('guideModal'); }
@@ -1802,8 +1809,8 @@ require(['vs/editor/editor.main'], function () {
     clearTimeout(_structureDebounce);
     _structureDebounce = setTimeout(updateStructurePanel, 600);
     // Debounced classroom live-code sync: waits for a pause in typing
-    // rather than firing on every keystroke. A no-op 401 for an
-    // anonymous, non-cohort learner (see syncLiveCode() in classroom.js).
+    // rather than firing on every keystroke. Anonymous learners are skipped
+    // locally by syncLiveCode() in classroom.js.
     clearTimeout(_classroomSyncDebounce);
     _classroomSyncDebounce = setTimeout(() => {
       if (typeof window._classroomOnAutosave === 'function') {
@@ -2810,11 +2817,7 @@ async function sendStreamingInput(value) {
 async function analyzeCode() {
   if (!ensurePythonEditorContent('analyze')) return;
   const codeSnapshot = getCode();
-  // Deduplication: #output ("Analyzing...") and #aiBubble ("Analyzing code
-  // with AI...") both carry their own aria-live for this same "started"
-  // moment; speak() adds a third. sr:false / announce:false leave #output
-  // as the sole automatic announcer in Screen Reader Safe mode.
-  cueSuccess(); out('Analyzing...', { sr: false }); showAI('Analyzing code with AI...', { announce: false }); speak('Analyzing code.', { sr: false });
+  cueSuccess(); out('Explaining your code...', { sr: false }); speak('Explaining your code.', { sr: false });
   try {
     const result = await guardedJson('analysis', '/analyze', {
       method:  'POST',
@@ -2837,7 +2840,7 @@ async function analyzeCode() {
         .replace(/\s*want a deeper line by line walkthrough\??.*$/i, '')
         .replace(/\s*just say:?\s*analyze deeper\.?\s*$/i, '');
       speak(spoken, { sr: false });
-      window._lastAnalyzeContext = { code: codeSnapshot, at: Date.now() };
+      window._lastAnalyzeContext = { code: codeSnapshot, nextStart: data.next_start, deep: false };
     } else {
       speak('No analysis available.', { sr: false });
     }
@@ -2849,32 +2852,30 @@ async function analyzeCode() {
 }
 
 async function analyzeDeep() {
-  if (!window._lastAnalyzeContext || (Date.now() - window._lastAnalyzeContext.at > 5 * 60 * 1000)) {
-    speak('Please run analyze first, then say analyze deeper.');
-    return;
-  }
-  const codeForDeep = window._lastAnalyzeContext.code;
+  if (!ensurePythonEditorContent('analyze deeper')) return;
+  const codeForDeep = getCode();
+  const previous = window._lastAnalyzeContext;
+  const start = previous && previous.deep && previous.code === codeForDeep && previous.nextStart !== null
+    ? previous.nextStart : 0;
   if (looksLikeNonPythonCode(codeForDeep)) {
     rejectNonPythonCode('deep analysis');
     window._lastAnalyzeContext = null;
     return;
   }
-  const currentCode = getCode();
-  if (codeForDeep !== currentCode) {
-    SpeechManager.cancelAll();
-    speak('Your code has changed since the last analyze. I will analyze the version you originally asked about. Say analyze again to refresh.');
-  }
-  cueSuccess(); showAI('Going deeper...'); speak('Going line by line.');
+  cueSuccess(); speak(start ? 'Continuing the detailed explanation.' : 'Explaining each line and its syntax.');
   try {
     const result = await guardedJson('analysis', '/analyze-deep', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code: codeForDeep, language: getLanguage() }),
+      body: JSON.stringify({ code: codeForDeep, language: getLanguage(), start }),
     }, narrationContext(codeForDeep), () => ({ code: codeForDeep, file: ProjectState.activeFile || '' }));
     if (staleResult(result)) return;
     const data = result.value;
     out(data.analysis || 'No deeper analysis.', { sr: false });
-    if (data.analysis) speak(data.analysis);
+    if (data.analysis) {
+      speak(data.analysis);
+      window._lastAnalyzeContext = { code: codeForDeep, nextStart: data.next_start, deep: true };
+    }
   } catch (e) {
     console.error(e); speak('Deeper analysis failed.');
   } finally {
@@ -3979,9 +3980,9 @@ async function handleConfirmedAction(action, payload) {
   else if (action === 'copy_code')       copyCode();
   else if (action === 'paste_code')         pasteCode();
   else if (action === 'restart_tutorial')   restartTutorial();
-  else if (action === 'toggle_dyslexia')    { document.getElementById('dyslexiaToggle').click(); }
+  else if (action === 'toggle_dyslexia')    speak('Dyslexia mode is not part of this simplified view. Use text size or High Contrast in Accessibility.');
   else if (action === 'toggle_motion')      { document.getElementById('motionToggle').click(); }
-  else if (action === 'toggle_night')       { document.getElementById('nightToggle').click(); }
+  else if (action === 'toggle_night')       speak('Night mode is not part of this simplified view. Use High Contrast in Accessibility.');
   else if (action === 'cycle_color_mode')   {
     const s = document.getElementById('colorVisionMode');
     s.selectedIndex = (s.selectedIndex + 1) % s.options.length;
@@ -4006,14 +4007,7 @@ async function handleConfirmedAction(action, payload) {
   }
   else if (action === 'list_variables_voice') await listVariablesWithValues();
   else if (action === 'start_tutorial')     {
-    // Vision-Aid build: "start tutorial" launches the minimal 5-step IDE
-    // quick-start (editor -> type -> run -> output -> Ask CodeUp), not the
-    // longer Python-concepts walkthrough - see static/onboarding.js. The
-    // old TutorialController stays intact and reachable at
-    // TutorialController.open() for any internal/future use, just not
-    // wired to this action anymore.
-    if (window.MinimalOnboarding) window.MinimalOnboarding.open();
-    else if (window.TutorialController) window.TutorialController.open();
+    speak('Write Python in the editor and press Control Enter or Run. Ask CodeUp whenever you need help.');
   }
   else if (action === 'skip_tutorial')      {
     if (window.MinimalOnboarding && window.MinimalOnboarding.active) window.MinimalOnboarding.close(false);
@@ -4203,6 +4197,7 @@ function showProgramInputControl(req) {
   const message = req.message || inputRequestMessage(req);
   const accessiblePrompt = inputRequestMessage(req);
   const accessibleName = message.includes(req.prompt || '') ? message : `${accessiblePrompt} ${message}`;
+  _programInputSubmitting = false;
   if (status) status.textContent = message;
   if (label) label.textContent = `Program input answer for ${req.prompt || 'input request'}`;
   if (input) {
@@ -4229,6 +4224,7 @@ function hideProgramInputControl(message) {
   const input = document.getElementById('programInputValue');
   const submit = document.getElementById('programInputSubmitBtn');
   const cancel = document.getElementById('programInputCancelBtn');
+  _programInputSubmitting = false;
   if (status) status.textContent = message || 'No program input is being requested.';
   if (input) { input.disabled = true; input.value = ''; input.placeholder = 'Program input will appear here when needed...'; }
   if (submit) submit.disabled = true;
@@ -4253,15 +4249,18 @@ function handleProgramInputRequest(payload) {
   speak(message, { sr: false });
 }
 async function submitProgramInputValue() {
+  if (_programInputSubmitting) return;
   const input = document.getElementById('programInputValue');
   const value = input ? input.value.trim() : '';
   if (!value) { srAnnounce('Type an answer before submitting program input.'); return; }
+  _programInputSubmitting = true;
   if (_activeStreamRun && _activeStreamRun.runId && _activeStreamRun.awaitingPrompt) {
-    await sendStreamingInput(value);
-    hideProgramInputControl('Program input sent. Waiting for the program.');
+    const sent = await sendStreamingInput(value);
+    if (sent) hideProgramInputControl('Program input sent. Waiting for the program.');
+    else _programInputSubmitting = false;
     return;
   }
-  if (!_programInputRequest) { srAnnounce('No program input is being requested.'); return; }
+  if (!_programInputRequest) { _programInputSubmitting = false; srAnnounce('No program input is being requested.'); return; }
   const values = (_programInputRequest.values || []).concat([value]);
   _preflightInputs = values.slice();
   _preflightInputPlaceholders = [];
@@ -5897,10 +5896,25 @@ window.addEventListener('DOMContentLoaded', () => {
     }
     if (event.key === 'Escape') { event.preventDefault(); cancelProgramInputRequest(); }
   });
+  const activateProgramInputButton = (event, action) => {
+    if ((event.key !== 'Enter' && event.key !== ' ') || event.isComposing || event.repeat) return;
+    event.preventDefault();
+    action();
+  };
   const programSubmit = document.getElementById('programInputSubmitBtn');
-  if (programSubmit) programSubmit.addEventListener('click', submitProgramInputValue);
+  if (programSubmit) {
+    programSubmit.addEventListener('click', submitProgramInputValue);
+    programSubmit.addEventListener('keydown', event => {
+      activateProgramInputButton(event, submitProgramInputValue);
+    });
+  }
   const programCancel = document.getElementById('programInputCancelBtn');
-  if (programCancel) programCancel.addEventListener('click', cancelProgramInputRequest);
+  if (programCancel) {
+    programCancel.addEventListener('click', cancelProgramInputRequest);
+    programCancel.addEventListener('keydown', event => {
+      activateProgramInputButton(event, cancelProgramInputRequest);
+    });
+  }
 
   const codeModeBtn = document.getElementById('codeModeBtn');
   const audioBlocksModeBtn = document.getElementById('audioBlocksModeBtn');
@@ -6022,9 +6036,6 @@ window.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  document.addEventListener('keydown', e => {
-    if (e.ctrlKey && e.shiftKey && e.key === 'P') { e.preventDefault(); openCommandPalette(); }
-  });
 
   // Click outside the container closes the palette
   const paletteOverlay = document.getElementById('commandPaletteOverlay');
@@ -6204,8 +6215,8 @@ function startAutosave() {
     // instructor-visible status from going stale to "Offline" while they
     // are reading rather than typing. The actual code sync on a real edit
     // is the 2s debounce in editor.onDidChangeModelContent() above; this
-    // interval no longer duplicates that (a no-op 401 for a non-cohort
-    // learner, see syncLiveCode()/heartbeat() in classroom.js).
+    // interval no longer duplicates that. Anonymous learners are skipped by
+    // syncLiveCode()/onHeartbeat() in classroom.js.
     if (typeof window._classroomOnHeartbeat === 'function') {
       try { window._classroomOnHeartbeat(); } catch (e) {}
     }
@@ -7530,11 +7541,7 @@ async function bugChallenge() {
 }
 
 function restartTutorial() {
-  if (window.MinimalOnboarding) {
-    window.MinimalOnboarding.open();
-  } else if (window.TutorialController) {
-    window.TutorialController.open();
-  }
+  speak('Write Python in the editor and press Control Enter or Run. Ask CodeUp whenever you need help.');
 }
 
 function showInputDialog(promptText, callback) {

@@ -73,20 +73,13 @@ def test_no_explicit_role_region_anywhere(client):
     ("cu-editor-wrapper", "codeEditorHeading", "Code editor"),
     ("cu-output-section", "programOutputHeading", "Program output"),
     ("cu-voice-console", "command-input-label", "Ask CodeUp"),
-    # XRCVC final closure pass, Finding 15: XRCVC explicitly asked for a
-    # landmark on "Show commands & help", overriding the "bounded at three"
-    # framing above for this one, specifically-requested case. Nested inside
-    # the Commands region above rather than hoisted to the top level - see
-    # test_xrcvc_v2_remediation.py::test_show_commands_help_is_a_real_named_landmark.
-    ("cu-help-content", "cuHelpPanelHeading", "Commands and help"),
 ])
 def test_justified_regions_are_named_sections(client, section_id_or_class, heading_id, expected_heading_text):
-    """Code editor, Program output, Commands, and (as of the XRCVC final
-    closure pass) Commands and help are the IDE regions explicitly worth
+    """Code editor, Program output, and Commands are the IDE regions worth
     NVDA/JAWS region-navigation (a blind learner jumping straight to
     "Commands" or "Program output" is a real, common need) - each is a
     <section> named by its own visible/sr-only heading, per HTML-AAM's
-    "named section -> region role" mapping."""
+    "named section -> region role" mapping. Help stays a small disclosure."""
     tree, _ = _tree(client)
     sections = tree.xpath(f'//section[contains(@class, "{section_id_or_class}")]')
     assert sections, f"no <section> found for {section_id_or_class}"

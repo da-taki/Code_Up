@@ -33,12 +33,11 @@
   <header class="cu-header">
     <div class="cu-header-top">
       <h1 id="pageTitle" class="cu-title">CodeUp</h1>
-      <span id="cuModeStatus" class="cu-mode-badge" role="status" aria-live="polite" aria-label="Current mode">Python Code Mode</span>
       <details class="cu-disclosure cu-header-settings">
-        <summary class="cu-disclosure-summary">CodeUp display and accessibility settings</summary>
+        <summary class="cu-disclosure-summary">Accessibility</summary>
         <div class="cu-theme-controls" role="group" aria-describedby="settingsDescription" aria-labelledby="accessibilitySettingsHeading">
       <h2 id="accessibilitySettingsHeading" class="sr-only">Accessibility and speech settings</h2>
-      <p id="settingsDescription" class="cu-settings-description">Controls for speech mode, display, screen-reader profile, voice speed, and browser voice selection.</p>
+      <p id="settingsDescription" class="cu-settings-description">Adjust speech, contrast, text size, and motion.</p>
 
       <h3 class="cu-settings-subheading">Speech mode</h3>
       <label for="speechModeSelect">How should CodeUp speak?</label>
@@ -51,9 +50,6 @@
       <h3 class="cu-settings-subheading">Display</h3>
       <select id="colorVisionMode" class="theme-selector" aria-label="Color vision mode">
         <option value="default">Standard Colors (no special mode)</option>
-        <option value="protanopia">Protanopia (Red-blind)</option>
-        <option value="deuteranopia">Deuteranopia (Green-blind)</option>
-        <option value="tritanopia">Tritanopia (Blue-blind)</option>
         <option value="high-contrast">High Contrast</option>
       </select>
 
@@ -64,45 +60,13 @@
         <option value="xlarge">Extra large text</option>
       </select>
 
-      <button id="dyslexiaToggle" class="theme-toggle" aria-pressed="false" aria-label="Toggle dyslexia-friendly mode">
-        Dyslexia Mode
-      </button>
-
       <button id="motionToggle" class="theme-toggle" aria-pressed="false" aria-label="Toggle reduced motion">
         Reduce Motion
       </button>
 
-      <button id="nightToggle" class="theme-toggle" aria-pressed="false" aria-label="Toggle night mode">
-        Night Mode
-      </button>
-      <button id="tutorialBtn" class="cu-button cu-button-secondary" aria-label="Start interactive tutorial">
-        Tutorial
-      </button>
-
-      <h3 class="cu-settings-subheading">Screen reader</h3>
-      <label for="assistiveTechnologyProfile">Assistive technology profile</label>
-      <select id="assistiveTechnologyProfile" class="theme-selector" aria-label="Assistive technology profile">
-        <option value="default">Default</option>
-        <option value="nvda">NVDA</option>
-        <option value="jaws">JAWS</option>
-        <option value="narrator">Windows Narrator</option>
-        <option value="voiceover">VoiceOver</option>
-        <option value="orca">Orca</option>
-        <option value="vs code">VS Code handoff</option>
-      </select>
-
-      <h3 class="cu-settings-subheading">Voice speed and voice selection</h3>
+      <h3 class="cu-settings-subheading">Speech rate</h3>
       <label for="speechRateControl">Speech rate: <span id="speechRateValue">1.0x</span></label>
       <input id="speechRateControl" class="cu-speech-rate" type="range" min="0.5" max="2" step="0.1" value="1" aria-describedby="speechModeDescription">
-      <label for="speechVoiceSelect">Browser voice: <span id="speechVoiceValue">Default browser voice</span></label>
-      <select id="speechVoiceSelect" class="theme-selector" aria-label="Browser speech voice" aria-describedby="speechModeDescription">
-        <option value="">Default browser voice</option>
-      </select>
-      <button id="testVoiceBtn" class="cu-button cu-button-secondary" type="button" aria-label="Test selected browser voice">Test Voice</button>
-      <h3 class="cu-settings-subheading">Help</h3>
-      <button type="button" id="guideBtn" class="cu-button cu-button-secondary" aria-label="Open the CodeUp getting started guide" aria-haspopup="dialog">Getting started guide</button>
-      <button type="button" id="shortcutHelpBtn" class="cu-button cu-button-secondary" aria-label="Open the keyboard shortcuts reference" aria-haspopup="dialog">Keyboard shortcuts</button>
-      <a href="/accessibility">Accessibility help</a>
         </div>
       </details>
     </div>
@@ -116,7 +80,7 @@
        style="background:var(--accent-soft, rgba(0,0,0,0.04));border-bottom:1px solid var(--border-soft);color:var(--text-main);padding:10px 16px;font-size:0.9rem;line-height:1.5;display:flex;gap:12px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;">
     <div style="flex:1;min-width:260px;">
       <p style="margin:0;">
-        <strong>New to CodeUp?</strong> Type some Python below and press <strong>Ctrl+Enter</strong> to run it. Ask CodeUp if you need help. <a href="#" id="cuStartTutorialLink">Start tutorial</a>
+        Write Python below and press <strong>Ctrl+Enter</strong> or Run. Ask CodeUp whenever you need help.
       </p>
     </div>
     <button id="cuStartBannerDismiss" class="cu-button cu-button-secondary"
@@ -131,7 +95,6 @@
       <div class="cu-editor-region" id="codeModeRegion">
         <p id="editorHelp" class="cu-editor-help">Tab moves focus out of the editor. Use Control right bracket to indent a line and Control left bracket to outdent it. Press Escape when speech is quiet, or press Control+M, to leave the editor and continue to CodeUp controls.</p>
         <div id="editor" class="cu-editor" role="group" aria-label="Python code editor" aria-describedby="editorHelp"></div>
-        <button id="leaveEditorBtn" class="cu-button cu-button-secondary cu-leave-editor" type="button" aria-label="Leave editor and move to editor actions">Leave editor</button>
         <div id="errorSummary" class="cu-error-summary" aria-live="off" hidden>
           <h3 id="errorSummaryHeading">Editor error</h3>
           <p id="errorSummaryText">No editor errors.</p>
@@ -161,7 +124,7 @@
     </section>
 
     <div id="programInputSection" class="cu-program-input">
-      <h2 id="programInputHeading" class="cu-section-heading">Program inputs</h2>
+      <h2 id="programInputHeading" class="cu-section-heading">Your program is asking</h2>
       <p id="programInputStatus" class="cu-command-tip">No program input is being requested.</p>
       <label id="programInputLabel" for="programInputValue">Program input answer</label>
       <input
@@ -186,10 +149,8 @@
         placeholder="Ask about your code or an error..."
         aria-label="Ask CodeUp"
         aria-labelledby="command-input-label"
-        aria-describedby="commandPrecisionTip"
       />
       <button class="cu-button cu-button-secondary" id="sendCommandBtn" aria-label="Send">Send</button>
-      <p id="commandPrecisionTip" class="cu-command-tip">Tip: type or speak. For exact symbols or long prompts, typing is more reliable.</p>
 
       <div id="liveAssistantPanel" class="cu-live-assistant" hidden>
         <p id="liveAssistantStatus" class="cu-live-assistant-status" role="status" aria-live="polite" aria-atomic="true">Live Assistant: off</p>
@@ -204,23 +165,18 @@
       </div>
 
       <details id="cuHelpPanel" class="cu-disclosure cu-help-disclosure">
-        <summary class="cu-disclosure-summary">Show commands &amp; help</summary>
-        <section class="cu-help-content" aria-labelledby="cuHelpPanelHeading">
-          <h3 id="cuHelpPanelHeading" class="sr-only">Commands and help</h3>
-          <p class="cu-help-intro">Ask CodeUp anything, by voice or by typing. For example:</p>
+        <summary class="cu-disclosure-summary">Help</summary>
+        <div class="cu-help-content">
+          <p class="cu-help-intro">You can ask CodeUp:</p>
           <ul class="cu-help-examples">
-            <li>what can I do here</li>
-            <li>run</li>
-            <li>explain this code</li>
-            <li>why did I get this error?</li>
-            <li>where am I?</li>
-            <li>why is this line indented?</li>
-            <li>give me a hint</li>
-            <li>read my output</li>
-            <li>start tutorial</li>
-            <li>show keyboard shortcuts</li>
+            <li>Why did this break?</li>
+            <li>What did it print?</li>
+            <li>Where am I?</li>
+            <li>Why is this line indented?</li>
+            <li>Give me a hint.</li>
           </ul>
-        </section>
+          <p>Keyboard: Ctrl+Enter runs your code. Ctrl+M leaves the editor.</p>
+        </div>
       </details>
     </section>
   </div>
@@ -556,13 +512,6 @@
         applyTextSizeMode(e.target.value);
         safeStorage(function () { localStorage.setItem('textSizeMode', e.target.value); });
       });
-      document.getElementById('dyslexiaToggle').addEventListener('click', function () {
-        var isActive = document.body.classList.toggle('theme-dyslexia');
-        this.classList.toggle('active', isActive);
-        this.setAttribute('aria-pressed', String(isActive));
-        safeStorage(function () { localStorage.setItem('dyslexiaMode', isActive); });
-        speak(isActive ? 'Dyslexia-friendly mode activated.' : 'Dyslexia-friendly mode deactivated.');
-      });
       document.getElementById('motionToggle').addEventListener('click', function () {
         var isActive = document.body.classList.toggle('theme-reduced-motion');
         this.classList.toggle('active', isActive);
@@ -570,27 +519,9 @@
         safeStorage(function () { localStorage.setItem('reducedMotion', isActive); });
         speak(isActive ? 'Reduced motion mode activated.' : 'Reduced motion mode deactivated.');
       });
-      document.getElementById('nightToggle').addEventListener('click', function () {
-        var isActive = document.body.classList.toggle('theme-night');
-        this.classList.toggle('active', isActive);
-        this.setAttribute('aria-pressed', String(isActive));
-        safeStorage(function () { localStorage.setItem('nightMode', isActive); });
-        try {
-          if (typeof monaco !== 'undefined' && monaco.editor) {
-            monaco.editor.setTheme(isActive ? 'vs-dark' : 'vs');
-          }
-        } catch (e) {}
-        speak(isActive ? 'Night mode activated.' : 'Night mode deactivated.');
-      });
 
       document.getElementById('runBtn').addEventListener('click', function () { if (typeof runCode === 'function') runCode(); });
       document.getElementById('voiceButton').addEventListener('click', function () { if (typeof toggleVoice === 'function') toggleVoice(); });
-      var tutorialLink = document.getElementById('cuStartTutorialLink');
-      if (tutorialLink) tutorialLink.addEventListener('click', function (e) {
-        e.preventDefault();
-        if (window.MinimalOnboarding && typeof window.MinimalOnboarding.open === 'function') window.MinimalOnboarding.open();
-        else if (window.TutorialController && typeof window.TutorialController.open === 'function') window.TutorialController.open();
-      });
       document.getElementById('sendCommandBtn').addEventListener('click', function () { if (typeof submitCommand === 'function') submitCommand(); });
       var voiceTextInput = document.getElementById('voiceText');
       if (voiceTextInput) {
@@ -614,7 +545,6 @@
 
       document.addEventListener('keydown', function (e) {
         if (e.altKey && e.key === 'a') { e.preventDefault(); var s = document.getElementById('colorVisionMode'); s.selectedIndex = (s.selectedIndex + 1) % s.options.length; applyColorVisionMode(s.value); }
-        if (e.altKey && e.key === 'd') { e.preventDefault(); document.getElementById('dyslexiaToggle').click(); }
         if (e.altKey && e.key === 'm') { e.preventDefault(); document.getElementById('motionToggle').click(); }
       });
 
@@ -627,8 +557,6 @@
   <script src="/static/live-assistant.js"></script>
   <script src="/static/narration-guard.js"></script>
   <script src="/static/app.js"></script>
-  <script src="/static/tutorial.js"></script>
-  <script src="/static/onboarding.js"></script>
   <script src="/static/classroom.js"></script>
 
 </body>

@@ -31,11 +31,9 @@ def _visible_html(html):
     return re.sub(r"<details\b[\s\S]*?</details>", "", html)
 
 
-def test_ide_shows_current_mode_badge_defaulting_to_code_mode(client):
+def test_ide_has_no_redundant_mode_badge(client):
     html = _ide_html(client)
-    assert 'id="cuModeStatus"' in html
-    visible = _visible_html(html)
-    assert "Python Code Mode" in visible
+    assert 'id="cuModeStatus"' not in html
 
 
 @pytest.mark.parametrize("control_id", ["runBtn", "voiceButton", "voiceText", "sendCommandBtn"])
@@ -57,8 +55,7 @@ def test_live_regions_are_not_hidden_inside_collapsed_details(client, region_id)
 @pytest.mark.parametrize(
     "control_id",
     [
-        "colorVisionMode", "dyslexiaToggle",
-        "speechModeSelect", "assistiveTechnologyProfile",
+        "colorVisionMode", "speechModeSelect", "textSizeMode", "motionToggle", "speechRateControl",
     ],
 )
 def test_advanced_controls_are_collapsed_into_details(client, control_id):
@@ -91,7 +88,7 @@ def test_collapsed_sections_are_accessible_disclosures(client):
 def test_ask_codeup_help_panel_has_simple_examples(client):
     html = _ide_html(client)
     assert 'id="cuHelpPanel"' in html
-    for example in ("run", "explain this code", "give me a hint", "start tutorial"):
+    for example in ("Why did this break?", "What did it print?", "Where am I?", "Why is this line indented?", "Give me a hint."):
         assert f"<li>{example}</li>" in html, f"help panel missing example: {example}"
     # Vision-Aid build: no technical command-parser categories.
     for group in ("Audio Blocks", "Export", "Debug", "Navigate", "Resume my context"):
@@ -115,9 +112,9 @@ def test_no_inline_ai_model_pill_clutter(client):
     assert "LLAMA 3.3" not in _ide_html(client)
 
 
-def test_app_js_updates_mode_badge():
+def test_app_js_has_no_removed_mode_badge_dependency():
     js = Path("static/app.js").read_text(encoding="utf-8")
-    assert "cuModeStatus" in js, "renderAudioBlocks should keep the mode badge in sync"
+    assert "cuModeStatus" not in js
 
 
 def test_app_js_applies_block_category_and_state_classes():

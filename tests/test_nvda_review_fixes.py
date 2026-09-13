@@ -125,7 +125,7 @@ def test_heading_hierarchy_does_not_skip_levels(client):
     headings = parser.headings
     assert headings.count((1, "CodeUp")) == 1
     names = [name for _, name in headings]
-    for expected in ["Code editor", "Program output", "Program inputs", "Ask CodeUp"]:
+    for expected in ["Code editor", "Program output", "Your program is asking", "Ask CodeUp"]:
         assert expected in names
     previous = 0
     for level, name in headings:
@@ -163,10 +163,8 @@ def test_landmark_labels_are_unique_and_regions_are_limited(client):
     assert len(labels) == len(set(labels)), labels
     assert sum(1 for tag, _, _ in parser.landmarks if tag == "main") == 1
     region_labels = [label for _, role, label in parser.landmarks if role == "region"]
-    assert set(region_labels) == {
-        "codeEditorHeading", "programOutputHeading", "command-input-label", "cuHelpPanelHeading",
-    }, region_labels
-    assert len(region_labels) == 4, "exactly one region each - no duplicates, no extras"
+    assert set(region_labels) == {"codeEditorHeading", "programOutputHeading", "command-input-label"}, region_labels
+    assert len(region_labels) == 3, "exactly one primary region each - no duplicates, no extras"
 
 
 
@@ -204,7 +202,7 @@ def test_editor_escape_path_and_skip_links_exist(client):
     html = ide_html(client)
     assert 'href="#editor">Jump to editor' in html
     assert 'href="#output">Jump to output' in html
-    assert 'id="leaveEditorBtn"' in html
+    assert 'id="leaveEditorBtn"' not in html
     assert 'Press Escape when speech is quiet, or press Control+M' in html
     assert "editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyM" in STATIC_APP
     assert "leaveEditor();" in STATIC_APP
@@ -220,13 +218,13 @@ def test_monaco_error_markers_are_created_labelled_and_cleared(client):
     assert "monaco.editor.setModelMarkers(model, 'codeup-runtime', [])" in STATIC_APP
 
 
-def test_speech_speed_and_voice_preferences_persist(client):
+def test_compact_speech_preferences_keep_rate_and_remove_voice_picker(client):
     html = ide_html(client)
-    for token in ("speechRateControl", "speechVoiceSelect", "testVoiceBtn", "speechRateValue", "speechVoiceValue"):
+    for token in ("speechRateControl", "speechRateValue"):
         assert f'id="{token}"' in html
+    for token in ("speechVoiceSelect", "testVoiceBtn", "speechVoiceValue"):
+        assert f'id="{token}"' not in html
     assert "localStorage.setItem('codeupSpeechRate'" in STATIC_APP
-    assert "localStorage.setItem('codeupSpeechVoice'" in STATIC_APP
-    assert "speechSynthesis.getVoices" in STATIC_APP
     assert "voiceName" in VOICE_ENGINE
 
 

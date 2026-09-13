@@ -44,7 +44,7 @@ class _FakeResponse:
         self.choices = [_FakeChoice(content)]
 
 
-def _make_fake_groq_module(call_log, lock, sleep_seconds=0.15, content="Fake analysis from the model."):
+def _make_fake_groq_module(call_log, lock, sleep_seconds=0.15, content="x = 1\nprint(x)"):
     """A fake `groq` module whose Groq(...).chat.completions.create(...)
     records (api_key, thread_name, start, end) for every real call and
     sleeps briefly so concurrent requests genuinely overlap in time,
@@ -112,7 +112,7 @@ def test_concurrent_real_route_requests_distribute_across_keys(monkeypatch, fake
     client = app_module.app.test_client()
 
     def fire(i):
-        r = client.post("/analyze", json={"code": f"x = {i}\nprint(x)", "language": "en"})
+        r = client.post("/fix", json={"code": f"x = {i}\nprint(x)", "language": "en"})
         return r.status_code, r.get_json()
 
     started = time.time()
@@ -121,7 +121,7 @@ def test_concurrent_real_route_requests_distribute_across_keys(monkeypatch, fake
     elapsed = time.time() - started
 
     assert all(status == 200 for status, _ in results)
-    assert all("Fake analysis" in (data.get("analysis") or "") for _, data in results)
+    assert all("print(x)" in (data.get("code") or "") for _, data in results)
     assert len(call_log) == 8
 
     keys_used = {entry["api_key"] for entry in call_log}
@@ -153,7 +153,7 @@ def test_policy_blocked_concurrent_requests_never_touch_the_pool(monkeypatch, fa
     )
     r = instructor.post("/classroom/cohorts", data={"name": "C"}, follow_redirects=True)
     join_code = _extract(rb'cu-join-code">([A-Z0-9]+)<', r.data)
-    cohort_id = _extract(rb'cohorts/(\d+)"', r.data)
+    cohort_id = _extract(rb'cohorts/(\d+)/ai-toggle"', r.data)
     r = instructor.post(
         f"/classroom/cohorts/{cohort_id}/assignments",
         data={"title": "A", "instructions": "i", "starter_code": "", "ai_policy": "OFF"},
@@ -199,7 +199,7 @@ def test_overload_degrades_gracefully_with_no_leaks(monkeypatch, fake_groq_calls
     client = app_module.app.test_client()
 
     def fire(i):
-        r = client.post("/analyze", json={"code": f"x = {i}", "language": "en"})
+        r = client.post("/fix", json={"code": f"x = {i}\nprint(x)", "language": "en"})
         return r.status_code, r.get_json()
 
     with ThreadPoolExecutor(max_workers=6) as ex:
@@ -209,8 +209,8 @@ def test_overload_degrades_gracefully_with_no_leaks(monkeypatch, fake_groq_calls
     # an exception escaping the route - whether it was actually served or
     # gracefully told the AI is busy.
     assert all(status == 200 for status, _ in results)
-    texts = [data.get("analysis") or "" for _, data in results]
-    served = [t for t in texts if "Fake analysis" in t]
+    texts = [data.get("code") or data.get("error") or "" for _, data in results]
+    served = [t for t in texts if "print(x)" in t]
     busy = [t for t in texts if "safe" in t.lower() or "busy" in t.lower() or "try again" in t.lower()]
     assert served, "expected at least one request to actually get served"
     assert busy, "expected at least one request to be gracefully told the AI is busy, not silently dropped"

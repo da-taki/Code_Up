@@ -115,15 +115,14 @@ def test_main_help_prioritizes_demo_commands_without_bookmarks(client):
     assert data.get("onboarding") is True
     speech = _spoken(data).lower()
     for expected in (
-        "generate code",
-        "run code",
-        "explain it",
-        "fix this code",
-        "start tutorial",
-        "more examples",
+        "write python",
+        "control enter",
+        "ask codeup",
     ):
         assert expected in speech, expected
     for absent in (
+        "start tutorial",
+        "more examples",
         "replay mistake",
         "summarize structure",
         "make project report",

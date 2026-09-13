@@ -492,10 +492,17 @@ def cohort_live_dashboard(instructor, cohort_id):
     learners = db.list_learners_for_cohort(cohort_id)
     rows = [_live_learner_row(cohort_id, learner) for learner in learners]
     online_count = sum(1 for r in rows if r["status"] != "Offline")
+    help_requests = db.list_help_requests(cohort_id, status="open")
+    help_requests += db.list_help_requests(cohort_id, status="helping")
+    for help_request in help_requests:
+        help_request["waiting_minutes"] = _waiting_minutes(help_request["created_at"])
+        help_request["live_code_url"] = url_for(
+            "classroom.learner_live_code", cohort_id=cohort_id, learner_id=help_request["learner_id"]
+        )
     return render_template(
         "classroom/cohort_live_dashboard.html",
         instructor=instructor, cohort=cohort, learners=rows,
-        online_count=online_count, total_count=len(rows),
+        online_count=online_count, total_count=len(rows), help_requests=help_requests,
     )
 
 
@@ -865,7 +872,7 @@ def start_helping(instructor, help_request_id):
     hr = db.get_help_request(help_request_id)
     if hr and _own_cohort_or_404(instructor, hr["cohort_id"]):
         db.mark_help_request_helping(help_request_id, (request.form.get("note") or "").strip() or None)
-        return redirect(url_for("classroom.help_queue", cohort_id=hr["cohort_id"]))
+        return redirect(url_for("classroom.cohort_live_dashboard", cohort_id=hr["cohort_id"]))
     return redirect(url_for("classroom.instructor_dashboard"))
 
 
@@ -877,7 +884,7 @@ def resolve_help_request(instructor, help_request_id):
         cohort = _own_cohort_or_404(instructor, hr["cohort_id"])
         if cohort:
             db.resolve_help_request(help_request_id, (request.form.get("note") or "").strip() or None)
-            return redirect(url_for("classroom.help_queue", cohort_id=hr["cohort_id"]))
+            return redirect(url_for("classroom.cohort_live_dashboard", cohort_id=hr["cohort_id"]))
     return redirect(url_for("classroom.instructor_dashboard"))
 
 

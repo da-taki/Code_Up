@@ -45,9 +45,9 @@ def test_what_can_i_do_here_speaks_useful_help(client):
     data = _vc(client, "What can I do here?")
     assert data["action"] == "deterministic_message"
     speech = _spoken(data).lower()
-    assert "generate code" in speech
-    assert "run code" in speech
-    assert "say more" in speech or "more examples" in speech
+    assert "write python" in speech
+    assert "control enter" in speech
+    assert "ask codeup" in speech
 
 
 def test_teach_me_this_code_routes_to_analyze_for_demo(client):

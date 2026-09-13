@@ -29,11 +29,11 @@ def test_first_help_returns_short_onboarding(client):
     assert d["action"] == "deterministic_message"
     assert d.get("onboarding") is True
     msg = d["message"].lower()
-    assert "generate code" in msg
-    assert "run code" in msg and "explain it" in msg
+    assert "write python" in msg
+    assert "control enter" in msg and "ask codeup" in msg
     assert "star pattern" not in msg and "5 by 5" not in msg
-    assert "more examples" in msg
-    assert len(d["message"]) < 320
+    assert "more examples" not in msg
+    assert len(d["message"]) < 140
 
 
 @pytest.mark.parametrize("text", ["what can you do", "how do I use this", "what should I try", "help me start"])

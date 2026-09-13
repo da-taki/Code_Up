@@ -74,12 +74,14 @@ def client(tmp_snippets, monkeypatch):
 
 
 
-def test_gemini_disabled_returns_message(client):
+def test_analyze_is_deterministic_when_gemini_is_disabled(client):
     res = client.post("/analyze", json={"code": "print(1)", "language": "en"})
     assert res.status_code == 200
     data = res.get_json()
     assert "analysis" in data
-    assert "disabled" in data["analysis"].lower() or "service" in data["analysis"].lower()
+    assert "line 1" in data["analysis"].lower()
+    assert "output area" in data["analysis"].lower()
+    assert data["structural_source"] == "ast-tokenize"
 
 
 def test_app_import_does_not_start_background_services():

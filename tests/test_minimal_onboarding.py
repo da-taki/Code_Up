@@ -73,13 +73,11 @@ def test_onboarding_handles_continue_exit_and_fill_in_example_by_voice_or_typed(
 
 # ---- "Start tutorial" now launches the new flow, old one stays reachable --
 
-def test_start_tutorial_action_prefers_minimal_onboarding():
+def test_start_tutorial_action_gives_first_run_guidance_without_overlay():
     idx = STATIC_APP.index("else if (action === 'start_tutorial')")
     block = STATIC_APP[idx:idx + 700]
-    assert "window.MinimalOnboarding" in block
-    assert "window.MinimalOnboarding.open();" in block
-    # Old controller is still the fallback, not deleted.
-    assert "window.TutorialController.open();" in block
+    assert "Write Python in the editor and press Control Enter or Run" in block
+    assert ".open();" not in block.split("else if (action === 'skip_tutorial')", 1)[0]
 
 
 def test_tutorial_button_opens_minimal_onboarding():
@@ -89,10 +87,9 @@ def test_tutorial_button_opens_minimal_onboarding():
     assert "window.MinimalOnboarding.open();" in block
 
 
-def test_banner_start_tutorial_link_opens_minimal_onboarding():
-    idx = INDEX_HTML.index("var tutorialLink = document.getElementById('cuStartTutorialLink');")
-    block = INDEX_HTML[idx:idx + 400]
-    assert "window.MinimalOnboarding" in block
+def test_banner_has_no_tutorial_entry_point():
+    assert 'id="cuStartTutorialLink"' not in INDEX_HTML
+    assert "Write Python below and press <strong>Ctrl+Enter</strong> or Run" in INDEX_HTML
 
 
 def test_onboarding_overlay_markup_present_and_hidden_by_default():
@@ -102,8 +99,9 @@ def test_onboarding_overlay_markup_present_and_hidden_by_default():
     assert 'id="onboardingExitBtn"' in INDEX_HTML
 
 
-def test_onboarding_script_included():
-    assert '<script src="/static/onboarding.js">' in INDEX_HTML
+def test_tutorial_scripts_are_not_loaded_by_the_learner_ide():
+    assert '<script src="/static/onboarding.js">' not in INDEX_HTML
+    assert '<script src="/static/tutorial.js">' not in INDEX_HTML
 
 
 # ---- old tutorial engine and TutorialController are untouched, dormant ---

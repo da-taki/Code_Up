@@ -42,7 +42,7 @@ def _make_cohort(instructor_client, name="Python Beginners", username="msrao"):
     )
     r = instructor_client.post("/classroom/cohorts", data={"name": name}, follow_redirects=True)
     join_code = _extract(rb'cu-join-code">([A-Z0-9]+)<', r.data)
-    cohort_id = _extract(rb'cohorts/(\d+)"', r.data)
+    cohort_id = _extract(rb'cohorts/(\d+)/ai-toggle"', r.data)
     return join_code, cohort_id
 
 

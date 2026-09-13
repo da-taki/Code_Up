@@ -55,17 +55,23 @@ def test_what_can_i_do_here_speaks_short_beginner_onboarding(client, no_cloud):
     assert data["action"] == "deterministic_message"
     assert data["onboarding"] is True
     s = _spoken(data).lower()
-    for kw in ("learn python", "speaking or typing", "start tutorial",
-               "generate code", "run code", "explain it", "more examples"):
+    for kw in ("write python", "control enter", "run", "ask codeup"):
         assert kw in s, kw
-    for adv in ("replay mistake", "summarize structure", "make project report"):
+    for adv in (
+        "start tutorial",
+        "more examples",
+        "replay mistake",
+        "summarize structure",
+        "make project report",
+    ):
         assert adv not in s, adv
 
 
-def test_onboarding_mentions_typed_fallback_and_microphone(client, no_cloud):
+def test_onboarding_points_to_editor_and_ask_box_without_device_setup(client, no_cloud):
     s = _spoken(_vc(client, "what can I do here")).lower()
-    assert "microphone" in s
-    assert "type" in s  # typed command fallback explicitly offered
+    assert "write python" in s
+    assert "ask codeup" in s
+    assert "microphone" not in s
 
 
 @pytest.mark.parametrize("text", [
@@ -80,8 +86,10 @@ def test_first_step_gives_one_clear_beginner_action(client, no_cloud, text):
     assert data["action"] == "deterministic_message"
     assert data["onboarding"] is True
     s = _spoken(data).lower()
-    assert "start tutorial" in s          # one concrete first action
-    assert "type" in s                    # typed fallback for no-mic learners
+    assert "write python" in s
+    assert "control enter" in s
+    assert "ask codeup" in s
+    assert "start tutorial" not in s
 
 
 @pytest.mark.parametrize("text", ["help", "show commands", "guide me"])
@@ -224,19 +232,15 @@ def test_engine_success_and_concept_text_is_speech_safe():
             assert sanitize_speech_text(value) == value, (mid, field)
 
 
-def test_ide_start_gate_explains_what_codeup_is_and_how_to_start():
-    """Vision-Aid build: this fuller "what CodeUp is" explanation (not a
-    replacement for NVDA/JAWS/VS Code, headphones/microphone note) moved
-    from a "More about CodeUp" disclosure in the main banner to the
-    /accessibility help page (section 9 of the redesign - the banner
-    itself now only says "you can start coding", nothing else) - still
-    fully documented, just not the first thing a new learner reads. The
-    IDE template keeps the short, load-bearing bits: the tutorial and
-    Ask-CodeUp entry points themselves."""
+def test_ide_starts_directly_with_concise_guidance_and_detailed_help_elsewhere():
+    """The IDE leads with the editor; detailed assistive-tech setup stays
+    available on the accessibility help page rather than in onboarding."""
     src = _read("templates/index.html")
     low = src.lower()
-    assert 'start tutorial' in low
-    assert "what can i do here" in low
+    assert "write python" in low
+    assert "ctrl+enter" in low
+    assert "ask codeup" in low
+    assert "start tutorial" not in low
 
     help_low = _read("templates/accessibility.html").lower()
     assert "python basics" in help_low

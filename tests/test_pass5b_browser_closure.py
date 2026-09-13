@@ -39,7 +39,7 @@ def _publish_assignment(instructor_client, title="P5B Assignment"):
     assert r.status_code == 200
     r = instructor_client.post("/classroom/cohorts", data={"name": "P5B Cohort"}, follow_redirects=True)
     join_code = _extract(rb'cu-join-code">([A-Z0-9]+)<', r.data)
-    cohort_id = _extract(rb'cohorts/(\d+)"', r.data)
+    cohort_id = _extract(rb'cohorts/(\d+)/ai-toggle"', r.data)
     r = instructor_client.post(
         f"/classroom/cohorts/{cohort_id}/assignments",
         data={

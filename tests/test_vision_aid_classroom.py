@@ -44,7 +44,7 @@ def _make_cohort(instructor_client, name="Python Beginners", username="msrao_va"
     )
     r = instructor_client.post("/classroom/cohorts", data={"name": name}, follow_redirects=True)
     join_code = _extract(rb'cu-join-code">([A-Z0-9]+)<', r.data)
-    cohort_id = _extract(rb'cohorts/(\d+)"', r.data)
+    cohort_id = _extract(rb'cohorts/(\d+)/ai-toggle"', r.data)
     return join_code, int(cohort_id)
 
 
@@ -179,6 +179,83 @@ def test_deterministic_commands_work_while_class_ai_is_off(instructor_client, le
         assert data.get("success") is not False, (text, data)
         assert data.get("action") not in (None, "unknown"), (text, data)
     assert called["hit"] is False
+
+
+def test_all_core_accessibility_paths_make_zero_provider_calls_when_ai_is_off(
+    instructor_client, learner_client, monkeypatch,
+):
+    provider_calls = []
+
+    def fail_provider(*args, **kwargs):
+        provider_calls.append((args, kwargs))
+        raise AssertionError("AI-off deterministic path reached an AI provider")
+
+    for name in (
+        "call_gemini",
+        "call_gemini_capability",
+        "call_conversation_orchestrator_ai",
+        "_call_ollama",
+    ):
+        monkeypatch.setattr(app_module, name, fail_provider)
+
+    join_code, cohort_id = _make_cohort(instructor_client, username="all_core_ai_off")
+    learner_id = _join(learner_client, join_code)
+    _set_class_ai(instructor_client, cohort_id, False)
+    _set_learner_ai(instructor_client, cohort_id, learner_id, False)
+    code = "for item in range(2):\n    print(item)\n"
+
+    for text, payload, useful_words in (
+        ("read output", {"code": code, "output": "0\n1\n"}, ("read_output",)),
+        ("read line 2", {"code": code, "cursor_line": 2}, ("read_line",)),
+        ("read line 2 exactly", {"code": code, "cursor_line": 2}, ("read_line",)),
+        ("explain line 2", {"code": code, "cursor_line": 2}, ("line 2", "print")),
+        ("where am i", {"code": code, "cursor_line": 2}, ("where_am_i",)),
+        ("read around me", {"code": code, "cursor_line": 2}, ("line 1", "line 2")),
+        ("why is this indented", {"code": code, "cursor_line": 2}, ("indent", "loop")),
+        ("what contains this line", {"code": code, "cursor_line": 2}, ("for", "loop")),
+        ("stop speaking", {}, ("stop_speaking",)),
+        ("go to line 2", {"code": code, "cursor_line": 1}, ("goto_line", "navigate")),
+    ):
+        data = _voice(learner_client, text, **payload).get_json()
+        assert data.get("action") not in (None, "unknown"), (text, data)
+        assert "AI help is currently disabled" not in str(data), (text, data)
+        local_text = " ".join(
+            str(data.get(key) or "")
+            for key in ("action", "intent", "line", "message", "speech", "output")
+        ).lower()
+        assert any(word in local_text for word in useful_words), (text, data)
+
+    for text, expected_action in (
+        ("explain my code", "analyze"),
+        ("analyze deeper", "analyze_deep"),
+    ):
+        data = _voice(learner_client, text, code=code, cursor_line=2).get_json()
+        assert data.get("action") == expected_action, (text, data)
+        assert "AI help is currently disabled" not in str(data), (text, data)
+
+    basic = learner_client.post("/analyze", json={"code": code}).get_json()
+    deep = learner_client.post("/analyze-deep", json={"code": code}).get_json()
+    assert "Line 1:" in basic["analysis"] and "Line 2:" in basic["analysis"]
+    assert basic["structural_source"] == "ast-tokenize"
+    assert "Line 1:" in deep["analysis"] and "Line 2:" in deep["analysis"]
+    assert "colon says that an indented block follows" in deep["analysis"]
+    assert deep["structural_source"] == "ast-tokenize"
+
+    blocked = _voice(
+        learner_client,
+        "what is a metaclass",
+        code=code,
+        cursor_line=2,
+    ).get_json()
+    assert blocked["message"] == "AI help is currently disabled by your instructor."
+    assert blocked["speech"] == "AI help is currently disabled by your instructor."
+    assert provider_calls == []
+
+    run = learner_client.post(
+        "/run", json={"code": "name = input('Name: ')\nprint(name)\n"},
+    ).get_json()
+    assert run.get("action") == "request_program_input"
+    assert provider_calls == []
 
 
 def test_run_and_output_work_while_class_ai_is_off(instructor_client, learner_client):
@@ -601,7 +678,7 @@ def test_full_instructor_navigation_flow_reaches_a_selected_learners_code(instru
         follow_redirects=True,
     )
     r = instructor_client.post("/classroom/cohorts", data={"name": "Python Beginners"}, follow_redirects=True)
-    cohort_id = int(_extract(rb'cohorts/(\d+)"', r.data))
+    cohort_id = int(_extract(rb'cohorts/(\d+)/ai-toggle"', r.data))
     join_code = _extract(rb'cu-join-code">([A-Z0-9]+)<', r.data)
     assert b"Students (0)" in r.data
 
@@ -617,26 +694,20 @@ def test_full_instructor_navigation_flow_reaches_a_selected_learners_code(instru
     assert b"hi" in code_view.data
 
 
-def test_legacy_dashboard_still_reachable_but_not_the_default(instructor_client):
-    """Assignments/reports/help-queue infrastructure is not deleted - just
-    not what an instructor naturally lands on."""
+def test_legacy_dashboard_is_dormant_and_not_linked_from_the_live_flow(instructor_client):
+    """The old route remains compatible but is absent from the normal flow."""
     join_code, cohort_id = _make_cohort(instructor_client, username="legacy_reachable")
     legacy = instructor_client.get(f"/classroom/cohorts/{cohort_id}")
     assert legacy.status_code == 200
     assert b"Cohort at a glance" in legacy.data  # the old rich dashboard's own heading
 
     live = instructor_client.get(f"/classroom/cohorts/{cohort_id}/live")
-    assert b"Classic dashboard" in live.data  # a way back to it, not gone
+    assert b"Classic dashboard" not in live.data
 
 
-def test_live_dashboard_never_shows_assignments_reports_or_help_queue(instructor_client):
+def test_live_dashboard_never_shows_assignments_reports_or_lms_chrome(instructor_client):
     join_code, cohort_id = _make_cohort(instructor_client, username="no_lms_surface")
     r = instructor_client.get(f"/classroom/cohorts/{cohort_id}/live")
-    # Strip out the one deliberate escape-hatch link back to the legacy
-    # dashboard (its own link *text* names what's over there) - everything
-    # else on this page must be free of LMS vocabulary.
-    low = r.data.lower().replace(
-        b"classic dashboard (assignments, guided projects, help queue, reports)", b""
-    )
-    for banned in (b"assignment", b"help queue", b"help request", b"guided project", b"due date"):
+    low = r.data.lower()
+    for banned in (b"assignment", b"help queue", b"guided project", b"due date", b"report"):
         assert banned not in low

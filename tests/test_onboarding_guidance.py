@@ -31,8 +31,10 @@ def _action(client, text, code="print('keep me')\n"):
 def test_startup_guidance_uses_spoken_commands_not_tab_only():
     src = _read("templates/index.html")
     assert 'id="startGate"' not in src
-    assert "start tutorial" in src
-    assert "what can I do here" in src
+    assert "Write Python" in src
+    assert "Ctrl+Enter" in src
+    assert "Ask CodeUp" in src
+    assert "start tutorial" not in src.lower()
     assert "Press Tab to reach the Tutorial button" not in src
 
 
@@ -50,9 +52,9 @@ def test_first_level_onboarding_returns_short_guidance_without_cloud_ai(client, 
     assert data["action"] == "deterministic_message"
     assert data["onboarding"] is True
     msg = data["message"].lower()
-    for snippet in ("speaking or typing", "generate code", "run code",
-                    "explain it", "start tutorial", "more examples"):
+    for snippet in ("write python", "control enter", "ask codeup"):
         assert snippet in msg, (text, snippet, msg)
+    assert "start tutorial" not in msg
 
 
 @pytest.mark.parametrize("text", [
@@ -124,8 +126,10 @@ def test_existing_demo_commands_still_route(client, text, expected_action):
 
 def test_onboarding_message_is_general_not_pattern_specific():
     msg = app_module._ONBOARDING_MESSAGE.lower()
-    for cap in ("generate code", "run code", "explain it", "debug", "tutorial"):
+    for cap in ("write python", "control enter", "run", "ask codeup"):
         assert cap in msg, cap
+    for removed in ("debug", "tutorial", "more examples"):
+        assert removed not in msg, removed
     for weird in ("star pattern", "5 by 5", "5x5", "row 3", "row 6", "6 stars"):
         assert weird not in msg, weird
 

@@ -205,11 +205,11 @@ class TestCycleBugRemoved:
 class TestWhatCanIDoHere:
     def test_message_constant_covers_the_beginner_contract(self):
         msg = app_module._ONBOARDING_MESSAGE.lower()
-        for kw in ("learn python", "speaking or typing", "start tutorial",
-                   "insert a loop", "run", "explain", "fix this code",
-                   "say more"):
+        for kw in ("write python", "control enter", "run", "ask codeup"):
             assert kw in msg, kw
-        assert "type the command" in msg
+        for removed in ("start tutorial", "insert a loop", "fix this code", "say more"):
+            assert removed not in msg, removed
+        assert len(app_module._ONBOARDING_MESSAGE) < 140
         for adv in ADVANCED_DUMP:
             assert adv not in msg, adv
 
@@ -218,8 +218,9 @@ class TestWhatCanIDoHere:
         assert data["action"] == "deterministic_message"
         assert data["onboarding"] is True
         low = _spoken(data).lower()
-        assert "insert a loop" in low
-        assert "say more" in low
+        assert "write python" in low
+        assert "control enter" in low
+        assert "ask codeup" in low
 
     def test_say_more_and_more_examples_expose_the_longer_help(self, client, no_cloud):
         assert _vc(client, "say more")["action"] == "say_more"

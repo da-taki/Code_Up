@@ -188,7 +188,6 @@ def test_run_tooltip_keeps_accessible_name_and_shortcut_text(live_server, browse
 
 @pytest.mark.parametrize("theme_setup,label", [
     (None, "default theme"),
-    ("document.getElementById('nightToggle').click();", "Night Mode"),
     (
         "document.getElementById('colorVisionMode').value = 'high-contrast';"
         "document.getElementById('colorVisionMode').dispatchEvent(new Event('change'));",

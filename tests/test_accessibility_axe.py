@@ -152,7 +152,7 @@ def _make_cohort(live_server, page, username):
     html = resp.text()
     import re
     join_code = re.search(r'cu-join-code">([A-Z0-9]+)<', html).group(1)
-    cohort_id = re.search(r'cohorts/(\d+)"', html).group(1)
+    cohort_id = re.search(r'cohorts/(\d+)/ai-toggle"', html).group(1)
     return join_code, cohort_id
 
 

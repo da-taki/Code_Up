@@ -376,6 +376,24 @@ def test_escape_leaves_editor_in_one_press_in_screen_reader_safe_mode(live_serve
     assert page.evaluate("() => editor.getValue()") == "abc"
 
 
+@pytest.mark.parametrize("night", [False, True])
+def test_command_and_input_fields_show_the_same_focus_ring_as_buttons(live_server, page, night):
+    # XRCVC report 6: a clear keyboard focus indicator on every control. A
+    # later `.cu-voice-input:focus { outline: none }` rule used to cancel the
+    # 3px :focus-visible ring on the command box and program input field.
+    if night:
+        page.add_init_script("localStorage.setItem('nightMode', 'true')")
+    _open_ide(page, live_server)
+    page.locator('.cu-skip-links a[href="#voiceText"]').focus()
+    page.keyboard.press("Enter")
+    assert _active(page)["id"] == "voiceText"
+    ring = page.evaluate(
+        "() => { const s = getComputedStyle(document.activeElement); "
+        "return {style: s.outlineStyle, width: parseFloat(s.outlineWidth)}; }"
+    )
+    assert ring["style"] == "solid" and ring["width"] >= 2, ring
+
+
 @pytest.mark.parametrize("combo", ["Control+Shift+P", "Control+Shift+p"])
 def test_command_palette_shortcut_is_case_insensitive(live_server, page, combo):
     # Caps Lock (or a lowercase key from assistive input) delivers "p", which

@@ -379,7 +379,7 @@ body.theme-night .cu-output { background: #06030a; }
   font-size: 0.9rem; font-family: var(--font-mono);
   box-shadow: none;
 }
-.cu-voice-input:focus { outline: none; border-color: var(--accent); background: var(--bg-panel); }
+.cu-voice-input:focus { border-color: var(--accent); background: var(--bg-panel); }
 .cu-command-tip {
   flex-basis: 100%;
   margin: -2px 0 0;

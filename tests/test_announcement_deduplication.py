@@ -35,11 +35,22 @@ def test_run_start_message_has_one_owner():
 
 
 def test_run_complete_output_has_one_owner():
-    block, _, _ = _slice(STATIC_APP, "out(data.output, { sr: false });", "if (data.clear_inputs_after_run)")
+    block, _, _ = _slice(STATIC_APP, "out(data.output, { sr: false, announce: false });", "if (data.clear_inputs_after_run)")
+    # XRCVC 4c: Screen Reader Safe users hear the output itself exactly once.
+    assert block.count("srAnnounce(formatRunOutputSpeech(data.output), 'polite', { keep: true });") == 1
+    assert "available in Program output" not in block
     assert (
         "speak(formatRunOutputSpeech(data.output), "
         "{ forceFull: true, speechKind: 'program-output', sr: false });"
     ) in block, "the formatted run-output announcement must not duplicate #output's own native aria-live"
+
+
+def test_shared_out_speak_pairs_use_single_screen_reader_owner():
+    assert "_outputOwnsCurrentAnnouncement = true;" in STATIC_APP
+    speak_start = STATIC_APP.index("function speak(text, opts = {})")
+    speak_end = STATIC_APP.index("function speakOutput()", speak_start)
+    speak_block = STATIC_APP[speak_start:speak_end]
+    assert "!_outputOwnsCurrentAnnouncement" in speak_block
 
 
 # ---------------------------------------------------------------------------
@@ -63,7 +74,7 @@ def test_update_command_understanding_supports_announce_false():
     fn_end = STATIC_APP.index("window.updateTranscriptStatus", fn_start)
     fn_block = STATIC_APP[fn_start:fn_end]
     assert "update.announce === false" in fn_block
-    assert "setTimeout(() => container.setAttribute('aria-live', 'polite'), 50);" in fn_block
+    assert "window.codeUpLiveRegionValue('polite')" in fn_block
     assert "requestAnimationFrame(" not in fn_block, (
         "requestAnimationFrame(...) does not fire in a backgrounded tab and "
         "would leave the region stuck silenced - this was a real bug found live"
@@ -255,7 +266,7 @@ def test_setstatus_supports_announce_false_and_uses_a_real_timer():
     fn_end = TUTORIAL_JS.index("_setText: function", fn_start)
     fn_block = TUTORIAL_JS[fn_start:fn_end]
     assert "opts.announce === false" in fn_block
-    assert "setTimeout(function () { el.setAttribute('aria-live', 'polite'); }, 50);" in fn_block
+    assert "window.codeUpLiveRegionValue('polite')" in fn_block
     assert "requestAnimationFrame(" not in fn_block
 
 

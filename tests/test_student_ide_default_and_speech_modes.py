@@ -239,8 +239,9 @@ def test_explicit_bypass_speaks_once_not_twice():
     # explicitly excludes the explicit-bypass case, and returns immediately -
     # it can never run on the same invocation that reaches VoiceEngine.speak.
     guard_match = re.search(
-        r"if \(!_browserSpeechEnabled && !explicitBypass\) \{\s*"
-        r"if \(opts\.sr !== false\) srAnnounce\([^;]+;\s*"
+        r"if \(!_browserSpeechEnabled && !explicitBypass\) \{[\s\S]*?"
+        r"if \(opts\.sr !== false && !_outputOwnsCurrentAnnouncement\) \{\s*"
+        r"srAnnounce\([^;]+;\s*\}\s*"
         r"return;\s*\}",
         body,
     )

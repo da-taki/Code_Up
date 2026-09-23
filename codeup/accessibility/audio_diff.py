@@ -12,7 +12,7 @@ returns. Risk labels are intentionally conservative and never overclaim.
 
 import difflib
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from codeup.projects import structure_tools
 

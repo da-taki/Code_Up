@@ -222,36 +222,42 @@ check('plain sentences with no container punctuation are untouched', () => {
   assert.strictEqual(N.narrateStructuredOutputLine('The answer is 42.'), 'The answer is 42.');
 });
 check('a list is narrated with open/close bracket words', () => {
-  assert.strictEqual(N.narrateStructuredOutputLine('[2, 3, 5]'), 'open bracket 2, 3, 5 close bracket');
+  assert.strictEqual(N.narrateStructuredOutputLine('[2, 3, 5]'), 'open bracket 2 comma 3 comma 5 close bracket');
 });
 check('a tuple is narrated with open/close parenthesis words', () => {
-  assert.strictEqual(N.narrateStructuredOutputLine('(1, 2)'), 'open parenthesis 1, 2 close parenthesis');
+  assert.strictEqual(N.narrateStructuredOutputLine('(1, 2)'), 'open parenthesis 1 comma 2 close parenthesis');
 });
 check('a dict is narrated with braces and a spoken colon', () => {
   assert.strictEqual(
     N.narrateStructuredOutputLine("{'a': 1, 'b': 2}"),
-    "open brace 'a' colon 1, 'b' colon 2 close brace"
+    'open brace single quote a single quote colon 1 comma single quote b single quote colon 2 close brace'
   );
 });
 check('nested containers get independently announced open/close words', () => {
   assert.strictEqual(
     N.narrateStructuredOutputLine('[[1, 2], [3, 4]]'),
-    'open bracket open bracket 1, 2 close bracket , open bracket 3, 4 close bracket close bracket'
+    'open bracket open bracket 1 comma 2 close bracket comma open bracket 3 comma 4 close bracket close bracket'
   );
 });
 check('negative numbers and decimals are left alone', () => {
-  assert.strictEqual(N.narrateStructuredOutputLine('[-3, 3.14]'), 'open bracket -3, 3.14 close bracket');
+  assert.strictEqual(N.narrateStructuredOutputLine('[-3, 3.14]'), 'open bracket -3 comma 3.14 close bracket');
+});
+check('quoted strings inside containers name materially important quote marks', () => {
+  assert.strictEqual(
+    N.narrateStructuredOutputLine('["two words", \'three\']'),
+    'open bracket double quote two words double quote comma single quote three single quote close bracket'
+  );
 });
 check('a colon outside any container is left alone (not mislabeled a dict)', () => {
   assert.strictEqual(N.narrateStructuredOutputLine('Score: 10'), 'Score: 10');
 });
 check('run-output speech narrates list punctuation in context', () => {
   const spoken = N.formatRunOutputSpeech('[2, 3, 5]');
-  assert.ok(spoken.includes('open bracket 2, 3, 5 close bracket'), spoken);
+  assert.ok(spoken.includes('open bracket 2 comma 3 comma 5 close bracket'), spoken);
 });
 check('full-output replay speech narrates list punctuation too', () => {
   const spoken = N.formatFullOutputSpeech('[2, 3, 5]');
-  assert.ok(spoken.includes('open bracket 2, 3, 5 close bracket'), spoken);
+  assert.ok(spoken.includes('open bracket 2 comma 3 comma 5 close bracket'), spoken);
 });
 
 console.log('spoken_code.test.js: ' + groups + ' groups passed');

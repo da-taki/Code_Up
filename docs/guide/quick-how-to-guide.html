@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>CodeUp Quick How-To Guide</title>
+<meta name="description" content="Clean learner and instructor guide for CodeUp">
+<!--
+  Editable source for CodeUp_How_To_Use_Guide.pdf.
+  Rebuild the PDF with:  py scripts/build_guide_pdf.py
+  Claims in this guide are checked by tests/test_how_to_guide_contract.py.
+-->
+<style>
+  :root {
+    --ink: #1b1f24;
+    --muted: #4a5360;
+    --accent: #0b4f8a;
+    --rule: #c9d1db;
+    --note-bg: #eef4fa;
+    --table-head: #e3ebf3;
+  }
+  @page { size: Letter; margin: 0.65in 0.7in 0.6in 0.7in; }
+  html { font-size: 10pt; }
+  body {
+    margin: 0;
+    color: var(--ink);
+    background: #ffffff;
+    font-family: "Segoe UI", Arial, Helvetica, sans-serif;
+    line-height: 1.3;
+  }
+  section { break-before: page; }
+  section.cover { break-before: auto; }
+  h1 { font-size: 30pt; margin: 0 0 4pt; color: var(--accent); letter-spacing: 0.5pt; }
+  .cover .kicker { font-size: 13pt; font-weight: 700; letter-spacing: 2pt; color: var(--muted); margin: 0.6in 0 6pt; }
+  .cover .audience { font-size: 13pt; font-weight: 600; margin: 0 0 12pt; }
+  h2 { font-size: 15pt; color: var(--accent); margin: 0 0 6pt; padding-bottom: 4pt; border-bottom: 2px solid var(--rule); }
+  h3 { font-size: 11.5pt; margin: 10pt 0 4pt; }
+  p { margin: 0 0 6pt; }
+  ol, ul { margin: 0 0 8pt; padding-left: 20pt; }
+  li { margin: 0 0 1.5pt; }
+  pre, code { font-family: Consolas, "Courier New", monospace; }
+  pre { background: #f4f6f8; border: 1px solid var(--rule); padding: 6pt 9pt; margin: 4pt 0 8pt; font-size: 10pt; }
+  table { width: 100%; border-collapse: collapse; margin: 3pt 0 8pt; font-size: 9.5pt; break-inside: avoid; }
+  th, td { text-align: left; vertical-align: top; padding: 2.5pt 6pt; border: 1px solid var(--rule); }
+  th { background: var(--table-head); }
+  td:first-child { width: 42%; font-weight: 600; }
+  .note { background: var(--note-bg); border-left: 4px solid var(--accent); padding: 5pt 9pt; margin: 8pt 0; break-inside: avoid; }
+  .note strong { margin-right: 4pt; }
+  .link-box { border: 1px solid var(--rule); padding: 7pt 10pt; margin: 10pt 0; font-weight: 600; }
+  .end { text-align: center; margin-top: 18pt; color: var(--muted); }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+
+<section class="cover">
+  <p class="kicker">CODEUP</p>
+  <h1>Quick How-To Guide</h1>
+  <p class="audience">For learners and instructors</p>
+  <p>CodeUp is a browser-based Python learning environment for beginners. You can write and run Python, inspect output, ask questions about code, understand errors, use guided learning tools, and work inside an instructor-managed classroom.</p>
+  <p class="link-box">Open CodeUp: <a href="https://code-up-fmqr.onrender.com/ide">https://code-up-fmqr.onrender.com/ide</a></p>
+
+  <h3>Start in five minutes</h3>
+  <ol>
+    <li>Open CodeUp and wait for the workspace to finish loading.</li>
+    <li>Move to the Code editor and type a short Python program.
+<pre>name = "Learner"
+print("Hello", name)</pre></li>
+    <li>Press Ctrl+Enter or use Run.</li>
+    <li>Check Program output. Change the name, run again, and confirm the output changes.</li>
+    <li>Use the command box to ask something such as "explain this code" or "give me a code map".</li>
+    <li>If your instructor has given you a class code, open Classroom and join with your name and code.</li>
+  </ol>
+  <p class="note"><strong>Good to know:</strong> Voice control is optional. Every core learner task can be completed with the keyboard and normal on-screen controls.</p>
+</section>
+
+<section>
+  <h2>1. The learner workspace</h2>
+  <p>Most day-to-day work happens in the main IDE. You do not need to learn every feature before writing your first program.</p>
+  <table>
+    <thead><tr><th scope="col">Area</th><th scope="col">What it is for</th></tr></thead>
+    <tbody>
+      <tr><td>Code editor</td><td>Write and edit Python.</td></tr>
+      <tr><td>Run</td><td>Execute the current program.</td></tr>
+      <tr><td>Program output</td><td>See printed output and runtime errors.</td></tr>
+      <tr><td>Command box</td><td>Ask CodeUp to explain, navigate, edit, debug, or guide you.</td></tr>
+      <tr><td>Voice</td><td>Say the same kinds of commands when microphone control is enabled.</td></tr>
+      <tr><td>Learning tools</td><td>Open optional tools such as code maps, stepping, snippets, projects, lessons, and Audio Blocks.</td></tr>
+      <tr><td>Classroom</td><td>Join a class, open assignments, ask for help, and submit work.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Essential keyboard shortcuts</h3>
+  <table id="essential-shortcuts">
+    <thead><tr><th scope="col">Shortcut</th><th scope="col">Action</th></tr></thead>
+    <tbody>
+      <tr><td>Ctrl+Enter</td><td>Run the current Python program.</td></tr>
+      <tr><td>Tab / Shift+Tab</td><td>Move to the next or previous control. In the code editor this leaves the editor (the default).</td></tr>
+      <tr><td>Ctrl+] / Ctrl+[</td><td>Indent or outdent the current line of code.</td></tr>
+      <tr><td>Ctrl+M</td><td>Move focus out of the code editor.</td></tr>
+      <tr><td>Ctrl+Shift+M</td><td>Toggle microphone voice control.</td></tr>
+      <tr><td>Ctrl+Shift+P</td><td>Open the command palette.</td></tr>
+      <tr><td>Alt+Shift+K</td><td>Open the full keyboard shortcuts list.</td></tr>
+      <tr><td>Alt+Shift+O</td><td>Open settings.</td></tr>
+      <tr><td>Escape</td><td>Cancel an active program-input prompt or stop CodeUp speech when applicable.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Write and run Python</h3>
+  <ul>
+    <li>Type Python directly into the editor.</li>
+    <li id="tab-behavior">Use normal Python indentation. By default, Tab moves to the next control and Shift+Tab moves to the previous control, so keyboard users can always leave the code editor. Use Ctrl+] to indent a line and Ctrl+[ to outdent it. If you prefer Tab to indent code, turn off "Tab Leaves Editor" in CodeUp's display and accessibility settings.</li>
+    <li>Press Ctrl+Enter or Run.</li>
+    <li>Read Program output after each run.</li>
+    <li>If the program fails, leave the error visible and ask CodeUp to explain it before changing everything at once.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>2. Program input, output, and errors</h2>
+  <h3>Using input()</h3>
+  <p>When a running Python program reaches input(), CodeUp can ask for the value while the program is waiting.</p>
+<pre>name = input("What is your name? ")
+age = input("How old are you? ")
+print(name, age)</pre>
+  <ul>
+    <li>When the input prompt appears, type the answer into the input field.</li>
+    <li>Press Enter in the field, or activate Submit with Enter or Space.</li>
+    <li>Use Escape or the Cancel button to cancel the active prompt.</li>
+    <li>For several input() calls, answer each prompt in order. CodeUp continues to the next prompt automatically.</li>
+    <li>Answers such as run, stop, yes, no, hello, 16, Alex, or one are treated as program input while the program is waiting for input.</li>
+  </ul>
+  <p class="note"><strong>Alternative input commands:</strong> You can also use short commands such as "read input prompt", "use Alexis", "use 16", "read input values", "clear input values", and "cancel input".</p>
+
+  <h3>Useful output commands</h3>
+  <table>
+    <thead><tr><th scope="col">Command</th><th scope="col">What it does</th></tr></thead>
+    <tbody>
+      <tr><td>read output</td><td>Read the stored output.</td></tr>
+      <tr><td>read last output</td><td>Replay the most recent output.</td></tr>
+      <tr><td>how many lines of output</td><td>Report output length.</td></tr>
+      <tr><td>first line of output</td><td>Read the first output line.</td></tr>
+      <tr><td>last line of output</td><td>Read the last output line.</td></tr>
+      <tr><td>show run history</td><td>Summarize recent runs.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>When something breaks</h3>
+  <p>A simple debugging loop works well: run the code, inspect the actual error, find where it happened, understand the cause, make one change, then run again.</p>
+  <table>
+    <thead><tr><th scope="col">Try asking</th><th scope="col">Purpose</th></tr></thead>
+    <tbody>
+      <tr><td>explain error</td><td>Explain the recent error.</td></tr>
+      <tr><td>where did it crash</td><td>Identify the crash location.</td></tr>
+      <tr><td>what caused this</td><td>Explain the cause using the current error.</td></tr>
+      <tr><td>what value caused this</td><td>Show the relevant value when CodeUp has evidence for it.</td></tr>
+      <tr><td>what should I test next</td><td>Suggest the next debugging check.</td></tr>
+      <tr><td>fix with explanation</td><td>Propose a repair with an explanation.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <h2>3. Asking CodeUp for help</h2>
+  <p>The command box accepts natural-language instructions. Voice commands use the same idea: say what you would otherwise type.</p>
+  <h3>Understand your code</h3>
+  <table>
+    <thead><tr><th scope="col">Example command</th><th scope="col">Use it for</th></tr></thead>
+    <tbody>
+      <tr><td>explain this code / walk me through this code</td><td>Understand what the program does.</td></tr>
+      <tr><td>analyze code</td><td>Review the current code.</td></tr>
+      <tr><td>analyze deeper</td><td>Request a more detailed explanation.</td></tr>
+      <tr><td>give me a code map</td><td>See the program structure.</td></tr>
+      <tr><td>where am I</td><td>Get your current code context.</td></tr>
+      <tr><td>read around me</td><td>Read nearby lines.</td></tr>
+      <tr><td>why is this line indented</td><td>Explain the current line's nesting.</td></tr>
+      <tr><td>what contains this line</td><td>Read the enclosing block chain.</td></tr>
+      <tr><td>what variables exist</td><td>List variables found in the program.</td></tr>
+      <tr><td>show program state</td><td>Trace and summarize program state.</td></tr>
+      <tr><td>step through this</td><td>Walk through execution step by step.</td></tr>
+      <tr><td>find total</td><td>Find whole-word uses of a name and explain their roles.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Create or edit code</h3>
+  <table>
+    <thead><tr><th scope="col">Example command</th><th scope="col">Example result</th></tr></thead>
+    <tbody>
+      <tr><td>make a calculator</td><td>Generate a beginner starter program.</td></tr>
+      <tr><td>insert print Finished</td><td>Add a print statement.</td></tr>
+      <tr><td>add an if statement for score &gt; 50</td><td>Add a conditional.</td></tr>
+      <tr><td>insert a for loop</td><td>Add a loop.</td></tr>
+      <tr><td>rename variable total to score_total</td><td>Rename a symbol.</td></tr>
+      <tr><td>comment this line</td><td>Comment the current line.</td></tr>
+      <tr><td>simplify this code</td><td>Suggest a simpler version.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Review changes before keeping them</h3>
+  <p>For meaningful edits, use the change-review workflow instead of accepting changes blindly:</p>
+  <ul>
+    <li>what changed</li>
+    <li>read before and after</li>
+    <li>explain this change</li>
+    <li>is this risky</li>
+    <li>apply this change</li>
+    <li>undo last change</li>
+    <li>compare before and after</li>
+  </ul>
+</section>
+
+<section>
+  <h2>4. Optional learning and project tools</h2>
+  <p>You can ignore these until you need them. They are extra learning tools, not requirements for running a normal Python program.</p>
+  <table>
+    <thead><tr><th scope="col">Tool</th><th scope="col">What it helps with</th></tr></thead>
+    <tbody>
+      <tr><td>Audio Code Map</td><td>Understand functions, classes, loops, blocks, and where you are in the program.</td></tr>
+      <tr><td>Step Narration</td><td>Follow execution one step at a time.</td></tr>
+      <tr><td>Variable Watch</td><td>Track selected variables and program state.</td></tr>
+      <tr><td>Audio Blocks</td><td>Build beginner logic using numbered blocks, then compile or transfer it to Python.</td></tr>
+      <tr><td>Tutorial</td><td>Learn the interface through a guided onboarding flow.</td></tr>
+      <tr><td>Programming Literacy / Tutor Mode</td><td>Practice concepts, request progressive hints, and check understanding.</td></tr>
+      <tr><td>Python Foundations</td><td>Work through 12 modules: printing, variables, input, data types, conditions, loops, lists, dictionaries, functions, debugging, and a mini project.</td></tr>
+      <tr><td>Guided projects</td><td>Complete larger tasks with checkpoints.</td></tr>
+      <tr><td>Snippets</td><td>Save and reuse small pieces of code.</td></tr>
+      <tr><td>Multi-file projects</td><td>Create, open, run, and export projects with more than one file.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>A few useful project commands</h3>
+  <ul>
+    <li>read project files</li>
+    <li>open helpers.py</li>
+    <li>create file data.py</li>
+    <li>run main.py</li>
+    <li>project map</li>
+    <li>export this project</li>
+    <li>export for VS Code</li>
+  </ul>
+  <p class="note"><strong>Beginner recommendation:</strong> Start with the normal Python editor, Run, Program output, and the command box. Add the other tools when they solve a specific learning problem.</p>
+</section>
+
+<section>
+  <h2>5. Classroom guide for learners</h2>
+  <h3>Join a class</h3>
+  <ol>
+    <li>Open Classroom in the main IDE.</li>
+    <li>Enter the class code provided by your instructor.</li>
+    <li>Enter your learner name and select Join.</li>
+    <li>You can also type a command such as "Join ABC123".</li>
+  </ol>
+  <h3>Assignments</h3>
+  <ul>
+    <li>Open a published assignment from the classroom area.</li>
+    <li>Read the title and instructions before editing.</li>
+    <li>Write and run your code in the normal IDE.</li>
+    <li>Use only the kinds of assistance allowed for that assignment.</li>
+    <li>Submit when the code represents your intended answer.</li>
+    <li>Use Back to IDE or Back to CodeUp to return to the normal workspace.</li>
+  </ul>
+  <h3>Useful classroom commands</h3>
+  <table>
+    <thead><tr><th scope="col">Command</th><th scope="col">Action</th></tr></thead>
+    <tbody>
+      <tr><td>open my assignments</td><td>Show your assignments.</td></tr>
+      <tr><td>what am I supposed to do</td><td>Repeat the current assignment goal.</td></tr>
+      <tr><td>what can AI help me with</td><td>Show what assistance is allowed.</td></tr>
+      <tr><td>submit / turn this in</td><td>Submit the current assignment.</td></tr>
+      <tr><td>I need help</td><td>Create an instructor help request.</td></tr>
+      <tr><td>is my instructor helping</td><td>Check the help-request state.</td></tr>
+      <tr><td>cancel help</td><td>Cancel an open help request.</td></tr>
+      <tr><td>what class am I in</td><td>Show the current classroom.</td></tr>
+      <tr><td>leave class</td><td>Leave/switch the learner identity on this browser.</td></tr>
+    </tbody>
+  </table>
+  <p class="note"><strong>Assignment permissions:</strong> An instructor can limit generation, fixes, explanations, hints, error help, concept questions, code maps, step narration, or variable-state tools depending on the activity.</p>
+</section>
+
+<section>
+  <h2>6. Instructor quickstart</h2>
+  <p>Instructor sign-in: <a href="https://code-up-fmqr.onrender.com/classroom/instructor/login">https://code-up-fmqr.onrender.com/classroom/instructor/login</a></p>
+  <h3>Set up a class</h3>
+  <ol>
+    <li>Create an instructor account and sign in.</li>
+    <li>Create a cohort with a clear name, for example "Python Beginners - Cohort A".</li>
+    <li>Share the cohort join code with the intended learners.</li>
+    <li>Create an assignment with a title, instructions, optional starter code, dates if needed, expected concepts, and assistance policy.</li>
+    <li>Review the assignment, then publish it.</li>
+    <li>Keep the cohort dashboard open during class to monitor learners, submissions, and help requests.</li>
+  </ol>
+  <h3>What the instructor dashboard is for</h3>
+  <table>
+    <thead><tr><th scope="col">Area</th><th scope="col">Use</th></tr></thead>
+    <tbody>
+      <tr><td>Learners</td><td>See enrolled learners, recent activity, status, and progress.</td></tr>
+      <tr><td>Assignments</td><td>Create, publish, duplicate, schedule, and review work.</td></tr>
+      <tr><td>Help queue</td><td>See waiting learners, mark a request as helping, and resolve it.</td></tr>
+      <tr><td>Submissions</td><td>Inspect saved/submitted code and run information.</td></tr>
+      <tr><td>Assistance policy</td><td>Choose what kinds of CodeUp help are allowed for an assignment.</td></tr>
+      <tr><td>Reports</td><td>Review cohort progress and export classroom data when needed.</td></tr>
+    </tbody>
+  </table>
+  <h3>Optional instructor tools</h3>
+  <ul>
+    <li>Create custom lessons for a specific concept.</li>
+    <li>Create guided projects with deterministic checkpoints.</li>
+    <li>Archive completed cohorts and reactivate them later if needed.</li>
+    <li>Use learner detail pages when you need a closer look at progress or submissions.</li>
+  </ul>
+  <h3>Before the first session</h3>
+  <ul>
+    <li>Test instructor sign-in and create a sample cohort.</li>
+    <li>Join once from a learner browser using the class code.</li>
+    <li>Publish and open one sample assignment.</li>
+    <li>Test a help request and one submission.</li>
+    <li>Confirm Run, output, input(), and the command box work on the learner devices you will use.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>7. Troubleshooting and useful links</h2>
+  <table>
+    <thead><tr><th scope="col">Problem</th><th scope="col">What to try</th></tr></thead>
+    <tbody>
+      <tr><td>Voice does not respond</td><td>Type the same command instead. If you want voice, check browser microphone permission and make sure voice listening is active.</td></tr>
+      <tr><td>A command is misunderstood</td><td>Use a shorter phrase or type the command. The Help / all commands surfaces show supported actions.</td></tr>
+      <tr><td>Program is waiting for input</td><td>Answer the visible input prompt, or use a short value command such as "use Alexis" or "use 16".</td></tr>
+      <tr><td>Program output is very long</td><td>Ask "how many lines of output", "first line of output", or "last line of output", then use "read output" when needed.</td></tr>
+      <tr><td>Assignment is not visible</td><td>Ask the instructor to confirm that it is published and currently available, then refresh the classroom view.</td></tr>
+      <tr><td>Code produces an error</td><td>Run once, keep the error visible, and try "explain error" or "where did it crash" before requesting a full fix.</td></tr>
+      <tr><td>A project/file cannot be found</td><td>Use "read project files" or "project map" to confirm the active project and file names.</td></tr>
+    </tbody>
+  </table>
+  <h3>Useful links</h3>
+  <ul>
+    <li>Learner IDE: <a href="https://code-up-fmqr.onrender.com/ide">https://code-up-fmqr.onrender.com/ide</a></li>
+    <li>Instructor sign-in: <a href="https://code-up-fmqr.onrender.com/classroom/instructor/login">https://code-up-fmqr.onrender.com/classroom/instructor/login</a></li>
+    <li>Instructor dashboard: <a href="https://code-up-fmqr.onrender.com/classroom/instructor">https://code-up-fmqr.onrender.com/classroom/instructor</a></li>
+    <li>Learner classroom home: <a href="https://code-up-fmqr.onrender.com/classroom/learner">https://code-up-fmqr.onrender.com/classroom/learner</a></li>
+    <li>Learner join page: <a href="https://code-up-fmqr.onrender.com/classroom/join">https://code-up-fmqr.onrender.com/classroom/join</a></li>
+  </ul>
+  <p class="note"><strong>For a first class:</strong> Keep the workflow simple: join the class, write code, Run, inspect output, ask for help when needed, and submit. The advanced tools can be introduced gradually.</p>
+  <p class="end"><strong>End of quick guide</strong><br>CodeUp is designed to make beginner Python practice easier to navigate, explain, debug, and teach. You do not need to use every feature at once.</p>
+</section>
+
+</body>
+</html>

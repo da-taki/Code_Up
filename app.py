@@ -3787,7 +3787,6 @@ def mistake_replay():
     body = safejson()
     language = safe(body.get("language"), "en")
     query = safe(body.get("query"), "compare")
-    current_code = safe(body.get("code"), "")
 
     session_id = get_session_id()
     with _mistake_snapshots_lock:
@@ -12543,6 +12542,8 @@ def run_stream_start():
 
     body = safejson()
     code = safe(body.get("code"), "")
+    prepared_inputs = body.get("inputs") if isinstance(body.get("inputs"), list) else []
+    prepared_inputs = [str(item)[:1000] for item in prepared_inputs[:100]]
     if len(code) > MAX_CODE_SIZE:
         return jsonify({"success": False, "error": "Code too large"}), 413
     if not code.strip():

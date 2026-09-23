@@ -31,13 +31,14 @@ UI_CSS = Path("static/style/ui-improvements.css").read_text(encoding="utf-8")
 # ---------------------------------------------------------------------------
 
 def test_editor_help_text_matches_the_active_tab_mode():
-    # Superseded contract (How-To Guide): Tab indents by default, and the
-    # XRCVC Tab-exits behavior is the opt-in "Tab Leaves Editor" setting. The
-    # help text must still never describe a mode that is not active, and must
+    # Current contract (How-To Guide): Tab and Shift+Tab leave the editor by
+    # default; turning off "Tab Leaves Editor" restores Tab indentation. The
+    # help text must never describe a mode that is not active, and must
     # always name the way out of the editor.
     help_start = INDEX_HTML.index('id="editorHelp"')
     help_text = INDEX_HTML[help_start:help_start + 400]
-    assert "Tab indents code" in help_text
+    assert "Tab and Shift+Tab move forward and backward out of the editor" in help_text
+    assert "Control right bracket and Control left bracket to indent and outdent" in help_text
     assert "Control+M" in help_text and "Escape" in help_text
     assert "Tab Leaves Editor" in help_text
     start = STATIC_APP.index("function editorHelpText(tabMovesFocus)")

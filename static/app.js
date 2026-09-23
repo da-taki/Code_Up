@@ -956,7 +956,8 @@ SCREEN READER HANDOFF:
 
 KEYBOARD:
 - Ctrl+Enter: Run
-- Tab / Shift+Tab (in the editor): Indent / outdent code (Ctrl+] / Ctrl+[ also work)
+- Tab / Shift+Tab (in the editor): Move to the next / previous control (default; turn off Tab Leaves Editor in settings if you prefer Tab to indent)
+- Ctrl+] / Ctrl+[: Indent / outdent code
 - Escape (editor quiet) or Ctrl+M: Leave the editor
 - Escape (while speaking): Stop speech
 - Ctrl+Shift+M: Toggle voice control
@@ -1042,6 +1043,8 @@ let _speechMode = 'sr-safe';
 let _screenReaderModeEnabled = true;   // derived from _speechMode - see applySpeechMode()
 let _browserSpeechEnabled = false;     // derived from _speechMode - see applySpeechMode()
 let _assistiveTechnologyProfile = 'default';
+let _outputOwnsCurrentAnnouncement = false;
+let _outputAnnouncementOwnerTimer = null;
 
 function applySpeechMode(mode, opts = {}) {
   if (SPEECH_MODES.indexOf(mode) === -1) mode = 'sr-safe';
@@ -1066,7 +1069,11 @@ function applySpeechMode(mode, opts = {}) {
   } catch (e) {}
   updateSpeechModeUI();
   persistAccessibilitySettings({});
-  if (!opts.silent) srAnnounce(`Speech mode set to ${SPEECH_MODE_LABELS[mode]}. ${SPEECH_MODE_DESCRIPTIONS[mode]}`);
+  if (!opts.silent) {
+    const message = `Speech mode set to ${SPEECH_MODE_LABELS[mode]}. ${SPEECH_MODE_DESCRIPTIONS[mode]}`;
+    if (_browserSpeechEnabled) speak(message, { sr: false });
+    else srAnnounce(message);
+  }
 }
 
 function updateSpeechModeUI() {
@@ -1091,14 +1098,31 @@ function updateSpeechModeUI() {
   // the exact duplicate/simultaneous-speech complaint. #output stays fully
   // present, focusable, and readable via normal review either way; only the
   // automatic live-announcement toggles with the mode.
-  const outputRegion = document.getElementById('output');
-  if (outputRegion) outputRegion.setAttribute('aria-live', _browserSpeechEnabled ? 'off' : 'polite');
-  // Same duplication risk for the Mentor transcript: rememberMentorTurn()
-  // writes the exact text speak() just spoke into #mentorTranscript, which
-  // also carries its own static aria-live="polite" in the HTML.
-  const mentorRegion = document.getElementById('mentorTranscript');
-  if (mentorRegion) mentorRegion.setAttribute('aria-live', _browserSpeechEnabled ? 'off' : 'polite');
+  // CodeUp Voice and a running screen reader must never become two competing
+  // automatic narrators. Keep every review surface in the DOM, but switch all
+  // automatic live-region channels off while CodeUp Voice owns narration.
+  // Screen Reader Safe restores each region's intended native priority.
+  const liveRegions = {
+    output: 'polite',
+    mentorTranscript: 'polite',
+    srAnnouncer: 'polite',
+    srAlert: 'assertive',
+    aiBubble: 'polite',
+    commandUnderstanding: 'polite',
+    voiceStateIndicator: 'polite',
+    audioBlocksStatus: 'polite',
+    tutorialProgress: 'polite',
+    tutorialStatus: 'polite',
+    liveAssistantStatus: 'polite',
+  };
+  Object.keys(liveRegions).forEach(id => {
+    const region = document.getElementById(id);
+    if (region) region.setAttribute('aria-live', _browserSpeechEnabled ? 'off' : liveRegions[id]);
+  });
 }
+window.codeUpLiveRegionValue = function (defaultValue) {
+  return _browserSpeechEnabled ? 'off' : (defaultValue || 'polite');
+};
 
 function speak(text, opts = {}) {
   // Test anchor for the single speech path: VoiceEngine.speak(text, opts).
@@ -1113,7 +1137,16 @@ function speak(text, opts = {}) {
   // this branch, so the event is still spoken exactly once.
   const explicitBypass = opts.explicit === true && _speechMode !== 'codeup-voice';
   if (!_browserSpeechEnabled && !explicitBypass) {
-    if (opts.sr !== false) srAnnounce(spokenText, opts.priority || 'polite');
+    // out() and speak() are intentionally paired throughout the IDE: out()
+    // keeps a result reviewable while speak() supplies CodeUp Voice audio.
+    // In Screen Reader Safe mode #output is itself a polite live region, so
+    // the next synchronous speak() must not push a second copy (or a near-
+    // duplicate summary) into #srAnnouncer. out() marks that ownership for
+    // the current task and clears it immediately afterwards. Explicit replay
+    // has no output mutation and therefore remains unaffected.
+    if (opts.sr !== false && !_outputOwnsCurrentAnnouncement) {
+      srAnnounce(spokenText, opts.priority || 'polite');
+    }
     return;
   }
   if (typeof VoiceEngine !== 'undefined' && VoiceEngine.speak) {
@@ -1615,7 +1648,10 @@ function showAI(msg, opts = {}) {
     b.setAttribute('aria-live', 'off');
     b.textContent = msg;
     showEl(b);
-    _aiBubbleAnnounceRestoreTimer = setTimeout(() => b.setAttribute('aria-live', 'polite'), 50);
+    _aiBubbleAnnounceRestoreTimer = setTimeout(
+      () => b.setAttribute('aria-live', window.codeUpLiveRegionValue('polite')),
+      50
+    );
     return;
   }
   b.textContent = msg;
@@ -2375,27 +2411,22 @@ function out(t, options = {}) {
       }, 50);
     } else {
       output.textContent = t;
+      if (!_browserSpeechEnabled) {
+        _outputOwnsCurrentAnnouncement = true;
+        clearTimeout(_outputAnnouncementOwnerTimer);
+        _outputAnnouncementOwnerTimer = setTimeout(() => {
+          _outputOwnsCurrentAnnouncement = false;
+        }, 0);
+      }
     }
   }
   const text = String(t || '').trim();
   if (options.sr === false) return;
-  // Announcement-ownership pass: #output carries its own static aria-live,
-  // set to "polite" whenever browser speech is off (Screen Reader Safe
-  // mode - see updateSpeechModeUI()), so a real screen reader already
-  // announces this exact textContent change on its own the instant it
-  // happens. A *manual* srAnnounce() of the identical text right after was
-  // a second, redundant announcement of the same event for every caller
-  // that didn't already know to pass {sr:false} - confirmed live: the
-  // native #output mutation AND a separate srAnnounce() call both fired
-  // for one out() call. In CodeUp Voice mode #output's aria-live is "off"
-  // instead (so it doesn't clash with CodeUp's own spoken narration), and
-  // this manual announcement remains the only live-region signal there -
-  // left unchanged, since suppressing it too could silence an out() call
-  // that has no paired speak().
-  if (!_browserSpeechEnabled) return;
-  const isError = options.assertive || /^(?:error\b|found \d+ errors?\b|mentor error\b)/i.test(text) ||
-    /\b(?:failed|failure)\.?$/i.test(text);
-  srAnnounce(text, isError ? 'assertive' : 'polite');
+  // In Screen Reader Safe mode #output's native polite live region owns this
+  // write. In CodeUp Voice mode all ARIA live regions are intentionally off
+  // so NVDA/JAWS cannot clash with browser speech. Either way, out() must not
+  // create a second manual live-region event.
+  return;
 }
 
 let _cuAnnounceRestoreTimer = null;
@@ -2459,7 +2490,10 @@ function updateCommandUnderstanding(update = {}) {
     nextEl.style.fontWeight = update.isError ? '700' : '';
   }
   if (suppressAnnounce) {
-    _cuAnnounceRestoreTimer = setTimeout(() => container.setAttribute('aria-live', 'polite'), 50);
+    _cuAnnounceRestoreTimer = setTimeout(
+      () => container.setAttribute('aria-live', window.codeUpLiveRegionValue('polite')),
+      50
+    );
   }
 }
 window.updateTranscriptStatus = updateCommandUnderstanding;
@@ -2643,7 +2677,17 @@ async function runCode(runFile, codeOverride) {
       // speak(formatRunOutputSpeech(...)) announcement below, so a Screen
       // Reader Safe user heard the same run output announced twice (once raw,
       // once formatted) - XRCVC "duplicate output speech".
-      out(data.output, { sr: false });
+      // The complete output remains persistent and focusable, but a very
+      // large raw blob must not be injected wholesale into a live region.
+      // Mute #output for this write and give screen readers exactly one
+      // announcement of the output itself (XRCVC 4c: the screen reader must
+      // read the output aloud), using the same punctuation-aware formatter
+      // and 4000-character bound as CodeUp Voice. Output past that bound
+      // ends with a pointer to the visible output and Read output again.
+      out(data.output, { sr: false, announce: false });
+      if (_speechMode !== 'codeup-voice') {
+        srAnnounce(formatRunOutputSpeech(data.output), 'polite', { keep: true });
+      }
       const outputFocus = document.getElementById('output');
       try { if (outputFocus && shouldFocusOutputAfterInput) outputFocus.focus(); } catch (e) {}
       cueSuccess();
@@ -3531,7 +3575,16 @@ function applyConversationalEdit(aiAction) {
 const _liveRegionTimers = {};
 const _lastLiveRegionMessages = {};
 const _lastLiveRegionTimes = {};
-function srAnnounce(msg, priority = 'polite') {
+// A pending live-region message normally yields to a newer one (rapid
+// navigation should only speak the latest position). opts.keep marks a
+// pending message that must not be dropped, such as program output: any
+// announcement queued before its 50ms timer fires is appended after it
+// instead of replacing it. Without this, a semantic note spoken right after
+// Run ("High iteration count...") replaced the prime-number output itself.
+const _pendingLiveRegionText = {};
+const _pendingLiveRegionKeep = {};
+function srAnnounce(msg, priority = 'polite', opts = {}) {
+  if (_browserSpeechEnabled) return;
   const region = priority === 'assertive' ? 'assertive' : 'polite';
   const el = document.getElementById(region === 'assertive' ? 'srAlert' : 'srAnnouncer');
   if (!el) return;
@@ -3546,9 +3599,18 @@ function srAnnounce(msg, priority = 'polite') {
   if (!cleaned || (_lastLiveRegionMessages[region] === cleaned && now - (_lastLiveRegionTimes[region] || 0) < 1200)) return;
   _lastLiveRegionMessages[region] = cleaned;
   _lastLiveRegionTimes[region] = now;
+  const text = _pendingLiveRegionKeep[region] && _pendingLiveRegionText[region]
+    ? (_pendingLiveRegionText[region] + ' ' + cleaned).slice(0, 8400)
+    : cleaned;
+  _pendingLiveRegionKeep[region] = opts.keep === true || !!_pendingLiveRegionKeep[region];
+  _pendingLiveRegionText[region] = text;
   clearTimeout(_liveRegionTimers[region]);
   el.textContent = '';
-  _liveRegionTimers[region] = setTimeout(function () { el.textContent = cleaned; }, 50);
+  _liveRegionTimers[region] = setTimeout(function () {
+    _pendingLiveRegionText[region] = '';
+    _pendingLiveRegionKeep[region] = false;
+    el.textContent = text;
+  }, 50);
 }
 
 function srAlert(msg) {
@@ -3560,6 +3622,8 @@ function clearSrAlert() {
   if (!el) return;
   clearTimeout(_liveRegionTimers.assertive);
   el.textContent = '';
+  _pendingLiveRegionText.assertive = '';
+  _pendingLiveRegionKeep.assertive = false;
   _lastLiveRegionMessages.assertive = '';
   _lastLiveRegionTimes.assertive = 0;
 }
@@ -5291,7 +5355,7 @@ function voiceUnavailableMessage() {
 function setVoiceButtonOff() {
   const btn = document.getElementById('voiceButton');
   if (!btn) return;
-  btn.textContent = '\uD83C\uDFA4 Voice (Off)';
+  btn.textContent = '\uD83C\uDFA4 Voice input (Off)';
   btn.setAttribute('aria-pressed', 'false');
   btn.classList.remove('cu-button-voice--active');
   btn.classList.remove('cu-button-voice--paused');
@@ -5496,7 +5560,7 @@ function startListening() {
     if (_voicePaused) {
       const btn = document.getElementById('voiceButton');
       if (btn) {
-        btn.textContent = 'Voice (Paused)';
+        btn.textContent = 'Voice input (Paused)';
         btn.setAttribute('aria-pressed', 'mixed');
         btn.classList.remove('cu-button-voice--active');
         btn.classList.add('cu-button-voice--paused');
@@ -5507,7 +5571,7 @@ function startListening() {
 
     const btn = document.getElementById('voiceButton');
     if (btn) {
-      btn.textContent = 'Voice (ON)';
+      btn.textContent = 'Voice input (On)';
       btn.setAttribute('aria-pressed', 'true');
       btn.classList.remove('cu-button-voice--paused');
       btn.classList.add('cu-button-voice--active');
@@ -5673,7 +5737,7 @@ function pauseVoiceRecognition() {
 
   const btn = document.getElementById('voiceButton');
   if (btn) {
-    btn.textContent = 'Voice (Paused)';
+    btn.textContent = 'Voice input (Paused)';
     btn.setAttribute('aria-pressed', 'mixed');
     btn.classList.remove('cu-button-voice--active');
     btn.classList.add('cu-button-voice--paused');
@@ -5705,7 +5769,7 @@ function resumeVoiceRecognition() {
 
   const btn = document.getElementById('voiceButton');
   if (btn) {
-    btn.textContent = 'Voice (ON)';
+    btn.textContent = 'Voice input (On)';
     btn.setAttribute('aria-pressed', 'true');
     btn.classList.remove('cu-button-voice--paused');
     btn.classList.add('cu-button-voice--active');
@@ -6053,7 +6117,10 @@ window.addEventListener('DOMContentLoaded', () => {
       speak(msg);
       return;
     }
-    if (e.ctrlKey && e.shiftKey && e.key === 'M') { e.preventDefault(); toggleVoice(); }
+    if (e.ctrlKey && e.shiftKey && String(e.key || '').toUpperCase() === 'M') {
+      e.preventDefault();
+      toggleVoice();
+    }
     if (e.key === 'Escape') {
       const paletteOverlay = document.getElementById('commandPaletteOverlay');
       const paletteOpen = paletteOverlay && !paletteOverlay.hasAttribute('hidden');
@@ -6124,14 +6191,17 @@ function focusEditor() {
   try { if (editor && editor.focus) editor.focus(); } catch (e) {}
 }
 
-// Tab inside the editor indents code (Shift+Tab outdents) - Monaco's native
-// behavior, and what the CodeUp How-To Guide tells learners. Escape (when
-// speech is quiet) and Ctrl+M always leave the editor, so it is never a
-// keyboard trap. Learners who prefer the XRCVC Finding 4/4B behavior can turn
-// on "Tab Leaves Editor" in settings; Ctrl+] / Ctrl+[ indent in both modes.
+// New users get the XRCVC-safe behavior: Tab and Shift+Tab leave the editor
+// in the expected direction. A learner who explicitly turns the setting off
+// keeps Monaco's native Tab/Shift+Tab indent behavior. Ctrl+] / Ctrl+[ always
+// indent/outdent, so code indentation remains keyboard reachable in either
+// mode, while nobody has to discover a setting before they can escape.
 const TAB_MOVES_FOCUS_KEY = 'codeupTabMovesFocus';
 function tabMovesFocusEnabled() {
-  try { return localStorage.getItem(TAB_MOVES_FOCUS_KEY) === 'true'; } catch (e) { return false; }
+  try {
+    const stored = localStorage.getItem(TAB_MOVES_FOCUS_KEY);
+    return stored == null ? true : stored === 'true';
+  } catch (e) { return true; }
 }
 function editorAriaLabel(tabMovesFocus) {
   const tabText = tabMovesFocus
@@ -7039,12 +7109,11 @@ const _NO_OUTPUT_PLACEHOLDER = 'Program finished with no output.';
 // was being spoken with the raw bracket/brace characters, which most TTS
 // voices either mumble or silently skip - a screen-reader/CodeUp-Voice user
 // heard "one two three" with no indication it was a list at all. This walks
-// each line once and only touches bracket/paren/brace characters (open/close
-// names) and colons *inside* a detected container, so ordinary sentences
-// with no container punctuation are left completely untouched - narrating
-// every comma/colon in normal prose would be "unbearable" per the ticket.
-// Commas and decimal points are left as-is; TTS already pauses on commas and
-// reads "3.14"/"-3" correctly on its own.
+// each line once and only expands punctuation while inside a detected
+// container, so ordinary prose remains untouched. Commas are named because a
+// pause alone does not distinguish a list from adjacent values; quote marks
+// are named only inside containers, where they materially distinguish strings
+// and dictionary keys. Decimal points and minus signs remain natural.
 const _OPEN_WORDS  = { '[': ' open bracket ', '(': ' open parenthesis ', '{': ' open brace ' };
 const _CLOSE_WORDS = { ']': ' close bracket ', ')': ' close parenthesis ', '}': ' close brace ' };
 function narrateStructuredOutputLine(line) {
@@ -7052,10 +7121,19 @@ function narrateStructuredOutputLine(line) {
   if (!/[[\](){}]/.test(text)) return text;
   let spoken = '';
   let depth = 0;
+  let quote = '';
   for (let i = 0; i < text.length; i++) {
     const ch = text[i];
-    if (_OPEN_WORDS[ch]) { depth++; spoken += _OPEN_WORDS[ch]; }
-    else if (_CLOSE_WORDS[ch]) { depth = Math.max(0, depth - 1); spoken += _CLOSE_WORDS[ch]; }
+    const escaped = i > 0 && text[i - 1] === '\\';
+    if (depth > 0 && (ch === "'" || ch === '"') && !escaped) {
+      const word = ch === "'" ? ' single quote ' : ' double quote ';
+      if (!quote) { quote = ch; spoken += word; }
+      else if (quote === ch) { quote = ''; spoken += word; }
+      else { spoken += ch; }
+    }
+    else if (!quote && _OPEN_WORDS[ch]) { depth++; spoken += _OPEN_WORDS[ch]; }
+    else if (!quote && _CLOSE_WORDS[ch]) { depth = Math.max(0, depth - 1); spoken += _CLOSE_WORDS[ch]; }
+    else if (!quote && ch === ',' && depth > 0) { spoken += ' comma '; }
     else if (ch === ':' && depth > 0) { spoken += ' colon '; }
     else { spoken += ch; }
   }

@@ -28,6 +28,7 @@ function extract(startMarker, endMarker) {
 const SHOW_AI_SRC = extract('let _aiBubbleAnnounceRestoreTimer = null;', 'function hideAI()');
 const OUT_SRC = extract('let _outputAnnounceRestoreTimer = null;', 'let _cuAnnounceRestoreTimer = null;');
 const UPDATE_CU_SRC = extract('let _cuAnnounceRestoreTimer = null;', 'window.updateTranscriptStatus');
+const SPEAK_SRC = extract('function speak(text, opts = {})', 'function speakOutput()');
 
 // --- Fake timers (same pattern as voice_speech_chunking.test.js) ---------
 let _now = 1000000;
@@ -85,13 +86,24 @@ const sandbox = {
   setTimeout: fakeSetTimeout,
   clearTimeout: fakeClearTimeout,
   srAnnounce(text, priority) { srAnnounceCalls.push({ text, priority }); },
+  sanitizeSpeechText(text) { return String(text || ''); },
+  lastSpokenText: '',
+  _speechEpoch: 0,
+  _speechMode: 'sr-safe',
+  _outputOwnsCurrentAnnouncement: false,
+  _outputAnnouncementOwnerTimer: null,
+  VoiceEngine: { speak() { return Promise.resolve(); } },
+  SpeechManager: { enqueue() { return Promise.resolve(); } },
+  codeUpLiveRegionValue(defaultValue) {
+    return _browserSpeechEnabled ? 'off' : (defaultValue || 'polite');
+  },
   showEl(el) { if (el) el.hidden = false; },
   get _browserSpeechEnabled() { return _browserSpeechEnabled; },
 };
 sandbox.window = sandbox;
 sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
-vm.runInContext(OUT_SRC + '\n' + UPDATE_CU_SRC + '\n' + SHOW_AI_SRC, sandbox);
+vm.runInContext(OUT_SRC + '\n' + UPDATE_CU_SRC + '\n' + SHOW_AI_SRC + '\n' + SPEAK_SRC, sandbox);
 
 function reset(browserSpeechEnabled) {
   outputEl = makeEl({ _attrs: { 'aria-live': browserSpeechEnabled ? 'off' : 'polite' } });
@@ -99,6 +111,8 @@ function reset(browserSpeechEnabled) {
   elements = { output: outputEl, aiBubble: aiBubbleEl };
   srAnnounceCalls = [];
   _browserSpeechEnabled = browserSpeechEnabled;
+  sandbox._outputOwnsCurrentAnnouncement = false;
+  sandbox._outputAnnouncementOwnerTimer = null;
 }
 
 let groups = 0;
@@ -119,12 +133,11 @@ check('out() in Screen Reader Safe mode relies on #output\'s own aria-live, not 
     'out() manually announced on top of #output\'s own aria-live - that is the exact duplicate this pass fixed');
 });
 
-check('out() in CodeUp Voice mode still manually announces (its aria-live is off there)', () => {
+check('out() in CodeUp Voice mode does not compete with browser speech', () => {
   reset(true);
   sandbox.out('Hello in CodeUp Voice mode');
-  assert.strictEqual(srAnnounceCalls.length, 1,
-    '#output\'s aria-live is off in this mode, so out()\'s manual announce is the only signal - must not be removed');
-  assert.strictEqual(srAnnounceCalls[0].text, 'Hello in CodeUp Voice mode');
+  assert.strictEqual(srAnnounceCalls.length, 0,
+    'CodeUp Voice owns automatic narration in this mode; a manual ARIA announcement would clash with it');
 });
 
 check('out(text, {sr:false}) never manually announces in either mode', () => {
@@ -135,11 +148,23 @@ check('out(text, {sr:false}) never manually announces in either mode', () => {
   assert.strictEqual(srAnnounceCalls.length, 0);
 });
 
-check('out() still escalates to assertive priority for error text in CodeUp Voice mode', () => {
+check('a paired out()+speak() event has one screen-reader owner', () => {
+  reset(false);
+  sandbox.out('Detailed persistent result', { sr: false });
+  sandbox.speak('Short spoken summary');
+  assert.strictEqual(srAnnounceCalls.length, 0,
+    '#output already owns this synchronous event; speak() must not enqueue a second live-region message');
+  advance(1);
+  sandbox.speak('A later independent event');
+  assert.strictEqual(srAnnounceCalls.length, 1,
+    'announcement ownership must expire after the paired event instead of silencing later speech');
+  assert.strictEqual(srAnnounceCalls[0].text, 'A later independent event');
+});
+
+check('out() keeps even error live announcements quiet in CodeUp Voice mode', () => {
   reset(true);
   sandbox.out('Fix failed.');
-  assert.strictEqual(srAnnounceCalls.length, 1);
-  assert.strictEqual(srAnnounceCalls[0].priority, 'assertive');
+  assert.strictEqual(srAnnounceCalls.length, 0);
 });
 
 // XRCVC full re-audit: runCode()'s error branch writes the raw error into

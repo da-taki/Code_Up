@@ -399,6 +399,8 @@ SAFE_GLOBALS = {
     'sum': SafeFunction(sum),
     'min': SafeFunction(min),
     'max': SafeFunction(max),
+    'all': SafeFunction(all),
+    'any': SafeFunction(any),
     'abs': SafeFunction(abs),
     'round': SafeFunction(round),
     'sorted': SafeFunction(sorted),

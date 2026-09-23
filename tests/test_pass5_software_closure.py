@@ -1,9 +1,14 @@
 import json
 import os
+import time as _time
+from contextlib import contextmanager
 
 import pytest
 
 import app as app_module
+from codeup.classroom import concepts as classroom_concepts
+from codeup.classroom import db as classroom_db
+from codeup.classroom import reports as classroom_reports
 
 
 @pytest.fixture
@@ -149,9 +154,6 @@ def test_tutorial_validate_accepts_matching_successful_server_run(client):
 # Section 4: rate-limit / execution-budget identity
 # ---------------------------------------------------------------------------
 
-from codeup.classroom import db as classroom_db  # noqa: E402
-
-
 def _run(client, code="print(1)"):
     return client.post("/run", json={"code": code, "language": "en"}, headers={"Origin": "http://localhost"})
 
@@ -230,12 +232,6 @@ def test_two_classroom_learners_sharing_a_browser_remain_distinct_budgets(client
 # ---------------------------------------------------------------------------
 # Section 5: cohort dashboard performance
 # ---------------------------------------------------------------------------
-
-import time as _time
-from contextlib import contextmanager
-
-from codeup.classroom import concepts as classroom_concepts, reports as classroom_reports
-
 
 def _seed_cohort(n_learners, *, teacher_suffix):
     instructor = classroom_db.create_instructor(f"pass5-perf-{teacher_suffix}", "h", "Ms Perf")

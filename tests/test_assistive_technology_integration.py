@@ -124,20 +124,23 @@ def test_ide_has_live_regions_and_labeled_controls(client):
 
 def test_frontend_routes_visual_output_to_live_regions():
     source = Path("static/app.js").read_text(encoding="utf-8")
-    assert "srAnnounce(text, isError ? 'assertive' : 'polite')" in source
-    assert "found \\d+ errors?" in source
+    # Screen Reader Safe relies on each persistent surface's native live
+    # region; CodeUp Voice turns every automatic ARIA channel off so it cannot
+    # compete with browser speech.
+    assert "region.setAttribute('aria-live', _browserSpeechEnabled ? 'off' : liveRegions[id])" in source
+    assert "if (_browserSpeechEnabled) return;" in source
     assert "function srAlert(msg)" in source
     assert "function clearSrAlert()" in source
     run_code = source[source.index("async function runCode("):]
     success_start = run_code.index("if (data.success) {")
     run_success = run_code[success_start:run_code.index("} else {", success_start)]
-    # out(data.output, { sr: false }) - sr:false so out() doesn't also push the
-    # raw output through srAnnounce() on top of the #output live region's own
-    # change and the formatted speak(formatRunOutputSpeech(...)) announcement
-    # right below it (XRCVC-reported duplicate output speech in Screen Reader
-    # Safe mode: the same run output was announced twice, once raw once
-    # formatted).
-    assert run_success.index("clearSrAlert();") < run_success.index("out(data.output, { sr: false });")
+    # Program output stays persistent, but its raw text is muted as a live
+    # write. Screen readers get one bounded, punctuation-aware announcement
+    # of the output itself (XRCVC 4c) instead of an unbounded raw blob.
+    assert run_success.index("clearSrAlert();") < run_success.index(
+        "out(data.output, { sr: false, announce: false });"
+    )
+    assert "srAnnounce(formatRunOutputSpeech(data.output), 'polite', { keep: true });" in run_success
     assert "replace(/<module>/g, 'top-level code')" in source
 
 

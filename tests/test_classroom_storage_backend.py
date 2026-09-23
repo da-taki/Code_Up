@@ -149,6 +149,19 @@ def test_pg_connection_leaves_selects_and_updates_alone():
     assert "RETURNING" not in sql2.upper()
 
 
+def test_public_ensure_schema_forces_version_recheck(monkeypatch):
+    marker_pool = object()
+    calls = []
+    monkeypatch.setattr(_storage, "_get_pool", lambda url: marker_pool)
+    monkeypatch.setattr(
+        _storage,
+        "_ensure_postgres_schema",
+        lambda pool, url, *, force=False: calls.append((pool, url, force)),
+    )
+    _storage.ensure_schema("postgresql://example.invalid/classroom")
+    assert calls == [(marker_pool, "postgresql://example.invalid/classroom", True)]
+
+
 # ---- concurrency hardening (real SQLite, real threads) -------------------------
 
 def test_concurrent_learners_joining_same_cohort_all_succeed():

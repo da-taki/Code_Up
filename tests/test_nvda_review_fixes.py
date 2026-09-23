@@ -274,8 +274,8 @@ def test_editor_tab_key_behavior_is_accurately_described_and_indent_is_reachable
     label matches actual behavior and that a keyboard indent/outdent path exists.
     """
     assert "accessibilitySupport: 'on'" in STATIC_APP
-    # The label is now built per Tab mode (default: Tab indents, per the How-To
-    # Guide; opt-in "Tab Leaves Editor": Tab moves focus) - each variant must
+    # The label is now built per Tab mode (default: Tab moves focus, per the
+    # How-To Guide; "Tab Leaves Editor" turned off: Tab indents) - each variant must
     # describe exactly what that mode does, plus the way out of the editor.
     assert "ariaLabel:            editorAriaLabel(tabMovesFocusEnabled())" in STATIC_APP
     start = STATIC_APP.index("function editorAriaLabel(tabMovesFocus)")

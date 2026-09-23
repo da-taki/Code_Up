@@ -810,6 +810,67 @@ def test_sandbox_normal_execution(client):
     assert "4" in data.get("output", "")
 
 
+def test_sandbox_all_and_any_builtins(client):
+    # all()/any() were missing from SAFE_GLOBALS, so beginner programs such as
+    # the prime-number idiom `all(n % d for d in range(2, n))` failed with
+    # NameError. They are pure iterable reducers like sum/min/max.
+    code = (
+        "assert all([True, True]) is True\n"
+        "assert all([True, False]) is False\n"
+        "assert all([]) is True\n"
+        "assert any([False, True]) is True\n"
+        "assert any([False, False]) is False\n"
+        "assert any([]) is False\n"
+        "print([n for n in range(2, 20) if all(n % d for d in range(2, n))])\n"
+        "def has_even(values):\n"
+        "    return any(v % 2 == 0 for v in values)\n"
+        "print(has_even([1, 3, 4]), has_even([1, 3]))\n"
+    )
+    res = client.post("/run", json={"code": code})
+    assert res.status_code == 200
+    data = res.get_json()
+    assert data["success"] is True, data
+    output = data.get("output", "")
+    assert "[2, 3, 5, 7, 11, 13, 17, 19]" in output
+    assert "True False" in output
+
+
+def test_sandbox_all_any_generator_example_output(client):
+    code = (
+        "numbers = [2, 3, 5, 7]\n"
+        "\n"
+        "print(all(n > 1 for n in numbers))\n"
+        "print(any(n % 2 == 0 for n in numbers))\n"
+    )
+    res = client.post("/run", json={"code": code})
+    data = res.get_json()
+    assert data["success"] is True, data
+    assert data.get("output", "").strip().splitlines() == ["True", "True"]
+
+
+@pytest.mark.parametrize("code", [
+    "print(eval('1 + 1'))",
+    "exec('print(1)')",
+    "compile('1', 'x', 'eval')",
+    "__import__('os')",
+    "print(open('../../app.py').read())",
+    "print(open('/etc/passwd').read())",
+])
+def test_sandbox_dangerous_builtins_stay_unavailable_after_all_any(client, code):
+    res = client.post("/run", json={"code": code})
+    data = res.get_json()
+    assert data["success"] is False, (code, data)
+
+
+def test_sandbox_all_any_do_not_expose_builtins_module(client):
+    # Real builtin functions carry __self__ (the builtins module). The
+    # SafeFunction wrapper plus the AST audit must keep that unreachable.
+    res = client.post("/run", json={"code": "print(all.__self__)"})
+    data = res.get_json()
+    assert data["success"] is False
+    assert "builtins" not in data.get("output", "")
+
+
 def test_sandbox_loop_output(client):
     res = client.post("/run", json={"code": "for i in range(3):\n    print(i)"})
     assert res.status_code == 200

@@ -273,22 +273,149 @@ def test_step_narration_names_classes_and_hides_runtime_addresses():
 
 
 # ============================================================================
-# Guide page 2: "Tab inside the editor indents code."
+# Guide page 2: editor traversal is trap-free by default.
 # Real trusted-keypress coverage lives in tests/test_monaco_tab_focus.py
-# (default Tab/Shift+Tab indent + the opt-in "Tab Leaves Editor" setting).
+# (default Tab/Shift+Tab exit + explicit opt-out indentation mode).
 # ============================================================================
 
-def test_editor_tab_exit_is_opt_in_so_default_tab_indents():
+def test_editor_tab_exit_is_default_and_indent_remains_keyboard_reachable():
     source = Path("static/app.js").read_text(encoding="utf-8")
     html = Path("templates/index.html").read_text(encoding="utf-8")
 
     assert "e.key === 'Tab' && !e.altKey && !e.ctrlKey && !e.metaKey && tabMovesFocusEnabled()" in source
-    assert "localStorage.getItem(TAB_MOVES_FOCUS_KEY) === 'true'" in source
+    assert "return stored == null ? true : stored === 'true'" in source
     # Leaving the editor never depends on Tab: Escape and Ctrl+M stay bound.
     assert "monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyM, () => { leaveEditor(); }" in source
     assert 'id="tabFocusToggle"' in html
     help_start = html.index('id="editorHelp"')
-    assert "Tab indents code" in html[help_start:help_start + 300]
+    assert "Tab and Shift+Tab move forward and backward out of the editor" in html[help_start:help_start + 500]
+    assert "Control right bracket and Control left bracket to indent and outdent" in html[help_start:help_start + 500]
+
+
+GUIDE_SOURCE = Path("docs/guide/quick-how-to-guide.html")
+GUIDE_PDF = Path("docs/guide/CodeUp_How_To_Use_Guide.pdf")
+
+
+def test_guide_source_documents_default_tab_navigation_and_bracket_indent():
+    guide = GUIDE_SOURCE.read_text(encoding="utf-8")
+    assert "Tab inside the editor indents code" not in guide
+    start = guide.index('id="tab-behavior"')
+    bullet = guide[start:guide.index("</li>", start)]
+    assert "By default, Tab moves to the next control and Shift+Tab moves to the previous control" in bullet
+    assert "Use Ctrl+] to indent a line and Ctrl+[ to outdent it" in bullet
+    assert 'turn off "Tab Leaves Editor"' in bullet
+    # The toggle the guide names must be the real control, and it must really
+    # default to on (Tab leaves the editor) for new users.
+    html = Path("templates/index.html").read_text(encoding="utf-8")
+    assert re.search(r'id="tabFocusToggle"[^>]*aria-pressed="true"[^>]*>\s*Tab Leaves Editor', html)
+
+
+def test_guide_shortcut_table_matches_the_ide_shortcut_dialog():
+    guide = GUIDE_SOURCE.read_text(encoding="utf-8")
+    table = guide[guide.index('id="essential-shortcuts"'):]
+    table = table[:table.index("</table>")]
+    shortcuts = re.findall(r"<tr><td>([^<]+)</td>", table)
+    html = Path("templates/index.html").read_text(encoding="utf-8")
+    dialog = html[html.index('id="shortcutHelpModal"'):]
+    dialog = dialog[:dialog.index('id="shortcutHelpCloseBtn"')]
+    for shortcut in shortcuts:
+        for key in (part.strip() for part in shortcut.split("/")):
+            assert f'<span class="cu-hotkey">{key}</span>' in dialog, key
+
+
+def test_generated_guide_pdf_is_in_sync_with_its_source():
+    from pypdf import PdfReader
+
+    text = " ".join(page.extract_text() for page in PdfReader(str(GUIDE_PDF)).pages)
+    text = re.sub(r"\s+", " ", text)
+    assert "Tab inside the editor indents code" not in text
+    assert "By default, Tab moves to the next control and Shift+Tab moves to the previous control" in text
+    assert chr(0x2014) not in text  # no em dashes in learner-facing text
+
+
+# ============================================================================
+# Full September 2026 guide (docs/guide/full-how-to-guide.html). Converted once
+# from the 67-page PDF; only the Tab/indent statements changed.
+# ============================================================================
+
+FULL_SOURCE = Path("docs/guide/full-how-to-guide.html")
+FULL_PDF = Path("docs/guide/CodeUp_How_To_Guide_September_2026.pdf")
+
+# Any phrasing that says Tab inside the editor indents (the pre-XRCVC default).
+_STALE_TAB = re.compile(
+    r"Tab (?:inside|in) the editor(?:\s|</td>|<td>)*(?:indents|Indent Python code)", re.IGNORECASE
+)
+
+
+def _pdf_text(path):
+    from pypdf import PdfReader
+
+    return re.sub(r"\s+", " ", " ".join(page.extract_text() for page in PdfReader(str(path)).pages))
+
+
+@pytest.mark.parametrize("source", [GUIDE_SOURCE, FULL_SOURCE], ids=["quick", "full"])
+def test_no_guide_source_says_tab_indents_by_default(source):
+    text = source.read_text(encoding="utf-8")
+    assert not _STALE_TAB.search(text)
+    assert chr(0x2014) not in text
+
+
+def test_full_guide_documents_default_tab_navigation_and_bracket_indent():
+    guide = FULL_SOURCE.read_text(encoding="utf-8")
+    keyboard = guide[guide.index("<h2>6. Keyboard basics</h2>"):]
+    keyboard = keyboard[:keyboard.index("</table>")]
+    assert "<td>Tab or Shift+Tab inside the editor</td><td>Leave the code editor forward or backward (the default)" in keyboard
+    assert "turn off Tab Leaves Editor" in keyboard
+    assert "<td>Ctrl+] / Ctrl+[</td><td>Indent or outdent the current line of Python code." in keyboard
+    settings = guide[guide.index("5.5 Visual accessibility controls"):]
+    settings = settings[:settings.index("</table>")]
+    assert "<td>Tab Leaves Editor</td><td>On by default: Tab and Shift+Tab move focus out of the code editor." in settings
+
+
+def test_full_guide_keeps_every_part_and_numbered_section():
+    guide = FULL_SOURCE.read_text(encoding="utf-8")
+    parts = re.findall(r'<h1 class="part">([^<]+)</h1>', guide)
+    assert parts == [
+        "Start here: choose your path",
+        "Part I. Learner Guide",
+        "Part II. Instructor Guide",
+        "Part III. Running a Class or Program",
+        "Part IV. Complete Operational Reference",
+        "Part V. Repository Feature Coverage Appendix",
+    ]
+    numbers = [int(n) for n in re.findall(r"<h2>(\d+)\. ", guide)]
+    assert numbers == list(range(1, 104)), "a numbered section was dropped or reordered"
+    # Conversion artifacts that once broke the layout: rows split across a page
+    # break, a code block misread as a table, and a code block that restarted
+    # the six-step quickstart numbering at step 3.
+    assert "<tr><td></td>" not in guide and '<th scope="col"></th>' not in guide
+    assert "<strong></strong>" not in guide
+    quickstart = guide[guide.index("<h2>First 10 minutes: learner quickstart</h2>"):]
+    quickstart = quickstart[:quickstart.index("</ol>")]
+    assert quickstart.count("<li>") == 6
+
+
+@pytest.mark.parametrize("pdf", [GUIDE_PDF, FULL_PDF], ids=["quick", "full"])
+def test_generated_guide_pdfs_have_no_stale_tab_wording(pdf):
+    text = _pdf_text(pdf)
+    assert not _STALE_TAB.search(text)
+    assert chr(0x2014) not in text
+
+
+def test_generated_full_guide_pdf_is_in_sync_with_its_source():
+    from pypdf import PdfReader
+
+    assert len(PdfReader(str(FULL_PDF)).pages) >= 67, "the full guide must stay a full guide"
+    text = _pdf_text(FULL_PDF)
+    assert "Leave the code editor forward or backward (the default)" in text
+    assert "103. " in text and "Part V. Repository Feature Coverage Appendix" in text
+
+
+def test_guide_build_script_regenerates_both_guides():
+    source = Path("scripts/build_guide_pdf.py").read_text(encoding="utf-8")
+    for path in (GUIDE_SOURCE, GUIDE_PDF, FULL_SOURCE, FULL_PDF):
+        assert path.exists(), path
+        assert f'"{path.name}"' in source, path.name
 
 
 # ============================================================================

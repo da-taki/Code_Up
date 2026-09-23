@@ -75,7 +75,7 @@
       <button id="nightToggle" class="theme-toggle" aria-pressed="false" aria-label="Toggle night mode">
         Night Mode
       </button>
-      <button id="tabFocusToggle" class="theme-toggle" aria-pressed="false" aria-label="Toggle Tab leaves editor. When on, Tab moves focus out of the code editor instead of indenting.">
+      <button id="tabFocusToggle" class="theme-toggle active" aria-pressed="true" aria-label="Toggle Tab leaves editor. When on, Tab and Shift Tab move focus out of the code editor. Use Control right bracket and Control left bracket to indent and outdent.">
         Tab Leaves Editor
       </button>
       <button id="tutorialBtn" class="cu-button cu-button-secondary" aria-label="Start interactive tutorial">
@@ -221,7 +221,7 @@
       </div>
 
       <div class="cu-editor-region" id="codeModeRegion">
-        <p id="editorHelp" class="cu-editor-help">Tab indents code and Shift+Tab outdents it (Control right bracket and Control left bracket also work). Press Escape when speech is quiet, or press Control+M, to leave the editor and continue to CodeUp controls. To make Tab leave the editor instead, turn on Tab Leaves Editor in settings.</p>
+        <p id="editorHelp" class="cu-editor-help">Tab and Shift+Tab move forward and backward out of the editor. Use Control right bracket and Control left bracket to indent and outdent. Press Escape when speech is quiet, or press Control+M, to leave the editor and continue to CodeUp controls. Turn off Tab Leaves Editor in settings only if you prefer Tab to indent.</p>
         <div id="editor" class="cu-editor" role="group" aria-label="Python code editor" aria-describedby="editorHelp"></div>
         <button id="leaveEditorBtn" class="cu-button cu-button-secondary cu-leave-editor" type="button" aria-label="Leave editor and move to editor actions">Leave editor</button>
         <div id="errorSummary" class="cu-error-summary" aria-live="off" hidden>
@@ -270,8 +270,8 @@
 
       <div class="cu-command-bar" role="toolbar" aria-label="Editor actions">
         <button class="cu-button cu-button-primary" id="runBtn" aria-label="Run Python code (Ctrl+Enter)" data-tooltip="Run your code. Shortcut: Ctrl+Enter">Run</button>
-        <button class="cu-button cu-button-voice" id="voiceButton" aria-label="Toggle voice control (Ctrl+Shift+M)" data-tooltip="Toggle CodeUp Voice. Shortcut: Ctrl+Shift+M" aria-pressed="false">
-          Voice (Off)
+        <button class="cu-button cu-button-voice" id="voiceButton" aria-label="Toggle voice command input (Ctrl+Shift+M)" data-tooltip="Start or stop voice command input. Shortcut: Ctrl+Shift+M" aria-pressed="false">
+          Voice input (Off)
         </button>
         <span id="voiceStateIndicator" class="voice-state-indicator" aria-live="polite" aria-atomic="true"></span>
         <details class="cu-disclosure cu-tools-disclosure">
@@ -537,17 +537,18 @@
     <div class="modal-content">
       <h2 id="shortcutHelpTitle">Keyboard shortcuts</h2>
       <ul class="cu-shortcut-list">
-        <li><span class="cu-hotkey">Ctrl+Enter</span> — Run your code</li>
-        <li><span class="cu-hotkey">Jump to editor</span> skip link, or <span class="cu-hotkey">Tab</span> from the top of the page — Focus the editor</li>
-        <li><span class="cu-hotkey">Tab</span> / <span class="cu-hotkey">Shift+Tab</span> in the editor — Indent / outdent code (<span class="cu-hotkey">Ctrl+]</span> / <span class="cu-hotkey">Ctrl+[</span> also work)</li>
-        <li><span class="cu-hotkey">Escape</span> (editor quiet) or <span class="cu-hotkey">Ctrl+M</span> — Leave the editor</li>
-        <li><span class="cu-hotkey">Escape</span> (while speaking) — Stop speech</li>
-        <li><span class="cu-hotkey">Jump to command input</span> skip link — Focus the command box</li>
-        <li><span class="cu-hotkey">Jump to output</span> skip link — Focus program output</li>
-        <li><span class="cu-hotkey">Ctrl+Shift+M</span> — Toggle CodeUp Voice control</li>
-        <li><span class="cu-hotkey">Alt+Shift+O</span> — Open accessibility and speech settings</li>
-        <li><span class="cu-hotkey">Alt+Shift+K</span> — Open this shortcut list</li>
-        <li><span class="cu-hotkey">Ctrl+Shift+P</span> — Command palette</li>
+        <li><span class="cu-hotkey">Ctrl+Enter</span>: Run your code</li>
+        <li><span class="cu-hotkey">Jump to editor</span> skip link, or <span class="cu-hotkey">Tab</span> from the top of the page: Focus the editor</li>
+        <li><span class="cu-hotkey">Tab</span> / <span class="cu-hotkey">Shift+Tab</span> in the editor: Move to the next / previous control (default)</li>
+        <li><span class="cu-hotkey">Ctrl+]</span> / <span class="cu-hotkey">Ctrl+[</span>: Indent / outdent code</li>
+        <li><span class="cu-hotkey">Escape</span> (editor quiet) or <span class="cu-hotkey">Ctrl+M</span>: Leave the editor</li>
+        <li><span class="cu-hotkey">Escape</span> (while speaking): Stop speech</li>
+        <li><span class="cu-hotkey">Jump to command input</span> skip link: Focus the command box</li>
+        <li><span class="cu-hotkey">Jump to output</span> skip link: Focus program output</li>
+        <li><span class="cu-hotkey">Ctrl+Shift+M</span>: Toggle voice command input</li>
+        <li><span class="cu-hotkey">Alt+Shift+O</span>: Open accessibility and speech settings</li>
+        <li><span class="cu-hotkey">Alt+Shift+K</span>: Open this shortcut list</li>
+        <li><span class="cu-hotkey">Ctrl+Shift+P</span>: Command palette</li>
         <li>In Audio Blocks: <span class="cu-hotkey">Ctrl+Enter</span> compile, <span class="cu-hotkey">Ctrl+Shift+Enter</span> run, arrow keys move between blocks, <span class="cu-hotkey">[</span> / <span class="cu-hotkey">]</span> outdent / indent</li>
       </ul>
       <div class="modal-buttons">
@@ -561,7 +562,7 @@
       <h2 id="guideTitle">Getting started with CodeUp</h2>
       <ol class="cu-guide-list">
         <li>Use the <strong>Jump to editor</strong> skip link, or Tab from the top of the page, to reach the code editor.</li>
-        <li>Type Python code in the editor. Tab indents and Shift+Tab outdents (Ctrl+] / Ctrl+[ also work).</li>
+        <li>Type Python code in the editor. Tab and Shift+Tab leave the editor in the expected direction; use Ctrl+] / Ctrl+[ to indent or outdent. You can turn off Tab Leaves Editor in settings if you prefer Tab indentation.</li>
         <li>Press <strong>Ctrl+Enter</strong>, or the Run button, to run your code.</li>
         <li>Use the <strong>Jump to output</strong> skip link to inspect the program output.</li>
         <li>Use the <strong>Jump to command input</strong> skip link, or the Commands box, to type or say a command.</li>

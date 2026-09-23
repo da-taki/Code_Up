@@ -163,7 +163,23 @@ def test_voice_button_advertises_its_real_shortcut(client):
     # The actual registered handler really is Ctrl+Shift+M, not Alt+Shift+M
     # (which is a different chord bound to "code map") - the label must not
     # be a documentation mismatch.
-    assert "e.ctrlKey && e.shiftKey && e.key === 'M'" in STATIC_APP
+    assert "e.ctrlKey && e.shiftKey && String(e.key || '').toUpperCase() === 'M'" in STATIC_APP
+
+
+def test_audio_blocks_buttons_have_help_tooltips(client):
+    # XRCVC v2 finding 11a: Compile, Run Blocks and Block actions had no
+    # tooltip/help text for low-vision users (the Run button already did).
+    html = client.get("/ide").get_data(as_text=True)
+    for command, tooltip in (
+        ('data-block-command="compile blocks to Python"', 'data-tooltip="Turn your blocks into Python code, without running it"'),
+        ('data-block-command="run blocks"', 'data-tooltip="Compile your blocks to Python, then run them"'),
+    ):
+        start = html.index(command)
+        tag = html[html.rindex("<button", 0, start):html.index(">", start)]
+        assert tooltip in tag, command
+    start = html.index('aria-label="Block actions"')
+    tag = html[html.rindex("<summary", 0, start):html.index(">", start)]
+    assert 'data-tooltip="Move, indent, outdent, or delete the current block"' in tag
 
 
 # ---------------------------------------------------------------------------
@@ -202,7 +218,7 @@ def test_shortcut_help_covers_the_core_shortcuts_from_the_ticket(client):
     modal = html[modal_start:modal_end]
     for expected in ("Run your code", "Focus the editor", "Leave the editor",
                       "Focus the command box", "Focus program output",
-                      "accessibility and speech settings", "CodeUp Voice control",
+                      "accessibility and speech settings", "voice command input",
                       "Audio Blocks"):
         assert expected in modal, expected
 
@@ -227,7 +243,8 @@ def test_run_success_output_is_not_announced_twice():
     # See test_assistive_technology_integration.py::test_frontend_routes_visual_output_to_live_regions
     # for the ordering assertion; this one guards the sr:false itself so a
     # future edit can't silently drop it and reintroduce the duplicate.
-    assert "out(data.output, { sr: false });" in STATIC_APP
+    assert "out(data.output, { sr: false, announce: false });" in STATIC_APP
+    assert "srAnnounce(formatRunOutputSpeech(data.output), 'polite', { keep: true });" in STATIC_APP
 
 
 def test_sonify_start_message_is_not_announced_twice():
@@ -253,8 +270,10 @@ def test_output_region_live_announcement_toggles_with_speech_mode():
     # duplicating CodeUp Voice's own spoken narration of the same content.
     fn_start = STATIC_APP.index("function updateSpeechModeUI(")
     fn_block = STATIC_APP[fn_start:fn_start + 2400]
-    assert "outputRegion.setAttribute('aria-live', _browserSpeechEnabled ? 'off' : 'polite');" in fn_block
-    assert "mentorRegion.setAttribute('aria-live', _browserSpeechEnabled ? 'off' : 'polite');" in fn_block
+    assert "output: 'polite'" in fn_block
+    assert "mentorTranscript: 'polite'" in fn_block
+    assert "commandUnderstanding: 'polite'" in fn_block
+    assert "region.setAttribute('aria-live', _browserSpeechEnabled ? 'off' : liveRegions[id]);" in fn_block
 
 
 def test_switching_to_screen_reader_safe_cancels_in_flight_speech():
@@ -262,6 +281,16 @@ def test_switching_to_screen_reader_safe_cancels_in_flight_speech():
     fn_block = STATIC_APP[fn_start:fn_start + 900]
     assert "wasBrowserSpeechEnabled && !_browserSpeechEnabled" in fn_block
     assert "SpeechManager.cancelAll();" in fn_block
+
+
+def test_codeup_voice_turns_every_automatic_live_region_off():
+    fn_start = STATIC_APP.index("function updateSpeechModeUI(")
+    fn_block = STATIC_APP[fn_start:fn_start + 2600]
+    for region_id in (
+        "srAnnouncer", "srAlert", "aiBubble", "commandUnderstanding",
+        "voiceStateIndicator", "audioBlocksStatus", "tutorialStatus",
+    ):
+        assert region_id in fn_block
 
 
 # ---------------------------------------------------------------------------
@@ -283,7 +312,7 @@ def test_voice_toggle_shortcut_has_no_editable_target_guard():
     # If this chord ever grows an `editableTarget` guard (like the bare "2"
     # stop-listening shortcut has), Ctrl+Shift+M would stop working while
     # the tutorial has focused #voiceText - reproducing XRCVC's report.
-    idx = STATIC_APP.index("if (e.ctrlKey && e.shiftKey && e.key === 'M')")
+    idx = STATIC_APP.index("if (e.ctrlKey && e.shiftKey && String(e.key || '').toUpperCase() === 'M')")
     line = STATIC_APP[idx:STATIC_APP.index("\n", idx)]
     assert "editableTarget" not in line
 
@@ -373,8 +402,8 @@ def test_accessibility_help_page_agrees_with_in_app_shortcut_labels():
     # called; both already call Ctrl+Shift+P "Command palette" and
     # Alt+Shift+K the shortcut-list opener.
     index_html = Path("templates/index.html").read_text(encoding="utf-8")
-    assert "Ctrl+Shift+P</span> — Command palette" in index_html
-    assert "Alt+Shift+K</span> — Open this shortcut list" in index_html
+    assert "Ctrl+Shift+P</span>: Command palette" in index_html
+    assert "Alt+Shift+K</span>: Open this shortcut list" in index_html
     assert "- Ctrl+Shift+P: Command palette" in STATIC_APP
     assert "- Alt+Shift+K: Show this full shortcut list" in STATIC_APP
 

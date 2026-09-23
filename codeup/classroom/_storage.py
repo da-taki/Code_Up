@@ -458,10 +458,10 @@ def _get_pool(url: str) -> ConnectionPool:
         return pool
 
 
-def _ensure_postgres_schema(pool: ConnectionPool, url: str) -> None:
+def _ensure_postgres_schema(pool: ConnectionPool, url: str, *, force: bool = False) -> None:
     global _schema_ready_for
     with _schema_lock:
-        if _schema_ready_for == url:
+        if _schema_ready_for == url and not force:
             return
         try:
             with pool.connection() as conn:
@@ -576,7 +576,11 @@ def ensure_schema(url: str) -> None:
     connection, without duplicating the pool/advisory-lock/migration
     logic above."""
     pool = _get_pool(url)
-    _ensure_postgres_schema(pool, url)
+    # Migration/maintenance callers may run after a long-lived process cached
+    # schema readiness while another process repaired, reset, or deliberately
+    # damaged the destination. Recheck the version table under the advisory
+    # lock here; normal request connections retain the fast cached path.
+    _ensure_postgres_schema(pool, url, force=True)
 
 
 def schema_version() -> Optional[int]:

@@ -808,16 +808,16 @@ const VoiceEngine = (function () {
       const btn = document.getElementById('voiceButton');
       if (!btn) return;
       if (!active) {
-        btn.textContent = 'Voice (Off)';
+        btn.textContent = 'Voice input (Off)';
         btn.setAttribute('aria-pressed', 'false');
         btn.classList.remove('cu-button-voice--active', 'cu-button-voice--paused');
       } else if (paused) {
-        btn.textContent = 'Voice (Paused)';
+        btn.textContent = 'Voice input (Paused)';
         btn.setAttribute('aria-pressed', 'mixed');
         btn.classList.remove('cu-button-voice--active');
         btn.classList.add('cu-button-voice--paused');
       } else {
-        btn.textContent = 'Voice (ON)';
+        btn.textContent = 'Voice input (On)';
         btn.setAttribute('aria-pressed', 'true');
         btn.classList.remove('cu-button-voice--paused');
         btn.classList.add('cu-button-voice--active');

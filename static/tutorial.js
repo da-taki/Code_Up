@@ -906,7 +906,12 @@
         el.setAttribute('aria-live', 'off');
         el.textContent = msg || '';
         var self = this;
-        this._statusAnnounceRestoreTimer = setTimeout(function () { el.setAttribute('aria-live', 'polite'); }, 50);
+        this._statusAnnounceRestoreTimer = setTimeout(function () {
+          var value = typeof window.codeUpLiveRegionValue === 'function'
+            ? window.codeUpLiveRegionValue('polite')
+            : 'polite';
+          el.setAttribute('aria-live', value);
+        }, 50);
         return;
       }
       el.textContent = msg || '';

@@ -625,6 +625,10 @@
           if ('speechSynthesis' in window) {
             var primer = new SpeechSynthesisUtterance(' ');
             primer.volume = 0;
+            // Marks the silent primer so codeUpSpeechActive() (static/app.js)
+            // does not mistake it for CodeUp speech on the first keypress.
+            window._codeupAudioPrimerUntil = Date.now() + 1500;
+            primer.onend = primer.onerror = function () { window._codeupAudioPrimerUntil = 0; };
             window.speechSynthesis.speak(primer);
           }
         } catch (e) {}

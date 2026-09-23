@@ -326,6 +326,59 @@ def test_escape_while_quiet_leaves_editor(live_server, page, tab_moves_focus):
     assert _active(page)["id"] == "runBtn"
 
 
+_HELD_SPEECH = """
+(() => {
+  let current = null;
+  const fake = {
+    speaking: false, pending: false, paused: false,
+    getVoices() { return []; }, addEventListener() {}, removeEventListener() {}, pause() {}, resume() {},
+    cancel() { window.__cancels = (window.__cancels || 0) + 1; const u = current; current = null; fake.speaking = false;
+               if (u && u.onend) setTimeout(() => u.onend({}), 0); },
+    speak(u) { current = u; fake.speaking = true; if (u.onstart) setTimeout(() => u.onstart({}), 0);
+               // The silent first-gesture primer ends at once, as in Chrome; real speech is held.
+               if (!u.text.trim()) setTimeout(() => { if (current === u) { current = null; fake.speaking = false; } if (u.onend) u.onend({}); }, 5); },
+  };
+  Object.defineProperty(window, 'speechSynthesis', { value: fake, configurable: true });
+})();
+"""
+
+
+def test_escape_while_speaking_stops_speech_and_stays_in_editor(live_server, page):
+    # Documented contract (editor help, shortcut dialog, report 4a): Escape
+    # while CodeUp is speaking only stops speech; a further Escape leaves.
+    # Two handlers used to run on one press: the capture listener stopped
+    # speech, then Monaco's Escape command saw silence and left the editor.
+    page.add_init_script(_HELD_SPEECH)
+    _open_ide(page, live_server)
+    page.evaluate("() => applySpeechMode('codeup-voice', {silent: true})")
+    _focus_editor(page, "abc")
+    # Browsers only allow speech after a user gesture, and that first gesture
+    # also fires the silent audio primer; do it before CodeUp starts speaking.
+    page.keyboard.press("Shift")
+    page.wait_for_timeout(100)
+    page.evaluate("() => speak('A long sentence that is still being spoken.', {forceFull: true})")
+    page.wait_for_function("() => window.speechSynthesis.speaking === true")
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(200)
+    assert page.evaluate("() => window.__cancels || 0") >= 1
+    assert page.evaluate("() => editor.hasTextFocus()"), "the speech-stopping Escape must not also leave the editor"
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(200)
+    assert _active(page)["id"] == "runBtn"
+
+
+@pytest.mark.parametrize("combo", ["Control+Shift+P", "Control+Shift+p"])
+def test_command_palette_shortcut_is_case_insensitive(live_server, page, combo):
+    # Caps Lock (or a lowercase key from assistive input) delivers "p", which
+    # the handler used to ignore even though the shortcut list documents it.
+    _open_ide(page, live_server)
+    page.locator("#voiceText").focus()
+    page.keyboard.press(combo)
+    page.wait_for_function(
+        "() => { const o = document.getElementById('commandPaletteOverlay'); return !!o && !o.hasAttribute('hidden'); }"
+    )
+
+
 @pytest.mark.parametrize("tab_moves_focus", [False, True])
 def test_ctrl_m_leaves_editor(live_server, page, tab_moves_focus):
     _open_ide(page, live_server, tab_moves_focus=tab_moves_focus)

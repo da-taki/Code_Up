@@ -6127,7 +6127,7 @@ window.addEventListener('DOMContentLoaded', () => {
       const inputDialog = document.getElementById('_cuInputDialog');
       const dialogOpen  = !!(inputDialog && !inputDialog.hidden);
       if (paletteOpen || dialogOpen) return;
-      if (AppState.isSpeaking || (window.speechSynthesis && window.speechSynthesis.speaking) || (_stepNarrationJob && !_stepNarrationJob.cancelled)) {
+      if (codeUpSpeechActive() || (_stepNarrationJob && !_stepNarrationJob.cancelled)) {
         if (_stepNarrationJob) _stepNarrationJob.cancelled = true;
         SpeechManager.cancelAll();
         SonificationManager.clearAll();
@@ -6154,7 +6154,7 @@ window.addEventListener('DOMContentLoaded', () => {
   }
 
   document.addEventListener('keydown', e => {
-    if (e.ctrlKey && e.shiftKey && e.key === 'P') { e.preventDefault(); openCommandPalette(); }
+    if (e.ctrlKey && e.shiftKey && String(e.key || '').toUpperCase() === 'P') { e.preventDefault(); openCommandPalette(); }
   });
 
   // Click outside the container closes the palette
@@ -6235,6 +6235,16 @@ function setTabMovesFocus(on) {
 }
 window.setTabMovesFocus = setTabMovesFocus;
 window.tabMovesFocusEnabled = tabMovesFocusEnabled;
+// True when CodeUp itself is speaking. The page's silent first-gesture audio
+// primer (primeAudio in templates/index.html) also makes
+// speechSynthesis.speaking true for a moment; it must not turn the session's
+// first Escape into "stop speech" instead of "leave the editor".
+function codeUpSpeechActive() {
+  if (AppState.isSpeaking) return true;
+  const synthSpeaking = !!(window.speechSynthesis && window.speechSynthesis.speaking);
+  return synthSpeaking && !(Date.now() < (window._codeupAudioPrimerUntil || 0));
+}
+
 function leaveEditor() {
   const next = document.getElementById('runBtn') || document.getElementById('voiceText') || document.getElementById('output');
   if (next && next.focus) next.focus();
@@ -6308,7 +6318,7 @@ function registerEditorShortcuts() {
   applyTabBehaviorDescription();
 
   editor.addCommand(monaco.KeyCode.Escape, () => {
-    if (AppState.isSpeaking || (window.speechSynthesis && window.speechSynthesis.speaking)) {
+    if (codeUpSpeechActive()) {
       SpeechManager.cancelAll();
       ErrorBeaconManager.stop();
       srAnnounce('Speech stopped');
@@ -6326,7 +6336,13 @@ function registerEditorShortcuts() {
   if (editorDom) {
     editorDom.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
-        if (AppState.isSpeaking || (window.speechSynthesis && window.speechSynthesis.speaking)) {
+        if (codeUpSpeechActive()) {
+          // This press only stops speech. Without stopping it here, Monaco's
+          // own Escape command ran next, found speech already quiet, and left
+          // the editor on the same press (documented: Escape while speaking
+          // stops speech; a further Escape leaves).
+          e.preventDefault();
+          e.stopPropagation();
           SpeechManager.cancelAll();
           ErrorBeaconManager.stop();
           srAnnounce('Speech stopped');

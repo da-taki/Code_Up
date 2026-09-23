@@ -343,13 +343,13 @@ _HELD_SPEECH = """
 """
 
 
-def test_escape_while_speaking_stops_speech_and_stays_in_editor(live_server, page):
-    # Documented contract (editor help, shortcut dialog, report 4a): Escape
-    # while CodeUp is speaking only stops speech; a further Escape leaves.
-    # Two handlers used to run on one press: the capture listener stopped
-    # speech, then Monaco's Escape command saw silence and left the editor.
+@pytest.mark.parametrize("tab_moves_focus", [False, True])
+def test_escape_while_speaking_stops_speech_and_leaves_editor_in_one_press(live_server, page, tab_moves_focus):
+    # XRCVC report 4a (as sent): Escape exits the editor on the first press
+    # the page receives. If CodeUp is speaking, that same press also stops
+    # the speech so no narration keeps running after focus has left.
     page.add_init_script(_HELD_SPEECH)
-    _open_ide(page, live_server)
+    _open_ide(page, live_server, tab_moves_focus=tab_moves_focus)
     page.evaluate("() => applySpeechMode('codeup-voice', {silent: true})")
     _focus_editor(page, "abc")
     # Browsers only allow speech after a user gesture, and that first gesture
@@ -361,10 +361,19 @@ def test_escape_while_speaking_stops_speech_and_stays_in_editor(live_server, pag
     page.keyboard.press("Escape")
     page.wait_for_timeout(200)
     assert page.evaluate("() => window.__cancels || 0") >= 1
-    assert page.evaluate("() => editor.hasTextFocus()"), "the speech-stopping Escape must not also leave the editor"
+    assert page.evaluate("() => window.speechSynthesis.speaking") is False
+    assert _active(page)["id"] == "runBtn"
+    assert page.evaluate("() => editor.getValue()") == "abc"
+
+
+def test_escape_leaves_editor_in_one_press_in_screen_reader_safe_mode(live_server, page):
+    _open_ide(page, live_server)
+    page.evaluate("() => applySpeechMode('sr-safe', {silent: true})")
+    _focus_editor(page, "abc")
     page.keyboard.press("Escape")
     page.wait_for_timeout(200)
     assert _active(page)["id"] == "runBtn"
+    assert page.evaluate("() => editor.getValue()") == "abc"
 
 
 @pytest.mark.parametrize("combo", ["Control+Shift+P", "Control+Shift+p"])

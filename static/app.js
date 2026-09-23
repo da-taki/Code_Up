@@ -6245,6 +6245,18 @@ function codeUpSpeechActive() {
   return synthSpeaking && !(Date.now() < (window._codeupAudioPrimerUntil || 0));
 }
 
+// Escape inside the editor always leaves it in one press. If CodeUp is
+// speaking, that same press also stops the speech, so leaving the editor
+// never leaves narration running that the learner can no longer silence.
+function escapeFromEditor() {
+  if (codeUpSpeechActive()) {
+    SpeechManager.cancelAll();
+    ErrorBeaconManager.stop();
+    SonificationManager.playTone(600, 0.05, 0.06);
+  }
+  leaveEditor();
+}
+
 function leaveEditor() {
   const next = document.getElementById('runBtn') || document.getElementById('voiceText') || document.getElementById('output');
   if (next && next.focus) next.focus();
@@ -6317,16 +6329,7 @@ function registerEditorShortcuts() {
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => { runCode(); });
   applyTabBehaviorDescription();
 
-  editor.addCommand(monaco.KeyCode.Escape, () => {
-    if (codeUpSpeechActive()) {
-      SpeechManager.cancelAll();
-      ErrorBeaconManager.stop();
-      srAnnounce('Speech stopped');
-      SonificationManager.playTone(600, 0.05, 0.06);
-    } else {
-      leaveEditor();
-    }
-  });
+  editor.addCommand(monaco.KeyCode.Escape, () => { escapeFromEditor(); });
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyM, () => { leaveEditor(); });
   // Ctrl+] / Ctrl+[ indent/outdent in both Tab modes - the only indent keys
   // while "Tab Leaves Editor" is on (see tabMovesFocusEnabled above).
@@ -6336,20 +6339,11 @@ function registerEditorShortcuts() {
   if (editorDom) {
     editorDom.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
-        if (codeUpSpeechActive()) {
-          // This press only stops speech. Without stopping it here, Monaco's
-          // own Escape command ran next, found speech already quiet, and left
-          // the editor on the same press (documented: Escape while speaking
-          // stops speech; a further Escape leaves).
-          e.preventDefault();
-          e.stopPropagation();
-          SpeechManager.cancelAll();
-          ErrorBeaconManager.stop();
-          srAnnounce('Speech stopped');
-          SonificationManager.playTone(600, 0.05, 0.06);
-        } else {
-          leaveEditor();
-        }
+        // Handled once here; Monaco's own Escape command and the page-level
+        // Escape handler must not act on the same press a second time.
+        e.preventDefault();
+        e.stopPropagation();
+        escapeFromEditor();
       } else if (e.key === 'Tab' && !e.altKey && !e.ctrlKey && !e.metaKey && tabMovesFocusEnabled()) {
         // Opt-in "Tab Leaves Editor" mode only. Capture phase on the editor's
         // own container, ahead of Monaco's internal textarea handler, so

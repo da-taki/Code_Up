@@ -108,7 +108,7 @@ def test_normal_insert_is_not_treated_as_broken(client):
     d = _vc(client, "insert print hello")
     assert d.get("intentional_error") is not True
     assert d["action"] == "conversational_edit"
-    assert d["ai_action"]["code"] == 'print("hello")'
+    assert d["ai_action"]["code"] == 'print("Hello")'
 
 
 def test_why_quotes_works_outside_tutorial(client):

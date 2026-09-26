@@ -76,6 +76,18 @@ check('gotoModule jumps and validates', () => {
   assert.strictEqual(m.gotoModule('nope'), false);
 });
 
+check('standalone expanded practice topics activate and retain progress', () => {
+  const m = new TutorialModel();
+  assert.strictEqual(m.gotoModule('dictionaries', true), true);
+  assert.strictEqual(m.active, true);
+  assert.strictEqual(m.moduleId, 'dictionaries');
+  assert.strictEqual(m.stage, 'intro');
+  assert.strictEqual(m.nextModuleId(), null, 'expanded practice must not alter the legacy sequence');
+  m.beginActivity();
+  m.markSuccess();
+  assert.deepStrictEqual(m.completed, ['dictionaries']);
+});
+
 check('classifyDecision maps tutorial words', () => {
   const C = TutorialModel.classifyDecision;
   assert.strictEqual(C('continue'), 'continue');

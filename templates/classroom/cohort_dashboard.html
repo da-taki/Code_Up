@@ -4,6 +4,7 @@
 {% block header_nav %}
   <nav aria-label="Cohort actions">
     <a class="cu-button cu-button-secondary" id="helpQueueLink" href="{{ url_for('classroom.help_queue', cohort_id=cohort.id) }}">Help queue ({{ open_help_count }})</a>
+    <a class="cu-button cu-button-secondary" href="#newAssignmentHeading">Create an assignment</a>
     <a class="cu-button cu-button-secondary" href="{{ url_for('classroom.custom_lessons_list', cohort_id=cohort.id) }}">Your lessons</a>
     <a class="cu-button cu-button-secondary" href="{{ url_for('classroom.custom_projects_list', cohort_id=cohort.id) }}">Your projects</a>
     <a class="cu-button cu-button-secondary" href="{{ url_for('classroom.cohort_report', cohort_id=cohort.id) }}">Report</a>
@@ -12,6 +13,201 @@
 {% endblock %}
 {% block content %}
   <p class="cu-crumb"><a href="{{ url_for('classroom.instructor_dashboard') }}">Instructor dashboard</a></p>
+
+  <p class="cu-notice" id="joinCodeNotice">Join code: <span class="cu-join-code">{{ cohort.join_code }}</span> - learners type "join {{ cohort.join_code }}" in CodeUp, or enter it on the join page. This page updates by itself about every 7 seconds; new joins, help requests and submissions are announced.</p>
+
+  {# 1. Help requests: the first thing on the page, never behind a link. #}
+  <section class="cu-panel cu-help-now" aria-labelledby="helpNowHeading">
+    <h2 id="helpNowHeading" tabindex="-1">Needs help now ({{ help_rows|length }})</h2>
+    <div id="helpNowTableWrap" class="cu-table-wrap">
+    {% if help_rows %}
+    <table class="cu-table" id="helpNowTable">
+      <caption class="sr-only">Learners waiting for help, longest waiting first</caption>
+      <thead>
+        <tr>
+          <th scope="col">Learner</th>
+          <th scope="col">Waiting</th>
+          <th scope="col">Assignment</th>
+          <th scope="col">Message</th>
+          <th scope="col">Status</th>
+          <th scope="col">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for hr in help_rows %}
+        <tr data-help-id="{{ hr.id }}">
+          <th scope="row"><a href="{{ hr.detail_url }}">{{ hr.learner_name }}</a></th>
+          <td>{{ hr.waiting_minutes }} min</td>
+          <td>{{ hr.assignment_title or '-' }}</td>
+          <td>{{ hr.message or '(no message)' }}</td>
+          <td><span class="cu-badge">{{ 'Being helped' if hr.status == 'helping' else 'Waiting' }}</span></td>
+          <td>
+            {% if hr.status == 'open' %}
+            <form method="post" action="{{ hr.helping_url }}" class="cu-inline-form">
+              <input type="hidden" name="next" value="dashboard">
+              <button type="submit" class="cu-button cu-button-secondary" aria-label="Start helping {{ hr.learner_name }}">Start helping</button>
+            </form>
+            {% endif %}
+            <form method="post" action="{{ hr.resolve_url }}" class="cu-inline-form">
+              <input type="hidden" name="next" value="dashboard">
+              <button type="submit" class="cu-button cu-button-primary" aria-label="Mark {{ hr.learner_name }}'s request resolved">Resolved</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+      <p>No one is waiting for help.</p>
+    {% endif %}
+    </div>
+  </section>
+
+  {# 2. Learners: live status, current assignment, help and progress. #}
+  <section class="cu-panel" aria-labelledby="learnersHeading">
+    <h2 id="learnersHeading">Learners ({{ learner_rows|length }})</h2>
+    <div id="learnersTableWrap" class="cu-table-wrap">
+    {% if learner_rows %}
+    <table class="cu-table" id="learnersTable">
+      <caption class="sr-only">Learners in this cohort and their progress</caption>
+      <thead>
+        <tr>
+          <th scope="col">Learner</th>
+          <th scope="col">Status</th>
+          <th scope="col">Help</th>
+          <th scope="col">Current assignment</th>
+          <th scope="col">Last active</th>
+          <th scope="col">Course modules</th>
+          <th scope="col">Assignments submitted</th>
+          <th scope="col">Concepts demonstrated</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in learner_rows %}
+        <tr data-learner-id="{{ row.learner.id }}">
+          <td><a href="{{ url_for('classroom.learner_detail', cohort_id=cohort.id, learner_id=row.learner.id) }}">{{ row.learner.display_name }}</a></td>
+          <td><span class="cu-badge">{{ row.live_status }}</span></td>
+          <td>{% if row.live_status == 'requested help' %}Waiting for help{% elif row.live_status == 'instructor helping' %}Being helped{% else %}-{% endif %}</td>
+          <td>{{ row.current_assignment }}</td>
+          <td>{{ row.last_active_label }}</td>
+          <td>{{ row.modules_completed }} / {{ row.modules_total }}</td>
+          <td>{{ row.assignments_submitted }} / {{ row.assignments_total }}</td>
+          <td>{{ row.concepts_demonstrated }} / {{ row.concepts_total }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+      <p>No learners have joined this cohort yet. Share the join code above.</p>
+    {% endif %}
+    </div>
+  </section>
+
+  {# 3. Assignments and who has submitted. #}
+  <section class="cu-panel" aria-labelledby="assignmentsHeading">
+    <h2 id="assignmentsHeading">Assignments</h2>
+    <div id="assignmentsTableWrap" class="cu-table-wrap">
+    {% if assignments %}
+    <table class="cu-table" id="assignmentsTable">
+      <caption class="sr-only">Assignments in this cohort</caption>
+      <thead>
+        <tr>
+          <th scope="col">Title</th>
+          <th scope="col">Status</th>
+          <th scope="col">Submitted</th>
+          <th scope="col">AI assistance</th>
+          <th scope="col">Due date</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for a in assignments %}
+        <tr data-assignment-id="{{ a.id }}">
+          <td><a href="{{ url_for('classroom.assignment_detail', assignment_id=a.id) }}">{{ a.title }}</a></td>
+          <td><span class="cu-badge cu-badge--{{ a.status }}">{{ a.status }}</span></td>
+          <td>{{ submission_counts.get(a.id, 0) }} of {{ learner_rows|length }}</td>
+          <td>{{ preset_label(a.ai_policy) }}</td>
+          <td>{{ a.due_date or '-' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+      <p>No assignments yet. Create one below; it starts as a draft until you publish it.</p>
+    {% endif %}
+    </div>
+  </section>
+
+  {# 4. Create an assignment. #}
+  <section class="cu-panel" aria-labelledby="newAssignmentHeading">
+    <h2 id="newAssignmentHeading" tabindex="-1">Create an assignment</h2>
+    <p>Only the title is required. The assignment is saved as a draft; open it afterwards to publish it, check the AI permissions, or schedule it.</p>
+    <form method="post" action="{{ url_for('classroom.create_assignment', cohort_id=cohort.id) }}" novalidate>
+      <div class="cu-field">
+        <label for="a_title">Title (required)</label>
+        <input type="text" id="a_title" name="title" maxlength="200" required value="{{ assignment_form.title if assignment_form else '' }}"
+               {% if assignment_title_error %}aria-invalid="true" aria-describedby="a_title_error" data-focus-on-error{% endif %}>
+        {% if assignment_title_error %}<p id="a_title_error" class="cu-field-error">{{ assignment_title_error }}</p>{% endif %}
+      </div>
+      <div class="cu-field">
+        <label for="a_instructions">Instructions the learner will hear</label>
+        <textarea id="a_instructions" name="instructions" rows="5">{{ assignment_form.instructions if assignment_form else '' }}</textarea>
+      </div>
+      <div class="cu-field">
+        <label for="a_starter">Starter code (optional, placed in the learner's editor)</label>
+        <textarea id="a_starter" name="starter_code" rows="6">{{ assignment_form.starter_code if assignment_form else '' }}</textarea>
+      </div>
+      <fieldset class="cu-field" id="a_policy_group" aria-describedby="a_policy_help">
+        <legend>AI assistance for this assignment</legend>
+        <p id="a_policy_help">Pick a starting point. After creating, you can switch each permission on or off individually. Accessibility features are never affected.</p>
+        {% set selected_policy = assignment_form.ai_policy if assignment_form else 'FULL' %}
+        {% for policy in recommended_presets %}
+        <div class="cu-choice">
+          <input type="radio" id="a_policy_{{ policy|lower }}" name="ai_policy" value="{{ policy }}" aria-describedby="a_policy_{{ policy|lower }}_desc" {% if policy == selected_policy %}checked{% endif %}>
+          <label for="a_policy_{{ policy|lower }}">{{ preset_info[policy][0] }}</label>
+          <p id="a_policy_{{ policy|lower }}_desc" class="cu-choice-desc">{{ preset_info[policy][1] }}</p>
+        </div>
+        {% endfor %}
+        <details class="cu-disclosure">
+          <summary class="cu-disclosure-summary">More assistance presets</summary>
+          <div class="cu-disclosure-body">
+          {% for policy in ai_policies if policy not in recommended_presets %}
+          <div class="cu-choice">
+            <input type="radio" id="a_policy_{{ policy|lower }}" name="ai_policy" value="{{ policy }}" aria-describedby="a_policy_{{ policy|lower }}_desc" {% if policy == selected_policy %}checked{% endif %}>
+            <label for="a_policy_{{ policy|lower }}">{{ preset_info[policy][0] }}</label>
+            <p id="a_policy_{{ policy|lower }}_desc" class="cu-choice-desc">{{ preset_info[policy][1] }}</p>
+          </div>
+          {% endfor %}
+          </div>
+        </details>
+      </fieldset>
+      <div class="cu-field">
+        <input type="checkbox" id="a_assessment" name="is_assessment" {% if assignment_form and assignment_form.is_assessment %}checked{% endif %}>
+        <label for="a_assessment" style="display:inline;font-weight:normal;">This is an assessment</label>
+      </div>
+      <details class="cu-disclosure">
+        <summary class="cu-disclosure-summary">Schedule and expected concepts (optional)</summary>
+        <div class="cu-disclosure-body">
+          <div class="cu-field">
+            <label for="a_start">Start (optional)</label>
+            <input type="datetime-local" id="a_start" name="start_at" value="{{ assignment_form.start_at if assignment_form else '' }}">
+          </div>
+          <div class="cu-field">
+            <label for="a_due">Due date</label>
+            <input type="date" id="a_due" name="due_date" value="{{ assignment_form.due_date if assignment_form else '' }}">
+          </div>
+          <div class="cu-field">
+            <label for="a_end">End / close (optional)</label>
+            <input type="datetime-local" id="a_end" name="end_at" value="{{ assignment_form.end_at if assignment_form else '' }}">
+          </div>
+          <div class="cu-field">
+            <label for="a_concepts">Expected concepts (comma separated)</label>
+            <input type="text" id="a_concepts" name="expected_concepts" placeholder="dictionaries, variables, print output" value="{{ assignment_form.expected_concepts if assignment_form else '' }}">
+          </div>
+        </div>
+      </details>
+      <button type="submit" class="cu-button cu-button-primary">Create assignment (draft)</button>
+    </form>
+  </section>
 
   <section class="cu-panel" aria-labelledby="impactHeading">
     <h2 id="impactHeading">Cohort at a glance</h2>
@@ -39,124 +235,8 @@
       <button type="submit" class="cu-button cu-button-secondary">Save name</button>
     </form>
   </section>
-
-  <section class="cu-panel" aria-labelledby="learnersHeading">
-    <h2 id="learnersHeading">Learners ({{ learner_rows|length }})</h2>
-    <div id="learnersTableWrap" class="cu-table-wrap">
-    {% if learner_rows %}
-    <table class="cu-table" id="learnersTable">
-      <caption class="sr-only">Learners in this cohort and their progress</caption>
-      <thead>
-        <tr>
-          <th scope="col">Learner</th>
-          <th scope="col">Status</th>
-          <th scope="col">Last active</th>
-          <th scope="col">Course modules</th>
-          <th scope="col">Assignments submitted</th>
-          <th scope="col">Concepts demonstrated</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for row in learner_rows %}
-        <tr data-learner-id="{{ row.learner.id }}">
-          <td><a href="{{ url_for('classroom.learner_detail', cohort_id=cohort.id, learner_id=row.learner.id) }}">{{ row.learner.display_name }}</a></td>
-          <td><span class="cu-badge">{{ row.live_status }}</span></td>
-          <td>{{ row.learner.last_active_at or 'Never' }}</td>
-          <td>{{ row.modules_completed }} / {{ row.modules_total }}</td>
-          <td>{{ row.assignments_submitted }} / {{ row.assignments_total }}</td>
-          <td>{{ row.concepts_demonstrated }} / {{ row.concepts_total }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    {% else %}
-      <p>No learners have joined this cohort yet. Share the join code above.</p>
-    {% endif %}
-    </div>
-  </section>
-
-  <section class="cu-panel" aria-labelledby="newAssignmentHeading">
-    <h2 id="newAssignmentHeading">Create an assignment</h2>
-    <form method="post" action="{{ url_for('classroom.create_assignment', cohort_id=cohort.id) }}" novalidate>
-      <div class="cu-field">
-        <label for="a_title">Title</label>
-        <input type="text" id="a_title" name="title" maxlength="200" required value="{{ assignment_form.title if assignment_form else '' }}"
-               {% if assignment_title_error %}aria-invalid="true" aria-describedby="a_title_error" data-focus-on-error{% endif %}>
-        {% if assignment_title_error %}<p id="a_title_error" class="cu-field-error">{{ assignment_title_error }}</p>{% endif %}
-      </div>
-      <div class="cu-field">
-        <label for="a_instructions">Instructions</label>
-        <textarea id="a_instructions" name="instructions" rows="5">{{ assignment_form.instructions if assignment_form else '' }}</textarea>
-      </div>
-      <div class="cu-field">
-        <label for="a_starter">Starter code</label>
-        <textarea id="a_starter" name="starter_code" rows="6">{{ assignment_form.starter_code if assignment_form else '' }}</textarea>
-      </div>
-      <div class="cu-field">
-        <label for="a_start">Start (optional)</label>
-        <input type="datetime-local" id="a_start" name="start_at" value="{{ assignment_form.start_at if assignment_form else '' }}">
-      </div>
-      <div class="cu-field">
-        <label for="a_due">Due date</label>
-        <input type="date" id="a_due" name="due_date" value="{{ assignment_form.due_date if assignment_form else '' }}">
-      </div>
-      <div class="cu-field">
-        <label for="a_end">End / close (optional)</label>
-        <input type="datetime-local" id="a_end" name="end_at" value="{{ assignment_form.end_at if assignment_form else '' }}">
-      </div>
-      <div class="cu-field">
-        <label for="a_concepts">Expected concepts (comma separated)</label>
-        <input type="text" id="a_concepts" name="expected_concepts" placeholder="dictionaries, variables, print output" value="{{ assignment_form.expected_concepts if assignment_form else '' }}">
-      </div>
-      <div class="cu-field">
-        <label for="a_policy">AI policy preset (you can fine-tune individual permissions after creating)</label>
-        <select id="a_policy" name="ai_policy">
-          {% set selected_policy = assignment_form.ai_policy if assignment_form else 'FULL' %}
-          {% for policy in ai_policies %}
-          <option value="{{ policy }}" {% if policy == selected_policy %}selected{% endif %}>{{ policy }}</option>
-          {% endfor %}
-        </select>
-      </div>
-      <div class="cu-field">
-        <input type="checkbox" id="a_assessment" name="is_assessment" {% if assignment_form and assignment_form.is_assessment %}checked{% endif %}>
-        <label for="a_assessment" style="display:inline;font-weight:normal;">This is an assessment</label>
-      </div>
-      <button type="submit" class="cu-button cu-button-primary">Create assignment (draft)</button>
-    </form>
-  </section>
-
-  <section class="cu-panel" aria-labelledby="assignmentsHeading">
-    <h2 id="assignmentsHeading">Assignments</h2>
-    <div id="assignmentsTableWrap" class="cu-table-wrap">
-    {% if assignments %}
-    <table class="cu-table" id="assignmentsTable">
-      <caption class="sr-only">Assignments in this cohort</caption>
-      <thead>
-        <tr>
-          <th scope="col">Title</th>
-          <th scope="col">Status</th>
-          <th scope="col">AI policy</th>
-          <th scope="col">Due date</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for a in assignments %}
-        <tr data-assignment-id="{{ a.id }}">
-          <td><a href="{{ url_for('classroom.assignment_detail', assignment_id=a.id) }}">{{ a.title }}</a></td>
-          <td><span class="cu-badge cu-badge--{{ a.status }}">{{ a.status }}</span></td>
-          <td>{{ a.ai_policy }}</td>
-          <td>{{ a.due_date or '-' }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    {% else %}
-      <p>No assignments yet.</p>
-    {% endif %}
-    </div>
-  </section>
 {% endblock %}
 {% block scripts %}
-  <script src="/static/instructor-sync.js" data-cohort-id="{{ cohort.id }}"></script>
+  <script src="/static/instructor-sync.js" data-cohort-id="{{ cohort.id }}" data-last-event-id="{{ last_event_id }}"></script>
   <script src="/static/form-error-focus.js"></script>
 {% endblock %}

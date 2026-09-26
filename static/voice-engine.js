@@ -225,6 +225,7 @@ const VoiceEngine = (function () {
 
     const chunks = _semanticSpeechChunks(sanitizeSpeechText(text));
     if (!chunks.length) return Promise.resolve();
+    _noteSpoken(chunks.join(' '));
 
     return new Promise(resolve => {
       let remaining = chunks.length;
@@ -233,6 +234,59 @@ const VoiceEngine = (function () {
         _narrationQueue.push({ text: chunk, lang: opts.lang || detectLanguage(chunk), resolve: done, ...opts });
       });
       _dequeueNarration();
+    });
+  }
+
+  // ─── SELF-ECHO GUARD ────────────────────────────────────────────────────────
+  // Recognition keeps listening while CodeUp talks (so the learner can barge
+  // in). On speakers, the microphone can hear CodeUp's own voice ("...say run
+  // to see the output") and the transcript would be executed as a command.
+  // A transcript that is just a fragment of what CodeUp said in the last few
+  // seconds is dropped; explicit barge-in words always get through.
+  const ECHO_WINDOW_MS = 8000;
+  // Short voice-control commands. They are always accepted as barge-in,
+  // EXCEPT while CodeUp itself is saying those exact words (help text such as
+  // "say stop listening to turn voice off"): the microphone hearing that must
+  // not silence CodeUp or switch voice off.
+  const _CONTROL_PHRASES = new Set(['stop', 'stop it', 'cancel', 'quiet', 'be quiet', 'stop talking',
+    'stop speaking', 'silence', 'shut up', 'pause', 'pause voice', 'stop listening', 'turn voice off',
+    'turn off voice', 'voice off', 'disable microphone', 'mute microphone', 'stop everything',
+    'ruko', 'bas', 'chup', 'रुको', 'बस', 'चुप']);
+  let _spokenLog = [];
+
+  function _echoNorm(text) {
+    return String(text || '').toLowerCase().replace(/[^a-z0-9ऀ-ॿ\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+
+  function _noteSpoken(text) {
+    const now = Date.now();
+    const norm = _echoNorm(text);
+    if (!norm) return;
+    _spokenLog = _spokenLog.filter(e => now < e.until);
+    // An echo can only arrive while the words are being spoken: roughly
+    // 15 characters a second, plus a short tail for recognition latency.
+    const speakingMs = Math.min(ECHO_WINDOW_MS, (norm.length / 15) * 1000);
+    _spokenLog.push({ text: norm, ts: now, until: now + speakingMs + 1500 });
+  }
+
+  function isLikelyEcho(transcript) {
+    const heard = _echoNorm(transcript);
+    if (!heard) return false;
+    const now = Date.now();
+    const recent = _spokenLog.filter(e => now < e.until);
+    if (!recent.length) return false;
+    if (_CONTROL_PHRASES.has(heard)) {
+      return recent.some(e => (' ' + e.text + ' ').includes(' ' + heard + ' '));
+    }
+    const words = heard.split(' ');
+    // A learner repeating a suggested command ("check my work", "run it")
+    // is a real command: only longer fragments of CodeUp's sentence count.
+    if (words.length < 4) return false;
+    return recent.some(e => {
+      if (e.text.includes(heard)) return true;
+      const spoken = new Set(e.text.split(' '));
+      const overlap = words.filter(w => spoken.has(w)).length / words.length;
+      return overlap >= 0.8;
     });
   }
 
@@ -587,20 +641,81 @@ const VoiceEngine = (function () {
   })();
 
   const VoiceInput = (function () {
+    // One source of truth for microphone recognition. Invariants:
+    //   * at most ONE live SpeechRecognition instance - every new instance
+    //     first detaches and aborts the previous one, and every event handler
+    //     ignores events from an instance that is no longer current;
+    //   * _enabledByUser means "the learner wants voice on"; it only becomes
+    //     false through an explicit stop()/pause() or a user-initiated start
+    //     that the browser refused (permission denied);
+    //   * automatic restarts never run in a hidden tab - they wait for the tab
+    //     to become visible again (switching to the instructor window, another
+    //     app, or another tab must not permanently turn voice off);
+    //   * "voice on" is remembered for this browser tab (sessionStorage), so a
+    //     same-tab navigation (opening an assignment, lesson or project reloads
+    //     the IDE) can resume listening instead of silently dropping it.
     let _recognition = null;
     let _active = false;
+    let _starting = false;
     let _paused = false;
     let _enabledByUser = false;
     let _restartTimer = null;
     let _watchdogTimer = null;
     let _lastActivity = Date.now();
     let _userInitiated = false;
+    let _resuming = false;
     let _restartAttempts = 0;
-    const MAX_RESTARTS = 5;
+    let _lastStartAt = 0;
+    let _waitingForVisible = false;
+    const _statusListeners = [];
+    const MAX_RAPID_RESTARTS = 6;
+    const WANT_KEY = 'codeupVoiceWanted';
 
     function isActive() { return _active; }
     function isPaused() { return _paused; }
     function isEnabledByUser() { return _enabledByUser; }
+
+    function _hidden() { return typeof document !== 'undefined' && !!document.hidden; }
+
+    function _setWanted(on) {
+      try {
+        if (on) sessionStorage.setItem(WANT_KEY, '1');
+        else sessionStorage.removeItem(WANT_KEY);
+      } catch (e) {}
+    }
+
+    function wasWanted() {
+      try { return sessionStorage.getItem(WANT_KEY) === '1'; } catch (e) { return false; }
+    }
+
+    function onStatusChange(fn) { if (typeof fn === 'function') _statusListeners.push(fn); }
+
+    function _emit(status, detail) {
+      _debug('Voice status:', status, detail || '');
+      _statusListeners.forEach(fn => { try { fn(status, detail || {}); } catch (e) {} });
+    }
+
+    function _detach(rec) {
+      if (!rec) return;
+      rec.onstart = null;
+      rec.onresult = null;
+      rec.onerror = null;
+      rec.onend = null;
+    }
+
+    function _giveUp(reason) {
+      _enabledByUser = false;
+      _active = false;
+      _starting = false;
+      _paused = false;
+      _waitingForVisible = false;
+      _setWanted(false);
+      _stopWatchdog();
+      if (_restartTimer) { clearTimeout(_restartTimer); _restartTimer = null; }
+      setState(States.IDLE);
+      _updateVoiceButton(false, false);
+      _emit(reason);
+    }
 
     function start(userInitiated = true) {
       const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -610,43 +725,53 @@ const VoiceEngine = (function () {
       }
       if (userInitiated) {
         _enabledByUser = true;
+        _setWanted(true);
+        _restartAttempts = 0;
       } else if (!_enabledByUser) {
         return false;
       }
-      if (_active) return true;
+      if (_active || _starting) return true;
 
-      _recognition = new SR();
+      if (_recognition) {
+        // Never leave a second recognizer alive: detach first so its late
+        // onend cannot restart anything, then abort it.
+        const old = _recognition;
+        _detach(old);
+        try { old.abort(); } catch (e) {}
+      }
+      const rec = new SR();
+      _recognition = rec;
       _recognition.continuous = true;
       _recognition.interimResults = true;
-
-      const lang = Config.language === 'auto' ? 'en'
-                 : Config.language === 'hi' ? 'hi'
-                 : 'en';
-      _recognition.lang = lang === 'hi' ? 'hi-IN' : 'en-US';
-
+      const lang = Config.language === 'hi' ? 'hi' : 'en';
+      rec.lang = lang === 'hi' ? 'hi-IN' : 'en-US';
       _userInitiated = userInitiated;
 
-      _recognition.onstart = () => {
+      rec.onstart = () => {
+        if (rec !== _recognition) return;
         if (!_enabledByUser) {
-          try { _recognition.stop(); } catch (e) {}
+          try { rec.stop(); } catch (e) {}
           _active = false;
+          _starting = false;
           _paused = false;
           _stopWatchdog();
           _updateVoiceButton(false, false);
           return;
         }
         _active = true;
-        _restartAttempts = 0;
+        _starting = false;
+        _waitingForVisible = false;
         _lastActivity = Date.now();
         _startWatchdog();
-        if (!_paused) {
-          setState(States.LISTENING);
-        }
+        if (!_paused) setState(States.LISTENING);
         _updateVoiceButton(true, _paused);
+        const wasResume = _resuming;
+        _resuming = false;
+        _emit('listening', { userInitiated: _userInitiated, resumed: wasResume });
       };
 
-      _recognition.onresult = (event) => {
-        if (!_enabledByUser) return;
+      rec.onresult = (event) => {
+        if (rec !== _recognition || !_enabledByUser) return;
         let finalTranscript = '';
         let interimTranscript = '';
         for (let i = event.resultIndex; i < event.results.length; i++) {
@@ -659,97 +784,133 @@ const VoiceEngine = (function () {
         }
         const transcript = finalTranscript.trim();
         if (!transcript) return;
+        _lastActivity = Date.now();
+        _restartAttempts = 0;
+        if (isLikelyEcho(transcript)) {
+          _debug('Ignored CodeUp speech echo:', transcript);
+          return;
+        }
         if (typeof window !== 'undefined' && window.updateTranscriptStatus) {
           window.updateTranscriptStatus({ heard: transcript, nextAction: 'Interpreting voice command.' });
         }
-        _lastActivity = Date.now();
         _debug('Heard:', transcript);
 
         if (_paused) {
           const lower = transcript.toLowerCase().trim();
           const resumeWords = new Set(['resume', 'resume voice', 'start listening', 'wake up', 'unmute', 'फिर से सुनो', 'जागो']);
-          if (resumeWords.has(lower)) {
-            unpause();
-          }
+          if (resumeWords.has(lower)) unpause();
           return;
         }
 
         _handleInput(transcript);
       };
 
-      _recognition.onerror = (event) => {
-        _debug('Recognition error:', event.error);
-        if (event.error === 'no-speech') return;
-        if (event.error === 'aborted') {
+      rec.onerror = (event) => {
+        if (rec !== _recognition) return;
+        const error = event && event.error;
+        _debug('Recognition error:', error);
+        if (error === 'no-speech') return;
+        if (error === 'not-allowed' || error === 'service-not-allowed' || error === 'audio-capture') {
           _active = false;
-          if (!_enabledByUser) {
-            _paused = false;
-            _stopWatchdog();
-            _updateVoiceButton(false, false);
+          _starting = false;
+          if (_hidden()) {
+            // Background tabs may not open the microphone: wait for the
+            // learner to come back instead of turning voice off for good.
+            _waitingForVisible = true;
+            _emit('suspended', { error });
+            return;
+          }
+          if (_userInitiated) {
+            _giveUp('blocked');
+          } else if (_resuming) {
+            _resuming = false;
+            _giveUp('resume_failed');
+          } else {
+            // An automatic restart was refused while the page was visible;
+            // back off and try again (bounded by MAX_RAPID_RESTARTS).
+            _emit('retrying', { error });
           }
           return;
         }
-        if (event.error === 'audio-capture' || event.error === 'not-allowed') {
-          _active = false;
-          _enabledByUser = false;
-          setState(States.IDLE);
-          _updateVoiceButton(false, false);
-        }
+        // 'aborted' (another tab or app took the microphone, or our own
+        // abort), 'network', ... are transient: onend follows and restarts.
+        _active = false;
       };
 
-      _recognition.onend = () => {
+      rec.onend = () => {
+        if (rec !== _recognition) return;
         _debug('Recognition session ended');
-        if (!_active || !_enabledByUser) return;
-        _restartAttempts++;
-        if (_restartAttempts > MAX_RESTARTS) {
-          _restartAttempts = 0;
-        }
-        if (_restartTimer) { clearTimeout(_restartTimer); _restartTimer = null; }
-        _restartTimer = setTimeout(() => {
-          _restartTimer = null;
-          if (_active && _enabledByUser) {
-            try {
-              _recognition.start();
-              _lastActivity = Date.now();
-            } catch (e) {
-              setTimeout(() => {
-                try { if (_active && _enabledByUser) _recognition.start(); } catch (e2) {
-                  _debug('Restart failed permanently');
-                  _active = false;
-                  _enabledByUser = false;
-                  setState(States.IDLE);
-                  _updateVoiceButton(false, false);
-                }
-              }, 1000);
-            }
-          }
-        }, 400);
+        _active = false;
+        _starting = false;
+        if (!_enabledByUser) return;
+        _scheduleRestart();
       };
 
       try {
-        _recognition.start();
+        _starting = true;
+        _lastStartAt = Date.now();
+        rec.start();
         return true;
       } catch (e) {
         _debug('Failed to start recognition:', e);
+        _starting = false;
         _active = false;
+        if (!userInitiated) _scheduleRestart();
         return false;
       }
+    }
+
+    function _scheduleRestart() {
+      if (!_enabledByUser) return;
+      if (_restartTimer) { clearTimeout(_restartTimer); _restartTimer = null; }
+      if (_hidden()) {
+        _waitingForVisible = true;
+        return;
+      }
+      const sessionMs = _lastStartAt ? Date.now() - _lastStartAt : 0;
+      if (sessionMs > 0 && sessionMs < 1500) _restartAttempts++;
+      else _restartAttempts = 0;
+      if (_restartAttempts > MAX_RAPID_RESTARTS) {
+        _restartAttempts = 0;
+        _giveUp('failed');
+        return;
+      }
+      const delay = Math.min(4000, 300 * Math.pow(2, _restartAttempts));
+      _restartTimer = setTimeout(() => {
+        _restartTimer = null;
+        if (_enabledByUser && !_active && !_starting && !_hidden()) start(false);
+        else if (_enabledByUser && _hidden()) _waitingForVisible = true;
+      }, delay);
+    }
+
+    function resumeIfWanted() {
+      // Called once when the IDE loads: the learner had voice on in this tab
+      // before a same-tab navigation. Not a new user gesture, so a refusal is
+      // reported (resume_failed) instead of repeated.
+      if (_enabledByUser || !wasWanted()) return false;
+      _enabledByUser = true;
+      _resuming = true;
+      const ok = start(false);
+      if (!ok) { _resuming = false; _giveUp('resume_failed'); }
+      return ok;
     }
 
     function stop() {
       _enabledByUser = false;
       _active = false;
+      _starting = false;
       _paused = false;
+      _resuming = false;
+      _waitingForVisible = false;
+      _setWanted(false);
       _stopWatchdog();
       if (_restartTimer) { clearTimeout(_restartTimer); _restartTimer = null; }
-      if (!_recognition) {
-        setState(States.IDLE);
-        _updateVoiceButton(false, false);
-        return;
+      if (_recognition) {
+        try { _recognition.stop(); } catch (e) {}
       }
-      try { _recognition.stop(); } catch (e) {}
       setState(States.IDLE);
       _updateVoiceButton(false, false);
+      _emit('stopped');
     }
 
     function pause() {
@@ -767,22 +928,29 @@ const VoiceEngine = (function () {
       if (_state !== States.PROCESSING && _state !== States.RESPONDING && _state !== States.SPEAKING) {
         setState(States.LISTENING);
       }
-      try {
-        _recognition.stop();
-        _lastActivity = Date.now();
-      } catch (e) {
-        try { _recognition.start(); } catch (e2) {}
-      }
     }
 
     function setLanguage(lang) {
-      if (_recognition && _active && _enabledByUser) {
+      if (_recognition && _enabledByUser) {
         _recognition.lang = lang === 'hi' ? 'hi-IN' : 'en-US';
-        try {
-          _recognition.stop(); // onend will restart
-          _lastActivity = Date.now();
-        } catch (e) {}
+        if (_active) {
+          try {
+            _recognition.stop(); // onend restarts with the new language
+            _lastActivity = Date.now();
+          } catch (e) {}
+        }
       }
+    }
+
+    if (typeof document !== 'undefined' && document.addEventListener) {
+      document.addEventListener('visibilitychange', () => {
+        if (!_hidden() && _enabledByUser && !_active && !_starting) {
+          _waitingForVisible = false;
+          _restartAttempts = 0;
+          _lastStartAt = 0;
+          _scheduleRestart();
+        }
+      });
     }
 
     function _startWatchdog() {
@@ -793,9 +961,7 @@ const VoiceEngine = (function () {
         if (idle > 45000) {
           _debug('Watchdog: kicking recognition');
           _lastActivity = Date.now();
-          try { _recognition.stop(); } catch (e) {
-            try { if (_enabledByUser) _recognition.start(); } catch (e2) {}
-          }
+          try { _recognition.stop(); } catch (e) { _scheduleRestart(); }
         }
       }, 15000);
     }
@@ -824,7 +990,13 @@ const VoiceEngine = (function () {
       }
     }
 
-    return { isActive, isPaused, isEnabledByUser, start, stop, pause, unpause, setLanguage };
+    function _debugState() {
+      return { active: _active, starting: _starting, enabledByUser: _enabledByUser, paused: _paused,
+               waitingForVisible: _waitingForVisible, restartAttempts: _restartAttempts, wanted: wasWanted() };
+    }
+
+    return { isActive, isPaused, isEnabledByUser, start, stop, pause, unpause, setLanguage,
+             resumeIfWanted, wasWanted, onStatusChange, _debugState };
   })();
 
   // ─── INPUT HANDLING (voice → action pipeline) ───────────────────────────────
@@ -1088,6 +1260,8 @@ const VoiceEngine = (function () {
 
     _acquireRequestLock,
     _releaseRequestLock,
+    isLikelyEcho,
+    noteSpoken: _noteSpoken,
   };
 })();
 

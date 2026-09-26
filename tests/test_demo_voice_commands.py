@@ -44,9 +44,9 @@ class TestStepNarrationSelfEchoGuard:
     def test_non_stop_input_is_ignored_during_narration(self, handle_voice_src):
         src = handle_voice_src
         block = src[src.index("_stepNarrationJob"):src.index("BARGE-IN")]
-        assert "stopWords" in block
+        assert "controlWords.has(t)" in block
         assert "_stepNarrationJob.cancelled = true" in block
-        assert "return;" in block
+        assert "} else {\n      return;\n    }" in block
 
     def test_speech_path_is_shared_voice_engine(self):
         path = os.path.join(os.path.dirname(__file__), "..", "static", "app.js")

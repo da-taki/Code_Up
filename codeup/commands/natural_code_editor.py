@@ -161,6 +161,12 @@ def is_vague_edit_instruction(text: str) -> bool:
     return bool(_VAGUE_EDIT_RE.match(_norm(text)))
 
 
+_ASKS_FOR_CODE_RE = re.compile(
+    r"\b(?:share|paste|provide|send|upload|give\s+me|show\s+me)\b[^.?!\n]{0,40}\b(?:code|program|script)\b",
+    re.IGNORECASE,
+)
+
+
 def planner_messages(
     *,
     current_code: str,
@@ -183,7 +189,9 @@ def planner_messages(
         "Do not return markdown. Return JSON only. If the edit is unclear, return ask_clarification. "
         "If the request is unsafe, return refuse_unsafe. For single-file code, return the full "
         "updated code in updated_code. Do not return patches only unless the app already has a "
-        "safe patch applier."
+        "safe patch applier. The learner's current editor code is always included below (it may be "
+        "empty): never ask them to share, paste or send it. Use ask_clarification only when the "
+        "requested change itself is unclear."
     )
     files = project_files or {}
     file_summary = ", ".join(sorted(files)[:20]) if files else "(single editor file)"
@@ -278,7 +286,10 @@ def _code_safety_error(code: str, *, transcript: str = "") -> str:
         if isinstance(node, ast.While):
             constant_true = isinstance(node.test, ast.Constant) and node.test.value is True
             name_true = isinstance(node.test, ast.Name) and node.test.id in {"True", "true"}
-            if (constant_true or name_true) and not any(isinstance(child, ast.Break) for child in ast.walk(node)):
+            # break or return both leave the loop: "while True: try: return
+            # int(input(...))" is the standard input-validation idiom.
+            if (constant_true or name_true) and not any(isinstance(child, (ast.Break, ast.Return))
+                                                        for child in ast.walk(node)):
                 return "obvious_infinite_loop"
     return ""
 
@@ -316,6 +327,9 @@ def validate_plan(plan: Any, *, current_code: str = "", transcript: str = "") ->
     if action in {"ask_clarification", "refuse_unsafe"}:
         if action == "ask_clarification" and not clarification and not summary:
             return False, "missing_clarification", {}
+        if action == "ask_clarification" and _ASKS_FOR_CODE_RE.search(clarification or summary):
+            # The code was supplied; "please share your code" is never a real question.
+            return False, "asked_for_supplied_code", {}
         return True, "", normalized
 
     if action == "replace_current_code":

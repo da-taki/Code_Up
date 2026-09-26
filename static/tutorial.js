@@ -84,8 +84,8 @@
     return this.moduleId;
   };
 
-  TutorialModel.prototype.gotoModule = function (id) {
-    if (this.order.indexOf(id) === -1) return false;
+  TutorialModel.prototype.gotoModule = function (id, allowPracticeTopic) {
+    if (this.order.indexOf(id) === -1 && !allowPracticeTopic) return false;
     this.active = true;
     this.moduleId = id;
     this.stage = 'intro';
@@ -456,7 +456,7 @@
 
     _module: function () {
       if (!this.content) return null;
-      return this.content.modules[this.model.moduleId] || null;
+      return this._lookup(this.model.moduleId);
     },
 
     _steps: function () {
@@ -465,6 +465,18 @@
     _currentStep: function () {
       var steps = this._steps();
       return (this._stepIndex >= 0 && this._stepIndex < steps.length) ? steps[this._stepIndex] : null;
+    },
+
+    // Core onboarding modules keep their fixed five-step order; the wider
+    // beginner curriculum (practice_modules) is reachable by name - "practise
+    // dictionaries" - without changing that sequence.
+    _lookup: function (moduleId) {
+      if (!this.content || !moduleId) return null;
+      return this.content.modules[moduleId] || (this.content.practice_modules || {})[moduleId] || null;
+    },
+
+    _isCoreModule: function (moduleId) {
+      return !!(this.content && this.content.order && this.content.order.indexOf(moduleId) !== -1);
     },
 
     _ensureContent: function () {
@@ -535,18 +547,22 @@
     practice: function (moduleId) {
       var self = this;
       this._ensureContent().then(function () {
-        if (!self.content || !self.content.modules[moduleId]) {
-          _speak('I could not find that topic. The topics are: print, variables, if statements, for loops, and while loops.');
+        if (!self._lookup(moduleId)) {
+          _speak('I could not find that topic. Say list tutorial topics to hear every topic.');
           return;
         }
         _cancelSpeech();
-        self.model.gotoModule(moduleId);
+        // The model order intentionally remains the legacy five-topic guided
+        // sequence. Expanded modules are standalone practice topics, so the
+        // controller validates them through _lookup() and explicitly allows
+        // activation without adding them to automatic next-topic navigation.
+        self.model.gotoModule(moduleId, true);
         self._hintIndex = 0;
         self._showPanel();
         self.render();
         // Deduplication: see the matching comment in open() - _speak()
         // already covers this announcement in both speech modes.
-        _speak('Okay. Let us practise ' + self.content.modules[moduleId].title + '.');
+        _speak('Okay. Let us practise ' + self._lookup(moduleId).title + '.');
         self._enterModuleIntro(moduleId, { skipModelReset: true });
       });
     },
@@ -584,7 +600,9 @@
       if (!m) return;
       this.render();
       this._setStatus('Learning: ' + m.title);
-      _speak('Topic ' + this.model.moduleNumber() + ' of ' + this.content.count + '. ' + m.title + '. ' + m.concept);
+      _speak((this._isCoreModule(this.model.moduleId)
+        ? 'Topic ' + this.model.moduleNumber() + ' of ' + this.content.count + '. '
+        : 'Practice topic. ') + m.title + '. ' + m.concept);
       _speak(m.example_spoken);
       this._enterActivity();
     },
@@ -684,7 +702,7 @@
     },
 
     _localValidate: function (moduleId, code, ranOk) {
-      var m = (this.content && this.content.modules[moduleId]) || {};
+      var m = this._lookup(moduleId) || {};
       var c = String(code || '');
       var ok = false;
       if (moduleId === 'print') ok = /\bprint\s*\(\s*[^)\s]/.test(c);
@@ -707,17 +725,24 @@
       var m = this._module();
       _speak(successText || (m && m.success) || 'Well done.');
       var nextId = this.model.nextModuleId();
+      var isPracticeTopic = !this._isCoreModule(this.model.moduleId);
       var prompt;
       if (nextId) {
-        var nextTitle = this.content.modules[nextId].title;
+        var nextTitle = this._lookup(nextId).title;
         prompt = 'What would you like to do next? Say continue, to go on to ' + nextTitle + '. Say practise again, to repeat this topic. Say recap, to hear a summary. Or say exit tutorial, to stop and start coding.';
+      } else if (isPracticeTopic) {
+        // A standalone practice topic has no "next" in the five-step sequence,
+        // but it is not the end of the curriculum either.
+        prompt = 'Practice topic complete. Say practise again to repeat it, recap to hear a summary, practise and another topic name to try a new topic, or exit tutorial to start coding.';
       } else {
         prompt = 'That was the final topic. Congratulations. Say practise again to repeat it, recap to hear a summary, or exit tutorial to start coding on your own.';
       }
       this._lastInstruction = prompt;
       this.render();
       _speak(prompt);
-      this._setStatus(nextId ? 'Choose: continue, practise again, recap, or exit.' : 'All topics complete. Choose: practise again, recap, or exit.', { announce: false });
+      this._setStatus(nextId ? 'Choose: continue, practise again, recap, or exit.'
+        : isPracticeTopic ? 'Practice topic complete. Choose: practise again, recap, another topic, or exit.'
+        : 'All topics complete. Choose: practise again, recap, or exit.', { announce: false });
       // Move keyboard focus to the most likely next action.
       var focusBtn = document.getElementById(nextId ? 'tutorialContinueBtn' : 'tutorialStopBtn');
       if (focusBtn) { try { focusBtn.focus(); } catch (e) {} }
@@ -924,7 +949,9 @@
       if (!m) return;
       this._setText(document.getElementById('tutorialTopic'), m.title);
       this._setText(document.getElementById('tutorialProgress'),
-        'Topic ' + this.model.moduleNumber() + ' of ' + this.content.count);
+        this._isCoreModule(this.model.moduleId)
+          ? 'Topic ' + this.model.moduleNumber() + ' of ' + this.content.count
+          : 'Practice topic');
       var stageText = '';
       if (this.model.stage === 'intro') stageText = m.concept;
       else if (this.model.stage === 'activity') stageText = this._lastInstruction || (this._currentStep() && this._currentStep().prompt) || m.task;
@@ -960,6 +987,33 @@
       on('tutorialAgainBtn', function () { self._practiceAgain(); });
       on('tutorialRecapBtn', function () { self._recap(); });
       on('tutorialStopBtn', function () { self.exit(true); });
+
+      // "All practice topics": filled once, on first open, from the same
+      // /tutorial/modules response (core five + the wider curriculum).
+      var topicsDetails = document.getElementById('tutorialTopicsDetails');
+      if (topicsDetails) {
+        topicsDetails.addEventListener('toggle', function () {
+          if (!topicsDetails.open) return;
+          var list = document.getElementById('tutorialTopicsList');
+          if (!list || list.childElementCount) return;
+          self._ensureContent().then(function () {
+            var order = (self.content && self.content.practice_order) || (self.content && self.content.order) || [];
+            order.forEach(function (moduleId) {
+              var mod = self._lookup(moduleId);
+              if (!mod) return;
+              var li = document.createElement('li');
+              var btn = document.createElement('button');
+              btn.type = 'button';
+              btn.className = 'cu-button cu-button-secondary';
+              btn.textContent = mod.title;
+              btn.setAttribute('aria-label', 'Practise ' + mod.title);
+              btn.addEventListener('click', function () { self.practice(moduleId); });
+              li.appendChild(btn);
+              list.appendChild(li);
+            });
+          });
+        });
+      }
 
       window._tutorialOnRunSuccess = function () { self.onRunResult(true); };
       window._tutorialOnRunError = function () { self.onRunResult(false); };

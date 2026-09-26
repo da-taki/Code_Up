@@ -176,8 +176,9 @@ def test_empty_assignment_title_shows_accessible_error_and_preserves_other_field
     starter = tree.xpath('//*[@id="a_starter"]')[0].text_content()
     assert "marks = {}" in starter
     assert tree.xpath('//*[@id="a_concepts"]')[0].get("value") == "dictionaries, loops"
-    selected_option = tree.xpath('//*[@id="a_policy"]/option[@selected]')
-    assert selected_option and selected_option[0].get("value") == "HINTS_ONLY"
+    # The preset is now a labelled radio group (each with a description).
+    checked = tree.xpath('//input[@name="ai_policy"][@checked]')
+    assert len(checked) == 1 and checked[0].get("value") == "HINTS_ONLY"
     assert tree.xpath('//*[@id="a_assessment"]')[0].get("checked") is not None
 
 

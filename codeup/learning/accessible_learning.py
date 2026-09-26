@@ -261,7 +261,7 @@ ERROR_CHALLENGES = [
 
 SHORTCUTS = (
     "Alt Shift R: run. Alt Shift H: command help. Alt Shift E: read errors. "
-    "Alt Shift M: code map. Alt Shift T: run with step narration. Alt Shift S: stop. "
+    "Alt Shift M: code map. Alt Shift T: run with step narration. Alt Shift S: stop speech. "
     "Alt Shift A: toggle screen reader mode. Alt Shift K: shortcut help. "
     "Alt Shift N: toggle navigation mode."
 )
@@ -1130,6 +1130,12 @@ def route_command(
         candidates: List[Tuple[int, str]] = []
         tree = _tree(code)
         if kind == "error":
+            diagnostics = mem.get("diagnostics") if isinstance(mem.get("diagnostics"), list) else []
+            if diagnostics:
+                # Known diagnostics are navigated by ONE handler in app.py
+                # (diagnostic_navigation): same cursor, same wording, same
+                # first/last cues as "first error", "read all errors", etc.
+                return None
             nums = re.findall(
                 r"line (\d+)", error or str(mem.get("last_run_error") or ""), re.I
             )

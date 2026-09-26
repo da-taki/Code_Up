@@ -216,3 +216,24 @@ table.cu-table th { background: var(--bg-soft); }
 .cu-classroom-leave {
   margin-bottom: var(--gap-md);
 }
+
+/* Instructor command center: help requests come first and stand out by
+   border weight and heading, not by colour alone (colour-vision modes). */
+.cu-help-now {
+  border: 3px solid var(--accent);
+}
+
+.cu-choice {
+  margin-bottom: var(--gap-sm);
+}
+
+.cu-choice > label {
+  display: inline;
+  font-weight: 600;
+}
+
+.cu-choice-desc {
+  margin: 2px 0 0 1.75rem;
+  color: var(--text-muted, inherit);
+  font-size: 0.95em;
+}

@@ -109,7 +109,7 @@ class TestCountingLoopGeneration:
         d = _vc(client, "insert a for loop that prints hello 3 times")
         code = (d.get("ai_action") or {}).get("code", "")
         if code:
-            assert "hello" in code
+            assert "Hello" in code  # sentence-case text (display_text)
 
 
 class TestTeachCode:

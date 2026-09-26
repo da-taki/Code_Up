@@ -85,11 +85,58 @@ def defined_names(code: str) -> Set[str]:
     return names
 
 
+_SPOKEN_OPERATORS = {"plus": "+", "minus": "-", "times": "*", "multiplied by": "*", "divided by": "/"}
+_SPOKEN_OPERATOR_RE = re.compile(r"\s+(plus|minus|times|multiplied\s+by|divided\s+by)\s+", re.IGNORECASE)
+
+
+def _spoken_expression(raw: str, names: Set[str]) -> Optional[str]:
+    """"score plus ten" -> "score + 10", only when every operand is a number
+    or a name the program already defines, and at least one is such a name."""
+    parts = _SPOKEN_OPERATOR_RE.split(raw)
+    if len(parts) < 3:
+        return None
+    tokens, used_name = [], False
+    for index, part in enumerate(parts):
+        if index % 2:
+            tokens.append(_SPOKEN_OPERATORS[" ".join(part.lower().split())])
+            continue
+        operand = part.strip()
+        number = _to_number(operand)
+        if number is not None:
+            tokens.append(str(number))
+        elif re.fullmatch(r"[A-Za-z_]\w*", operand) and operand in names:
+            tokens.append(operand)
+            used_name = True
+        else:
+            return None
+    return " ".join(tokens) if used_name else None
+
+
+def display_text(text: str) -> str:
+    """Spoken words shown by print(): sentence case, CodeUp spelled properly."""
+    value = " ".join(str(text or "").strip().strip(".").split())
+    if not value:
+        return "Hello"
+    value = re.sub(r"\bcode\s?up\b", "CodeUp", value, flags=re.IGNORECASE)
+    return value[0].upper() + value[1:]
+
+
 def print_argument_python(content: str, code: str = "", said_variable: bool = False) -> str:
-    raw = " ".join(str(content or "").split())
+    """What to put inside print() for spoken words, using the current program.
+
+    Ordinary words are text ("print good morning" -> "Good morning"). A name
+    is used as a variable only when the learner says so ("the variable
+    score") or the current program already defines it ("print name" after
+    name = input(...)). Spoken words never become a new, undefined name.
+    """
+    raw = " ".join(str(content or "").split()).strip().rstrip(".")
     if not raw:
         return '""'
-    explicit = re.match(r"(?:the\s+)?variable\s+([A-Za-z_]\w*)$", raw, re.IGNORECASE)
+    literal = re.match(r"(?:the\s+)?(?:text|words?|message|sentence)\s+(.+)$", raw, re.IGNORECASE)
+    if literal:
+        return _quote(display_text(literal.group(1)))
+    explicit = re.match(r"(?:the\s+)?(?:variable|value\s+of|value\s+in)\s+(?:the\s+variable\s+)?([A-Za-z_]\w*)$",
+                        raw, re.IGNORECASE)
     if explicit:
         return explicit.group(1)
     numbered = re.match(r"(?:the\s+)?number\s+(.+)$", raw, re.IGNORECASE)
@@ -100,11 +147,13 @@ def print_argument_python(content: str, code: str = "", said_variable: bool = Fa
     value = _to_number(raw)
     if value is not None:
         return str(value)
-    if re.fullmatch(r"[A-Za-z_]\w*", raw):
-        if said_variable or raw in defined_names(code):
-            return raw
-        return _quote(raw)
-    return _quote(raw)
+    names = defined_names(code)
+    expression = _spoken_expression(raw, names)
+    if expression:
+        return expression
+    if re.fullmatch(r"[A-Za-z_]\w*", raw) and (said_variable or raw in names):
+        return raw
+    return _quote(display_text(raw))
 
 
 def build_insert_python(spoken: str, code: str = "") -> Optional[str]:

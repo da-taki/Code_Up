@@ -81,6 +81,9 @@
       <button id="tutorialBtn" class="cu-button cu-button-secondary" aria-label="Start interactive tutorial">
         Tutorial
       </button>
+      <button id="guidedLearningBtn" class="cu-button cu-button-secondary" aria-label="Start guided learning: CodeUp gives one small goal at a time and checks your code">
+        Guided learning
+      </button>
 
       <h3 class="cu-settings-subheading">Screen reader</h3>
       <label for="assistiveTechnologyProfile">Assistive technology profile</label>
@@ -602,6 +605,13 @@
       <button id="tutorialStopBtn" class="cu-button cu-button-secondary" aria-label="Stop the tutorial and start coding">Stop &amp; code</button>
     </div>
     <p class="cu-tutorial-help">Say or type the insert command I give you, then say <strong>run code</strong>. Other commands: repeat, hint, read my code, give me an example, continue, practise again, recap, or exit tutorial.</p>
+    <details id="tutorialTopicsDetails" class="cu-disclosure">
+      <summary class="cu-disclosure-summary">All practice topics</summary>
+      <div class="cu-disclosure-body">
+        <p>Pick any topic to practise it on its own. You can also say "practise dictionaries", or "start guided learning loops" for step-by-step coaching.</p>
+        <ul id="tutorialTopicsList" class="cu-tutorial-topics"></ul>
+      </div>
+    </details>
   </aside>
 
   <script>
@@ -848,6 +858,8 @@
         }
       });
       document.getElementById('voiceButton').addEventListener('click', function () { if (typeof toggleVoice === 'function') toggleVoice(); });
+      var guidedBtn = document.getElementById('guidedLearningBtn');
+      if (guidedBtn) guidedBtn.addEventListener('click', function () { if (typeof handleCommandText === 'function') handleCommandText('start guided learning'); });
       document.getElementById('languageSelector').addEventListener('change', function (e) {
         if (typeof window.warnIfHindiUnavailable === 'function') {
           window.warnIfHindiUnavailable(e.target.value);
@@ -865,11 +877,7 @@
             window.TutorialController.render();
           }
         } catch (err) {}
-        if (typeof isListening !== 'undefined' && isListening) {
-          speak('Language changed. Restarting voice recognition.');
-          stopListening();
-          setTimeout(function () { startListening(); }, 800);
-        }
+        if (typeof changeRecognitionLanguage === 'function') changeRecognitionLanguage(e.target.value);
       });
       document.getElementById('sendCommandBtn').addEventListener('click', function () { if (typeof submitCommand === 'function') submitCommand(); });
       var voiceTextInput = document.getElementById('voiceText');

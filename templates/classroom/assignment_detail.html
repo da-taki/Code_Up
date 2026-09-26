@@ -56,15 +56,24 @@
     <p id="policySummary">{{ policy_summary }}</p>
 
     <h3>Apply a starting preset</h3>
+    <p>A preset switches every permission below at once. You can still change individual permissions afterwards.</p>
     <form method="post" action="{{ url_for('classroom.set_assignment_policy', assignment_id=assignment.id) }}" novalidate>
       <div class="cu-field">
         <label for="policy_select">Preset</label>
-        <select id="policy_select" name="ai_policy" {% if assignment.locked %}disabled{% endif %}>
-          {% for policy in ai_policies %}
-          <option value="{{ policy }}" {% if policy == assignment.ai_policy %}selected{% endif %}>{{ policy }}</option>
+        <select id="policy_select" name="ai_policy" aria-describedby="policy_select_help" {% if assignment.locked %}disabled{% endif %}>
+          {% for policy in recommended_presets %}
+          <option value="{{ policy }}" {% if policy == assignment.ai_policy %}selected{% endif %}>{{ preset_info[policy][0] }}</option>
+          {% endfor %}
+          {% for policy in ai_policies if policy not in recommended_presets %}
+          <option value="{{ policy }}" {% if policy == assignment.ai_policy %}selected{% endif %}>{{ preset_info[policy][0] }}</option>
           {% endfor %}
         </select>
       </div>
+      <ul id="policy_select_help">
+        {% for policy in recommended_presets %}
+        <li><strong>{{ preset_info[policy][0] }}:</strong> {{ preset_info[policy][1] }}</li>
+        {% endfor %}
+      </ul>
       <button type="submit" class="cu-button cu-button-secondary" {% if assignment.locked %}disabled{% endif %}>Apply preset</button>
     </form>
 
@@ -74,8 +83,9 @@
         <legend class="sr-only">Individual AI and tool permissions</legend>
         {% for cap in capabilities %}
         <div class="cu-field" style="margin-bottom:4px;">
-          <input type="checkbox" id="cap_{{ cap }}" name="cap_{{ cap }}" {% if capability_settings.get(cap, True) %}checked{% endif %}>
+          <input type="checkbox" id="cap_{{ cap }}" name="cap_{{ cap }}" aria-describedby="cap_{{ cap }}_desc" {% if capability_settings.get(cap, True) %}checked{% endif %}>
           <label for="cap_{{ cap }}" style="display:inline;font-weight:normal;">{{ capability_labels[cap] }}</label>
+          <p id="cap_{{ cap }}_desc" class="cu-choice-desc">{{ capability_descriptions[cap] }}</p>
         </div>
         {% endfor %}
       </fieldset>
@@ -106,7 +116,7 @@
           <td><span class="cu-badge cu-badge--{{ row.status }}">{{ row.status.replace('_', ' ') }}</span></td>
           <td>{{ row.run_count }}</td>
           <td>{{ row.success_run_count }}</td>
-          <td>{{ row.submitted_at or '-' }}</td>
+          <td>{{ row.submitted_label }}</td>
           <td>
             {% if row.status != 'not_started' %}
             <a href="{{ url_for('classroom.view_submission', assignment_id=assignment.id, learner_id=row.learner_id) }}">Inspect</a>

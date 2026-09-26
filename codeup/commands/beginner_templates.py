@@ -186,6 +186,68 @@ def make_calculator_program() -> str:
     ])
 
 
+def make_percentage_program(kind: str = "general") -> str:
+    """Beginner percentage programs: part of a total (default), school marks,
+    or a percentage of a number."""
+    if kind == "marks":
+        return "\n".join([
+            'maths = float(input("Enter maths marks out of 100: "))',
+            'science = float(input("Enter science marks out of 100: "))',
+            'english = float(input("Enter english marks out of 100: "))',
+            "",
+            "total = maths + science + english",
+            "percentage = total / 300 * 100",
+            'print("Total marks:", total, "out of 300")',
+            'print("Percentage:", round(percentage, 2))',
+        ])
+    if kind == "of_number":
+        return "\n".join([
+            'number = float(input("Enter the number: "))',
+            'percent = float(input("Enter the percentage: "))',
+            "",
+            "result = number * percent / 100",
+            'print(percent, "percent of", number, "is", result)',
+        ])
+    return "\n".join([
+        'part = float(input("Enter the part, for example marks obtained: "))',
+        'total = float(input("Enter the total, for example maximum marks: "))',
+        "",
+        "if total == 0:",
+        '    print("The total cannot be zero.")',
+        "else:",
+        "    percentage = part / total * 100",
+        '    print("Percentage:", round(percentage, 2))',
+    ])
+
+
+_PERCENT_RE = re.compile(r"\bpercent(?:age)?s?\b|%")
+_PERCENT_VAGUE_RE = re.compile(
+    r"\b(?:that|the|those)\s+(?:percent(?:age)?\s+)?(?:thing|stuff|one|wala|wali)\b|\bpercent(?:age)?\s+(?:wala|wali|thing|stuff)\b")
+
+
+def percentage_kind(text: str) -> Optional[str]:
+    """"marks", "of_number", "general", or "ambiguous" for a percentage request."""
+    low = _norm(text)
+    if not _PERCENT_RE.search(low):
+        return None
+    if re.search(r"\b(?:marks?|school|exam|subjects?|report\s+card|grades?)\b", low):
+        return "marks"
+    if re.search(r"\bof\s+(?:a|any|the)\s+number\b|\bpercent(?:age)?\s+of\b|\bdiscount\b", low):
+        return "of_number"
+    if _PERCENT_VAGUE_RE.search(low):
+        return "ambiguous"
+    return "general"
+
+
+def percentage_template(kind: str) -> TemplateResult:
+    speech = {
+        "marks": "Generated a school marks percentage program.",
+        "of_number": "Generated a program that finds a percentage of a number.",
+    }.get(kind, "Generated a beginner percentage calculator.")
+    return TemplateResult("generate_percentage_program", edit_action="replace_code",
+                          code=make_percentage_program(kind), speech=speech)
+
+
 def make_marks_average_program() -> str:
     return "\n".join([
         'maths = float(input("Enter maths marks: "))',
@@ -194,6 +256,25 @@ def make_marks_average_program() -> str:
         "",
         "average = (maths + science + english) / 3",
         'print("Average marks:", average)',
+    ])
+
+
+def make_school_marks_program() -> str:
+    return "\n".join([
+        'name = input("Enter student name: ")',
+        'maths = float(input("Enter maths marks out of 100: "))',
+        'science = float(input("Enter science marks out of 100: "))',
+        'english = float(input("Enter english marks out of 100: "))',
+        "",
+        "total = maths + science + english",
+        "average = total / 3",
+        'print(name, "scored", total, "out of 300")',
+        'print("Average marks:", round(average, 2))',
+        "",
+        "if average >= 40:",
+        '    print("Result: pass")',
+        "else:",
+        '    print("Result: needs more practice")',
     ])
 
 
@@ -215,10 +296,17 @@ def make_generation_program(text: str) -> Optional[TemplateResult]:
     if "age" in low and "plus one" in low and re.search(r"\bask(?:s)?\s+for\b|\binput\b", low):
         code = make_age_plus_one_program(include_name=("name" in low), use_function=("function" in low))
         return TemplateResult("generate_beginner_input_program", edit_action="replace_code", code=code, speech="Generated a beginner input program.")
+    percent = percentage_kind(low)
+    if percent == "ambiguous":
+        return None  # the caller asks one short question (see app._percentage_generation_clarification)
+    if percent and re.search(r"\b(?:calculator|program|programme|app|checker|finder|calculate)\b", low):
+        return percentage_template(percent)
     if re.search(r"\bcalculator\b", low):
         return TemplateResult("generate_calculator_program", edit_action="replace_code", code=make_calculator_program(), speech="Generated a beginner calculator program.")
     if re.search(r"\bmarks?\s+average\b|\baverage\s+(?:marks?|program)\b", low):
         return TemplateResult("generate_marks_average_program", edit_action="replace_code", code=make_marks_average_program(), speech="Generated a marks average program.")
+    if re.search(r"\bschool\s+marks?\b|\breport\s+card\b|\bmarks?\s+(?:program|programme|calculator|tracker|report)\b", low):
+        return TemplateResult("generate_school_marks_program", edit_action="replace_code", code=make_school_marks_program(), speech="Generated a school marks program.")
     if re.search(r"\bpassword\s+checker\b", low):
         return TemplateResult("generate_password_checker_program", edit_action="replace_code", code=make_password_checker_program(), speech="Generated a password checker program.")
     if re.search(r"\binput\s+program\b", low):
@@ -397,9 +485,12 @@ def build_from_mapping(intent: str, slots: Optional[Dict[str, Any]] = None, *, c
         code = make_for_loop_template()
         return TemplateResult(intent, code=code, speech="Inserted a simple for loop that prints 0, 1, and 2.")
     if intent == "insert_print_statement":
-        text = str(slots.get("text") or slots.get("value") or "Hello")
-        code = make_print_template(text)
-        return TemplateResult(intent, code=code, speech="Inserted a print statement.")
+        # Same resolver as the deterministic path: words are text unless the
+        # current program defines the name (so "hello" never becomes print(hello)).
+        from codeup.commands.intent_repair import print_argument_python
+        spoken = slots.get("text") or slots.get("value")
+        argument = print_argument_python(str(spoken), current_code) if spoken not in (None, "") else '"Hello"'
+        return TemplateResult(intent, code=f"print({argument})", speech="Inserted a print statement.")
     if intent == "insert_variable_example":
         code = make_variable_template(str(slots.get("kind") or slots.get("name") or "name"), name=slots.get("name"), value=slots.get("value"))
         return TemplateResult(intent, code=code, speech="Inserted a beginner variable example.")

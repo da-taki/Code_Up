@@ -28,6 +28,9 @@
   var scriptEl = document.currentScript;
   var cohortId = scriptEl && scriptEl.dataset ? scriptEl.dataset.cohortId : '';
   if (!cohortId) return;
+  // Server-rendered watermark: events up to this id are already on the page.
+  var renderedEventId = scriptEl.dataset.lastEventId;
+  renderedEventId = /^\d+$/.test(renderedEventId || '') ? parseInt(renderedEventId, 10) : null;
 
   var POLL_INTERVAL_MS = 7000;
   var MIN_SYNC_GAP_MS = 1500;
@@ -38,16 +41,21 @@
     lastSyncAt: 0,
     lastLearnerCount: null,
     lastOpenHelpCount: null,
-    lastSeenEventId: null, // null until the first successful sync seeds it
+    lastSeenEventId: renderedEventId, // from the rendered page; null only for older markup
     learnerRowsById: {}, // learner id (string) -> <tr> already in the table
     assignmentRowsById: {}, // assignment id (string) -> <tr> already in the table
+    helpRowsById: {}, // help request id (string) -> <tr> in the "Needs help now" table
   };
 
   // ---- accessible event announcements ----------------------------------
 
   function announce(text) {
     var el = document.getElementById('srAnnouncer');
-    if (el) el.textContent = text;
+    if (!el) return;
+    // Clear first so an identical message (the same learner asking for help
+    // again) is a DOM change the screen reader announces again.
+    el.textContent = '';
+    setTimeout(function () { el.textContent = text; }, 60);
   }
 
   function eventAnnouncement(evt) {
@@ -76,10 +84,11 @@
     var fresh = events.filter(function (e) { return e.id > state.lastSeenEventId; });
     if (!fresh.length) return;
     fresh.sort(function (a, b) { return a.id - b.id; }); // oldest first, so multiple arrivals read in order
-    fresh.forEach(function (e) {
-      var text = eventAnnouncement(e);
-      if (text) announce(text);
-    });
+    // One combined message: setting the live region once per event used to
+    // overwrite it synchronously, so only the LAST of several simultaneous
+    // arrivals (e.g. two help requests in one poll) was ever announced.
+    var texts = fresh.map(eventAnnouncement).filter(Boolean);
+    if (texts.length) announce(texts.join(' '));
     state.lastSeenEventId = fresh[fresh.length - 1].id;
   }
 
@@ -108,6 +117,8 @@
     statusTd.appendChild(badge);
     tr.appendChild(statusTd);
 
+    tr.appendChild(textTd(l.help || '-'));
+    tr.appendChild(textTd(l.current_assignment || 'None open'));
     tr.appendChild(textTd(l.last_active_at));
     tr.appendChild(textTd(l.modules_completed + ' / ' + l.modules_total));
     tr.appendChild(textTd(l.assignments_submitted + ' / ' + l.assignments_total));
@@ -126,13 +137,17 @@
     if (link.getAttribute('href') !== l.detail_url) link.setAttribute('href', l.detail_url);
     var badge = tr.cells[1].querySelector('span');
     if (badge.textContent !== l.live_status) badge.textContent = l.live_status;
-    if (tr.cells[2].textContent !== l.last_active_at) tr.cells[2].textContent = l.last_active_at;
+    var helpText = l.help || '-';
+    if (tr.cells[2].textContent !== helpText) tr.cells[2].textContent = helpText;
+    var currentText = l.current_assignment || 'None open';
+    if (tr.cells[3].textContent !== currentText) tr.cells[3].textContent = currentText;
+    if (tr.cells[4].textContent !== l.last_active_at) tr.cells[4].textContent = l.last_active_at;
     var modulesText = l.modules_completed + ' / ' + l.modules_total;
-    if (tr.cells[3].textContent !== modulesText) tr.cells[3].textContent = modulesText;
+    if (tr.cells[5].textContent !== modulesText) tr.cells[5].textContent = modulesText;
     var assignText = l.assignments_submitted + ' / ' + l.assignments_total;
-    if (tr.cells[4].textContent !== assignText) tr.cells[4].textContent = assignText;
+    if (tr.cells[6].textContent !== assignText) tr.cells[6].textContent = assignText;
     var conceptsText = l.concepts_demonstrated + ' / ' + l.concepts_total;
-    if (tr.cells[5].textContent !== conceptsText) tr.cells[5].textContent = conceptsText;
+    if (tr.cells[7].textContent !== conceptsText) tr.cells[7].textContent = conceptsText;
   }
 
   function buildLearnersTable() {
@@ -145,7 +160,8 @@
     table.appendChild(caption);
     var thead = document.createElement('thead');
     var headRow = document.createElement('tr');
-    ['Learner', 'Status', 'Last active', 'Course modules', 'Assignments submitted', 'Concepts demonstrated']
+    ['Learner', 'Status', 'Help', 'Current assignment', 'Last active', 'Course modules',
+     'Assignments submitted', 'Concepts demonstrated']
       .forEach(function (label) {
         var th = document.createElement('th');
         th.scope = 'col';
@@ -192,7 +208,10 @@
     var tbody = table.querySelector('tbody');
 
     var seenIds = {};
-    var cursor = tbody.firstChild;
+    // Element siblings only: server-rendered <tbody> markup has whitespace
+    // text nodes between rows, and treating one as the cursor made the
+    // first reconcile re-insert every row - which blurs a focused link.
+    var cursor = tbody.firstElementChild;
     opts.items.forEach(function (item) {
       var id = opts.idOf(item);
       seenIds[id] = true;
@@ -206,7 +225,7 @@
       if (cursor !== row) {
         tbody.insertBefore(row, cursor);
       } else {
-        cursor = cursor.nextSibling;
+        cursor = cursor.nextElementSibling;
       }
     });
 
@@ -274,7 +293,8 @@
     statusTd.appendChild(badge);
     tr.appendChild(statusTd);
 
-    tr.appendChild(textTd(a.ai_policy));
+    tr.appendChild(textTd(a.submitted || '-'));
+    tr.appendChild(textTd(a.ai_policy_label || a.ai_policy));
     tr.appendChild(textTd(a.due_date));
     return tr;
   }
@@ -287,8 +307,11 @@
     var badgeClass = 'cu-badge cu-badge--' + a.status;
     if (badge.textContent !== a.status) badge.textContent = a.status;
     if (badge.className !== badgeClass) badge.className = badgeClass;
-    if (tr.cells[2].textContent !== a.ai_policy) tr.cells[2].textContent = a.ai_policy;
-    if (tr.cells[3].textContent !== a.due_date) tr.cells[3].textContent = a.due_date;
+    var submittedText = a.submitted || '-';
+    if (tr.cells[2].textContent !== submittedText) tr.cells[2].textContent = submittedText;
+    var policyText = a.ai_policy_label || a.ai_policy;
+    if (tr.cells[3].textContent !== policyText) tr.cells[3].textContent = policyText;
+    if (tr.cells[4].textContent !== a.due_date) tr.cells[4].textContent = a.due_date;
   }
 
   function buildAssignmentsTable() {
@@ -301,7 +324,7 @@
     table.appendChild(caption);
     var thead = document.createElement('thead');
     var headRow = document.createElement('tr');
-    ['Title', 'Status', 'AI policy', 'Due date'].forEach(function (label) {
+    ['Title', 'Status', 'Submitted', 'AI assistance', 'Due date'].forEach(function (label) {
       var th = document.createElement('th');
       th.scope = 'col';
       th.textContent = label;
@@ -326,12 +349,130 @@
     });
   }
 
+  // ---- "Needs help now": same targeted reconcile as the other tables ------
+
+  function helpActionForm(url, label, ariaLabel, primary) {
+    var form = document.createElement('form');
+    form.method = 'post';
+    form.action = url;
+    form.className = 'cu-inline-form';
+    var next = document.createElement('input');
+    next.type = 'hidden';
+    next.name = 'next';
+    next.value = 'dashboard';
+    form.appendChild(next);
+    var btn = document.createElement('button');
+    btn.type = 'submit';
+    btn.className = 'cu-button ' + (primary ? 'cu-button-primary' : 'cu-button-secondary');
+    btn.textContent = label;
+    btn.setAttribute('aria-label', ariaLabel);
+    form.appendChild(btn);
+    return form;
+  }
+
+  function helpStatusText(h) { return h.status === 'helping' ? 'Being helped' : 'Waiting'; }
+
+  function buildHelpActions(h) {
+    var td = document.createElement('td');
+    if (h.status === 'open') {
+      td.appendChild(helpActionForm(h.helping_url, 'Start helping', 'Start helping ' + h.learner_name, false));
+    }
+    td.appendChild(helpActionForm(h.resolve_url, 'Resolved', 'Mark ' + h.learner_name + "'s request resolved", true));
+    td.dataset.status = h.status;
+    return td;
+  }
+
+  function buildHelpRow(h) {
+    var tr = document.createElement('tr');
+    tr.dataset.helpId = String(h.id);
+    var th = document.createElement('th');
+    th.scope = 'row';
+    var link = document.createElement('a');
+    link.href = h.detail_url;
+    link.textContent = h.learner_name;
+    th.appendChild(link);
+    tr.appendChild(th);
+    tr.appendChild(textTd(h.waiting_minutes + ' min'));
+    tr.appendChild(textTd(h.assignment_title || '-'));
+    tr.appendChild(textTd(h.message || '(no message)'));
+    var statusTd = document.createElement('td');
+    var badge = document.createElement('span');
+    badge.className = 'cu-badge';
+    badge.textContent = helpStatusText(h);
+    statusTd.appendChild(badge);
+    tr.appendChild(statusTd);
+    tr.appendChild(buildHelpActions(h));
+    return tr;
+  }
+
+  function updateHelpRow(tr, h) {
+    var waiting = h.waiting_minutes + ' min';
+    if (tr.cells[1].textContent !== waiting) tr.cells[1].textContent = waiting;
+    var badge = tr.cells[4].querySelector('span');
+    if (badge.textContent !== helpStatusText(h)) badge.textContent = helpStatusText(h);
+    // Actions only change when the status does, and never while one of the
+    // buttons has focus, so a routine poll cannot pull a button away.
+    var actions = tr.cells[5];
+    if ((actions.dataset.status || (actions.querySelectorAll('form').length > 1 ? 'open' : 'helping')) !== h.status
+        && !actions.contains(document.activeElement)) {
+      tr.replaceChild(buildHelpActions(h), actions);
+    }
+  }
+
+  function buildHelpTable() {
+    var table = document.createElement('table');
+    table.className = 'cu-table';
+    table.id = 'helpNowTable';
+    var caption = document.createElement('caption');
+    caption.className = 'sr-only';
+    caption.textContent = 'Learners waiting for help, longest waiting first';
+    table.appendChild(caption);
+    var thead = document.createElement('thead');
+    var headRow = document.createElement('tr');
+    ['Learner', 'Waiting', 'Assignment', 'Message', 'Status', 'Actions'].forEach(function (label) {
+      var th = document.createElement('th');
+      th.scope = 'col';
+      th.textContent = label;
+      headRow.appendChild(th);
+    });
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+    table.appendChild(document.createElement('tbody'));
+    return table;
+  }
+
+  function reconcileHelpTable(data) {
+    var items = data.help_requests || [];
+    var heading = document.getElementById('helpNowHeading');
+    var headingText = 'Needs help now (' + items.length + ')';
+    if (heading && heading.textContent !== headingText) heading.textContent = headingText;
+    reconcileTable({
+      wrapId: 'helpNowTableWrap', tableId: 'helpNowTable',
+      emptyMessage: 'No one is waiting for help.',
+      buildTable: buildHelpTable, buildRow: buildHelpRow, updateRow: updateHelpRow,
+      items: items, idOf: function (h) { return h.id; },
+      rowsById: state.helpRowsById,
+      onRemoveIfFocused: function () {
+        // The request the instructor was on was resolved elsewhere: keep
+        // their place on the section heading instead of dropping to <body>.
+        if (heading) heading.focus();
+      },
+    });
+  }
+
   function seedExistingRows() {
     var learnersTable = document.getElementById('learnersTable');
     if (learnersTable) {
       var learnerRows = learnersTable.querySelectorAll('tbody tr[data-learner-id]');
       for (var i = 0; i < learnerRows.length; i++) {
         state.learnerRowsById[learnerRows[i].dataset.learnerId] = learnerRows[i];
+      }
+    }
+    var helpTable = document.getElementById('helpNowTable');
+    if (helpTable) {
+      var helpRows = helpTable.querySelectorAll('tbody tr[data-help-id]');
+      for (var k = 0; k < helpRows.length; k++) {
+        state.helpRowsById[helpRows[k].dataset.helpId] = helpRows[k];
       }
     }
     var assignmentsTable = document.getElementById('assignmentsTable');
@@ -351,6 +492,7 @@
   }
 
   function applySync(data) {
+    reconcileHelpTable(data);
     reconcileLearnersTable(data);
     reconcileAssignmentsTable(data);
     patchHelpQueueLink(data);

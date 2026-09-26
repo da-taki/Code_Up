@@ -11,7 +11,7 @@
   <section class="cu-panel" aria-labelledby="submissionHeading">
     <h2 id="submissionHeading">Submission status</h2>
     <p>Status: <span class="cu-badge cu-badge--{{ progress.status or 'not_started' }}">{{ (progress.status or 'not_started').replace('_', ' ') }}</span></p>
-    {% if progress.submitted_at %}<p>Submitted: {{ progress.submitted_at }}</p>{% endif %}
+    {% if progress.submitted_at %}<p>Submitted: {{ submitted_label }}</p>{% endif %}
     <p>Runs: {{ progress.run_count or 0 }} ({{ progress.success_run_count or 0 }} successful)</p>
     {% if progress.last_error %}<p>Most recent error: {{ progress.last_error }}</p>{% endif %}
   </section>

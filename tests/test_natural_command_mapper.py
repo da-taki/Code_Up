@@ -330,7 +330,7 @@ def test_nonsense_loop_command_clarifies_not_raw_insert(client):
     ("explain", "walk_through"),
     ("fix", "fix"),
     ("debug", "deterministic_message"),
-    ("stop", "stop_everything"),
+    ("stop", "stop_speaking"),
     ("what can I do", "deterministic_message"),
 ])
 def test_other_simple_commands_still_route_without_ai_mapper(client, monkeypatch, text, expected):

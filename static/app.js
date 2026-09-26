@@ -190,6 +190,24 @@ const AUTOSAVE_INTERVAL_MS = 30000;
 let _autosaveTimer = null;
 let _autosaveLastCode = '';
 const AUTOSAVE_KEY = 'codeup_autosave_draft';
+// The plain IDE's draft. Classroom pages (/ide?assignment=, ?project=,
+// ?module=) keep authoritative progress on the server, so they autosave under
+// their own scoped key and never restore into - or overwrite - the plain IDE
+// draft. (Sharing one key used to move assignment code into the learner's
+// plain IDE on "Back to CodeUp", replacing their own work.)
+function classroomContextKey() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    for (const kind of ['assignment', 'project', 'module']) {
+      if (params.get(kind)) return kind + ':' + params.get(kind);
+    }
+  } catch (e) {}
+  return '';
+}
+function autosaveKey() {
+  const ctx = classroomContextKey();
+  return ctx ? AUTOSAVE_KEY + ':' + ctx : AUTOSAVE_KEY;
+}
 const PROJECT_DRAFT_KEY = 'codeup_project_draft';
 const DEFAULT_PYTHON_STARTER = 'print("Hello CodeUp!")';
 const PYTHON_ONLY_MESSAGE = 'CodeUp is Python-only. Remove HTML, CSS, or JavaScript and use valid Python code.';
@@ -548,9 +566,8 @@ async function readLineEnhanced(line) {
   const indent = Math.floor(getIndentLevel(lineText));
   sonifyLine(lineText, indent);
   setTimeout(() => {
-    const msg = `Line ${line}: ${lineText || 'empty line'}`;
-    out(msg, { sr: false });
-    speak(msg);
+    out(`Line ${line}: ${lineText || 'empty line'}`, { sr: false });
+    speak(`Line ${line}: ${lineText ? speakableCode(lineText) : 'empty line'}`);
   }, 200);
 }
 
@@ -789,12 +806,13 @@ async function checkSyntaxErrors() {
       speak('No errors detected.');
       speak('Code looks good.');
     } else if (data.success && data.has_errors) {
-      const errorList = data.errors.map(e => `Line ${e.line || 'unknown'}: ${e.type} - ${e.message}`).join('\n');
-      out(`Found ${data.error_count} error(s):\n\n${errorList}`, { sr: false });
+      const errorList = data.errors.map(e => `Line ${e.line || 'unknown'}: ${e.message}`).join('\n');
+      out(`Found ${data.error_count} problem(s):\n\n${errorList}`, { sr: false });
 
-      // Canceling here was causing Chrome TTS race conditions
-      speak(`Found ${data.error_count} error${data.error_count !== 1 ? 's' : ''}.`);
-      data.errors.forEach(e => speak(`${e.type} on line ${e.line || 'unknown'}.`));
+      // Canceling here was causing Chrome TTS race conditions.
+      // One navigable summary (count + the selected problem + "say next
+      // error"), not one "static on line N" sentence per problem.
+      speak(data.summary || `Found ${data.error_count} problem${data.error_count !== 1 ? 's' : ''}.`);
 
       if (data.errors.length > 0 && data.errors[0].line > 0) {
         ErrorBeaconManager.start(data.errors[0].line, data.errors[0].severity);
@@ -818,7 +836,7 @@ function stopErrorBeacon() {
 
 function locateError() { checkSyntaxErrors(); }
 
-const BEGINNER_COMMAND_GUIDE_SPEECH = 'You can build Python by speaking or typing. Main demo commands are generate code, run code, read output, analyze, explain this code to explain it, fix this code to debug, replay mistake, summarize structure, make project report, stop everything, and start tutorial. Voice works well for analyze, run, read output, fix this code, replay mistake, summarize structure, make project report, stop everything, and start tutorial. For exact symbols, patterns, or long prompts, typing is more reliable. Say more examples for a longer list.';
+const BEGINNER_COMMAND_GUIDE_SPEECH = 'You can build Python by speaking or typing. Main demo commands are generate code, run code, read output, analyze, explain this code, fix this code to debug, replay mistake, summarize structure, make project report, and start tutorial. Say stop to stop CodeUp speaking. Say stop listening to turn voice control off. Say stop everything to stop both speech and listening. For exact symbols, patterns, or long prompts, typing is more reliable. Say more examples for a longer list.';
 const BEGINNER_COMMAND_GUIDE_VISIBLE = `You can type or speak natural commands.
 
 Voice works well for:
@@ -831,7 +849,9 @@ fix this code
 replay mistake
 summarize structure
 make project report
-stop everything
+stop (stop CodeUp speaking)
+stop listening (turn voice off)
+stop everything (speech and listening)
 start tutorial
 
 For exact symbols, patterns, quotes, or long prompts, typing is more reliable.
@@ -946,8 +966,10 @@ EXECUTION PLAYBACK:
 UTILITIES:
 - "repeat" — repeat last action
 - "say that again" — repeat last speech
-- "pause voice" — keep mic open but ignore commands
-- "resume voice" — start listening again
+- "stop" — stop CodeUp speaking (voice keeps listening)
+- "stop listening" / "turn voice off" — turn voice control off
+- "resume voice" — turn voice control back on
+- "stop everything" — stop speech and listening
 
 SCREEN READER HANDOFF:
 - "make screen reader handoff notes" — explains the current code so it is easier
@@ -964,7 +986,7 @@ KEYBOARD:
 - Ctrl+Shift+P: Command palette
 - Alt+Shift+K: Show this full shortcut list
 - Alt+Shift+O: Open accessibility and speech settings
-- Alt+Shift+R/H/E/M/T/S/A/N: Run/Help/Errors/Code map/Step narration/Stop/Toggle screen reader mode/Toggle navigation mode
+- Alt+Shift+R/H/E/M/T/S/A/N: Run/Help/Errors/Code map/Step narration/Stop speech/Toggle screen reader mode/Toggle navigation mode
 - In the editor - Alt+S/L/V/E/H/B/W: Sonify/Line/Vars/Errors/Help/Breadcrumb/Walkthrough
 - In the editor - Alt+Left/Right/Home/End: Navigate history/top/bottom
   `.trim();
@@ -1131,6 +1153,9 @@ function speak(text, opts = {}) {
   const spokenText = sanitizeSpeechText(text);
   if (!spokenText) return;
   lastSpokenText = spokenText;
+  // Remember what CodeUp said in EVERY speech mode (screen readers echo into
+  // the microphone just like CodeUp Voice), so VoiceInput can ignore it.
+  try { if (typeof VoiceEngine !== 'undefined' && VoiceEngine.noteSpoken) VoiceEngine.noteSpoken(spokenText); } catch (e) {}
   // Explicitly-requested narration (opts.explicit:true) is allowed through
   // even when automatic browser speech is off, i.e. in Screen Reader Safe
   // mode - see SPEECH_MODE_* above. It never also announces via ARIA in
@@ -2361,7 +2386,7 @@ function setCode(v, opts) {
   opts = opts || {};
   if (!opts.allowNonPython && looksLikeNonPythonCode(v)) {
     rejectNonPythonCode(opts.source || 'non-Python code');
-    try { localStorage.removeItem(AUTOSAVE_KEY); } catch (e) {}
+    try { localStorage.removeItem(autosaveKey()); } catch (e) {}
     _autosaveLastCode = '';
     return false;
   }
@@ -2769,6 +2794,12 @@ async function runCode(runFile, codeOverride) {
       if (data.explanation) {
         speak(data.explanation);
       }
+      const knownProblems = Array.isArray(data.diagnostics) ? data.diagnostics.length : 0;
+      if (knownProblems > 1) {
+        // Every known problem stays navigable (next error / previous error /
+        // read all errors) instead of only the one Python stopped on.
+        speak(`CodeUp found ${knownProblems} problems in total. Say next error to hear the next one, or read all errors.`);
+      }
       if (data.inputs_hint) {
         speak(data.inputs_hint);
       }
@@ -3099,7 +3130,7 @@ function readMyCodeAloud() {
     const lead = (lines[i].match(/^[ \t]*/) || [''])[0].replace(/\t/g, '    ');
     const note = lead.length >= 4 ? 'indented, ' : '';
     const body = lines[i].trim();
-    speak(`Line ${i + 1}. ${note}${body || 'blank'}.`);
+    speak(`Line ${i + 1}. ${note}${body ? speakableCode(body) : 'blank'}.`);
   }
   srAnnounce('Read your code');
 }
@@ -3191,7 +3222,7 @@ async function adviseCode() {
   }
 }
 
-async function fixCode() {
+async function fixCode(opts) {
   const before = getCode();
   if (!ensurePythonEditorContent('fix')) return;
   cueSuccess(); out('Fixing...', { sr: false }); showAI('Fixing code with AI...', { announce: false }); speak('Fixing code.', { sr: false });
@@ -3199,7 +3230,10 @@ async function fixCode() {
     const res  = await fetch('/fix', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ code: before, language: getLanguage() }),
+      // selected_diagnostic: "fix this error" targets the problem chosen
+      // with next/previous error; the server reads it from session state.
+      body:    JSON.stringify({ code: before, language: getLanguage(),
+                                selected_diagnostic: !!(opts && opts.selectedDiagnostic) }),
     });
     const data = await res.json();
     if (data.success) {
@@ -3231,7 +3265,9 @@ async function fixCode() {
         if (diffData.explanation) { out(diffData.explanation, { sr: false }); speak(diffData.explanation, { sr: false }); }
       }
     } else {
-      out('Fix failed.', { sr: false }); speak('Fix failed.', { sr: false });
+      // The server explains a refusal (stale selected error, classroom policy).
+      const failSpeech = data.speech || 'Fix failed.';
+      out(failSpeech, { sr: false }); speak(failSpeech, { sr: false });
     }
   } catch (e) {
     console.error(e); out('Fix failed.', { sr: false }); speak('Fix failed.', { sr: false });
@@ -3277,7 +3313,10 @@ async function generateCode(prompt, context = {}) {
     const res = await fetch('/generate-code', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ prompt, language: getLanguage(), source: context.input_source || context.source || 'typed' }),
+      // current_code: the server tells the model what is already in the
+      // editor, so a request that builds on it never gets "share your code".
+      body:    JSON.stringify({ prompt, language: getLanguage(), source: context.input_source || context.source || 'typed',
+                                current_code: getCode() }),
     });
     const data = await res.json();
     if (data.success && data.project && data.files) {
@@ -3350,7 +3389,7 @@ function readLine(line) {
   SpeechManager.cancelAll();
   const text = model.getLineContent(line);
   out(`Line ${line}: ${text}`, { sr: false });
-  speak(`Line ${line}: ${text || 'Empty line.'}`);
+  speak(`Line ${line}: ${text ? speakableCode(text) : 'Empty line.'}`);
 }
 
 function readCurrentLine() {
@@ -3361,7 +3400,7 @@ function readCurrentLine() {
   SpeechManager.cancelAll();
   const text = model.getLineContent(pos.lineNumber);
   out(`Line ${pos.lineNumber}: ${text}`, { sr: false });
-  speak(`Current line ${pos.lineNumber}: ${text || 'Empty line.'}`);
+  speak(`Current line ${pos.lineNumber}: ${text ? speakableCode(text) : 'Empty line.'}`);
 }
 
 function nextLine() {
@@ -3375,7 +3414,7 @@ function nextLine() {
   editor.revealLineInCenter(line);
   const text = model.getLineContent(line);
   out(`Line ${line}: ${text}`, { sr: false });
-  speak(`Line ${line}: ${text || 'Empty line.'}`);
+  speak(`Line ${line}: ${text ? speakableCode(text) : 'Empty line.'}`);
 }
 
 function prevLine() {
@@ -3389,7 +3428,7 @@ function prevLine() {
   editor.revealLineInCenter(line);
   const text = model.getLineContent(line);
   out(`Line ${line}: ${text}`, { sr: false });
-  speak(`Line ${line}: ${text || 'Empty line.'}`);
+  speak(`Line ${line}: ${text ? speakableCode(text) : 'Empty line.'}`);
 }
 
 function clearEditor() {
@@ -3403,7 +3442,7 @@ function clearEditor() {
   ProjectState.manifest = {};
   renderProjectFiles();
   try {
-    localStorage.removeItem(AUTOSAVE_KEY);
+    localStorage.removeItem(autosaveKey());
     localStorage.setItem(PROJECT_DRAFT_KEY, JSON.stringify({ active: false, timestamp: Date.now() }));
   } catch (e) {}
   _autosaveLastCode = '';
@@ -3584,6 +3623,7 @@ const _lastLiveRegionTimes = {};
 const _pendingLiveRegionText = {};
 const _pendingLiveRegionKeep = {};
 function srAnnounce(msg, priority = 'polite', opts = {}) {
+  try { if (msg && typeof VoiceEngine !== 'undefined' && VoiceEngine.noteSpoken) VoiceEngine.noteSpoken(String(msg)); } catch (e) {}
   if (_browserSpeechEnabled) return;
   const region = priority === 'assertive' ? 'assertive' : 'polite';
   const el = document.getElementById(region === 'assertive' ? 'srAlert' : 'srAnnouncer');
@@ -3945,7 +3985,14 @@ async function handleConfirmedAction(action, payload) {
   }
   else if (action === 'action_sequence') await executeActionSequence(payload || {});
   else if (action === 'mentor_stop') { SpeechManager.cancelAll(); speak('Mentor stopped.'); }
-  else if (action === 'stop_speaking') { SpeechManager.cancelAll(); srAnnounce('Speech stopped'); }
+  else if (action === 'stop_speaking') {
+    // "stop" / "be quiet": silence CodeUp only. Recognition and the saved
+    // voice-on choice are deliberately untouched (that is "stop listening").
+    if (typeof _stepNarrationJob !== 'undefined' && _stepNarrationJob) { _stepNarrationJob.cancelled = true; }
+    SpeechManager.cancelAll();
+    SonificationManager.clearAll();
+    srAnnounce('Speech stopped');
+  }
   else if (action === 'mentor_chat') {
     const _mentorMode = payload && payload.mode ? payload.mode : 'general';
     if (_mentorMode !== 'concept' && typeof VoiceEngine !== 'undefined' && typeof talkToMentorStreaming === 'function') {
@@ -3960,7 +4007,7 @@ async function handleConfirmedAction(action, payload) {
   else if (action === 'analyze')     await analyzeCode();
   else if (action === 'walk_through')       await walkThroughCode();
   else if (action === 'analyze_deep') await analyzeDeep();
-  else if (action === 'fix')         await fixCode();
+  else if (action === 'fix')         await fixCode({ selectedDiagnostic: !!(payload && payload.selected_diagnostic) });
   else if (action === 'stop_everything') {
     if (typeof _stepNarrationJob !== 'undefined' && _stepNarrationJob) { _stepNarrationJob.cancelled = true; }
     stopListeningNow();
@@ -5374,8 +5421,9 @@ function markVoiceListeningOff() {
 
 function stopListeningNow() {
   try {
-    if (typeof VoiceEngine !== 'undefined' && VoiceEngine.VoiceInput &&
-        (VoiceEngine.VoiceInput.isActive() || VoiceEngine.VoiceInput.isPaused())) {
+    if (typeof VoiceEngine !== 'undefined' && VoiceEngine.VoiceInput) {
+      // Explicit shutdown must also win while recognition is starting,
+      // backing off, or waiting for a hidden tab to become visible.
       VoiceEngine.VoiceInput.stop();
     }
   } catch (e) {}
@@ -5402,14 +5450,19 @@ function toggleVoice() {
       isListening = true;
       AppState.isListening = true;
       _voicePaused = false;
+      // A refused microphone is reported by VoiceInput's 'blocked' status
+      // (see _wireVoiceInputStatus) - never guessed from a timer, which used
+      // to switch voice OFF while Chrome's permission prompt was still open.
+      // If nothing has happened after a few seconds, say so without
+      // turning anything off.
       setTimeout(() => {
-        if (_voiceEnabledByUser && isListening && typeof VoiceEngine !== 'undefined' && VoiceEngine.VoiceInput && !VoiceEngine.VoiceInput.isActive()) {
-          const msg = 'Microphone access blocked. Please grant microphone permission and toggle voice again. Keyboard shortcuts and the typed command box still work.';
-          out(msg, { sr: false });
-          speak(msg);
-          markVoiceListeningOff();
+        if (typeof VoiceEngine !== 'undefined' && VoiceEngine.VoiceInput
+            && VoiceEngine.VoiceInput.isEnabledByUser() && !VoiceEngine.VoiceInput.isActive()) {
+          const waitMsg = 'Waiting for the microphone. If your browser is asking for microphone permission, allow it. Keyboard shortcuts and the typed command box still work.';
+          out(waitMsg, { sr: false });
+          speak(waitMsg);
         }
-      }, 1500);
+      }, 3000);
       if (typeof cueSuccess === 'function') cueSuccess();
       const code = getCode();
       const hasCode = code.trim().length > 0;
@@ -5422,6 +5475,78 @@ function toggleVoice() {
     return;
   }
   if (isListening) stopListening(); else startListening();
+}
+
+// ---- VoiceInput is the single source of truth for microphone state ----
+// app.js mirrors it (isListening / AppState / the voice button) through these
+// status events instead of keeping a second, drifting copy of the state.
+const MIC_BLOCKED_MESSAGE = 'Microphone access blocked. Please grant microphone permission and toggle voice again. Keyboard shortcuts and the typed command box still work.';
+
+function _wireVoiceInputStatus() {
+  if (typeof VoiceEngine === 'undefined' || !VoiceEngine.VoiceInput || !VoiceEngine.VoiceInput.onStatusChange) return;
+  if (window._voiceStatusWired) return;  // registered exactly once per page
+  window._voiceStatusWired = true;
+  VoiceEngine.VoiceInput.onStatusChange(function (status, detail) {
+    if (status === 'listening') {
+      _voiceEnabledByUser = true;
+      isListening = true;
+      AppState.isListening = true;
+      _voicePaused = false;
+      if (detail && detail.resumed) {
+        // Same-tab navigation (assignment, lesson, project, back to IDE)
+        // reloaded the page while voice was on: say so once, briefly.
+        speak('Voice is still on.');
+      }
+      return;
+    }
+    if (status === 'blocked' || status === 'failed' || status === 'resume_failed') {
+      markVoiceListeningOff();
+      const msg = status === 'blocked' ? MIC_BLOCKED_MESSAGE
+        : status === 'resume_failed'
+          ? 'Voice was on before this page loaded, but the microphone did not restart. Press Control Shift M to turn voice on again. Keyboard shortcuts and the typed command box still work.'
+          : 'Voice recognition keeps stopping. Press the voice button or Control Shift M to restart.';
+      out(msg, { sr: false });
+      speak(msg);
+      return;
+    }
+    if (status === 'stopped') {
+      isListening = false;
+      AppState.isListening = false;
+    }
+  });
+}
+
+function resumeVoiceAfterNavigation() {
+  _wireVoiceInputStatus();
+  try {
+    if (typeof VoiceEngine !== 'undefined' && VoiceEngine.VoiceInput && VoiceEngine.VoiceInput.resumeIfWanted) {
+      if (VoiceEngine.VoiceInput.resumeIfWanted()) {
+        _voiceEnabledByUser = true;
+        isListening = true;
+        AppState.isListening = true;
+      }
+    }
+  } catch (e) { _debugLog('Voice resume failed:', e && e.message ? e.message : e); }
+}
+
+function changeRecognitionLanguage(lang) {
+  // The language selector must switch the recognizer that is actually
+  // running (VoiceInput) - it used to call the legacy stop/start pair, which
+  // spoke "Voice control is not active." and "Already listening." and left
+  // the recognition language unchanged.
+  if (typeof VoiceEngine !== 'undefined' && VoiceEngine.VoiceInput) {
+    try { VoiceEngine.configure({ language: lang === 'hi' ? 'hi' : 'en' }); } catch (e) {}
+    if (VoiceEngine.VoiceInput.isActive() || VoiceEngine.VoiceInput.isEnabledByUser()) {
+      VoiceEngine.VoiceInput.setLanguage(lang);
+      speak(lang === 'hi' ? 'Language changed. Voice is listening in Hindi.' : 'Language changed. Voice is listening in English.');
+    }
+    return;
+  }
+  if (isListening) {
+    speak('Language changed. Restarting voice recognition.');
+    stopListening();
+    setTimeout(function () { startListening(); }, 800);
+  }
 }
 
 // ---- Live Assistant Mode wiring (state machine: static/live-assistant.js) ----
@@ -5705,12 +5830,17 @@ function stopListening() {
 }
 
 function pauseVoiceRecognition() {
-  const voiceEngineActive = typeof VoiceEngine !== 'undefined'
-    && VoiceEngine.VoiceInput
-    && (VoiceEngine.VoiceInput.isActive() || VoiceEngine.VoiceInput.isPaused());
-  if (!isListening && !voiceEngineActive) { speak('Voice control is not active.'); return; }
-  if (voiceEngineActive) {
-    VoiceEngine.VoiceInput.stop();
+  const voiceInput = typeof VoiceEngine !== 'undefined' && VoiceEngine.VoiceInput
+    ? VoiceEngine.VoiceInput : null;
+  const voiceEngineOn = voiceInput && (
+    voiceInput.isEnabledByUser() || voiceInput.isActive() || voiceInput.isPaused()
+  );
+  if (!isListening && !voiceEngineOn) { speak('Voice control is not active.'); return; }
+  if (voiceInput) {
+    // isEnabledByUser() can remain true while Chrome is between recognition
+    // sessions. stop() is intentionally idempotent and clears that persisted
+    // intent, preventing an automatic restart after an explicit voice-off.
+    voiceInput.stop();
   }
   if (recognition) {
     try { recognition.stop(); } catch (e) {}
@@ -5799,23 +5929,31 @@ function resumeVoiceRecognition() {
 
 async function handleVoiceCommand(rawText) {
   if (_stepNarrationJob && !_stepNarrationJob.cancelled) {
-    const t = rawText.toLowerCase().trim();
-    const stopWords = ['stop', 'stop it', 'shut up', 'be quiet', 'silence',
-                       'stop talking', 'cancel', 'enough', 'quit',
-                       'रुको', 'बंद करो', 'चुप', 'रुक'];
-    if (stopWords.some(w => t === w)) {
+    const t = String(rawText || '').toLowerCase().trim().replace(/[.!?]+$/, '').replace(/\s+/g, ' ');
+    const controlWords = new Set([
+      'stop', 'stop it', 'stop now', 'stop please', 'please stop', 'shut up',
+      'be quiet', 'quiet', 'silence', 'stop talking', 'stop speaking', 'enough',
+      "that's enough", 'thats enough', 'ruko', 'bas', 'chup', 'रुको', 'रुक', 'चुप', 'बस',
+      'stop listening', 'turn voice off', 'turn off voice', 'voice off',
+      'disable microphone', 'mute microphone', 'pause voice',
+      'stop everything', 'stop all', 'cancel everything', 'cancel', 'बंद करो',
+    ]);
+    if (controlWords.has(t) || t === 'quit') {
       _stepNarrationJob.cancelled = true;
       SpeechManager.cancelAll();
       SonificationManager.clearAll();
       ErrorBeaconManager.stop();
-      // out() already announces via srAnnounce() internally - the extra
-      // srAnnounce('Stopped') here duplicated it with slightly different
-      // text ("Stopped." vs "Stopped"), so the two calls didn't even
-      // dedupe against each other (XRCVC "duplicate output speech").
-      out('Stopped.');
-      SonificationManager.playTone(400, 0.08, 0.08);
+      if (t === 'quit') {
+        out('Stopped.');
+        SonificationManager.playTone(400, 0.08, 0.08);
+        return;
+      }
+      // Let recognized control phrases continue through the canonical action
+      // path. That is where speech-only, microphone-off, and full-stop
+      // semantics are kept distinct.
+    } else {
+      return;
     }
-    return;
   }
 
   updateCommandUnderstanding({ heard: rawText, understood: '', nextAction: 'Interpreting voice command.' });
@@ -6380,6 +6518,7 @@ function registerEditorShortcuts() {
   if (typeof window._classroomInit === 'function') {
     try { window._classroomInit(); } catch (e) { console.warn('classroom init failed', e); }
   }
+  resumeVoiceAfterNavigation();
   _debugLog('All accessibility features loaded.');
 }
 
@@ -6391,11 +6530,11 @@ function startAutosave() {
       if (code === _autosaveLastCode) return;  // no-op if nothing changed
       if (!code.trim()) return;                 // don't autosave empty
       if (looksLikeNonPythonCode(code)) {
-        localStorage.removeItem(AUTOSAVE_KEY);
+        localStorage.removeItem(autosaveKey());
         _autosaveLastCode = '';
         return;
       }
-      localStorage.setItem(AUTOSAVE_KEY, JSON.stringify({
+      localStorage.setItem(autosaveKey(), JSON.stringify({
         code,
         timestamp: Date.now(),
         language: 'python',
@@ -6410,13 +6549,16 @@ function startAutosave() {
 }
 
 function recoverAutosaveDraft() {
+  // Same rule as recoverProjectWorkspace(): on a classroom page the server's
+  // saved progress decides what is in the editor, never a local draft.
+  if (classroomContextKey()) return;
   try {
-    const raw = localStorage.getItem(AUTOSAVE_KEY);
+    const raw = localStorage.getItem(autosaveKey());
     if (!raw) return;
     const draft = JSON.parse(raw);
     if (!draft || !draft.code) return;
     if ((draft.language && draft.language !== 'python') || looksLikeNonPythonCode(draft.code)) {
-      localStorage.removeItem(AUTOSAVE_KEY);
+      localStorage.removeItem(autosaveKey());
       out('Removed a stale non-Python draft. CodeUp now keeps this editor Python-only.');
       srAnnounce('Stale non-Python draft removed');
       return;
@@ -6426,7 +6568,7 @@ function recoverAutosaveDraft() {
     if (!isDefault) return;
     const ageMs = Date.now() - (draft.timestamp || 0);
     if (ageMs > 7 * 24 * 60 * 60 * 1000) {
-      localStorage.removeItem(AUTOSAVE_KEY);
+      localStorage.removeItem(autosaveKey());
       return;
     }
     if (!setCode(draft.code, { source: 'autosaved draft' })) return;
@@ -7028,7 +7170,22 @@ function quotePythonString(text) {
 function normalizeSpokenPrintArgument(text) {
   const raw = String(text || '').replace(/\s+/g, ' ').trim();
   const expr = normalizeSpokenCodeExpression(raw);
-  return isSimplePythonExpression(expr) ? expr : quotePythonString(raw);
+  if (!isSimplePythonExpression(expr)) return quotePythonString(raw);
+  // Spoken words must not become undefined names: "print hello" is text
+  // unless the program already defines hello (the server resolves this the
+  // same way in intent_repair.print_argument_python).
+  const editorCode = typeof getCode === 'function' ? String(getCode() || '') : '';
+  const builtins = new Set(['True', 'False', 'None', 'len', 'str', 'int', 'float', 'round', 'sum', 'max', 'min', 'abs']);
+  const isDefined = (name) => {
+    if (builtins.has(name)) return true;
+    const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp('^\\s*' + esc + '\\s*=(?!=)', 'm').test(editorCode)
+      || new RegExp('\\bfor\\s+(?:\\w+\\s*,\\s*)*' + esc + '\\b').test(editorCode)
+      || new RegExp('\\bdef\\s+' + esc + '\\b').test(editorCode)
+      || new RegExp('\\bdef\\s+\\w+\\s*\\([^)]*\\b' + esc + '\\b').test(editorCode);
+  };
+  const names = (String(expr).replace(/(["'])(?:\\.|(?!\1).)*\1/g, '').match(/[A-Za-z_]\w*/g)) || [];
+  return names.every(isDefined) ? expr : quotePythonString(raw);
 }
 
 function normalizeSpokenCodeText(text) {
@@ -7278,13 +7435,63 @@ function appendLineVoice(text) {
   speak(`Inserted: ${spokenCodeReadback(code)}`);
 }
 
-function spokenCodeReadback(code) {
+function speakPythonCodeLine(code) {
   const raw = String(code || '');
-  const indentMatch = raw.match(/^(\s*)/);
-  const spaces = indentMatch ? indentMatch[1].length : 0;
+  const spaces = (raw.match(/^\s*/) || [''])[0].length;
   const body = raw.trim();
+  if (!body) return 'blank line';
+  const tokenWords = [
+    ['**', ' power '], ['//', ' floor divide '], ['>=', ' greater than or equal to '],
+    ['<=', ' less than or equal to '], ['==', ' equals equals '], ['!=', ' not equals '],
+    ['(', ' open parenthesis '], [')', ' close parenthesis '], ['[', ' open bracket '],
+    [']', ' close bracket '], ['{', ' open brace '], ['}', ' close brace '],
+    [':', ' colon '], [',', ' comma '], ['=', ' equals '],
+    ['>', ' greater than '], ['<', ' less than '], ['+', ' plus '], ['-', ' minus '],
+    ['*', ' times '], ['/', ' divide '], ['%', ' modulo '],
+  ];
+  let out = '';
+  let quote = '';
+  for (let i = 0; i < body.length;) {
+    const ch = body[i];
+    if (ch === "'" || ch === '"') {
+      out += ch === "'" ? ' single quote ' : ' double quote ';
+      quote = quote === ch ? '' : ch;
+      i += 1;
+      continue;
+    }
+    let matched = false;
+    if (!quote && ch === '.') {
+      const numeric = /\d/.test(body[i - 1] || '') && /\d/.test(body[i + 1] || '');
+      out += numeric ? ' point ' : ' dot ';
+      i += 1;
+      continue;
+    }
+    if (!quote) {
+      for (const pair of tokenWords) {
+        if (body.startsWith(pair[0], i)) {
+          out += pair[1];
+          i += pair[0].length;
+          matched = true;
+          break;
+        }
+      }
+    }
+    if (!matched) { out += ch; i += 1; }
+  }
   const prefix = spaces >= 4 ? 'indented, ' : '';
-  return prefix + body;
+  return prefix + out.replace(/\s+/g, ' ').trim();
+}
+function spokenCodeReadback(code) {
+  return speakPythonCodeLine(code);
+}
+
+// Code read aloud as part of a sentence. CodeUp Voice's speech engine drops
+// punctuation, so symbols become words there ("print open parenthesis ...").
+// Screen Reader Safe hands the raw code to the learner's own screen reader,
+// whose punctuation setting decides - converting it here as well would make
+// NVDA or JAWS read every symbol twice.
+function speakableCode(code) {
+  return _speechMode === 'codeup-voice' ? speakPythonCodeLine(code) : String(code || '');
 }
 
 function replaceLineVoice(lineNum, text) {
@@ -7400,6 +7607,22 @@ async function suggestNextLine() {
 }
 
 function chooseSuggestion(choice) {
+  // A bare "cancel" reaches here only when nothing more specific was pending
+  // (the server first gives it to a pending classroom join, a waiting input()
+  // prompt - where it is literal text - and a pending clarification; the
+  // client's own "did you mean" confirm and step narration take it earlier).
+  // Only this side knows whether suggestions are open, so decide here:
+  // dismiss them, or else stop CodeUp talking like "stop" (mic stays on).
+  const cancelWords = ['cancel', 'never mind', 'nevermind', 'forget it'];
+  if (cancelWords.includes(String(choice || '').toLowerCase().trim())) {
+    if (_lastSuggestions && _lastSuggestions.length) {
+      _lastSuggestions = [];
+      speak('Suggestions dismissed.');
+    } else {
+      handleConfirmedAction('stop_speaking', {});
+    }
+    return;
+  }
   if (!_lastSuggestions || _lastSuggestions.length === 0) {
     speak('No suggestions available. Say suggest next line first.');
     return;

@@ -29,7 +29,7 @@ from rapidfuzz import fuzz
 
 from codeup.commands.conversation_orchestrator import frontend_actions, action_next_label, looks_like_generation_request, orchestrate_command, strip_wake_phrase
 from codeup.commands.input_concierge import build_input_plan, concierge_request_message, detect_inputs as detect_concierge_inputs
-from codeup.runtime import session_memory
+from codeup.runtime import session_memory, diagnostics as runtime_diagnostics
 from codeup.commands import command_clarifier
 from codeup.integrations import grounded_ai
 from codeup.commands import clarification_flow
@@ -84,6 +84,9 @@ from codeup.commands import natural_command_mapper
 from codeup.commands import natural_code_editor
 from codeup.commands import beginner_templates
 from codeup.learning import accessible_learning
+from codeup.learning import learner_model
+from codeup.learning import guided_learning
+from codeup.commands import semantic_intent
 from codeup.accessibility import audio_blocks
 from codeup.commands.command_normalization import normalize_command_transcript
 from codeup.accessibility.speech_output import sanitize_speech_text
@@ -1812,7 +1815,14 @@ def _record_classroom_lesson_progress(module_id: str, code: str, passed: bool) -
 
 @app.route("/tutorial/modules", methods=["GET"])
 def tutorial_modules():
-    return jsonify({"success": True, **tutorial_engine.module_pack()})
+    # order/count/modules stay the five-step onboarding tutorial (a locked
+    # contract); practice_modules adds the full beginner curriculum, which the
+    # tutorial panel offers as "practise <topic>" outside that sequence.
+    expanded = tutorial_engine.expanded_module_pack()
+    return jsonify({
+        "success": True, **tutorial_engine.module_pack(),
+        "practice_order": expanded["order"], "practice_modules": expanded["modules"],
+    })
 
 
 @app.route("/tutorial/validate", methods=["POST"])
@@ -2037,6 +2047,85 @@ def _beginner_error_summary(error_text: str) -> str:
     # Fall back to the existing one-line summary (still no raw traceback).
     return user_facing_error(error_text)
 
+
+
+
+
+
+def _record_learner_evidence_from_code(mem, code: str, *, ran_ok: Optional[bool] = None, hint_used: bool = False) -> None:
+    try:
+        concepts = classroom_concepts.detect_concepts(code or "")
+    except Exception:
+        concepts = []
+    # Running code CodeUp generated, unchanged, is not evidence the learner
+    # can write it - only that they saw it.
+    generated_hash = str(mem.get("last_generated_code_hash") or "")
+    unchanged_generated = bool(generated_hash) and generated_hash == session_memory.code_hash(code)
+    for concept in concepts:
+        learner_model.record_evidence(mem, concept, "encountered")
+        if ran_ok is True and not unchanged_generated:
+            learner_model.record_evidence(mem, concept, "success")
+        elif ran_ok is False:
+            learner_model.record_evidence(mem, concept, "error")
+        if hint_used:
+            learner_model.record_evidence(mem, concept, "hint_used")
+_STALE_DIAGNOSTICS_MESSAGE = (
+    "Your code has changed since those problems were found, so they may no longer be right. "
+    "Run your code or say check syntax to find the current problems."
+)
+
+
+def _stale_diagnostics_response(mem, text: str) -> Dict[str, Any]:
+    """Old diagnostics never drive navigation, explanation or fixes for new code."""
+    session_memory.clear_diagnostics(mem)
+    return {"success": True, "action": "deterministic_message", "intent": "diagnostic_navigation",
+            "message": _STALE_DIAGNOSTICS_MESSAGE, "speech": _STALE_DIAGNOSTICS_MESSAGE, "heard": text,
+            "diagnostics_stale": True, "diagnostic_count": 0, "confidence": 0.98}
+
+
+def _diagnostic_speech(items, cursor: int = 0) -> str:
+    diagnostics = []
+    for item in items or []:
+        if hasattr(item, "to_dict"):
+            item = item.to_dict()
+        if isinstance(item, dict):
+            diagnostics.append(item)
+    if not diagnostics:
+        return "CodeUp found no problems."
+    cursor = max(0, min(int(cursor or 0), len(diagnostics) - 1))
+    selected = diagnostics[cursor]
+    count = len(diagnostics)
+    noun = "problem" if count == 1 else "problems"
+    line = selected.get("line") or 1
+    message = selected.get("message") or "Python problem."
+    if count == 1:
+        return f"CodeUp found 1 problem. It is on line {line}: {message}"
+    if cursor == count - 1:
+        return f"CodeUp found {count} {noun}. Problem {cursor + 1}, the last one, is on line {line}: {message}"
+    return f"CodeUp found {count} {noun}. Problem {cursor + 1} is on line {line}: {message} Say next error to continue."
+
+
+def _all_diagnostics_speech(items) -> str:
+    diagnostics = [item.to_dict() if hasattr(item, "to_dict") else item for item in (items or [])]
+    diagnostics = [item for item in diagnostics if isinstance(item, dict)]
+    if not diagnostics:
+        return "CodeUp found no problems."
+    parts = [f"CodeUp found {len(diagnostics)} problem{'s' if len(diagnostics) != 1 else ''}."]
+    for idx, item in enumerate(diagnostics[:10], start=1):
+        parts.append(f"{idx}. Line {item.get('line') or 1}: {item.get('message') or 'Python problem.'}")
+    if len(diagnostics) > 10:
+        parts.append(f"There are {len(diagnostics) - 10} more. Say next error to continue one by one.")
+    return " ".join(parts)
+
+
+def _diagnostic_detail_speech(item) -> str:
+    if not item:
+        return "There is no selected error. Run your code or check syntax first."
+    line = item.get("line") or 1
+    detail = item.get("detail") or item.get("message") or "Python problem."
+    detail = re.sub(r"^\s*line\s+\d+\s*:\s*", "", detail, flags=re.IGNORECASE) or detail
+    fix = item.get("fix") or "Fix that line, then run again."
+    return f"Selected problem on line {line}: {detail} Possible fix: {fix}"
 
 def _subprocess_exit_error(returncode: Optional[int]) -> str:
     if returncode in (None, 0):
@@ -4174,6 +4263,7 @@ def mentor_chat():
     elif mode == "repeat":
         system += "\nMode: repeat the previous mentor answer clearly."
 
+    system += _learner_prompt_directive(code)
     user = (
         f"Student message: {message or '(follow-up transform requested)'}\n"
         f"Mode: {mode}\n"
@@ -4259,6 +4349,7 @@ def mentor_chat_stream():
     elif mode == "repeat":
         system += "\nMode: repeat the previous mentor answer clearly."
 
+    system += _learner_prompt_directive(code)
     user = (
         f"Student message: {message or '(follow-up transform requested)'}\n"
         f"Mode: {mode}\n"
@@ -4943,16 +5034,21 @@ def run_code():
         else:
             explanation = _local_error_explanation(code, safe_error, language=safe(body.get("language"), "en"), beginner=True)
         _save_mistake_snapshot(get_session_id(), code, safe_error, success=False, explanation=explanation)
+        syntax_diag = runtime_diagnostics.from_syntax_error(e, code).to_dict()
         try:
             session_memory.record_run(mem,
                                       error=safe_error, traceback_text=safe_error, code=code,
                                       inputs=inputs, ran_ok=False, input_source=input_source)
+            session_memory.set_diagnostics(mem, [syntax_diag], code=code)
+            _record_learner_evidence_from_code(mem, code, ran_ok=False)
         except Exception:
             pass
         return jsonify({
             "success": False,
             "error": safe_error,
             "explanation": explanation,
+            "diagnostics": [syntax_diag],
+            "diagnostic_summary": _diagnostic_speech([syntax_diag]),
             "inputs_hint": None,
             "input_prompts": [],
         })
@@ -5141,10 +5237,21 @@ def run_code():
         if error.strip():
             explanation = explain_error(code, error, language=safe(body.get("language"), "en"))
             _save_mistake_snapshot(get_session_id(), code, error, success=False, explanation=explanation)
+            runtime_diag = runtime_diagnostics.from_runtime_error(error).to_dict()
+            # Python stops at the first runtime error; the static analyzer can
+            # still see the other problems it knows about (other undefined
+            # names), so the learner hears all of them instead of discovering
+            # them one run at a time. The runtime error stays first.
+            run_diagnostics = [runtime_diag] + [
+                d.to_dict() for d in runtime_diagnostics.static_diagnostics(code)
+                if d.line != runtime_diag["line"]
+            ]
             try:
                 session_memory.record_run(mem,
                                           error=error, traceback_text=sanitize_traceback(raw_error), code=code,
                                           inputs=inputs, ran_ok=False, input_source=input_source)
+                session_memory.set_diagnostics(mem, run_diagnostics, code=code)
+                _record_learner_evidence_from_code(mem, code, ran_ok=False)
             except Exception:
                 pass
             if "valueerror" in error.lower() and inputs:
@@ -5157,6 +5264,8 @@ def run_code():
                 "success": False,
                 "error": error,
                 "explanation": explanation,
+                "diagnostics": run_diagnostics,
+                "diagnostic_summary": _diagnostic_speech(run_diagnostics),
                 "inputs_hint": inputs_hint,
                 "input_prompts": input_prompts,
             })
@@ -5168,6 +5277,8 @@ def run_code():
                                       input_source=input_source if inputs else "none")
             if inputs:
                 session_memory.clear_pending_stdin_values(mem)
+            session_memory.clear_diagnostics(mem)
+            _record_learner_evidence_from_code(mem, code, ran_ok=True)
         except Exception:
             pass
 
@@ -5237,6 +5348,7 @@ def analyze():
             "No markdown headers. No bullet points. Spoken English only."
         )
 
+    system += _learner_prompt_directive(code)
     user = f"Python code:\n```python\n{code}\n```"
     analysis = call_gemini_capability("explain", system, user, language=language)
 
@@ -5297,6 +5409,7 @@ def analyze_deep():
             "Format: 'Lines X to Y: explanation'. Plain text paragraphs. No markdown."
         )
 
+    system += _learner_prompt_directive(code)
     user = f"Python code:\n```python\n{code}\n```"
     analysis = call_gemini_capability("explain", system, user, language=language, max_tokens=4096)
     return jsonify({"analysis": analysis, "speech": analysis, "auto_speak": True})
@@ -5480,6 +5593,7 @@ def walkthrough():
         )
 
     system += _verbosity_directive(safe(body.get("verbosity"), ""))
+    system += _learner_prompt_directive(code)
 
     explanation = _canonical_loop_walkthrough(code, language)
     if not explanation:
@@ -6067,111 +6181,65 @@ def check_syntax():
     code = safe(body.get("code"), "")
 
     if not code.strip():
-        return jsonify({"success": True, "has_errors": False, "message": "Code is empty."})
+        return jsonify({"success": True, "has_errors": False, "message": "Code is empty.", "diagnostics": [], "error_count": 0})
     blocked = _reject_non_python_response(code)
     if blocked:
         return blocked
 
-    errors = []
-
-    try:
-        compile(code, "<syntax_check>", "exec")
-        return jsonify({"success": True, "has_errors": False, "message": "No syntax errors detected."})
-    except IndentationError as e:
-        errors.append({
-            "line": e.lineno or 1,
-            "type": "IndentationError",
-            "message": str(e.msg or "Indentation error"),
-            "severity": "high"
-        })
-    except SyntaxError as e:
-        error_type = "SyntaxError"
-        if "unexpected EOF" in str(e).lower():
-            error_type = "MissingClosing"
-        elif "invalid syntax" in str(e).lower():
-            error_type = "InvalidSyntax"
-
-        errors.append({
-            "line": e.lineno or 1,
-            "type": error_type,
-            "message": str(e.msg or "Syntax error"),
-            "severity": "high"
-        })
-    except Exception as e:
-        errors.append({"line": 1, "type": "UnknownError", "message": str(e), "severity": "medium"})
-
-    if not errors:
-        try:
-            tree = ast.parse(code)
-            defined = set()
-            used_module_level = set()
-            params = set()
-
-            class UseCollector(ast.NodeVisitor):
-                def __init__(self):
-                    self.current_function = None
-
-                def visit_FunctionDef(self, node):
-                    for a in node.args.args:
-                        params.add(a.arg)
-                    prev = self.current_function
-                    self.current_function = node
-                    self.generic_visit(node)
-                    self.current_function = prev
-
-                def visit_For(self, node):
-                    if isinstance(node.target, ast.Name):
-                        params.add(node.target.id)
-                    self.generic_visit(node)
-
-                def visit_Assign(self, node):
-                    for target in node.targets:
-                        if isinstance(target, ast.Name):
-                            defined.add(target.id)
-                    self.generic_visit(node)
-
-                def visit_Name(self, node):
-                    if isinstance(node.ctx, ast.Load):
-                        if self.current_function is None:
-                            used_module_level.add(node.id)
-
-            UseCollector().visit(tree)
-
-            builtins = {
-                "abs", "all", "any", "ascii", "bin", "bool", "bytearray", "bytes",
-                "chr", "classmethod", "compile", "complex", "delattr", "dict", "dir",
-                "divmod", "enumerate", "eval", "exec", "filter", "float", "format",
-                "frozenset", "getattr", "globals", "hasattr", "hash", "help", "hex",
-                "id", "input", "int", "isinstance", "issubclass", "iter", "len",
-                "list", "locals", "map", "max", "memoryview", "min", "next", "object",
-                "oct", "open", "ord", "pow", "print", "property", "range", "repr",
-                "reversed", "round", "set", "setattr", "slice", "sorted",
-                "staticmethod", "str", "sum", "super", "tuple", "type", "vars", "zip",
-                "BaseException", "Exception", "ArithmeticError", "AssertionError",
-                "AttributeError", "EOFError", "ImportError", "IndexError", "KeyError",
-                "KeyboardInterrupt", "MemoryError", "NameError", "NotImplementedError",
-                "OSError", "RuntimeError", "SyntaxError", "SystemError", "SystemExit",
-                "TypeError", "ValueError", "ZeroDivisionError",
-                "True", "False", "None", "NotImplemented", "Ellipsis", "__debug__"
-            }
-            undefined = used_module_level - defined - builtins - params
-
-            for var in sorted(undefined):
-                errors.append({
-                    "line": 0,
-                    "type": "Potential undefined variable (heuristic)",
-                    "message": f"Variable '{var}' may be used before assignment at module level",
-                    "severity": "low"
-                })
-        except Exception:
-            pass
-
+    diagnostics = runtime_diagnostics.diagnostics_for_code(code)
+    items = [diag.to_dict() for diag in diagnostics]
+    mem = session_memory.get_memory(get_trace_storage())
+    if items:
+        session_memory.set_diagnostics(mem, items, code=code)
+    else:
+        session_memory.clear_diagnostics(mem)
+    legacy_errors = [
+        {
+            "line": item.get("line") or 1,
+            "type": item.get("category") or "diagnostic",
+            "message": item.get("message") or "Python problem.",
+            "severity": item.get("severity") or "warning",
+        }
+        for item in items
+    ]
     return jsonify({
         "success": True,
-        "has_errors": len(errors) > 0,
-        "errors": errors,
-        "error_count": len(errors)
+        "has_errors": len(items) > 0,
+        "errors": legacy_errors,
+        "diagnostics": items,
+        "error_count": len(items),
+        "selected_index": int(mem.get("diagnostic_cursor") or 0),
+        "summary": _diagnostic_speech(items, int(mem.get("diagnostic_cursor") or 0)),
     })
+
+
+def _selected_diagnostic_fix_brief(item: Dict[str, Any], code: str) -> str:
+    """Structured focus for the AI fixer: which problem, where, and the rules
+    for touching anything else."""
+    lines = code.splitlines()
+    line = int(item.get("line") or 0)
+    start, end = max(1, line - 2), min(len(lines), line + 2)
+    region = "\n".join(f"{n}: {lines[n - 1]}" for n in range(start, end + 1))
+    column = item.get("column")
+    fields = [
+        f"id: {_safe_text(item.get('id'), '', limit=80)}",
+        f"file: {_safe_text(item.get('file'), '', limit=200) or '<user>'}",
+        f"line: {line}" + (f", column: {column}" if isinstance(column, int) else ""),
+        f"category: {_safe_text(item.get('category'), '', limit=40)}",
+        f"message: {_safe_text(item.get('message'), '', limit=300)}",
+    ]
+    if item.get("detail"):
+        fields.append(f"detail: {_safe_text(item.get('detail'), '', limit=300)}")
+    return (
+        "\n\nThe learner selected ONE problem to fix:\n" + "\n".join(fields)
+        + f"\nSource around it (line numbers are for reference only):\n{region}\n\n"
+        "Rules for this fix:\n"
+        "1. Resolve the selected problem.\n"
+        "2. Keep every unrelated line exactly as it is, even if it has other problems.\n"
+        "3. Preserve the program's existing behaviour apart from this fix.\n"
+        "4. If the fix genuinely needs a change on another line, make it and add a short comment "
+        "above that line saying why."
+    )
 
 
 @app.route("/fix", methods=["POST"])
@@ -6185,8 +6253,22 @@ def fix():
     if not code.strip():
         return jsonify({"success": False, "error": "Code cannot be empty"}), 400
 
+    # "fix this error" after next/previous error targets the selected
+    # diagnostic, read from this session's own state (never from client text).
+    # A selection made for different code is refused, not guessed at.
+    focus = None
+    if body.get("selected_diagnostic"):
+        mem = session_memory.get_memory(get_trace_storage())
+        if session_memory.diagnostics_are_stale(mem, code):
+            session_memory.clear_diagnostics(mem)
+            return jsonify({"success": False, "stale_diagnostic": True, "code": "",
+                            "error": _STALE_DIAGNOSTICS_MESSAGE, "speech": _STALE_DIAGNOSTICS_MESSAGE})
+        focus = session_memory.selected_diagnostic(mem)
+        if focus and not 0 < int(focus.get("line") or 0) <= len(code.splitlines()):
+            focus = None
+
     line_number = _unindented_block_body_line(code)
-    if line_number:
+    if line_number and (focus is None or int(focus.get("line") or 0) in {line_number, line_number - 1}):
         fixed = _indent_line_in_code(code, line_number)
         error = f"IndentationError: expected an indented block on line {line_number}"
         explanation = (
@@ -6234,6 +6316,10 @@ def fix():
         )
 
     user = f"Fix this code:\n```python\n{code}\n```"
+    if focus:
+        user += _selected_diagnostic_fix_brief(focus, code)
+        system += ("\n\nThis request targets ONE selected problem. The rules in the user message take "
+                   "priority over finding and fixing every problem.")
     raw = call_gemini_capability("fix", system, user, temperature=0.1, language=language)
     fixed = extract_code(raw)
     if not fixed and raw and not _is_ai_service_message(raw):
@@ -6255,6 +6341,36 @@ def fix():
     return jsonify({"success": True, "code": fixed})
 
 
+# ---- current-code contract for AI code generation --------------------------
+# CodeUp always has the learner's editor content; a model must never be left
+# guessing whether code exists, and its "please share your code" is never
+# passed on to the learner.
+_CURRENT_CODE_CONTRACT = (
+    "\n\nCURRENT CODE: the learner's current editor code is always included in the request (or the request "
+    "says the editor is empty). Never ask the learner to share, paste or send their code - you already have it. "
+    "When the task changes, extends, fixes or builds on that code, return the COMPLETE revised program with the "
+    "change applied, keeping the rest of their program. When the task asks for a different, new program, write "
+    "the new program. Always answer with Python code, never with instructions for the learner to make the change."
+)
+_ASKS_FOR_CODE_RE = re.compile(
+    r"\b(?:share|paste|provide|send|upload|give\s+me|show\s+me)\b[^.?!\n]{0,40}\b(?:code|program|script)\b",
+    re.IGNORECASE,
+)
+_NO_CODE_PRODUCED_MESSAGE = ("I could not produce that change this time. Say it again, for example: "
+                             "add percentage calculation.")
+
+
+def _asks_learner_for_code(text: Any) -> bool:
+    return bool(_ASKS_FOR_CODE_RE.search(str(text or "")))
+
+
+def _current_code_context(editor_code: str) -> str:
+    if not str(editor_code or "").strip():
+        return "The learner's editor is empty.\n\n"
+    return ("The learner's current editor code (already provided - do not ask for it):\n"
+            f"```python\n{editor_code}\n```\n\n")
+
+
 @app.route("/generate-code", methods=["POST"])
 def generate_code():
     body = safejson()
@@ -6263,6 +6379,12 @@ def generate_code():
     requested_mode = safe(body.get("mode"), "")
     mem = session_memory.get_memory(get_trace_storage())
     previous_code = _safe_text(body.get("previousCode"), limit=MAX_CONVERSATIONAL_CONTEXT_SIZE + 1)
+    # The learner's editor content, sent by the IDE with every generation
+    # request, so a request that builds on the program ("add percentage
+    # calculation") is never answered as if no code existed.
+    editor_code = _safe_text(body.get("current_code"), limit=MAX_CODE_SIZE + 1)
+    if len(editor_code) > MAX_CODE_SIZE or _reject_non_python_response(editor_code):
+        editor_code = ""
     followup_edit = bool(body.get("followupEdit"))
     followup_command = _safe_text(body.get("followupCommand") or "", limit=MAX_VOICE_TEXT_SIZE)
 
@@ -6450,14 +6572,15 @@ def generate_code():
             "Return ONLY Python code. No markdown fences. No prose outside code comments."
         )
 
+    system += _CURRENT_CODE_CONTRACT
     constraints = constraint_summary(prompt)
     constraint_text = ""
     if constraints:
         constraint_text = "Important exact constraints:\n" + "\n".join(f"- {item}" for item in constraints) + "\n\n"
-    user = f"{constraint_text}Task description:\n{prompt}"
+    user = f"{constraint_text}{_current_code_context(editor_code)}Task description:\n{prompt}"
     raw = call_gemini_capability("generate", system, user, temperature=0.2, language=language)
     code = extract_code(raw)
-    if not code and raw and not _is_ai_service_message(raw):
+    if not code and raw and not _is_ai_service_message(raw) and not _asks_learner_for_code(raw):
         code = raw.strip()
     if not code:
         fallback = _local_code_generation_fallback(prompt)
@@ -6467,6 +6590,8 @@ def generate_code():
             return jsonify({"success": True, "code": fallback, "source": "local_fallback",
                             "explanation": explanation, "speech": explanation})
         error = raw.strip() if raw else "AI returned empty response. Try rephrasing."
+        if _asks_learner_for_code(raw):
+            error = _NO_CODE_PRODUCED_MESSAGE
         return jsonify({"success": False, "error": error, "code": ""})
 
     try:
@@ -6489,7 +6614,8 @@ def generate_code():
     except SyntaxError:
         retry_system = system + "\n\nIMPORTANT: Return ONLY syntactically valid Python. No prose. No markdown."
         raw_retry = call_gemini_capability("generate", retry_system, user, temperature=0.1, language=language)
-        retry_code = extract_code(raw_retry) or (raw_retry.strip() if raw_retry and not _is_ai_service_message(raw_retry) else "")
+        retry_code = extract_code(raw_retry) or (raw_retry.strip() if raw_retry and not _is_ai_service_message(raw_retry)
+                                                 and not _asks_learner_for_code(raw_retry) else "")
         try:
             compile(retry_code, "<generated>", "exec")
             if not validate_exact_output(retry_code, prompt):
@@ -6889,7 +7015,8 @@ COMMANDS = {
     "quiz_me":          ["quiz me", "test me", "challenge me", "quiz करो", "test करो"],
     "bug_challenge":    ["bug challenge", "debug challenge", "give me a bug", "bug ढूंढो"],
     "clear_breakpoints":["clear breakpoints", "remove breakpoints", "delete breakpoints"],
-    "stop_everything": ["stop", "stop it", "shut up", "be quiet", "silence", "stop talking", "cancel", "रुको", "बंद करो", "चुप", "रुक"],
+    "stop_speaking": ["stop", "stop it", "shut up", "be quiet", "silence", "stop talking", "stop speaking", "रुको", "चुप", "रुक"],
+    "stop_everything": ["stop everything", "stop all", "cancel everything", "cancel", "बंद करो"],
 }
 
 
@@ -8140,6 +8267,93 @@ def _unclear_loop_command_response(text):
             "needs_clarification": True, "heard": text}
 
 
+# ---- spoken print requests -------------------------------------------------
+# "add print hello", "acha print good morning", "make it say enter your marks",
+# "display welcome to CodeUp", "add a line that prints congratulations".
+# Every form resolves its argument through intent_repair.print_argument_python,
+# which reads the current program: ordinary words become text, a name is a
+# variable only when the learner says so or the program already defines it.
+
+_EDIT_FILLER_RE = re.compile(
+    r"^(?:(?:acha|achha|accha|acchha|ok|okay|so|bhai|yaar|haan|han|please|now|umm*|uhh*|hey|alright|"
+    r"and|then|also|just|can\s+you|could\s+you|would\s+you)[\s,]+)+",
+    re.IGNORECASE,
+)
+_PRINT_REQUEST_RES = (
+    # (pattern, words are always text)
+    (re.compile(r"^(?:add|insert|put|write|type)\s+(?:a\s+|an\s+)?(?:new\s+)?(?:print\s+)?(?:line|statement)\s+"
+                r"(?:that|which|to)\s+(?:says?|prints?|displays?|shows?)\s+(?P<content>.+)$", re.IGNORECASE), False),
+    (re.compile(r"^(?:make|have|let)\s+it\s+(?:say|says|print|prints|display|displays)\s+(?P<content>.+)$",
+                re.IGNORECASE), False),
+    (re.compile(r"^(?:(?:add|insert|put|write|type)\s+(?:a\s+|an\s+)?)?print(?:\s+line|\s+statement)?\s+"
+                r"(?:saying|that\s+says)\s+(?P<content>.+)$", re.IGNORECASE), True),
+    (re.compile(r"^(?:add|insert|put|write|type)\s+(?:a\s+|an\s+)?print(?:\s+line|\s+statement)?\s+(?P<content>.+)$",
+                re.IGNORECASE), False),
+    (re.compile(r"^(?:print|display)\s+(?P<content>.+)$", re.IGNORECASE), False),
+)
+# Not a request to display words: loops, ranges, patterns, IDE output/help.
+_PRINT_REQUEST_EXCLUDE_RE = re.compile(
+    r"\b(?:loop|times|function|indent\w*|four\s+spaces|even|odd|output|errors?|result|help|progress|"
+    r"settings|menu|shortcuts|commands|options|topics|sequence|stars?|pattern|table|square|triangle|"
+    r"code|program|file|line\s+\d+|numbers?)\b"
+    r"|\d+\s+to\s+\d+|\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten)\s+to\s+\w+",
+    re.IGNORECASE,
+)
+_PRINT_REQUEST_HINGLISH_RE = re.compile(
+    r"\b(?:kya|kyun|karta|kare|karo|hai|ko|ke|mein|andar|bahar|pehle|wali|hata|taaki|dikhe|aaye)\b", re.IGNORECASE)
+
+
+_CHANGE_WORDS_RE = re.compile(r"\b(?:instead|change|replace|modify|convert|rewrite|turn)\b|^make\s+it\b",
+                               re.IGNORECASE)
+
+
+def _is_plain_addition(text: str) -> bool:
+    """"add a loop" adds new code; "make it print 5 numbers instead" changes
+    existing code and belongs to the edit flow."""
+    core = _EDIT_FILLER_RE.sub("", " ".join(str(text or "").split())).strip()
+    return bool(re.match(r"^(?:add|insert|put|write|type)\b", core, re.IGNORECASE)) and \
+        not _CHANGE_WORDS_RE.search(core)
+
+
+def _print_request_response(text: str, code: str) -> Optional[Dict[str, Any]]:
+    core = _EDIT_FILLER_RE.sub("", " ".join(str(text or "").split())).strip().rstrip(".!")
+    if not core or _PRINT_REQUEST_HINGLISH_RE.search(core):
+        return None  # Hinglish sentences go to the semantic resolver
+    if re.search(r"\binstead\b", core, re.IGNORECASE):
+        return None  # "make it say X instead" changes the existing output: edit flow
+    if re.match(r"^(?:make|have|let)\s+it\b", core, re.IGNORECASE) and re.search(r"\bprint\s*\(", code or ""):
+        return None  # the program already prints: "make it say X" changes that output
+    core = re.sub(r"\s+(?:in|into|to)\s+(?:the\s+)?(?:editor|code|program)$", "", core, flags=re.IGNORECASE)
+    for pattern, always_text in _PRINT_REQUEST_RES:
+        match = pattern.match(core)
+        if not match:
+            continue
+        content = match.group("content").strip()
+        if not always_text and (_PRINT_REQUEST_EXCLUDE_RE.search(content)
+                                or re.fullmatch(r"(?:it|this|that|them|these)", content, re.IGNORECASE)
+                                # "make it print 0 1 2" is a number sequence (a loop), not words
+                                or len(re.findall(r"\b(?:\d+|zero|one|two|three|four|five|six|seven|eight|"
+                                                  r"nine|ten)\b", content, re.IGNORECASE)) >= 2):
+            return None
+        if build_exact_symbol_generation(core) is not None and \
+                intent_repair.print_argument_python(content, code).startswith('"'):
+            return None  # exact-symbol tasks ("print 5 stars") keep their own handler
+        argument = (intent_repair._quote(intent_repair.display_text(content)) if always_text
+                    else intent_repair.print_argument_python(content, code))
+        python = f"print({argument})"
+        try:
+            compile(python, "<print>", "exec")
+        except SyntaxError:
+            return None
+        confirmation = f"I added {python} to the editor. Say run to see the output."
+        return {
+            "success": True, "action": "conversational_edit",
+            "ai_action": {"action": "append_code", "code": python, "spoken_confirmation": confirmation},
+            "heard": text, "speech": confirmation, "spoken_code": python, "intent": "insert_print",
+        }
+    return None
+
+
 def _spoken_insert_response(text, code):
     if str(code or "").strip() and intent_repair.looks_like_print_sequence_request(text):
         msg = "Do you want me to replace the current code, or add a new loop that prints 0, 1, and 2?"
@@ -8175,7 +8389,7 @@ def _spoken_insert_response(text, code):
             return None
         if re.search(r"\b(?:statement|function|indent|indented|indentation|four\s+spaces|loop)\b", bare_content, re.IGNORECASE):
             return None
-        python = beginner_templates.make_print_template(bare_content)
+        python = f"print({intent_repair.print_argument_python(bare_content, code)})"
         confirmation = "I added print(\"Hello\") to the editor. Say run to see the output."
         if python != 'print("Hello")':
             confirmation = f"I added {' '.join(python.split())} to the editor. Say run to see the output."
@@ -8316,6 +8530,25 @@ _BEGINNER_TEMPLATE_TRANSFORM_INTENTS = {
 }
 
 
+def _percentage_generation_clarification(text, mem):
+    """"make a calculator that does that percentage thing": one short question,
+    but only when neither the words nor recent context say which percentage."""
+    if not looks_like_generation_request(text) and not re.search(r"\b(?:make|build|create|write)\b", text, re.I):
+        return None
+    if beginner_templates.percentage_kind(text) != "ambiguous":
+        return None
+    recent = " ".join(str(mem.get(k) or "") for k in ("last_gen_prompt", "last_utterance", "tutorial_module"))
+    context_kind = beginner_templates.percentage_kind(f"percentage {recent}") if recent.strip() else None
+    if context_kind in {"marks", "of_number"}:
+        return _template_result_voice_response(beginner_templates.percentage_template(context_kind), text,
+                                               source="beginner_templates")
+    question = "Do you mean percentage of a number, or percentage from school marks?"
+    session_memory.set_pending(mem, {"type": "generate", "kind": "percentage", "original": text})
+    return {"success": True, "intent": "clarify", "action": "clarify", "message": question, "speech": question,
+            "reason": "ambiguous_percentage", "needs_clarification": True, "heard": text,
+            "next_action": "Waiting for clarification."}
+
+
 def _beginner_template_command_response(text, code, *, mode="all"):
     result = beginner_templates.match_template_command(text, current_code=code)
     if result is not None:
@@ -8447,6 +8680,18 @@ def _deterministic_concept_voice_response(
         message = _ground_concept_answer(answer, facts, current_code, text)
     else:
         message = answer
+        if concept_kind != concept_qa.UNKNOWN_CONCEPT:
+            # Learner-model adaptation: a smaller example for a concept that
+            # has needed reinforcement, no re-definition of one the learner
+            # has repeatedly demonstrated, shorter after "simpler" requests.
+            # A learner with no evidence gets the unchanged answer.
+            try:
+                mem = session_memory.get_memory(get_trace_storage())
+                learner_concept = learner_model.canonical(concept_qa.concept_label(concept_kind) or concept_kind)
+                message = learner_model.adapt_concept_answer(mem, learner_concept, message)
+                learner_model.record_evidence(mem, learner_concept, "asked")
+            except Exception:
+                pass
     return {
         "success": True, "action": "deterministic_message",
         "message": message, "speech": message, "heard": text, "concept": concept_kind,
@@ -8514,11 +8759,21 @@ def _resolve_pending_clarification(pending, text, mem):
                 "speech": question, "needs_clarification": True, "heard": text}
     if ptype == "generate":
         answer = " ".join(str(text or "").split())
-        low = answer.lower()
-        if re.match(r"^(?:run|stop|clear|open|help|exit|cancel|never\s*mind|nevermind|"
-                    r"pause|resume|quit|tutorial)\b", low):
+        low = semantic_intent.strip_fillers(answer)
+        if re.match(r"^(?:cancel|never\s*mind|nevermind|forget\s+it|rehne\s+do|chhodo)$", low):
+            session_memory.clear_pending(mem)
+            msg = "Okay, I will not make a program."
+            return {"success": True, "action": "deterministic_message", "message": msg, "speech": msg,
+                    "heard": text}
+        # Only clearly non-generation verbs supersede: "print the first five
+        # even numbers" is an ANSWER to "what should the program do?".
+        if re.match(r"^(?:run|stop|clear|open|help|exit|pause|resume|quit|tutorial|explain|fix|read|"
+                    r"undo|check|go\s+to|what)\b", low):
+            # "actually just run this" while CodeUp was asking what to build:
+            # the new, clear command supersedes the pending generation.
             session_memory.clear_pending(mem)
             return None
+        answer = re.sub(r"^(?:make|create|write|build|generate)\s+(?:me\s+)?", "", low).strip() or answer
         if _generation_is_vague(answer):
             kind = pending.get("kind", "generic")
             _, question = _vague_generation_question(answer, _generation_spec_tokens(answer))
@@ -8528,6 +8783,16 @@ def _resolve_pending_clarification(pending, text, mem):
                 question = "What kind of project should I create?"
             return {"success": True, "action": "clarify", "intent": "clarify", "message": question,
                     "speech": question, "needs_clarification": True, "heard": text}
+        if pending.get("kind") == "percentage":
+            percent_kind = beginner_templates.percentage_kind(f"percentage {answer}")
+            if percent_kind not in {"marks", "of_number"}:
+                percent_kind = "of_number" if re.search(r"\b(?:number|first|pehla|pehli)\b", low) else (
+                    "marks" if re.search(r"\b(?:second|dusra|doosra|dusri)\b", low) else "general")
+            session_memory.clear_pending(mem)
+            response = _template_result_voice_response(beginner_templates.percentage_template(percent_kind), text,
+                                                       source="clarified_generation")
+            response["resolved_from_clarification"] = True
+            return response
         session_memory.clear_pending(mem)
         completed = _complete_generation_prompt(pending.get("kind", "generic"), pending.get("original", ""), answer)
         return {"success": True, "action": "generate_code", "prompt": completed,
@@ -8776,7 +9041,20 @@ def _complete_generation_prompt(kind, original, answer):
     answer = " ".join(str(answer or "").split())
     if kind == "marks":
         return f"Create a beginner-friendly Python program about student marks that {answer}."
+    if len(answer.split()) <= 4 and not re.search(r"\b(?:program|programme|app|game|script)\b", answer, re.I):
+        # A short answer to "What should the program do?" ("school marks",
+        # "calculator") names the program, so complete the original request.
+        return f"Create a beginner-friendly Python {answer} program."
     return answer
+
+
+def _learner_prompt_directive(code: str) -> str:
+    """Learner-model adaptation for AI explanation prompts (never raises)."""
+    try:
+        mem = session_memory.get_memory(get_trace_storage())
+        return learner_model.prompt_directive(mem, code)
+    except Exception:
+        return ""
 
 
 def _verbosity_directive(verbosity: str) -> str:
@@ -10060,9 +10338,489 @@ def _validated_python_insert_response(intent: str, slots: Dict[str, Any], text: 
     return None
 
 
+# ---- semantic intent fallback + clarification state ------------------------
+# See codeup/commands/semantic_intent.py for the allowlist and validation.
+# Everything here executes through canonical CodeUp commands re-dispatched
+# into _voice_command_impl (depth 1) or through fixed response dicts - never
+# through anything named by model output.
+
+_SEMANTIC_CAPABILITY = {
+    "GENERATE_CODE": "generate",
+    "IMPROVE_CODE": "generate",
+    "EDIT_CODE": "generate",
+    "REPEAT_CHANGE": "generate",
+    "EXPLAIN_CODE": "explain",
+}
+_SEMANTIC_CODE_DEPENDENT = {"EXPLAIN_CODE", "FIX_CODE", "IMPROVE_CODE", "EDIT_CODE", "REPEAT_CHANGE",
+                            "CODE_MAP", "LIST_VARIABLES", "PROGRAM_STATE", "STEP_START", "FIND"}
+_REPEAT_REQUEST_RE = re.compile(
+    r"^(?:please\s+|can\s+you\s+|could\s+you\s+|bhai\s+|yaar\s+)?"
+    r"(?:do\s+(?:that|it|this|the\s+same(?:\s+thing)?)\s+(?:again|once\s+more|one\s+more\s+time)|"
+    r"(?:that|it)\s+again|again|one\s+more\s+time|once\s+more|same\s+again|"
+    r"(?:phir|fir)\s+se(?:\s+(?:karo|kar\s+do|kardo))?|dobara(?:\s+(?:karo|kar\s+do|kardo))?|"
+    r"ek\s+baar\s+(?:aur|phir)(?:\s+(?:karo|kar\s+do|kardo))?)"
+    r"(?:\s+please)?$",
+    re.IGNORECASE,
+)
+_GEN_VERB_START_RE = re.compile(
+    r"^(?:calculate|compute|print|ask|check|count|find|add|show|store|convert|sort|read|take|tell|list|"
+    r"display|greet|guess|keep|track|make|let|help)\b", re.IGNORECASE)
+_IMPROVE_INSTRUCTIONS = {
+    "readability": "make this code more readable with clear variable names and short comments",
+    "features": "add one small useful beginner feature to this program",
+    "error_handling": "add simple input validation and error handling to this program",
+}
+
+
+def _semantic_owner() -> str:
+    token = request.cookies.get(CLASSROOM_LEARNER_COOKIE) if has_request_context() else ""
+    digest = hashlib.sha256(token.encode("utf-8")).hexdigest()[:12] if token else "guest"
+    return f"{get_session_id()}|{digest}"
+
+
+def _semantic_context(mem, current_code: str, error_context: str) -> Dict[str, Any]:
+    return {
+        "has_code": bool(str(current_code or "").strip()),
+        "has_error": bool(str(error_context or mem.get("last_run_error") or "").strip()),
+        "last_action": str(mem.get("last_action") or ""),
+        "guided_active": bool(guided_learning.is_active(mem)),
+    }
+
+
+def _response_payload(result):
+    resp, status = result if isinstance(result, tuple) else (result, 200)
+    try:
+        data = resp.get_json(silent=True)
+    except Exception:
+        data = None
+    return (data if isinstance(data, dict) else {}), status
+
+
+def _semantic_redispatch(command: str, body, original_text: str, meta: Dict[str, Any]):
+    """Run a canonical CodeUp command through the normal pipeline (depth 1)."""
+    nested = _voice_command_impl({**body, "text": command}, _semantic_depth=1)
+    data, status = _response_payload(nested)
+    data.setdefault("success", True)
+    data["heard"] = original_text
+    data["resolved_command"] = command
+    data["semantic"] = meta
+    return jsonify(_sanitize_voice_response(data)), status
+
+
+def _semantic_not_understood(text: str) -> Dict[str, Any]:
+    message = ("I did not understand that as a CodeUp command. You can say things like run my code, "
+               "explain this code, or help.")
+    return {"success": True, "action": "clarify", "intent": "clarify", "message": message,
+            "speech": message, "needs_clarification": True, "heard": text,
+            "reason": "semantic_not_understood"}
+
+
+def _semantic_ask(text, mem, current_code, *, choices, missing="", intent="", params=None,
+                  store=None, meta=None):
+    question = semantic_intent.clarification_question(choices, missing)
+    session_memory.set_pending(mem, semantic_intent.make_pending(
+        original=text, choices=choices, missing=missing, intent=intent, params=params,
+        code_hash=session_memory.code_hash(current_code), owner=_semantic_owner(), question=question,
+    ))
+    payload = {"success": True, "action": "clarify", "intent": "clarify", "message": question,
+               "speech": question, "needs_clarification": True, "heard": text,
+               "next_action": "Waiting for your answer.", "semantic": meta or {}}
+    return store(payload) if store else jsonify(payload)
+
+
+def _generation_command_from_description(description: str) -> str:
+    desc = " ".join(str(description or "").split()).strip(" .")
+    if not desc:
+        return ""
+    if _GEN_VERB_START_RE.match(desc):
+        return f"make a program that can {desc}" if not desc.lower().startswith("make ") else desc
+    if not re.match(r"^(?:a|an|the)\b", desc, re.IGNORECASE):
+        desc = ("an " if desc[:1].lower() in "aeiou" else "a ") + desc
+    if not re.search(r"\b(?:program|programme|app|game|checker|calculator|quiz|system|tracker)\b", desc, re.I):
+        desc += " program"
+    return f"make {desc}"
+
+
+def _semantic_execute(intent: str, params: Dict[str, Any], text: str, body, mem, current_code: str,
+                      error_context: str, store, meta: Dict[str, Any]):
+    capability = _SEMANTIC_CAPABILITY.get(intent)
+    if capability:
+        allowed, _settings, blocked_message = _ai_capability_check(capability)
+        if not allowed:
+            return store({"success": True, "action": "deterministic_message", "intent": intent.lower(),
+                          "heard": text, "message": blocked_message, "speech": blocked_message,
+                          "policy_blocked": True, "capability": capability, "semantic": meta})
+    has_code = bool(str(current_code or "").strip())
+    spec = semantic_intent.INTENTS.get(intent)
+    if spec and spec.needs_code and not has_code:
+        msg = "The editor is empty. Write or generate some code first."
+        return store({"success": True, "action": "deterministic_message", "message": msg, "speech": msg,
+                      "heard": text, "semantic": meta})
+
+    if intent == "UNKNOWN":
+        return store(_semantic_not_understood(text))
+    if intent == "REPEAT_LAST":
+        response = _repeat_request_response("do that again", body, mem, current_code, store, force=True,
+                                            original_text=text)
+        return response if response is not None else store(_semantic_not_understood(text))
+    if intent == "REPEAT_CHANGE":
+        last_change = mem.get("last_change") if isinstance(mem.get("last_change"), dict) else {}
+        command = str(last_change.get("reason") or "").strip()
+        if not command:
+            msg = "I do not know how the last change was made, so I cannot repeat it. Say the change again."
+            return store({"success": True, "action": "deterministic_message", "message": msg,
+                          "speech": msg, "heard": text, "semantic": meta})
+        return _semantic_redispatch(command, body, text, meta)
+    if intent == "EXPLAIN_CODE" and params.get("style") == "simple":
+        learner_model.record_evidence_for_code(mem, current_code, "simpler_requested")
+        return store({"success": True, "action": "mentor_chat", "mode": "shorter",
+                      "message": "Explain the current program in simpler words.", "heard": text,
+                      "semantic": meta})
+    if intent == "GENERATE_CODE":
+        description = params.get("description", "")
+        if not description:
+            return _semantic_ask(text, mem, current_code, choices=["GENERATE_CODE"], missing="description",
+                                 intent="GENERATE_CODE", store=store, meta=meta)
+        command = _generation_command_from_description(description)
+        return _semantic_redispatch(command, body, text, meta)
+    if intent == "IMPROVE_CODE":
+        aspect = params.get("aspect", "")
+        if not aspect:
+            return _semantic_ask(text, mem, current_code, choices=["IMPROVE_CODE"], missing="aspect",
+                                 intent="IMPROVE_CODE", store=store, meta=meta)
+        return _semantic_redispatch(_IMPROVE_INSTRUCTIONS[aspect], body, text, meta)
+    if intent == "EDIT_CODE":
+        mapped = _route_ai_natural_command_mapper(text, current_code, mem, body,
+                                                  error_context=error_context)
+        mapped.setdefault("semantic", meta)
+        return store(mapped)
+    command = semantic_intent.canonical_command(intent, params)
+    if not command:
+        return store(_semantic_not_understood(text))
+    return _semantic_redispatch(command, body, text, meta)
+
+
+def _semantic_fallback_response(text, body, mem, current_code, error_context, store):
+    """AI semantic fallback, reached only after deterministic routing declined.
+
+    Returns a response, or None to let the offline fuzzy matcher try (model
+    unavailable or produced invalid output)."""
+    resolution = semantic_intent.resolve(
+        text, ai_fn=call_conversation_orchestrator_ai,
+        context=_semantic_context(mem, current_code, error_context),
+    )
+    meta = {**resolution.to_log(), "source": "semantic_ai"}
+    _debug_log(f"semantic intent: {meta}")
+    if resolution.status in {"unavailable", "invalid"}:
+        return None
+    if resolution.status == "unknown":
+        return store(_semantic_not_understood(text))
+    if resolution.status == "clarify":
+        if resolution.missing:
+            return _semantic_ask(text, mem, current_code, choices=resolution.choices,
+                                 missing=resolution.missing, intent=resolution.intent,
+                                 params=resolution.params, store=store, meta=meta)
+        return _semantic_ask(text, mem, current_code, choices=resolution.choices, intent=resolution.intent,
+                             params=resolution.params, store=store, meta=meta)
+    return _semantic_execute(resolution.intent, resolution.params, text, body, mem, current_code,
+                             error_context, store, meta)
+
+
+def _reply_is_new_command(text: str) -> bool:
+    """True when a reply to a pending question is really a fresh, clear command."""
+    core = semantic_intent.strip_fillers(text)
+    if not core:
+        return False
+    if _looks_like_new_command(core):
+        return True
+    parsed = parse_intent(core)
+    # choose_suggestion matches ANY short reply ("banana" scores 0.95), so it
+    # is evidence of an answer, not of a new command.
+    if parsed.get("intent") not in (None, "concept_question", "mentor_chat", "repeat", "choose_suggestion") and \
+            float(parsed.get("confidence") or 0) >= 0.85:
+        return True
+    return any(core == phrase for phrases in COMMANDS.values() for phrase in phrases)
+
+
+def _handle_semantic_pending_reply(text, body, mem, current_code, store):
+    pending = session_memory.get_pending(mem)
+    if not pending or pending.get("type") != "semantic":
+        return None
+    if pending.get("owner") and pending.get("owner") != _semantic_owner():
+        session_memory.clear_pending(mem)
+        return None
+    if semantic_intent.pending_is_stale(pending):
+        session_memory.clear_pending(mem)
+        return None
+    code_changed = pending.get("code_hash") != session_memory.code_hash(current_code)
+    if code_changed and any(c in _SEMANTIC_CODE_DEPENDENT for c in pending.get("choices") or []):
+        # The code the question was about is gone; acting on it would be a guess.
+        session_memory.clear_pending(mem)
+        return None
+
+    meta = {"source": "semantic_clarification", "original": pending.get("original", ""),
+            "choices": list(pending.get("choices") or [])}
+    reply = semantic_intent.match_reply(text, pending)
+    kind = reply.get("kind")
+    params = dict(pending.get("params") or {})
+    if kind == "cancel":
+        session_memory.clear_pending(mem)
+        msg = "Okay, cancelled."
+        return store({"success": True, "action": "deterministic_message", "message": msg, "speech": msg,
+                      "heard": text, "semantic": meta})
+    if kind == "no":
+        session_memory.clear_pending(mem)
+        msg = "Okay, I will not do that. What would you like instead?"
+        return store({"success": True, "action": "deterministic_message", "message": msg, "speech": msg,
+                      "heard": text, "semantic": meta})
+    if kind == "choice":
+        session_memory.clear_pending(mem)
+        meta["resolved"] = reply["intent"]
+        return _semantic_execute(reply["intent"], params, text, body, mem, current_code, "", store, meta)
+    if kind == "param":
+        session_memory.clear_pending(mem)
+        params[reply["name"]] = reply["value"]
+        meta["resolved"] = pending.get("intent")
+        return _semantic_execute(pending.get("intent") or "", params, text, body, mem, current_code, "",
+                                 store, meta)
+
+    missing = str(pending.get("missing") or "")
+    if missing == "description" and not _reply_is_new_command(text):
+        desc_params, _reason = semantic_intent._validate_params(
+            "GENERATE_CODE", {"description": semantic_intent.strip_fillers(text)})
+        if desc_params and desc_params.get("description"):
+            session_memory.clear_pending(mem)
+            meta["resolved"] = "GENERATE_CODE"
+            return _semantic_execute("GENERATE_CODE", desc_params, text, body, mem, current_code, "", store,
+                                     meta)
+    if missing == "line":
+        number = re.search(r"\d+", text)
+        if number:
+            session_memory.clear_pending(mem)
+            return _semantic_execute("GO_TO_LINE", {"line": int(number.group(0))}, text, body, mem,
+                                     current_code, "", store, meta)
+    if missing == "term":
+        term = semantic_intent.strip_fillers(text).split()[-1:] if text.strip() else []
+        if term and re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", term[0]):
+            session_memory.clear_pending(mem)
+            return _semantic_execute("FIND", {"term": term[0]}, text, body, mem, current_code, "", store, meta)
+
+    if _reply_is_new_command(text):
+        # "actually just read the output" while CodeUp asked something else:
+        # the new, clear command wins and the old question is dropped. It is
+        # routed without its conversational lead-in ("actually just").
+        session_memory.clear_pending(mem)
+        core = semantic_intent.strip_fillers(text)
+        if core and core != " ".join(str(text or "").lower().split()):
+            return _voice_command_impl({**body, "text": core})
+        return None
+
+    choices = [c for c in pending.get("choices") or [] if c in semantic_intent.INTENTS]
+    if len(choices) >= 1 and not missing and _structured_ai_available():
+        resolution = semantic_intent.resolve(
+            text, ai_fn=call_conversation_orchestrator_ai,
+            context={**_semantic_context(mem, current_code, ""), "pending_question": pending.get("question")},
+            restrict=choices,
+        )
+        meta["model"] = resolution.to_log()
+        if resolution.status == "resolved" and resolution.intent in choices:
+            session_memory.clear_pending(mem)
+            meta["resolved"] = resolution.intent
+            return _semantic_execute(resolution.intent, {**params, **resolution.params}, text, body, mem,
+                                     current_code, "", store, meta)
+
+    attempts = int(pending.get("attempts") or 0) + 1
+    if attempts >= 2:
+        session_memory.clear_pending(mem)
+        msg = "Okay, I will leave that for now. Say the command again whenever you are ready."
+        return store({"success": True, "action": "deterministic_message", "message": msg, "speech": msg,
+                      "heard": text, "semantic": meta})
+    pending["attempts"] = attempts
+    question = pending.get("question") or semantic_intent.clarification_question(choices, missing)
+    msg = f"Sorry, I did not catch that. {question}"
+    return store({"success": True, "action": "clarify", "intent": "clarify", "message": msg, "speech": msg,
+                  "needs_clarification": True, "heard": text, "semantic": meta})
+
+
+def _vague_improvement_response(text, body, mem, current_code, store):
+    """"make it better": act when context makes the improvement obvious (the
+    current code just failed to run -> fix it), otherwise ask ONE question."""
+    meta = {"source": "improve_context"}
+    ran_this_code = str(mem.get("last_run_code_hash") or "") == session_memory.code_hash(current_code)
+    if ran_this_code and str(mem.get("last_run_error") or "").strip():
+        meta["reason"] = "current_code_has_error"
+        return _semantic_redispatch("fix this code", body, text, meta)
+    return _semantic_ask(text, mem, current_code, choices=["IMPROVE_CODE"], missing="aspect",
+                         intent="IMPROVE_CODE", store=store, meta=meta)
+
+
+def _repeat_request_response(text, body, mem, current_code, store, *, force=False, original_text=None):
+    """Context-aware "do that again": run again, repeat the last change, or ask."""
+    if not force and not _REPEAT_REQUEST_RE.match(" ".join(str(text or "").lower().strip().rstrip(".!?").split())):
+        return None
+    heard = original_text or text
+    recent = session_memory.recent_actions(mem)
+    last_run = next((e for e in reversed(recent) if e.get("kind") == "run"), None)
+    last_change = next((e for e in reversed(recent) if e.get("kind") == "change" and e.get("command")), None)
+    meta = {"source": "repeat_context", "last_run": bool(last_run), "last_change": bool(last_change)}
+    if not last_run and not last_change:
+        msg = "I do not have a recent action to repeat yet. Say run my code, or tell me what to do."
+        return store({"success": True, "action": "deterministic_message", "message": msg, "speech": msg,
+                      "heard": heard, "semantic": meta})
+    if last_run and last_change and abs(float(last_run["ts"]) - float(last_change["ts"])) <= 90:
+        return _semantic_ask(heard, mem, current_code, choices=["RUN_CODE", "REPEAT_CHANGE"],
+                             store=store, meta=meta)
+    latest = max((e for e in (last_run, last_change) if e), key=lambda e: float(e.get("ts") or 0))
+    if latest["kind"] == "run":
+        return _semantic_redispatch("run", body, heard, meta)
+    return _semantic_redispatch(latest["command"], body, heard, meta)
+
+
+# Three distinct control commands (exact phrases only, never substrings, so
+# "stop the loop" or code containing the word stop is never a control command):
+#   * speech interruption ("stop", "be quiet") -> stop_speaking: CodeUp stops
+#     talking, the microphone keeps listening and the saved "voice on" choice
+#     is untouched;
+#   * microphone off ("stop listening", "turn voice off") -> pause_voice:
+#     VoiceInput.stop() turns recognition off and remembers that choice;
+#   * "stop everything" -> stop_everything: both (routed by the parser).
+_SPEECH_STOP_PHRASES = frozenset({
+    "stop", "stop it", "stop now", "stop please", "please stop", "be quiet", "quiet", "quiet please",
+    "silence", "shut up", "stop talking", "stop speaking", "enough", "that's enough", "thats enough",
+    "ruko", "chup", "chup raho", "bas", "bas karo", "रुको", "रुक", "चुप", "बस",
+})
+_VOICE_OFF_PHRASES = frozenset({
+    "stop voice", "stop voice control", "stop listening", "turn voice off", "turn off voice",
+    "turn off voice control", "turn voice control off", "voice off", "disable voice", "disable voice control",
+    "disable microphone", "disable the microphone", "turn off microphone", "turn off the microphone",
+    "turn the microphone off", "turn the mic off", "turn off the mic", "turn off mic", "mute microphone",
+    "mute the microphone", "mute mic", "mute the mic", "microphone off", "mic off",
+})
+
+
+def _voice_control_command(text: str):
+    t = " ".join(str(text or "").lower().strip().rstrip(".!?").split())
+    if t in _SPEECH_STOP_PHRASES:
+        return {"success": True, "action": "stop_speaking", "intent": "stop_speaking",
+                "heard": text, "confidence": 0.97}
+    if t in _VOICE_OFF_PHRASES:
+        return {"success": True, "action": "pause_voice", "intent": "pause_voice",
+                "heard": text, "confidence": 0.97}
+    return None
+
+
+_TUTORIAL_TOPICS_LIST_RE = re.compile(
+    r"^(?:please\s+)?(?:(?:list|show|read|tell\s+me)\s+(?:all\s+|the\s+|my\s+)?(?:tutorial\s+topics|tutorials|topics|"
+    r"practice\s+topics|lessons\s+list)|(?:more|all)\s+tutorials|"
+    r"what\s+(?:tutorials|topics)\s+(?:are\s+there|do\s+you\s+have|can\s+i\s+(?:learn|practi[sc]e)))$",
+    re.IGNORECASE,
+)
+_TUTORIAL_PRACTISE_RE = re.compile(
+    r"^(?:please\s+)?(?:let\s+me\s+|i\s+want\s+to\s+)?practi[sc]e\s+(?P<topic>[a-z ]+?)"
+    r"(?:\s+(?:please|again|module|topic|lesson))?$",
+    re.IGNORECASE,
+)
+
+
+def _tutorial_topics_response(text: str, active_mode: str):
+    """Makes the expanded tutorial curriculum reachable by voice and typing:
+    "list tutorial topics" and "practise dictionaries". Unknown topics fall
+    through to the existing pipeline unchanged."""
+    t = " ".join(str(text or "").lower().strip().rstrip(".!?").split())
+    if _TUTORIAL_TOPICS_LIST_RE.match(t):
+        msg = tutorial_engine.topics_listing()
+        return {"success": True, "action": "deterministic_message", "message": msg, "speech": msg,
+                "heard": text, "intent": "tutorial_topics", "confidence": 0.98}
+    m = _TUTORIAL_PRACTISE_RE.match(t)
+    if not m:
+        return None
+    topic = m.group("topic")
+    if re.search(r"\berrors?$", topic):
+        return None  # "practice name errors" belongs to the error-practice feature
+    module_id = tutorial_engine.practice_module_for(topic)
+    if not module_id:
+        return None
+    if active_mode == "audio_blocks":
+        msg = "You are in Audio Blocks Mode. Say switch to Python Code Mode to practise Python topics."
+        return {"success": True, "action": "deterministic_message", "message": msg, "speech": msg,
+                "heard": text, "intent": "tutorial_practice"}
+    return {"success": True, "action": "tutorial_practice", "module": module_id, "heard": text,
+            "intent": "tutorial_practice", "confidence": 0.97}
+
+
+# Guided-learning action -> classroom capabilities it needs (codeup/classroom/ai_policy).
+# A full worked example is the answer itself, so it also needs code generation.
+_GUIDED_CAPABILITIES = {
+    "hint": ("hint",),
+    "more_hint": ("hint",),
+    "why": ("hint",),
+    "example": ("hint", "generate"),
+    # The step explanation is written for this exact task ("give the name
+    # marks to print, without quotes"), so it is a hint as well as a concept answer.
+    "explain": ("concept_qa", "hint"),
+}
+
+
+def _guided_assistance() -> Dict[str, bool]:
+    """The capabilities guided learning can reveal answers through, resolved
+    through the one classroom gate (_ai_capability_check)."""
+    return {cap: _ai_capability_check(cap)[0] for cap in ("hint", "generate", "concept_qa")}
+
+
+def _guided_learning_response(text: str, current_code: str, mem, active_mode: str):
+    """Checkpoint-based guided learning (codeup/learning/guided_learning.py).
+
+    Start/list commands work any time; step commands (check my work, hint,
+    another hint, show me an example, why is this wrong...) belong to guided
+    learning only while a guided path is active, so they never shadow the
+    tutor/lesson features otherwise."""
+    active = guided_learning.is_active(mem)
+    matched = guided_learning.command_kind(text, active=active)
+    if matched is None:
+        if active:
+            # A pending understanding question takes plain answers ("80",
+            # "it shows 80"); only a reply that starts like a command verb
+            # ("run it", "explain this") goes on to normal routing.
+            answered = guided_learning.answer_question(
+                mem, current_code, text, assistance=_guided_assistance()) \
+                if not _looks_like_new_command(semantic_intent.strip_fillers(text)) else None
+            if answered is not None:
+                answered.setdefault("heard", text)
+                return answered
+        return None
+    kind, topic = matched
+    if active_mode == "audio_blocks" and kind in {"start", "check", "hint", "more_hint", "example", "why"}:
+        msg = "You are in Audio Blocks Mode. Say switch to Python Code Mode to use guided Python learning."
+        return {"success": True, "action": "deterministic_message", "message": msg, "speech": msg,
+                "heard": text, "intent": "guided_learning"}
+    # Guided learning uses the assignment's existing capability settings, so
+    # it can never be a side door around them. Actions that reveal answer
+    # information need their capability; "check my work" still gives its
+    # verdict, but guided_learning drops the targeted feedback when hints are
+    # off. Navigation (next, repeat, progress, skip, stop, load) is never gated.
+    assistance = _guided_assistance()
+    for capability in _GUIDED_CAPABILITIES.get(kind, ()):
+        if not assistance[capability]:
+            blocked_message = _ai_capability_check(capability)[2]
+            return {"success": True, "action": "deterministic_message", "message": blocked_message,
+                    "speech": blocked_message, "heard": text, "intent": "guided_learning",
+                    "policy_blocked": True, "capability": capability}
+    response = guided_learning.handle(kind, mem, current_code, topic, assistance=assistance)
+    response.setdefault("heard", text)
+    response["guided_command"] = kind
+    return response
+
+
 @app.route("/voice-command", methods=["POST"])
 def voice():
-    body = safejson()
+    return _voice_command_impl(safejson())
+
+
+def _voice_command_impl(body, _semantic_depth: int = 0):
+    # _semantic_depth > 0 means this call is a re-dispatch of a canonical
+    # command chosen by the semantic resolver (codeup/commands/semantic_intent.py):
+    # it runs the exact same deterministic pipeline and policy gates as a typed
+    # command, but may never consult the semantic resolver again.
     raw_text = _safe_text(body.get("text"), limit=MAX_VOICE_TEXT_SIZE + 1).strip()
     if len(raw_text) > MAX_VOICE_TEXT_SIZE:
         return jsonify({"success": False, "action": "unknown", "error": "Voice command is too long"}), 413
@@ -10174,6 +10932,18 @@ def voice():
         awaiting_response.setdefault("confidence", 0.99)
         return jsonify(_sanitize_voice_response(awaiting_response))
 
+    voice_control = _voice_control_command(text)
+    if voice_control is not None:
+        return _store_and_return(voice_control)
+
+    guided_response = _guided_learning_response(text, current_code, mem, active_mode)
+    if guided_response is not None:
+        return _store_and_return(guided_response)
+
+    topics_response = _tutorial_topics_response(text, active_mode)
+    if topics_response is not None:
+        return _store_and_return(topics_response)
+
     # An open understanding question ("check my understanding") claims the
     # learner's reply before general NLU, so "2" or "i is 2 on the last run"
     # is graded instead of being read as a suggestion pick or a run command.
@@ -10190,6 +10960,20 @@ def voice():
                 "understanding_correct": understanding_reply.get("understanding_correct"),
                 "confidence": 0.98,
             })
+
+    # A pending semantic clarification ("Do you want me to run the code again
+    # or repeat the last change?") claims the learner's natural reply ("run
+    # it", "the first one", "haan run karo") before general routing - but a
+    # clearly new command supersedes it instead of being trapped.
+    if _semantic_depth == 0:
+        semantic_reply = _handle_semantic_pending_reply(text, body, mem, current_code, _store_and_return)
+        if semantic_reply is not None:
+            return semantic_reply
+        repeat_reply = _repeat_request_response(text, body, mem, current_code, _store_and_return)
+        if repeat_reply is not None:
+            return repeat_reply
+        if str(current_code or "").strip() and semantic_intent.is_vague_improvement(text):
+            return _vague_improvement_response(text, body, mem, current_code, _store_and_return)
 
     if intent == "repeat":
         last_action = storage.get('last_voice_action', None)
@@ -10334,6 +11118,23 @@ def voice():
     if concept_response is not None:
         return _store_and_return(concept_response)
 
+    semantic_direct_phrases = {
+        "run": ["code chala do", "program chala do", "mera program run karo", "run this please", "this run", "run it", "chalao", "run karo"],
+        "analyze": ["ye code samjhao", "code samjhao", "explain code me", "isko samjhao", "explain this please"],
+        "list_variables_voice": ["variables batao", "mere variables kya hain", "variable batao", "what variables i have"],
+        "code_map": ["code map batao", "map batao", "structure batao"],
+        "fix": ["error fix kar do", "isko theek kardo", "theek karo", "fix error please"],
+        "speak": ["output suna do", "output batao", "what happened", "kya output hai"],
+        "step_narration": ["next wala step", "next step batao"],
+    }
+    semantic_hit = next((action for action, phrases in semantic_direct_phrases.items() if text.lower().strip().rstrip(".!?") in phrases), None)
+    if semantic_hit:
+        return _store_and_return({
+            "success": True, "action": semantic_hit, "intent": "semantic_direct_command",
+            "message": f"Understood: {semantic_hit.replace('_', ' ')}.",
+            "speech": f"Understood. {semantic_hit.replace('_', ' ')}.",
+            "heard": text, "confidence": 0.96, "source": "deterministic_semantic_mapper",
+        })
     accessibility_response = _accessibility_command_response(text, storage)
     if accessibility_response is not None:
         accessibility_response.setdefault("heard", text)
@@ -10529,6 +11330,16 @@ def voice():
                 verbosity=verbosity,
             )
             if mapped_ai.get("action") == "clarify":
+                # The model could not map it ("add a loop" -> unknown), but a
+                # deterministic template can: use that rather than a generic
+                # "not clearly" reply. Never for a classroom policy block.
+                # Only for plain additions ("add a loop"): an edit of existing
+                # code ("make it print 5 numbers instead") keeps its question.
+                if mapped_ai.get("reason") in {"unknown_clarify", "low_confidence"} and _is_plain_addition(text):
+                    deterministic = (_beginner_template_command_response(text, current_code, mode="inserts")
+                                     or _spoken_insert_response(text, current_code))
+                    if deterministic is not None:
+                        return _store_and_return(deterministic)
                 _log_unrecognized_command(text, get_session_id())
             return _store_and_return(mapped_ai)
         local_edit = _route_local_natural_code_edit(text, current_code, mem)
@@ -10536,6 +11347,93 @@ def voice():
             return _store_and_return(local_edit)
         return None
 
+    learner_progress_phrases = {
+        "summary": {"how am i doing", "show my learning progress", "what have i learned", "what have i completed"},
+        "struggle": {"what am i struggling with", "where am i stuck"},
+        "practice": {"what should i practice", "recommend practice", "what should i do next"},
+        "why": {"why did you explain it that way", "why this explanation"},
+        "reset": {"reset my learning history", "reset learning profile", "clear my learning progress"},
+    }
+    learner_action = next((name for name, phrases in learner_progress_phrases.items() if " ".join(text.lower().strip().rstrip(".!?").split()) in phrases), None)
+    if learner_action:
+        if learner_action == "reset":
+            learner_model.reset(mem)
+            message = "I reset the learning history for this session. Classroom and instructor records are unchanged."
+        elif learner_action == "practice":
+            message = learner_model.practice_recommendation(mem)
+        elif learner_action == "why":
+            # Explain the answer the learner just heard, not whatever concept
+            # happens to come first in the editor.
+            concept = learner_model.last_explained_concept(mem) or \
+                (classroom_concepts.detect_concepts(current_code or "") or ["this topic"])[0]
+            message = learner_model.adaptation_note(mem, concept)
+        elif learner_action == "struggle":
+            summary = learner_model.progress_summary(mem)
+            message = summary if "Needs reinforcement" in summary else "I do not see a repeated struggle yet. I only track programming evidence such as errors, hints, practice, and successful runs."
+        else:
+            message = learner_model.progress_summary(mem)
+        return _store_and_return({
+            "success": True, "action": "deterministic_message", "intent": "learner_progress",
+            "message": message, "speech": message, "heard": text, "confidence": 0.98,
+        })
+    diagnostic_voice_phrases = {
+        "next": {"next error", "next problem"},
+        "previous": {"previous error", "prev error", "go to previous error", "previous problem"},
+        "first": {"first error", "first problem"},
+        "last": {"final error", "last problem", "last error"},
+        "repeat": {"repeat error", "repeat this error", "read selected error", "read current error"},
+        "count": {"how many errors", "how many problems", "count errors"},
+        "all": {"read all errors", "read all problems", "list all errors"},
+        "explain": {"explain this error", "explain selected error", "explain current error"},
+        "fix": {"fix this error", "fix selected error", "fix current error"},
+    }
+    diag_text = " ".join(text.lower().strip().rstrip(".!?").split())
+    diag_action = next((name for name, phrases in diagnostic_voice_phrases.items() if diag_text in phrases), None)
+    # Staleness is judged only when the request says what the code is (the
+    # IDE always sends the editor content; an empty editor counts as a change).
+    if diag_action and "code" in body and session_memory.diagnostics_are_stale(mem, current_code):
+        return _store_and_return(_stale_diagnostics_response(mem, text))
+    if diag_action:
+        if diag_action in {"next", "previous", "first", "last"}:
+            before_cursor = int(mem.get("diagnostic_cursor") or 0)
+            item = session_memory.move_diagnostic_cursor(mem, diag_action)
+            after_cursor = int(mem.get("diagnostic_cursor") or 0)
+            message = _diagnostic_speech(session_memory.get_diagnostics(mem), after_cursor)
+            if item and diag_action in {"next", "previous"} and before_cursor == after_cursor:
+                edge = "last" if diag_action == "next" else "first"
+                message = f"That is the {edge} problem. " + message
+        elif diag_action == "count":
+            items = session_memory.get_diagnostics(mem)
+            count = len(items)
+            message = (f"CodeUp knows about {count} problem{'s' if count != 1 else ''}. Say read all errors to hear them."
+                       if count else "CodeUp has no known problems. Run your code or check syntax first.")
+            item = session_memory.selected_diagnostic(mem)
+        elif diag_action == "all":
+            item = session_memory.selected_diagnostic(mem)
+            message = _all_diagnostics_speech(session_memory.get_diagnostics(mem))
+        elif diag_action == "explain":
+            item = session_memory.selected_diagnostic(mem)
+            message = _diagnostic_detail_speech(item)
+        elif diag_action == "fix":
+            item = session_memory.selected_diagnostic(mem)
+            if item:
+                return _store_and_return({
+                    "success": True, "action": "fix", "intent": "fix_selected_error",
+                    "message": _diagnostic_detail_speech(item), "speech": _diagnostic_detail_speech(item),
+                    "selected_diagnostic": item, "heard": text, "confidence": 0.98,
+                })
+            message = "There is no selected error to fix. Run your code or check syntax first."
+        else:
+            item = session_memory.selected_diagnostic(mem)
+            message = _diagnostic_detail_speech(item)
+        return _store_and_return({
+            "success": True, "action": "navigate_code" if item and item.get("line") else "deterministic_message",
+            "intent": "diagnostic_navigation", "line": item.get("line") if item else None,
+            "end_line": item.get("line") if item else None,
+            "message": message, "speech": message, "heard": text,
+            "selected_diagnostic": item, "diagnostic_count": len(session_memory.get_diagnostics(mem)),
+            "selected_index": int(mem.get("diagnostic_cursor") or 0), "confidence": 0.98,
+        })
     deterministic_code_intents = {
         "preflight_check", "check_indentation", "list_functions", "list_imports",
         "sandbox_check", "repeat_last_output", "repeat_last_error", "project_health",
@@ -10836,6 +11734,22 @@ def voice():
         })
 
     if confidence >= 0.75 and intent == "next_error":
+        if "code" in body and session_memory.diagnostics_are_stale(mem, current_code):
+            return _store_and_return(_stale_diagnostics_response(mem, text))
+        diagnostics_items = session_memory.get_diagnostics(mem)
+        if diagnostics_items:
+            item = session_memory.move_diagnostic_cursor(mem, "next")
+            message = _diagnostic_speech(diagnostics_items, int(mem.get("diagnostic_cursor") or 0))
+            return _store_and_return({
+                "success": True, "action": "navigate_code", "intent": intent,
+                "line": item.get("line") if item else None,
+                "end_line": item.get("line") if item else None,
+                "message": message, "speech": message, "heard": text,
+                "selected_diagnostic": item,
+                "diagnostic_count": len(diagnostics_items),
+                "selected_index": int(mem.get("diagnostic_cursor") or 0),
+                "confidence": confidence,
+            })
         error_line = _extract_error_line(error_context or str(mem.get("last_run_error") or ""))
         message = (f"The last error is on line {error_line}." if error_line
                    else "I do not have a recent error line. Run your code first.")
@@ -10973,8 +11887,6 @@ def voice():
         })
 
     early_text = " ".join(text.lower().strip().rstrip(".!?").split())
-    if early_text == "stop":
-        return _store_and_return({"success": True, "action": "stop_everything", "heard": text, "confidence": 0.96})
     if re.match(r"^(?:start|begin)\s+learning(?:\s+(?:python|coding|programming|to\s+code))?$", early_text):
         return _store_and_return({
             "success": True, "action": "start_tutorial",
@@ -11443,6 +12355,11 @@ def voice():
     if _report_response is not None:
         return _store_and_return(_report_response)
 
+    if active_mode != "audio_blocks":
+        print_request = _print_request_response(text, current_code)
+        if print_request is not None:
+            return _store_and_return(print_request)
+
     early_followup_category = session_memory.classify_followup(text)
     current_hash = session_memory.code_hash(current_code)
     generated_hash = str(mem.get("last_generated_code_hash") or "")
@@ -11480,6 +12397,10 @@ def voice():
         natural_understanding = _try_natural_command_understanding()
         if natural_understanding is not None:
             return natural_understanding
+
+    percentage_question = _percentage_generation_clarification(text, mem)
+    if percentage_question is not None:
+        return _store_and_return(percentage_question)
 
     template_response = _beginner_template_command_response(text, current_code, mode="inserts")
     if template_response is not None:
@@ -12044,19 +12965,51 @@ def voice():
     if conversational and conversational.get("action") != "unknown":
         return _store_and_return(conversational)
 
+    lower_text = text.lower().strip()
+    best, bscore, second, sscore = best_two_commands(lower_text)
     repaired = _route_repaired_intent(text, current_code, allow_ai=False)
+    structured_ai_available = _structured_ai_available()
+    near_exact_command = bool(best and bscore >= 90)
+    compact_repaired_command = bool(
+        repaired is not None and len(semantic_intent.strip_fillers(text).split()) <= 4
+    )
+
+    # Intent repair deliberately recognizes broad keyword evidence so it is a
+    # useful offline fallback. With structured AI available, only a near-exact
+    # command should bypass semantic classification; otherwise a long free-form
+    # request containing one command word (for example, "could you execute
+    # whatever I've written") would never reach the semantic resolver.
+    if repaired is not None and (
+        near_exact_command or compact_repaired_command or not structured_ai_available
+    ):
+        return _store_and_return(repaired)
+
+    HIGH_FREQUENCY_COMMANDS = {"run", "analyze", "fix", "help", "speak", "read_output", "walk_through", "sonify_block", "stop_speaking", "stop_everything", "pause_voice", "resume_voice"}
+
+    # Every deterministic route above declined. A near-exact fuzzy hit (a
+    # small typo of a known command) is still trusted without AI; anything
+    # looser goes to the allowlisted semantic resolver first, because
+    # character-level fuzzy scores misread Hinglish and paraphrases (e.g.
+    # "code ka structure bata" scored as "sonify block"). The fuzzy matcher
+    # below remains the offline fallback when AI is unavailable.
+    semantic_attempted = False
+    if _semantic_depth == 0 and not near_exact_command and structured_ai_available:
+        semantic_attempted = True
+        semantic_response = _semantic_fallback_response(
+            text, body, mem, current_code, error_context, _store_and_return,
+        )
+        if semantic_response is not None:
+            return semantic_response
+
     if repaired is not None:
         return _store_and_return(repaired)
 
     if conversational:
+        # The conversational edit router looked at this utterance but found no
+        # safe edit (and the semantic resolver, if available, could not map it).
         if re.search(r"\b(?:for\s+loop|loop)\b", text, re.IGNORECASE):
             return _store_and_return(_unclear_loop_command_response(text))
         return jsonify(conversational)
-
-    lower_text = text.lower().strip()
-    best, bscore, second, sscore = best_two_commands(lower_text)
-
-    HIGH_FREQUENCY_COMMANDS = {"run", "analyze", "fix", "help", "speak", "read_output", "walk_through", "sonify_block", "stop_everything", "pause_voice", "resume_voice"}
 
     if best and bscore >= VOICE_FUZZY_THRESHOLD:
         is_clear_winner = bscore >= 75 and (not second or (bscore - sscore) >= 15)
@@ -12073,6 +13026,13 @@ def voice():
             "heard": text,
             "confidence": bscore / 100.0
         })
+
+    if semantic_attempted:
+        # The semantic resolver already consulted the model for this
+        # utterance and could not map it; a second model call would only add
+        # latency. Give the concise, safe "not understood" answer.
+        _log_unrecognized_command(text, get_session_id())
+        return _store_and_return(_semantic_not_understood(text))
 
     mapped_ai = _route_ai_natural_command_mapper(
         text,

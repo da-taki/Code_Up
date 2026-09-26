@@ -11,7 +11,11 @@ const s = src.indexOf(START);
 const e = src.indexOf(END);
 assert(s !== -1 && e !== -1 && e > s, 'normalizer markers not found in static/app.js');
 
-const sandbox = {};
+// normalizeSpokenPrintArgument reads the editor (getCode) so a spoken word is
+// a variable only when the program defines it; tests set the editor content
+// the learner would have at that moment.
+let editorCode = '';
+const sandbox = { getCode: () => editorCode };
 vm.createContext(sandbox);
 vm.runInContext(
   src.slice(s, e) +
@@ -79,12 +83,24 @@ check('for-loop header', () => {
   assert.strictEqual(N.normalizeSpokenCodeText('for i in range 3'), 'for i in range(3):');
 });
 check('indented print of a variable', () => {
+  editorCode = 'count = 1\nwhile count <= 3:';
   assert.strictEqual(N.normalizeSpokenCodeText('indented print count'), '    print(count)');
+  editorCode = 'for i in range(3):';
   assert.strictEqual(N.normalizeSpokenCodeText('indented print i'), '    print(i)');
+  editorCode = '';
 });
 check('print message vs print variable', () => {
   assert.strictEqual(N.normalizeSpokenCodeText('print hello world'), 'print("hello world")');
+  editorCode = 'name = "Taknoor"';
   assert.strictEqual(N.normalizeSpokenCodeText('print name'), 'print(name)');
+  editorCode = '';
+});
+check('a spoken word never becomes an undefined name', () => {
+  editorCode = 'marks = 80';
+  assert.strictEqual(N.normalizeSpokenCodeText('print hello'), 'print("hello")');
+  assert.strictEqual(N.normalizeSpokenCodeText('print name'), 'print("name")');
+  assert.strictEqual(N.normalizeSpokenCodeText('print marks'), 'print(marks)');
+  editorCode = '';
 });
 check('a mis-heard print keyword is safely corrected', () => {
   assert.strictEqual(N.normalizeSpokenCodeText('prent hello world'), 'print("hello world")');
@@ -107,6 +123,7 @@ check('canonical tutorial commands build the example programs', () => {
 
   assert.strictEqual(line('print hello world'), 'print("hello world")');
 
+  editorCode = variable('name', 'Taknoor');
   assert.strictEqual(
     [variable('name', 'Taknoor'), line('print name')].join('\n'),
     'name = "Taknoor"\nprint(name)');
@@ -116,10 +133,12 @@ check('canonical tutorial commands build the example programs', () => {
      line('an indented print saying you can vote')].join('\n'),
     'age = 12\nif age > 10:\n    print("you can vote")');
 
+  editorCode = line('for i in range 3');
   assert.strictEqual(
     [line('for i in range 3'), line('an indented print i')].join('\n'),
     'for i in range(3):\n    print(i)');
 
+  editorCode = variable('count', '1') + '\n' + whileHeader('count is less than or equal to 3');
   assert.strictEqual(
     [variable('count', '1'), whileHeader('count is less than or equal to 3'),
      line('an indented print count'), line('an indented count equals count plus 1')].join('\n'),

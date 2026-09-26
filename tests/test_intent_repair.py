@@ -70,19 +70,19 @@ class TestSpokenInsert:
         return d["ai_action"]["code"]
 
     def test_insert_print_hello_is_quoted(self, client):
-        assert self._code(client, "insert print hello") == 'print("hello")'
+        assert self._code(client, "insert print hello") == 'print("Hello")'
 
     def test_put_print_hello_in_editor(self, client):
-        assert self._code(client, "put print hello in the editor") == 'print("hello")'
+        assert self._code(client, "put print hello in the editor") == 'print("Hello")'
 
     def test_add_print_line_that_says(self, client):
-        assert self._code(client, "add a print line that says hello world") == 'print("hello world")'
+        assert self._code(client, "add a print line that says hello world") == 'print("Hello world")'
 
     def test_insert_print_number_is_bare(self, client):
         assert self._code(client, "insert print 5") == "print(5)"
 
     def test_undefined_word_is_text(self, client):
-        assert self._code(client, "insert print name") == 'print("name")'
+        assert self._code(client, "insert print name") == 'print("Name")'
 
     def test_defined_variable_is_bare(self, client):
         assert self._code(client, "insert print name", code='name = "Taknoor"\n') == "print(name)"
@@ -93,11 +93,11 @@ class TestSpokenInsert:
         assert code != 'print("variable name")'
 
     def test_indented_print(self, client):
-        assert self._code(client, "insert an indented print hello") == '    print("hello")'
+        assert self._code(client, "insert an indented print hello") == '    print("Hello")'
 
     def test_for_loop_that_prints(self, client):
         code = self._code(client, "insert a for loop that prints hello three times")
-        assert code == 'for i in range(3):\n    print("hello")'
+        assert code == 'for i in range(3):\n    print("Hello")'
         compile(code, "<t>", "exec")  # syntactically valid
 
 

@@ -1151,7 +1151,7 @@ def test_missing_body_handled(client):
     ("insert a for loop",           "conversational_edit",
      lambda d: d.get("ai_action", {}).get("code") == "for i in range(3):\n    print(i)"),
     ("insert print hello world",    "conversational_edit",
-     lambda d: d.get("ai_action", {}).get("code") == 'print("hello world")'),
+     lambda d: d.get("ai_action", {}).get("code") == 'print("Hello world")'),
 ])
 def test_voice_intent_parsing(client, voice_input, expected_action, check):
     res = client.post("/voice-command", json={"text": voice_input})

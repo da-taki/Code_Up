@@ -99,7 +99,7 @@ class TestVariablePending:
 class TestRegressions:
     def test_print_insert_still_quotes(self, client):
         d = _vc(client, "insert print hello")
-        assert d["ai_action"]["code"] == 'print("hello")'
+        assert d["ai_action"]["code"] == 'print("Hello")'
 
     def test_intentional_broken_code_preserved(self, client):
         d = _vc(client, "insert print hello world without closing quote")

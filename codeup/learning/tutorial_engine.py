@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import ast
+import re
 from typing import Callable, Dict, List, Optional, Tuple
 
 MODULE_ORDER: List[str] = ["print", "variables", "if", "for", "while"]
+CORE_MODULE_ORDER: List[str] = list(MODULE_ORDER)
+EXPANDED_MODULE_ORDER: List[str] = list(MODULE_ORDER)
 
 MODULES: Dict[str, Dict] = {
     "print": {
@@ -505,4 +508,203 @@ def validate_attempt(
         "safe": True,
         "feedback": module["success"],
         "hint": None,
+    }
+
+# BEGINNER_CURRICULUM_EXTENSION: deterministic modules added after Vision-Aid feedback.
+def _has_call_named(code: str, name: str) -> bool:
+    tree = _safe_parse(code)
+    if tree is None:
+        return False
+    return any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == name for n in ast.walk(tree))
+
+
+def _has_binop(code: str, ops) -> bool:
+    tree = _safe_parse(code)
+    if tree is None:
+        return False
+    return any(isinstance(n, ast.BinOp) and isinstance(n.op, ops) for n in ast.walk(tree))
+
+
+def _has_compare(code: str) -> bool:
+    tree = _safe_parse(code)
+    return bool(tree and any(isinstance(n, ast.Compare) for n in ast.walk(tree)))
+
+
+def _has_boolop(code: str) -> bool:
+    tree = _safe_parse(code)
+    return bool(tree and any(isinstance(n, ast.BoolOp) for n in ast.walk(tree)))
+
+
+def _has_if_else(code: str) -> bool:
+    tree = _safe_parse(code)
+    return bool(tree and any(isinstance(n, ast.If) and n.orelse for n in ast.walk(tree)))
+
+
+def _has_elif(code: str) -> bool:
+    tree = _safe_parse(code)
+    return bool(tree and any(isinstance(n, ast.If) and any(isinstance(child, ast.If) for child in n.orelse) for n in ast.walk(tree)))
+
+
+def _has_nested_if(code: str) -> bool:
+    tree = _safe_parse(code)
+    if tree is None:
+        return False
+    return any(isinstance(n, ast.If) and any(isinstance(c, ast.If) for c in ast.walk(ast.Module(body=n.body, type_ignores=[]))) for n in ast.walk(tree))
+
+
+def _has_counter(code: str) -> bool:
+    tree = _safe_parse(code)
+    return bool(tree and any(isinstance(n, ast.AugAssign) or (isinstance(n, ast.Assign) and isinstance(n.value, ast.BinOp)) for n in ast.walk(tree)))
+
+
+def _has_list(code: str) -> bool:
+    tree = _safe_parse(code)
+    return bool(tree and any(isinstance(n, (ast.List, ast.ListComp)) for n in ast.walk(tree)))
+
+
+def _has_dict(code: str) -> bool:
+    tree = _safe_parse(code)
+    return bool(tree and any(isinstance(n, ast.Dict) for n in ast.walk(tree)))
+
+
+def _has_function_with_return(code: str) -> bool:
+    tree = _safe_parse(code)
+    return bool(tree and any(isinstance(n, ast.FunctionDef) and any(isinstance(c, ast.Return) for c in ast.walk(n)) for n in ast.walk(tree)))
+
+
+def _has_function_params(code: str) -> bool:
+    tree = _safe_parse(code)
+    return bool(tree and any(isinstance(n, ast.FunctionDef) and n.args.args for n in ast.walk(tree)))
+
+
+def _has_function_call(code: str) -> bool:
+    tree = _safe_parse(code)
+    if tree is None:
+        return False
+    defined = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    return any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in defined for n in ast.walk(tree))
+
+
+def _has_two_functions(code: str) -> bool:
+    tree = _safe_parse(code)
+    return bool(tree and sum(1 for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)) >= 2)
+
+
+def _always_practice(code: str) -> bool:
+    return bool(str(code or '').strip())
+
+
+def _module(mid, order, title, concept, example, task, hints, success, validator):
+    MODULES[mid] = {
+        "id": mid,
+        "order": order,
+        "title": title,
+        "concept": concept,
+        "example_code": example,
+        "example_spoken": "Ask for the example when you want the exact starter code read aloud.",
+        "task": task,
+        "hints": hints,
+        "success": success,
+        "recap": f"Quick recap. {concept}",
+    }
+    _VALIDATORS[mid] = validator
+
+
+_EXTRA_MODULES = [
+    ("input", "Input", "input lets a program ask the learner for a value while it runs.", 'name = input("Name: ")\nprint(name)', "Ask for a name, store it, then print it back.", ["Use input with a prompt.", "Store the result in a variable.", "Then print the variable."], lambda c: _has_call_named(c, "input")),
+    ("data_types", "Data types", "Data types are the kinds of values Python works with, such as text and numbers.", 'age = 16\nname = "Asha"\nprint(type(age))', "Use at least two different value types.", ["Try one number and one string.", "Strings use quotes.", "type(value) can show the kind."], _always_practice),
+    ("type_conversion", "Type conversion", "Type conversion changes a value from one kind to another when that is safe.", 'marks = int("90")\nprint(marks + 5)', "Convert text to a number and use it in arithmetic.", ["Use int(), float(), or str().", "input() gives text first.", "Convert before adding numbers."], lambda c: _has_call_named(c, 'int') or _has_call_named(c, 'float') or _has_call_named(c, 'str')),
+    ("arithmetic", "Arithmetic operators", "Arithmetic operators let Python calculate with numbers.", 'total = 80 + 15\nprint(total)', "Use an arithmetic operator and print the result.", ["Try plus or minus first.", "Store the result in a variable.", "Print the result."], lambda c: _has_binop(c, (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, ast.Mod, ast.Pow))),
+    ("comparison", "Comparison operators", "Comparisons ask a true-or-false question about values.", 'score = 90\nprint(score >= 40)', "Use a comparison such as greater than or equal to.", ["Try score >= 40.", "A comparison gives True or False.", "Print the comparison to hear the result."], _has_compare),
+    ("boolean_logic", "Boolean logic", "Boolean logic combines true-or-false conditions with and, or, and not.", 'score = 90\nattendance = 80\nprint(score >= 40 and attendance >= 75)', "Combine two comparisons.", ["Use and when both must be true.", "Use or when either can be true.", "Use not to reverse a condition."], _has_boolop),
+    ("conditions", "Conditions", "A condition is a true-or-false test that controls a decision.", 'marks = 55\nif marks >= 40:\n    print("pass")', "Write a condition inside an if statement.", ["Use if marks >= 40 colon.", "Indent the action.", "Print pass inside the block."], validate_if),
+    ("if_else", "if and else", "if and else choose between two paths.", 'marks = 35\nif marks >= 40:\n    print("pass")\nelse:\n    print("try again")', "Use if and else to handle both results.", ["The else line also ends with a colon.", "Indent both print lines.", "Use else for the other case."], _has_if_else),
+    ("elif", "elif", "elif checks another condition after the first if is false.", 'marks = 75\nif marks >= 80:\n    print("A")\nelif marks >= 60:\n    print("B")\nelse:\n    print("C")', "Use if, elif, and else for grades.", ["Start with the highest grade.", "Use elif for the middle grade.", "Use else for everything left."], _has_elif),
+    ("nested_conditions", "Nested conditions", "A nested condition is an if statement inside another block.", 'marks = 80\nif marks >= 40:\n    if marks >= 75:\n        print("distinction")', "Put one if statement inside another.", ["Indent the inner if.", "The inner print is indented twice.", "Keep the example small."], _has_nested_if),
+    ("for_loops", "for loops", "A for loop repeats for each value in a known sequence.", 'for number in range(5):\n    print(number)', "Use a for loop with range.", ["Use range(5).", "Indent the print.", "Run to hear each number."], validate_for),
+    ("while_loops", "while loops", "A while loop repeats while a condition stays true.", 'count = 1\nwhile count <= 3:\n    print(count)\n    count = count + 1', "Create a while loop that changes its counter.", ["Start count at 1.", "Use while count <= 3.", "Add count = count + 1 inside."], validate_while),
+    ("counters", "Counters", "A counter keeps track of how many times something happened.", 'count = 0\nfor item in range(3):\n    count = count + 1\nprint(count)', "Count three loop passes.", ["Start at zero.", "Add one inside the loop.", "Print after the loop."], _has_counter),
+    ("accumulators", "Accumulators", "An accumulator builds a total over time.", 'total = 0\nfor mark in [80, 90]:\n    total = total + mark\nprint(total)', "Add several marks into a total.", ["Start total at zero.", "Add each mark inside the loop.", "Print total after the loop."], _has_counter),
+    ("strings", "Strings", "Strings are text values in quotes.", 'name = "Asha"\nprint("Hello " + name)', "Create and print a string.", ["Use quotes for text.", "Store text in a variable.", "Print it or combine it."], lambda c: bool(re.search(r"['\"]", c or ''))),
+    ("lists", "Lists", "A list stores several values in order.", 'marks = [80, 90, 75]\nprint(marks[0])', "Create a list and read one item.", ["Use square brackets.", "Separate items with commas.", "Index 0 is the first item."], _has_list),
+    ("list_iteration", "List iteration", "List iteration means using a loop to visit each item.", 'marks = [80, 90, 75]\nfor mark in marks:\n    print(mark)', "Loop through a list.", ["Create the list first.", "Use for mark in marks.", "Print mark inside the loop."], lambda c: _has_list(c) and validate_for(c)),
+    ("dictionaries", "Dictionaries", "A dictionary stores values under named keys.", 'student = {"name": "Asha", "marks": 90}\nprint(student["name"])', "Create a student dictionary.", ["Use braces.", "Keys are labels like name.", "Read a value with square brackets."], _has_dict),
+    ("functions", "Functions", "A function is a named set of steps you can call later.", 'def greet():\n    print("Hello")\ngreet()', "Define and call a function.", ["Start with def.", "Indent the function body.", "Call it by writing its name with parentheses."], _has_function_call),
+    ("parameters", "Parameters", "A parameter is a name that receives a value inside a function.", 'def greet(name):\n    print(name)\ngreet("Asha")', "Create a function with one parameter.", ["Put the parameter inside the parentheses.", "Use it inside the function.", "Pass a value when calling."], _has_function_params),
+    ("return_values", "Return values", "return sends a result back from a function.", 'def add(a, b):\n    return a + b\nprint(add(2, 3))', "Write a function that returns a value.", ["Use return inside the function.", "Print the function call.", "Do not confuse return with print."], _has_function_with_return),
+    ("scope", "Scope", "Scope means where a variable name can be used.", 'def show_score():\n    score = 90\n    print(score)\nshow_score()', "Use a variable inside a function.", ["Create the variable inside the function.", "Print it inside that function.", "Then call the function."], _has_function_call),
+    ("syntax_errors", "Common syntax errors", "Syntax errors happen when Python cannot read the code shape.", 'if True:\n    print("fixed")', "Fix or write a tiny if block with a colon and indentation.", ["Look for missing colons.", "Check quotes and parentheses.", "Indent block lines."], _always_practice),
+    ("name_error", "NameError", "NameError usually means a name was used before Python knew it.", 'score = 90\nprint(score)', "Create a variable before printing it.", ["Spell the name the same way.", "Assign first, use second.", "Run after fixing."], validate_variables),
+    ("type_error", "TypeError", "TypeError often means two values do not fit the operation.", 'age = 16\nprint("Age: " + str(age))', "Convert a number before joining it with text.", ["Text plus number causes trouble.", "Use str(number).", "Then join the text."], lambda c: _has_call_named(c, 'str')),
+    ("debugging", "Debugging strategies", "Debugging means finding one small cause and testing a fix.", 'total = 0\nprint("total is", total)', "Add a print that helps inspect a value.", ["Print one value at a time.", "Run after each small change.", "Read the exact error line."], validate_print),
+    ("decomposition", "Program decomposition", "Decomposition means splitting a program into smaller named parts.", 'def get_marks():\n    return 90\ndef show_result(marks):\n    print(marks)\nshow_result(get_marks())', "Split a task into two functions.", ["One function can get a value.", "Another can show it.", "Call them together at the end."], _has_two_functions),
+    ("multifile_basics", "Multi-file basics", "Multi-file programs keep related code in separate files when projects grow.", 'def helper():\n    return "ready"\nprint(helper())', "Practice separating a helper idea into a function.", ["In this single editor, use a helper function first.", "Later that helper can move to another file.", "Keep names clear."], _has_function_call),
+    ("beginner_projects", "Beginner projects", "A beginner project combines several concepts into one useful program.", 'marks = [80, 90, 75]\ntotal = 0\nfor mark in marks:\n    total = total + mark\naverage = total / len(marks)\nprint(average)', "Build a small marks, calculator, quiz, or record program.", ["Choose one small goal.", "Use variables first.", "Add conditions or loops after the first version works."], _always_practice),
+]
+
+_start = len(MODULE_ORDER) + 1
+for _offset, (_mid, _title, _concept, _example, _task, _hints, _validator) in enumerate(_EXTRA_MODULES, start=0):
+    if _mid not in MODULES:
+        EXPANDED_MODULE_ORDER.append(_mid)
+        _module(_mid, _start + _offset, _title, _concept, _example, _task, _hints, f"Good work. You practised {_title.lower()}.", _validator)
+
+
+
+_TOPIC_ALIASES = {
+    "print": "print", "printing": "print", "output": "print",
+    "variable": "variables", "variables": "variables",
+    "if": "if", "if statements": "if", "if statement": "if",
+    "for": "for", "for loop": "for", "for loops": "for", "while": "while", "while loop": "while",
+    "while loops": "while", "loops": "for_loops", "input": "input", "inputs": "input",
+    "types": "data_types", "data types": "data_types", "type conversion": "type_conversion",
+    "converting types": "type_conversion", "maths": "arithmetic", "math": "arithmetic",
+    "arithmetic": "arithmetic", "comparison": "comparison", "comparisons": "comparison",
+    "boolean": "boolean_logic", "booleans": "boolean_logic", "and or not": "boolean_logic",
+    "conditions": "conditions", "else": "if_else", "if else": "if_else", "elif": "elif",
+    "nested if": "nested_conditions", "nested conditions": "nested_conditions",
+    "counter": "counters", "counters": "counters", "accumulator": "accumulators",
+    "accumulators": "accumulators", "totals": "accumulators", "string": "strings", "strings": "strings",
+    "text": "strings", "list": "lists", "lists": "lists", "list loops": "list_iteration",
+    "looping over lists": "list_iteration", "dictionary": "dictionaries", "dictionaries": "dictionaries",
+    "dict": "dictionaries", "function": "functions", "functions": "functions",
+    "parameter": "parameters", "parameters": "parameters", "return": "return_values",
+    "return values": "return_values", "scope": "scope", "syntax errors": "syntax_errors",
+    "syntax error": "syntax_errors", "name error": "name_error", "nameerror": "name_error",
+    "type error": "type_error", "typeerror": "type_error", "debugging": "debugging",
+    "decomposition": "decomposition", "multiple files": "multifile_basics",
+    "multi file": "multifile_basics", "projects": "beginner_projects", "beginner projects": "beginner_projects",
+}
+
+
+def practice_module_for(topic: str) -> Optional[str]:
+    """Resolve a spoken/typed topic ("dictionaries", "type conversion") to any
+    module id in the expanded curriculum, core modules included."""
+    key = " ".join(str(topic or "").lower().replace("_", " ").split())
+    key = re.sub(r"^(?:the|a|an)\s+", "", key)
+    key = re.sub(r"\s+(?:module|topic|lesson|again|tutorial)$", "", key).strip()
+    if not key:
+        return None
+    if key in _TOPIC_ALIASES:  # aliases first: "for loops" stays the core "for" module
+        return _TOPIC_ALIASES[key]
+    if key.replace(" ", "_") in MODULES:
+        return key.replace(" ", "_")
+    for mid in EXPANDED_MODULE_ORDER:
+        if MODULES[mid]["title"].lower() == key:
+            return mid
+    return None
+
+
+def topics_listing() -> str:
+    core = ", ".join(MODULES[m]["title"] for m in MODULE_ORDER)
+    extra = ", ".join(MODULES[m]["title"] for m in EXPANDED_MODULE_ORDER if m not in MODULE_ORDER)
+    return (f"The step by step tutorial covers {core}. You can also practise any of these "
+            f"{len(EXPANDED_MODULE_ORDER) - len(MODULE_ORDER)} topics: {extra}. "
+            "Say practise and a topic name, for example practise dictionaries.")
+
+
+def expanded_module_pack() -> Dict:
+    return {
+        "order": list(EXPANDED_MODULE_ORDER),
+        "count": len(EXPANDED_MODULE_ORDER),
+        "modules": {mid: dict(MODULES[mid]) for mid in EXPANDED_MODULE_ORDER},
     }

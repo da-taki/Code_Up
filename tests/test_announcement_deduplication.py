@@ -151,7 +151,9 @@ def test_fix_code_has_one_owner():
     assert "showAI('Fixing code with AI...', { announce: false });" in fn_block
     assert "speak('Fixing code.', { sr: false });" in fn_block
     assert "out(fixedSpeech, { sr: false }); speak(fixedSpeech, { sr: false });" in fn_block
-    assert fn_block.count("speak('Fix failed.', { sr: false });") == 2
+    assert fn_block.count("speak('Fix failed.', { sr: false });") == 1
+    # a server-explained refusal (stale selected error, policy) keeps the same single owner
+    assert "out(failSpeech, { sr: false }); speak(failSpeech, { sr: false });" in fn_block
 
 
 def test_describe_line_has_one_owner():
@@ -275,8 +277,9 @@ def test_tutorial_setstatus_calls_are_silenced_where_reproduced():
         "this._setStatus(first ? ('Say: ' + first.say) : ('Activity: ' + m.title), { announce: false });",
         "this._setStatus('Next, say: ' + next.say, { announce: false });",
         "this._setStatus('All lines added. Say: run code.', { announce: false });",
-        "this._setStatus(nextId ? 'Choose: continue, practise again, recap, or exit.' "
-        ": 'All topics complete. Choose: practise again, recap, or exit.', { announce: false });",
+        "this._setStatus(nextId ? 'Choose: continue, practise again, recap, or exit.'\n"
+        "        : isPracticeTopic ? 'Practice topic complete. Choose: practise again, recap, another topic, or exit.'\n"
+        "        : 'All topics complete. Choose: practise again, recap, or exit.', { announce: false });",
     ):
         assert needle in TUTORIAL_JS, needle
 

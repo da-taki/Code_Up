@@ -88,9 +88,9 @@ def test_infinite_loop_command_clarifies_and_does_not_insert_code(client):
 
 
 def test_existing_spoken_insert_and_noisy_loop_repairs_still_work(client):
-    assert _edit_code(_vc(client, "insert print hello", code="")) == 'print("hello")'
+    assert _edit_code(_vc(client, "insert print hello", code="")) == 'print("Hello")'
     assert _edit_code(_vc(client, "print hello", code="")) == 'print("Hello")'
     assert _edit_code(_vc(client, "insert a for loop that prints hello three times", code="")) == (
-        'for i in range(3):\n    print("hello")'
+        'for i in range(3):\n    print("Hello")'
     )
     assert _edit_code(_vc(client, "insert a loop that prince 3 whole numbers", code="")) == DEFAULT_FOR

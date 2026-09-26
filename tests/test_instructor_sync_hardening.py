@@ -179,7 +179,12 @@ def test_reordering_uses_minimal_insertBefore_moves():
     helper (see test_assignments_table_reuses_the_same_reconciler)."""
     body = _fn_body(INSTRUCTOR_SYNC_JS, "reconcileTable")
     assert "tbody.insertBefore(row, cursor)" in body
-    assert "cursor = cursor.nextSibling" in body
+    # Element siblings only: whitespace text nodes in server-rendered markup
+    # made the first reconcile move every row (and blur a focused link).
+    # Real-browser proof: tests/test_instructor_ux_browser.py.
+    assert "var cursor = tbody.firstElementChild" in body
+    assert "cursor = cursor.nextElementSibling" in body
+    assert "cursor.nextSibling" not in body and "tbody.firstChild" not in body
 
 
 def test_removed_learner_moves_focus_and_announces():

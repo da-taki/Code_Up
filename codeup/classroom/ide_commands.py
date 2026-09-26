@@ -50,8 +50,10 @@ def _norm(text: str) -> str:
 
 
 def _any(text: str, *phrases: str) -> bool:
-    n = _norm(text)
-    return any(n == _norm(p) or n.startswith(_norm(p) + " ") or _norm(p) in n for p in phrases)
+    n = f" {_norm(text)} "
+    # Whole words only: "turn this in" must not match "turn this into a
+    # function" (an edit request that would otherwise submit the assignment).
+    return any(f" {_norm(p)} " in n for p in phrases)
 
 
 def extract_join_code(text: str) -> Optional[str]:

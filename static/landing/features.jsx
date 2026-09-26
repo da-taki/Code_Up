@@ -189,7 +189,7 @@ function StartHere() {
               <li>Put on headphones, or turn on your speaker, so you can hear CodeUp.</li>
               <li>CodeUp works best on Google Chrome. Some browsers, especially Brave or privacy-heavy browsers, may block the microphone or speech. If voice does not work, open this page in Chrome.</li>
               <li>Allow the microphone if you want voice. You can always type commands in the command box instead.</li>
-              <li>Say "help" any time, or "stop everything" to stop the talking.</li>
+              <li>Say "stop" to stop CodeUp speaking. Say "stop listening" to turn voice control off, or "stop everything" to stop both.</li>
             </ul>
           </div>
         </div>

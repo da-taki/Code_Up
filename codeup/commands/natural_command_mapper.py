@@ -220,6 +220,33 @@ def _contains_blocked_payload(value: Any) -> bool:
     return False
 
 
+_EDIT_INTENTS = {"edit_current_code", "edit_previous_program"}
+
+
+def _prune_edit_slots(mapping: Any) -> Any:
+    """An edit is planned from the learner's own words plus the current code;
+    its slots are optional hints. A descriptive extra slot ("text": "add
+    percentage") used to fail validation and drop the whole edit before the
+    planner ever saw the code, so for edit intents unknown or unsafe slots
+    are discarded instead. Every other intent keeps strict validation."""
+    if not isinstance(mapping, dict) or str(mapping.get("intent") or "").strip() not in _EDIT_INTENTS:
+        return mapping
+    if _contains_blocked_payload(mapping):
+        return mapping  # never clean up a blocked payload: validation rejects it outright
+    slots = mapping.get("slots")
+    if not isinstance(slots, dict):
+        return {**mapping, "slots": {}}
+    allowed = _INTENT_SLOT_KEYS[str(mapping["intent"]).strip()]
+    kept = {}
+    for key, value in slots.items():
+        if key not in allowed:
+            continue
+        ok, _reason = validate_mapping({"intent": mapping["intent"], "confidence": 1.0, "slots": {key: value}})
+        if ok:
+            kept[key] = value
+    return {**mapping, "slots": kept}
+
+
 def validate_mapping(mapping: Any) -> Tuple[bool, str]:
 
     if not isinstance(mapping, dict):
@@ -330,7 +357,7 @@ def map_command(
         safe_reason = groq_key_manager.redact_known_keys(str(exc))[:160]
         return {"status": "failed", "reason": safe_reason}
 
-    parsed = _extract_json_object(raw)
+    parsed = _prune_edit_slots(_extract_json_object(raw))
     ok, reason = validate_mapping(parsed)
     if not ok:
         safe_reason = groq_key_manager.redact_known_keys(reason or "invalid_json")[:160]

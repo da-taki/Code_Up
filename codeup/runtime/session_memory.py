@@ -81,6 +81,8 @@ def new_memory() -> Dict[str, Any]:
         "last_run_inputs": [],
         "last_run_code_hash": "",
         "run_count": 0,
+        "diagnostics": [],
+        "diagnostic_cursor": 0,
         "last_explain_target": "",
         "last_active_file": "",
         "last_opened_file": "",
@@ -284,6 +286,7 @@ def record_run(mem: Dict[str, Any], *, output: str = "", error: str = "",
                inputs: Optional[List[str]] = None, ran_ok: Optional[bool] = None,
                input_source: str = "") -> None:
     mem["run_count"] = max(0, int(mem.get("run_count") or 0)) + 1
+    note_action(mem, "run")
     mem["last_run_traceback"] = _clip(traceback_text, _MAX_ERROR * 2)
     if code is not None:
         mem["last_run_code_hash"] = code_hash(code)
@@ -558,7 +561,31 @@ def record_change(mem: Dict[str, Any], *, before: str = "", after: str = "",
     del undo[:-_MAX_CHANGE_HISTORY]
     mem["last_change"] = record
     mem["change_cursor"] = len(history) - 1
+    note_action(mem, "change", command=reason)
     return record
+
+
+_MAX_ACTION_LOG = 20
+
+
+def note_action(mem: Dict[str, Any], kind: str, *, command: str = "") -> None:
+    """Timestamped log of executed actions (runs, applied code changes) so a
+    context-dependent request like "do that again" can tell which one the
+    learner most plausibly means."""
+    log = mem.get("action_log")
+    if not isinstance(log, list):
+        log = []
+        mem["action_log"] = log
+    log.append({"kind": _clip(kind, 40), "command": _clip(command, 300), "ts": time.time()})
+    del log[:-_MAX_ACTION_LOG]
+
+
+def recent_actions(mem: Dict[str, Any], *, within_seconds: float = 900.0) -> List[Dict[str, Any]]:
+    log = mem.get("action_log")
+    if not isinstance(log, list):
+        return []
+    cutoff = time.time() - within_seconds
+    return [entry for entry in log if isinstance(entry, dict) and float(entry.get("ts") or 0) >= cutoff]
 
 
 def record_code_change(mem: Dict[str, Any], *, before_code: str = "", after_code: str = "",
@@ -989,3 +1016,81 @@ def session_summary(mem: Dict[str, Any]) -> str:
     if not bits:
         return "We have not done much yet this session. Try generating or running some code."
     return "So far you " + ", then ".join(bits) + "."
+
+
+def diagnostic_fingerprint(code: Any) -> str:
+    """Identity of the source a diagnostic set describes. Trailing spaces and
+    blank lines at the end do not change it; any real edit does (a different
+    file's content included, so switching files also invalidates)."""
+    lines = [line.rstrip() for line in str(code or "").replace("\r\n", "\n").split("\n")]
+    return code_hash("\n".join(lines).rstrip("\n"))
+
+
+def set_diagnostics(mem: Dict[str, Any], diagnostics: List[Dict[str, Any]], code: Any = None) -> None:
+    cleaned: List[Dict[str, Any]] = []
+    for item in diagnostics or []:
+        if not isinstance(item, dict):
+            continue
+        cleaned.append({
+            "id": _clip(item.get("id"), 80),
+            "category": _clip(item.get("category"), 40),
+            "severity": _clip(item.get("severity"), 20),
+            "file": _clip(item.get("file"), 200),
+            "line": int(item.get("line") or 1),
+            "column": item.get("column"),
+            "message": _clip(item.get("message"), 300),
+            "detail": _clip(item.get("detail"), 500),
+            "fix": _clip(item.get("fix"), 300),
+            "source": _clip(item.get("source"), 80),
+        })
+    mem["diagnostics"] = cleaned[:50]
+    mem["diagnostics_fingerprint"] = diagnostic_fingerprint(code) if code is not None else ""
+    cursor = int(mem.get("diagnostic_cursor") or 0)
+    mem["diagnostic_cursor"] = max(0, min(cursor, max(0, len(cleaned) - 1)))
+
+
+def clear_diagnostics(mem: Dict[str, Any]) -> None:
+    mem["diagnostics"] = []
+    mem["diagnostic_cursor"] = 0
+    mem["diagnostics_fingerprint"] = ""
+
+
+def diagnostics_are_stale(mem: Dict[str, Any], code: Any) -> bool:
+    """True when stored diagnostics were produced for different source than
+    ``code``. Sets stored without a fingerprint are never treated as stale."""
+    stored = str(mem.get("diagnostics_fingerprint") or "")
+    return bool(stored) and bool(get_diagnostics(mem)) and stored != diagnostic_fingerprint(code)
+
+
+def get_diagnostics(mem: Dict[str, Any]) -> List[Dict[str, Any]]:
+    value = mem.get("diagnostics")
+    return value if isinstance(value, list) else []
+
+
+def selected_diagnostic(mem: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    items = get_diagnostics(mem)
+    if not items:
+        return None
+    cursor = max(0, min(int(mem.get("diagnostic_cursor") or 0), len(items) - 1))
+    mem["diagnostic_cursor"] = cursor
+    return items[cursor]
+
+
+def move_diagnostic_cursor(mem: Dict[str, Any], target: str) -> Optional[Dict[str, Any]]:
+    items = get_diagnostics(mem)
+    if not items:
+        mem["diagnostic_cursor"] = 0
+        return None
+    cursor = int(mem.get("diagnostic_cursor") or 0)
+    if target == "first":
+        cursor = 0
+    elif target == "last":
+        cursor = len(items) - 1
+    elif target == "previous":
+        cursor = max(0, cursor - 1)
+    elif target == "next":
+        cursor = min(len(items) - 1, cursor + 1)
+    else:
+        cursor = max(0, min(cursor, len(items) - 1))
+    mem["diagnostic_cursor"] = cursor
+    return items[cursor]

@@ -68,9 +68,9 @@ class TestGeneralInsertAppends:
         assert d["text"] == expected
 
     @pytest.mark.parametrize("text,code,expected_code", [
-        ("insert print hello world", "", 'print("hello world")'),
-        ("insert print name", "", 'print("name")'),
-        ("insert indented print count", "", '    print("count")'),
+        ("insert print hello world", "", 'print("Hello world")'),
+        ("insert print name", "", 'print("Name")'),
+        ("insert indented print count", "", '    print("Count")'),
         ("insert an indented print saying you can vote", "", '    print("you can vote")'),
         ("insert indented print i", "for i in range(3):", '    print(i)'),
     ])

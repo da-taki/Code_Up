@@ -1050,3 +1050,46 @@ def answer_concept(kind: str, code: str = "") -> Tuple[str, List[str]]:
     if kind in _MODULE_FALLBACKS:
         return (_MODULE_FALLBACKS[kind], [])
     return ("", [])
+
+# FOUNDATIONAL_THEORY_EXTENSION: concise deterministic theory entries for core beginner concepts.
+_THEORY_EXTENSION = {
+    "program_execution": ("program execution", ["program execution", "execution", "running a program"],
+        "Program execution means Python runs your code from top to bottom, one step at a time.\n\nExample:\nprint(\"first\")\nprint(\"second\")\n\nBeginner note: order matters because later lines can use values created earlier."),
+    "statement": ("statement", ["statement", "statements"],
+        "A statement is one instruction Python can run.\n\nExample:\nscore = 90\n\nBeginner note: assignments, print calls, if lines, and loops are all statements."),
+    "expression": ("expression", ["expression", "expressions"],
+        "An expression is code that produces a value.\n\nExample:\nmarks + 10\n\nBeginner note: expressions often live inside statements, such as print(marks + 10)."),
+    "value": ("value", ["value", "values"],
+        "A value is a piece of information your program can store or use.\n\nExample:\n90 and \"Asha\" are values.\n\nBeginner note: values have types, such as int for whole numbers and str for text."),
+    "assignment": ("assignment", ["assignment", "assign", "equals sign"],
+        "Assignment stores a value in a variable name.\n\nExample:\nscore = 90\n\nBeginner note: one equals sign stores a value; two equals signs compare values."),
+    "operator": ("operators", ["operator", "operators", "arithmetic operator", "arithmetic operators"],
+        "Operators are symbols or words that combine or compare values.\n\nExample:\ntotal = marks + bonus\n\nBeginner note: plus adds numbers, while greater-than asks a true-or-false question."),
+    "comparison": ("comparisons", ["comparison", "comparisons", "comparison operator", "comparison operators"],
+        "A comparison checks a relationship and gives True or False.\n\nExample:\nmarks >= 40\n\nBeginner note: comparisons are commonly used in if statements."),
+    "indentation": ("indentation", ["indentation", "indent", "indenting", "spaces"],
+        "Indentation is the spaces at the start of a line that show what belongs inside a block.\n\nExample:\nif marks >= 40:\n    print(\"pass\")\n\nBeginner note: the indented print runs only inside the if block."),
+    "block": ("blocks", ["block", "blocks", "code block"],
+        "A block is a group of indented lines that belong together.\n\nExample:\nfor item in items:\n    print(item)\n\nBeginner note: if statements, loops, and functions usually create blocks."),
+    "iteration": ("iteration", ["iteration", "iterate", "iterating"],
+        "Iteration means repeating code over values or while a condition stays true.\n\nExample:\nfor mark in marks:\n    print(mark)\n\nBeginner note: loops are the usual way to perform iteration."),
+    "debugging": ("debugging", ["debugging", "debug", "debug strategy", "debugging strategies"],
+        "Debugging means finding why code behaves differently from what you expected.\n\nExample:\nprint(total) can help check a value before a condition.\n\nBeginner note: fix one small thing, run again, and use the exact error line."),
+    "decomposition": ("decomposition", ["decomposition", "program decomposition", "decompose"],
+        "Decomposition means splitting a program into smaller named parts.\n\nExample:\ndef calculate_average(marks):\n    return sum(marks) / len(marks)\n\nBeginner note: small functions are easier to test and explain."),
+    "algorithmic_thinking": ("algorithmic thinking", ["algorithmic thinking", "algorithm", "algorithms"],
+        "Algorithmic thinking means describing the steps before writing the code.\n\nExample:\nGet marks, add them, divide by count, print average.\n\nBeginner note: if the steps are clear, the Python usually becomes easier."),
+}
+
+for _kind, (_label, _aliases, _message) in _THEORY_EXTENSION.items():
+    if _kind not in _CATALOG:
+        _CATALOG[_kind] = {"aliases": _aliases, "message": _message}
+    _CONCEPTS[_kind] = str(_CATALOG[_kind]["message"])
+    _CONCEPT_ALIASES[_kind] = list(_aliases)
+    for _alias in _aliases:
+        _ALIASES.setdefault(_alias, _kind)
+        _CONCEPT_BY_ALIAS.setdefault(_alias, _kind)
+_ALIAS_BY_LEN_REFRESH = sorted(_ALIASES, key=len, reverse=True)
+_ALIASES_BY_LEN[:] = _ALIAS_BY_LEN_REFRESH
+_CONCEPT_DISPLAY.update({kind: label for kind, (label, _aliases, _message) in _THEORY_EXTENSION.items()})
+_PYTHON_RELATED_WORDS.update({"execution", "statement", "expression", "assignment", "operator", "block", "debugging", "algorithm"})

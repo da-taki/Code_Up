@@ -63,8 +63,49 @@ PRESETS: Dict[str, Dict[str, bool]] = {
     },
     "ASSESSMENT": {cap: False for cap in CAPABILITIES},
     "OFF": {cap: False for cap in CAPABILITIES},
+    # Learners are coached but CodeUp never writes or fixes the code for
+    # them: explanations, hints, error explanations and all listening tools.
+    "GUIDED_PRACTICE": {
+        "generate": False, "fix": False, "explain": True, "hint": True, "error_help": True,
+        "concept_qa": True, "audio_code_map": True, "step_narration": True, "watch_variable": True,
+    },
 }
 POLICIES = tuple(PRESETS.keys())
+
+# Plain-language names and descriptions shown to instructors. The first three
+# are the recommended starting points; the rest stay available for finer control.
+PRESET_INFO = {
+    "FULL": ("Learning",
+             "Everything is on, including writing and fixing code. Good for open practice and exploring."),
+    "GUIDED_PRACTICE": ("Guided practice",
+                        "CodeUp explains, gives hints and explains errors, but never writes or fixes the code for "
+                        "the learner."),
+    "ASSESSMENT": ("Assessment",
+                   "All AI help and helper tools are off. Learners can still edit, run, hear output and "
+                   "submit; accessibility is never affected."),
+    "EXPLANATIONS_ONLY": ("Explanations only",
+                          "Explanations, error explanations and listening tools; no hints, code writing or fixes."),
+    "HINTS_ONLY": ("Hints only", "Only small hints. No explanations, code writing or fixes."),
+    "ERROR_HELP_ONLY": ("Error help only", "Only explanations of what an error means."),
+    "OFF": ("Everything off", "Same as Assessment, without marking the assignment as an assessment."),
+}
+RECOMMENDED_PRESETS = ("FULL", "GUIDED_PRACTICE", "ASSESSMENT")
+
+CAPABILITY_DESCRIPTIONS = {
+    "generate": "CodeUp may write new code or rewrite the learner's code.",
+    "fix": "CodeUp may correct errors in the learner's code automatically.",
+    "explain": "CodeUp may explain what the learner's code does, line by line or as a summary.",
+    "hint": "CodeUp may give small nudges without handing over the answer.",
+    "error_help": "CodeUp may explain what an error message means and where it happened.",
+    "concept_qa": "CodeUp may answer questions like 'what is a loop'.",
+    "audio_code_map": "The spoken outline of the program's structure (not AI).",
+    "step_narration": "Hearing the program run one step at a time (not AI).",
+    "watch_variable": "Hearing variable values while or after the program runs (not AI).",
+}
+
+
+def preset_label(preset: Optional[str]) -> str:
+    return PRESET_INFO.get(normalize_policy(preset), (str(preset or ""), ""))[0]
 
 CAPABILITY_LABELS = {
     "generate": "Code generation",

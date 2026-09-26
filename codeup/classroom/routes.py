@@ -329,6 +329,21 @@ def _derive_live_status(learner: Dict[str, Any], events: list, help_status: Opti
     return "working"
 
 
+def _last_active_label(last_active) -> str:
+    """'3 min ago' instead of a raw ISO timestamp (read aloud, those are noise)."""
+    if not last_active:
+        return "Never"
+    minutes = _waiting_minutes(last_active)
+    if minutes < 1:
+        return "Just now"
+    if minutes < 60:
+        return f"{minutes} min ago"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours} hour{'s' if hours != 1 else ''} ago"
+    return str(last_active)[:10]
+
+
 def _help_status_by_learner(cohort_id):
     """Shared by cohort_dashboard and cohort_live_summary so their "is this
     learner waiting for help" classification can never quietly drift apart."""
@@ -351,7 +366,15 @@ def _learner_progress(learner, assignments, help_status_by_learner):
     events = db.list_events_for_learner(learner["id"], limit=5)
     module_rows = db.list_module_progress(learner["id"])
     modules_completed = sum(1 for m in module_rows if m["status"] == "completed")
+    titles = {a["id"]: a["title"] for a in assignments}
+    open_rows = sorted(
+        (r for r in progress_rows if r["status"] != "submitted" and r["assignment_id"] in titles),
+        key=lambda r: str(r.get("updated_at") or ""), reverse=True,
+    )
+    current_assignment = titles[open_rows[0]["assignment_id"]] if open_rows else ""
     return {
+        "current_assignment": current_assignment or "None open",
+        "last_active_label": _last_active_label(learner.get("last_active_at")),
         "assignments_submitted": submitted,
         "assignments_total": len(assignments),
         "concepts_demonstrated": demonstrated,
@@ -361,6 +384,34 @@ def _learner_progress(learner, assignments, help_status_by_learner):
         "modules_total": len(curriculum.MODULE_ORDER),
         "live_status": _derive_live_status(learner, events, help_status_by_learner.get(learner["id"])),
     }
+
+
+def _help_request_rows(cohort_id, assignments):
+    """Open and in-progress help requests for the dashboard's "Needs help now"
+    section and its live poll - longest-waiting first, one shape for both."""
+    titles = {a["id"]: a["title"] for a in assignments}
+    rows = []
+    for status in ("open", "helping"):
+        for hr in db.list_help_requests(cohort_id, status=status):
+            rows.append({
+                "id": hr["id"], "status": status,
+                "learner_id": hr["learner_id"], "learner_name": hr.get("display_name") or "A learner",
+                "message": hr.get("message") or "",
+                "assignment_title": titles.get(hr.get("assignment_id")) or "",
+                "waiting_minutes": _waiting_minutes(hr["created_at"]),
+                "detail_url": url_for("classroom.learner_detail", cohort_id=cohort_id, learner_id=hr["learner_id"]),
+                "helping_url": url_for("classroom.start_helping", help_request_id=hr["id"]),
+                "resolve_url": url_for("classroom.resolve_help_request", help_request_id=hr["id"]),
+            })
+    rows.sort(key=lambda r: (r["status"] != "open", -r["waiting_minutes"]))
+    return rows
+
+
+def _submission_counts(assignments):
+    counts = {}
+    for a in assignments:
+        counts[a["id"]] = sum(1 for r in db.list_progress_for_assignment(a["id"]) if r["status"] == "submitted")
+    return counts
 
 
 def _render_cohort_dashboard(instructor, cohort, *, rename_error=None, rename_value=None,
@@ -386,7 +437,12 @@ def _render_cohort_dashboard(instructor, cohort, *, rename_error=None, rename_va
         "classroom/cohort_dashboard.html",
         instructor=instructor, cohort=cohort, learner_rows=learner_rows,
         assignments=assignments, open_help_count=len(open_help),
+        help_rows=_help_request_rows(cohort_id, assignments),
+        last_event_id=_latest_live_event_id(cohort_id),
+        submission_counts=_submission_counts(assignments),
         ai_policies=ai_policy.POLICIES, impact=impact,
+        preset_info=ai_policy.PRESET_INFO, recommended_presets=ai_policy.RECOMMENDED_PRESETS,
+        preset_label=ai_policy.preset_label,
         rename_error=rename_error, rename_value=rename_value,
         assignment_title_error=assignment_title_error, assignment_form=assignment_form,
     )
@@ -410,6 +466,18 @@ def cohort_dashboard(instructor, cohort_id):
 # hear about on a routine poll.
 _LIVE_SUMMARY_EVENT_KINDS = {"learner_joined", "help_requested", "assignment_submitted"}
 _LIVE_SUMMARY_EVENT_LIMIT = 20
+
+
+def _latest_live_event_id(cohort_id) -> int:
+    """Newest announceable event already reflected in a rendered dashboard.
+
+    Handed to instructor-sync.js as its starting watermark, so anything that
+    happens after the page was rendered - even before the first poll, or
+    while the tab was still in the background - is announced, instead of
+    being silently absorbed by a client-side "first poll seeds" rule."""
+    ids = [e["id"] for e in db.list_events_for_cohort(cohort_id, limit=100)
+           if e["kind"] in _LIVE_SUMMARY_EVENT_KINDS]
+    return max(ids) if ids else 0
 
 
 @classroom_bp.route("/cohorts/<int:cohort_id>/live-summary", methods=["GET"])
@@ -442,13 +510,16 @@ def cohort_live_summary(instructor, cohort_id):
             "display_name": learner["display_name"],
             "detail_url": url_for("classroom.learner_detail", cohort_id=cohort_id, learner_id=learner["id"]),
             "live_status": progress["live_status"],
-            "last_active_at": learner.get("last_active_at") or "Never",
+            "last_active_at": progress["last_active_label"],
             "modules_completed": progress["modules_completed"],
             "modules_total": progress["modules_total"],
             "assignments_submitted": progress["assignments_submitted"],
             "assignments_total": progress["assignments_total"],
             "concepts_demonstrated": progress["concepts_demonstrated"],
             "concepts_total": progress["concepts_total"],
+            "current_assignment": progress["current_assignment"],
+            "help": {"open": "Waiting for help", "helping": "Being helped"}.get(
+                help_status_by_learner.get(learner["id"]), "-"),
         })
 
     assignment_titles = {a["id"]: a["title"] for a in assignments}
@@ -467,10 +538,13 @@ def cohort_live_summary(instructor, cohort_id):
         if len(events) >= _LIVE_SUMMARY_EVENT_LIMIT:
             break
 
+    submitted_counts = _submission_counts(assignments)
     assignment_rows = [
         {
             "id": a["id"], "title": a["title"], "status": a["status"],
-            "ai_policy": a["ai_policy"], "due_date": a["due_date"] or "-",
+            "ai_policy": a["ai_policy"], "ai_policy_label": ai_policy.preset_label(a["ai_policy"]),
+            "due_date": a["due_date"] or "-",
+            "submitted": f"{submitted_counts.get(a['id'], 0)} of {len(learners)}",
             "detail_url": url_for("classroom.assignment_detail", assignment_id=a["id"]),
         }
         for a in assignments
@@ -481,6 +555,7 @@ def cohort_live_summary(instructor, cohort_id):
         "learner_count": len(learners),
         "learners": learner_rows,
         "open_help_count": len(open_help),
+        "help_requests": _help_request_rows(cohort_id, assignments),
         "events": events,
         "assignments": assignment_rows,
     })
@@ -598,6 +673,8 @@ def assignment_detail(instructor, assignment_id):
                 "submitted_at": None,
             })
     progress_rows.sort(key=lambda r: str(r.get("display_name") or "").lower())
+    for row in progress_rows:
+        row["submitted_label"] = _last_active_label(row["submitted_at"]) if row.get("submitted_at") else "-"
     settings = assignment.get("capability_settings") or ai_policy.default_settings_for_preset(assignment["ai_policy"])
 
     return render_template(
@@ -606,6 +683,8 @@ def assignment_detail(instructor, assignment_id):
         progress_rows=progress_rows, ai_policies=ai_policy.POLICIES,
         capability_settings=settings, capability_labels=ai_policy.CAPABILITY_LABELS,
         capabilities=ai_policy.CAPABILITIES,
+        capability_descriptions=ai_policy.CAPABILITY_DESCRIPTIONS,
+        preset_info=ai_policy.PRESET_INFO, recommended_presets=ai_policy.RECOMMENDED_PRESETS,
         policy_summary=ai_policy.summarize_settings(settings, is_assessment=assignment["is_assessment"]),
     )
 
@@ -697,6 +776,7 @@ def view_submission(instructor, assignment_id, learner_id):
     return render_template(
         "classroom/submission_view.html",
         instructor=instructor, cohort=cohort, assignment=assignment, learner=learner, progress=progress,
+        submitted_label=_last_active_label(progress.get("submitted_at")) if progress.get("submitted_at") else "",
     )
 
 
@@ -735,13 +815,21 @@ def help_queue(instructor, cohort_id):
     )
 
 
+def _help_action_redirect(cohort_id):
+    # "next" is a fixed choice, never a URL: the dashboard's inline help
+    # actions return there, everything else returns to the help queue.
+    if request.form.get("next") == "dashboard":
+        return redirect(url_for("classroom.cohort_dashboard", cohort_id=cohort_id) + "#helpNowHeading")
+    return redirect(url_for("classroom.help_queue", cohort_id=cohort_id))
+
+
 @classroom_bp.route("/help-requests/<int:help_request_id>/helping", methods=["POST"])
 @require_instructor
 def start_helping(instructor, help_request_id):
     hr = db.get_help_request(help_request_id)
     if hr and _own_cohort_or_404(instructor, hr["cohort_id"]):
         db.mark_help_request_helping(help_request_id, (request.form.get("note") or "").strip() or None)
-        return redirect(url_for("classroom.help_queue", cohort_id=hr["cohort_id"]))
+        return _help_action_redirect(hr["cohort_id"])
     return redirect(url_for("classroom.instructor_dashboard"))
 
 
@@ -753,7 +841,7 @@ def resolve_help_request(instructor, help_request_id):
         cohort = _own_cohort_or_404(instructor, hr["cohort_id"])
         if cohort:
             db.resolve_help_request(help_request_id, (request.form.get("note") or "").strip() or None)
-            return redirect(url_for("classroom.help_queue", cohort_id=hr["cohort_id"]))
+            return _help_action_redirect(hr["cohort_id"])
     return redirect(url_for("classroom.instructor_dashboard"))
 
 

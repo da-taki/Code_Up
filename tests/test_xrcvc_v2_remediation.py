@@ -255,8 +255,8 @@ def test_sonify_start_message_is_not_announced_twice():
 
 
 def test_step_narration_stop_message_is_not_announced_twice():
-    start = STATIC_APP.index("stopWords.some(w => t === w)")
-    block = STATIC_APP[start:start + 700]
+    start = STATIC_APP.index("if (t === 'quit')")
+    block = STATIC_APP[start:start + 240]
     assert "out('Stopped.');" in block
     assert "srAnnounce('Stopped');" not in block
 

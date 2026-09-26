@@ -196,6 +196,7 @@ def test_voice_input_shortcut_still_fires_after_tutorial_starts(live_server, pag
         pressed in {"true", "mixed"}
         or "Speech recognition is not supported" in output
         or "Microphone access blocked" in output
+        or "Waiting for the microphone" in output
     )
 
 

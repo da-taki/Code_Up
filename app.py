@@ -35,6 +35,7 @@ from codeup.integrations import grounded_ai
 from codeup.commands import clarification_flow
 from codeup.learning import concept_qa
 from codeup.commands import intent_repair
+from codeup.commands import structural_edit
 from codeup.commands.intent_parser import parse_intent
 from codeup.projects.project_support import (
     PROJECT_MANIFEST,
@@ -8315,6 +8316,122 @@ def _is_plain_addition(text: str) -> bool:
         not _CHANGE_WORDS_RE.search(core)
 
 
+# ---- structural edits ("in the loop", "before return", "after the loop") -----
+# codeup/commands/structural_edit.py grounds the location in the program's
+# AST; this glue adds policy, the "which loop?" question and its answer,
+# conversational recency, and an AI fallback whose result must still land
+# inside the named block.
+
+_STRUCTURAL_PENDING_TTL = 120
+# Ordinals before cardinals: in "the second one", "second" decides, not "one".
+_ORDINAL_WORDS = {"first": 0, "pehla": 0, "second": 1, "dusra": 1, "third": 2, "teesra": 2, "fourth": 3,
+                  "last": -1, "1": 0, "one": 0, "2": 1, "two": 1, "3": 2, "three": 2, "4": 3, "four": 3}
+
+
+def _structural_pending_choice(text: str, mem, current_code: str) -> Optional[Dict[str, Any]]:
+    """If CodeUp just asked "which loop?", match the answer to one option."""
+    pending = mem.get("structural_pending")
+    if not isinstance(pending, dict):
+        return None
+    if (time.time() - float(pending.get("ts") or 0) > _STRUCTURAL_PENDING_TTL
+            or pending.get("code_hash") != session_memory.code_hash(current_code)
+            or pending.get("owner") != _semantic_owner()):
+        mem.pop("structural_pending", None)
+        return None
+    reply = " ".join(str(text or "").lower().split())
+    options = pending.get("options") or []
+    chosen = None
+    line = re.search(r"\bline\s+(\d+)\b", reply)
+    if line:
+        chosen = next((o for o in options if int(o["line"]) == int(line.group(1))), None)
+    if chosen is None:
+        for word, index in _ORDINAL_WORDS.items():
+            if re.search(rf"\b{word}\b", reply) and index < len(options):
+                chosen = options[index]   # index -1 = "the last one"
+                break
+    if chosen is None:
+        words = set(re.findall(r"[a-z_]\w+", reply)) - {"the", "loop", "one", "over", "function", "if", "while"}
+        scored = [o for o in options if words & set(re.findall(r"[a-z_]\w+", o["label"].lower()))]
+        if len(scored) == 1:
+            chosen = scored[0]
+    mem.pop("structural_pending", None)   # answered or not, never trap the learner
+    return {"original": pending.get("text", ""), "line": chosen["line"]} if chosen else None
+
+
+def _structural_edit_response(text: str, current_code: str, mem, body, cursor_line=None) -> Optional[Dict[str, Any]]:
+    if not str(current_code or "").strip():
+        return None
+    forced_line, request_text = None, text
+    answer = _structural_pending_choice(text, mem, current_code)
+    if answer is not None:
+        forced_line, request_text = answer["line"], answer["original"]
+    result = structural_edit.plan(
+        request_text, current_code, cursor_line=cursor_line, forced_target_line=forced_line,
+        recent_headers=mem.get("recent_structure_headers") or [],
+    )
+    if result.status == "not_structural":
+        return None
+    allowed, _settings, blocked_message = _ai_capability_check("generate")
+    if not allowed:
+        return {"success": True, "action": "deterministic_message", "message": blocked_message,
+                "speech": blocked_message, "heard": text, "policy_blocked": True, "capability": "generate"}
+    if result.status == "clarify":
+        if result.options:
+            mem["structural_pending"] = {"text": request_text, "options": result.options, "ts": time.time(),
+                                         "code_hash": session_memory.code_hash(current_code),
+                                         "owner": _semantic_owner()}
+        return {"success": True, "action": "clarify", "intent": "clarify", "message": result.message,
+                "speech": result.message, "needs_clarification": True, "heard": text,
+                "source": "structural_edit"}
+    if result.status == "unbuildable":
+        target = result.target
+        if target is not None and target.field in {"body", "orelse"} and _structured_ai_available():
+            # The model writes the statement; CodeUp still decides where it may go.
+            instruction = (f"{request_text}\nLOCATION REQUIREMENT: add the new code inside the body of "
+                           f"{target.label}, indented as part of that block. Do not add it anywhere else.")
+            planned = _call_ai_code_edit_planner(instruction, current_code, mem, body, {})
+            updated = str((planned.get("plan") or {}).get("updated_code") or "")
+            if planned.get("status") == "planned" and updated and \
+                    structural_edit.added_statements_within(current_code, updated, target):
+                mem["recent_structure_headers"] = [current_code.splitlines()[target.header_line - 1].strip()]
+                return _natural_code_edit_response(
+                    text=text, current_code=current_code, updated_code=updated,
+                    summary=str((planned.get("plan") or {}).get("summary") or f"Updated {target.label}."),
+                    confidence=0.9, mem=mem, source="structural_edit_ai")
+        where = target.label if target is not None else "that place"
+        message = (f"I found {where}, but I could not work out what to add there. "
+                   "Try saying, for example: inside the loop, print hello.")
+        return {"success": True, "action": "clarify", "intent": "clarify", "message": message, "speech": message,
+                "needs_clarification": True, "heard": text, "source": "structural_edit"}
+    target = result.target
+    mem["recent_structure_headers"] = [current_code.splitlines()[target.header_line - 1].strip()]
+    placement = {"body": "inside", "orelse": "inside", "parent": result.location.relation}[target.field]
+    summary = f"I added {' '.join(result.statement.split())} {placement} {target.label}."
+    return _natural_code_edit_response(text=text, current_code=current_code, updated_code=result.code,
+                                       summary=summary, confidence=0.95, mem=mem, source="structural_edit")
+
+
+def _structural_ai_edit(text: str, current_code: str, mem, body) -> Dict[str, Any]:
+    target = structural_edit.loose_target(text, current_code)
+    allowed, _settings, blocked_message = _ai_capability_check("generate")
+    if not allowed:
+        return {"success": True, "action": "deterministic_message", "message": blocked_message,
+                "speech": blocked_message, "heard": text, "policy_blocked": True, "capability": "generate"}
+    planned = _call_ai_code_edit_planner(text, current_code, mem, body, {})
+    plan = planned.get("plan") or {}
+    updated = str(plan.get("updated_code") or "")
+    if planned.get("status") == "planned" and updated and \
+            (target is None or structural_edit.added_statements_within(current_code, updated, target)):
+        if target is not None:
+            mem["recent_structure_headers"] = [current_code.splitlines()[target.header_line - 1].strip()]
+        return _natural_code_edit_response(text=text, current_code=current_code, updated_code=updated,
+                                           summary=str(plan.get("summary") or "Updated the current code."),
+                                           confidence=0.9, mem=mem, source="structural_edit_ai")
+    message = ("Where should that go? Say it with the place, for example: inside the loop, print hello.")
+    return {"success": True, "action": "clarify", "intent": "clarify", "message": message, "speech": message,
+            "needs_clarification": True, "heard": text, "source": "structural_edit"}
+
+
 def _print_request_response(text: str, code: str) -> Optional[Dict[str, Any]]:
     core = _EDIT_FILLER_RE.sub("", " ".join(str(text or "").split())).strip().rstrip(".!")
     if not core or _PRINT_REQUEST_HINGLISH_RE.search(core):
@@ -8843,6 +8960,14 @@ def _record_voice_memory(mem, text, intent, response):
         ai_action = response.get("ai_action") or {}
         code = ai_action.get("code") or response.get("spoken_code") or ""
         if code:
+            # Blocks this edit created ("insert loop run 5" -> "for i in range(6):")
+            # are what a follow-up "in the loop ..." most likely means.
+            previous = str(mem.get("_current_voice_code") or "")
+            new_headers = [h for h in structural_edit.header_lines(str(code))
+                           if h not in set(structural_edit.header_lines(previous))
+                           or ai_action.get("action") != "replace_code"]
+            if new_headers:
+                mem["recent_structure_headers"] = new_headers[-4:]
             if str(response.get("template_intent") or "").startswith("generate_"):
                 session_memory.record_generation(mem, text, str(code))
             else:
@@ -10142,6 +10267,12 @@ def _route_ai_natural_command_mapper(
     verbosity: str = "normal",
 ) -> dict:
 
+    # Semantic EDIT_CODE and natural-edit requests reach here with the
+    # learner's own words; a location in them ("loop ke andar ...") must be
+    # honoured before the mapper reduces the request to "insert a print".
+    structural = _structural_edit_response(text, current_code, mem, body, cursor_line)
+    if structural is not None:
+        return structural
     result = _call_ai_natural_command_mapper(text, current_code)
     if result.get("status") != "mapped":
         return _ai_mapper_clarification(text, reason=str(result.get("reason") or result.get("status") or "mapper_failed"))
@@ -10175,6 +10306,14 @@ def _route_ai_natural_command_mapper(
     if intent_name in {"edit_current_code", "edit_previous_program"}:
         edit_code = current_code or str(mem.get("last_generated_code") or "")
         return _route_ai_code_edit_planner(text, edit_code, mem, body, mapping)
+
+    if intent_name.startswith("insert_") and structural_edit.has_loose_location(text) and \
+            structural_edit.header_lines(current_code):
+        # The mapper reduced "usme har round hello bhi dikhao" to "insert a
+        # print", which would append it after everything. The words point at a
+        # block, so the planner (whose contract makes location binding) edits
+        # the program, and the result must land inside that block.
+        return _structural_ai_edit(text, current_code, mem, body)
 
     template_result = beginner_templates.build_from_mapping(
         intent_name,
@@ -12356,6 +12495,11 @@ def _voice_command_impl(body, _semantic_depth: int = 0):
         return _store_and_return(_report_response)
 
     if active_mode != "audio_blocks":
+        # "in loop print hello each time": WHERE as well as WHAT. Must run
+        # before the plain print/append paths, which only know "add a line".
+        structural = _structural_edit_response(text, current_code, mem, body, cursor_line)
+        if structural is not None:
+            return _store_and_return(structural)
         print_request = _print_request_response(text, current_code)
         if print_request is not None:
             return _store_and_return(print_request)

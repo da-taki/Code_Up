@@ -191,7 +191,11 @@ def planner_messages(
         "updated code in updated_code. Do not return patches only unless the app already has a "
         "safe patch applier. The learner's current editor code is always included below (it may be "
         "empty): never ask them to share, paste or send it. Use ask_clarification only when the "
-        "requested change itself is unclear."
+        "requested change itself is unclear. Location words are requirements: when the learner says "
+        "in, inside, each time, every iteration, before, after, or names a block (the loop, the if, the "
+        "else, the function, return), put the new code exactly there with that block's indentation; "
+        "never append it at the end of the program instead. Keep every unrelated line unchanged and "
+        "return the complete revised program. Ask which block only if several match equally."
     )
     files = project_files or {}
     file_summary = ", ".join(sorted(files)[:20]) if files else "(single editor file)"

@@ -703,6 +703,16 @@ def _match_loop(low: str) -> Optional[TemplateResult]:
         return None
     if re.search(r"\bwhile\s+count\b|\b(?:less|greater)\s+than\b", low):
         return None
+    # RANGE requests without the word loop: "count from 3 to 7", "iterate from
+    # 2 through 6" name both end values, so the end is included.
+    range_request = re.fullmatch(
+        r"(?:(?:please|now)\s+)?(?:count|counting|iterate|go)\s+from\s+([a-z0-9-]+)\s+"
+        r"(?:to|through|till|until|up\s+to)\s+([a-z0-9-]+)", low)
+    if range_request:
+        first, last = _number(range_request.group(1)), _number(range_request.group(2))
+        if first is not None and last is not None and 0 <= last - first <= 100:
+            return TemplateResult("insert_for_loop", code=make_for_loop_template(first, last + 1),
+                                  speech=f"Inserted a for loop from {first} to {last}.")
     if not re.search(
         r"^(?:please\s+|hey\s+|ok\s+|okay\s+|can\s+you\s+|could\s+you\s+|would\s+you\s+)*"
         r"(?:(?:insert|add|put|write|make|create|build|generate|give\s+me)\b.*\b(?:for\s+|while\s+)?loop\b|"
@@ -815,6 +825,18 @@ def _loop_from_slots(slots: Dict[str, Any], *, while_loop: bool) -> Optional[Tem
     start = _number(slots.get("start"))
     stop = _number(slots.get("stop"))
     step = _number(slots.get("step")) or 1
+    count = _number(slots.get("count"))
+    if count is not None and stop is None and (start in (None, 0)):
+        # "run 5 times" is a COUNT: exactly 5 iterations (range(5)), never an
+        # inclusive end value like "from 0 to 5" (range(6)).
+        if count <= 0 or count > 100:
+            return _clarify("Say how many times the loop should run, a number from 1 to 100.",
+                            intent="insert_while_loop" if while_loop else "insert_for_loop", reason="invalid_loop_count")
+        if while_loop:
+            return TemplateResult("insert_while_loop", code=make_while_loop_template(0, count, 1),
+                                  speech=f"Inserted a safe while loop that runs {count} times.")
+        return TemplateResult("insert_for_loop", code=make_for_loop_template(0, count, 1),
+                              speech=f"Inserted a for loop that runs {count} times.")
     if start is None and stop is None:
         return None
     if start is None:

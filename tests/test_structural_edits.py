@@ -215,17 +215,14 @@ def _ai(monkeypatch, model):
 
 def test_original_conversation_through_the_production_path(monkeypatch):
     client = _ai(monkeypatch, StructuralModel())
-    # "insert loop run 5" is handled by CodeUp's existing loop clarifier in
-    # this build; following its suggestion creates the learner's exact loop.
+    # Turn 1 is a COUNT request: no clarification, exactly 5 iterations
+    # (see tests/test_loop_count_generation.py).
     turn1 = _vc(client, "insert loop run 5", "")
-    if not _code(turn1):
-        assert turn1["action"] == "clarify" and "loop from" in turn1["speech"]
-        turn1 = _vc(client, "loop from 0 to 5", "")
     created = _code(turn1)
-    assert created == "for i in range(6):\n    print(i)"
+    assert created == "for i in range(5):\n    print(i)"
     turn2 = _vc(client, "in loop print hello each time", created + "\n")
     code = _code(turn2)
-    assert _body_sources(code, "for i in range(6)") == ["print(i)", 'print("Hello")']
+    assert _body_sources(code, "for i in range(5)") == ["print(i)", 'print("Hello")']
     assert 'print(i)\nprint("Hello")' not in code
 
 

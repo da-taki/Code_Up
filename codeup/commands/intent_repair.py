@@ -323,6 +323,68 @@ def _loop_bounds(tail: str):
     return None, None, None
 
 
+# ---- loop COUNT requests ("run 5 times") vs RANGE requests ("from 0 to 5") ----
+# A count is a number of iterations: "loop 5 times" -> range(5) (0..4). A range
+# names its end value: "loop from 0 to 5" -> range(6). Range phrasing is left
+# to _loop_bounds / the range templates; this only recognises counts.
+
+MAX_LOOP_COUNT = 100   # same ceiling as beginner_templates._loop_from_slots
+
+_COUNT_NUMBER = r"(?:(?:minus|negative)\s+)?-?[a-z0-9]+"
+_COUNT_TIMES_RE = re.compile(rf"(?<!\S)(?P<n>{_COUNT_NUMBER})\s+(?:times?|baar|bar|martaba|dafa)\b")
+_COUNT_AFTER_VERB_RE = re.compile(
+    rf"\b(?:loop|loops|runs?|running|repeat|repeats|iterate|iterates)\s+(?:for\s+)?(?P<n>{_COUNT_NUMBER})$")
+_COUNT_CONTEXT_RE = re.compile(
+    r"\b(?:loop|loops|repeat|repeats|run|runs|iterate|execute|do|times?|baar|bar|chalao|chala|chalaao)\b")
+_RANGE_PHRASE_RE = re.compile(r"\bfrom\s+\S+\s+(?:to|through|till|until|up\s+to)\b|\b\S+\s+(?:through|till)\s+\S+\b")
+_REPEAT_THIS_RE = re.compile(
+    r"\b(?:this|it|that|isko|ise|ye|yeh|the\s+code|my\s+code|this\s+code|code)\b")
+_LOOP_ACTION_RE = re.compile(r"\b(?:prints?|says?|display|shows?)\b")
+
+
+_HINDI_COUNTS = {"ek": 1, "teen": 3, "char": 4, "chaar": 4, "paanch": 5, "panch": 5, "chhe": 6, "cheh": 6,
+                 "saat": 7, "aath": 8, "nau": 9, "das": 10}   # "do" (2) is omitted: it is also English "do"
+
+
+def _signed_number(token: str) -> Optional[int]:
+    t = " ".join(str(token or "").lower().split())
+    sign = -1 if re.match(r"^(?:minus|negative)\s+", t) else 1
+    t = re.sub(r"^(?:minus|negative)\s+", "", t)
+    value = _to_number(t)
+    if value is None:
+        value = _HINDI_COUNTS.get(t)
+    return None if value is None else sign * value
+
+
+def parse_loop_count(text: str) -> Optional[Dict[str, Any]]:
+    """{"count": n, "repeat_this": bool} for a loop-count request, else None.
+
+    Not a count: range phrasing, loops whose body is named ("a loop that
+    prints hello 3 times" - build_insert_python builds those), and anything
+    without loop/repeat wording.
+    """
+    t = _norm(text)
+    t = re.sub(r"^(?:(?:acha|achha|ok|okay|so|bhai|please|now|can\s+you|could\s+you)\s+)+", "", t)
+    if not t or _RANGE_PHRASE_RE.search(t) or _LOOP_ACTION_RE.search(t):
+        return None
+    if not _COUNT_CONTEXT_RE.search(t):
+        return None
+    m = _COUNT_TIMES_RE.search(t) or _COUNT_AFTER_VERB_RE.search(t)
+    if not m:
+        return None
+    count = _signed_number(m.group("n"))
+    if count is None:
+        return None
+    has_loop_word = bool(re.search(r"\bloops?\b", t))
+    if count == 1 and not has_loop_word:
+        return None   # "usko ek baar chala ke dikha" = run it once, not a loop
+    repeat_this = not has_loop_word and bool(_REPEAT_THIS_RE.search(t))
+    bare = bool(re.fullmatch(rf"(?:run|repeat|loop)\s+{_COUNT_NUMBER}\s+times?", t))
+    if not has_loop_word and not repeat_this and not bare and not re.search(r"\b(?:repeat|baar|bar)\b", t):
+        return None   # "wait 5 seconds" etc. are not loop requests
+    return {"count": count, "repeat_this": repeat_this}
+
+
 def build_counting_loop_insert(text: str):
     raw = " ".join(str(text or "").split())
     if not raw or _LOOP_GUARD_RE.search(raw):

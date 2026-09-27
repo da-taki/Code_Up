@@ -119,8 +119,10 @@ def mapper_messages(
         "or instead, prefer edit_current_code when editor code is available and "
         "edit_previous_program when the user is referring to a recent generated "
         "program. Slots may describe only small template choices or edit facts "
-        "such as text, kind, target, start, stop, step, row, old_value, new_value, "
-        "or to. Schema: "
+        "such as text, kind, target, start, stop, step, count, row, old_value, new_value, "
+        "or to. For loops, count is a number of iterations (\"run 5 times\", \"loop 5 baar\" -> "
+        "count 5); start and stop are an inclusive range (\"from 0 to 5\" -> start 0, stop 5). "
+        "Never put a repeat count in stop. Schema: "
         "{\"intent\":\"insert_for_loop\",\"confidence\":0.0,"
         "\"slots\":{\"start\":1,\"stop\":5},\"reason\":\"short log reason\"}."
     )

@@ -8411,6 +8411,57 @@ def _structural_edit_response(text: str, current_code: str, mem, body, cursor_li
                                        summary=summary, confidence=0.95, mem=mem, source="structural_edit")
 
 
+def _loop_count_response(text: str, current_code: str, mem) -> Optional[Dict[str, Any]]:
+    """"insert loop run 5", "loop five times", "5 baar loop chala do": a loop
+    whose body runs exactly that many times - range(5), never range(6)."""
+    parsed = intent_repair.parse_loop_count(text)
+    if parsed is None:
+        return None
+
+    def _ask(message: str) -> Dict[str, Any]:
+        return {"success": True, "action": "clarify", "intent": "clarify", "message": message, "speech": message,
+                "needs_clarification": True, "heard": text, "source": "loop_count"}
+
+    allowed, _settings, blocked_message = _ai_capability_check("generate")
+    if not allowed:
+        return {"success": True, "action": "deterministic_message", "message": blocked_message,
+                "speech": blocked_message, "heard": text, "policy_blocked": True, "capability": "generate"}
+    count = int(parsed["count"])
+    if count == 0:
+        return _ask("A loop that runs 0 times never runs its body, so I did not add one. "
+                    "Say how many times, for example: loop 5 times.")
+    if count < 0:
+        return _ask("A loop cannot run a negative number of times. Say a number like 5, for example: loop 5 times.")
+    if count > intent_repair.MAX_LOOP_COUNT:
+        return _ask(f"{count} times is more than the beginner limit of {intent_repair.MAX_LOOP_COUNT} repeats. "
+                    "Try a smaller number, like 10.")
+    if parsed["repeat_this"]:
+        program = str(current_code or "")
+        if not program.strip():
+            return _ask(f"What should repeat {count} times? Write or generate the code first, "
+                        f"then say repeat this {count} times.")
+        try:
+            tree = ast.parse(program)
+        except SyntaxError:
+            return _ask("Your code has an error, so I cannot repeat it yet. Fix the error first.")
+        if any(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Import, ast.ImportFrom))
+               for node in tree.body):
+            return _ask(f"Which part should repeat {count} times? For example: inside the function, "
+                        f"or say loop {count} times to add a new loop.")
+        body_lines = [("    " + line) if line.strip() else line for line in program.rstrip("\n").splitlines()]
+        updated = f"for i in range({count}):\n" + "\n".join(body_lines)
+        return _natural_code_edit_response(text=text, current_code=program, updated_code=updated,
+                                           summary=f"Your program now repeats {count} times.",
+                                           confidence=0.95, mem=mem, source="loop_count")
+    python = f"for i in range({count}):\n    print(i)"
+    last = count - 1
+    confirmation = (f"Inserted a for loop that runs {count} time{'s' if count != 1 else ''}, "
+                    f"printing {'0' if count == 1 else f'0 to {last}'}.")
+    return {"success": True, "action": "conversational_edit", "intent": "insert_count_loop",
+            "ai_action": {"action": "append_code", "code": python, "spoken_confirmation": confirmation},
+            "heard": text, "speech": confirmation, "spoken_code": python, "source": "loop_count"}
+
+
 def _structural_ai_edit(text: str, current_code: str, mem, body) -> Dict[str, Any]:
     target = structural_edit.loose_target(text, current_code)
     allowed, _settings, blocked_message = _ai_capability_check("generate")
@@ -12500,6 +12551,9 @@ def _voice_command_impl(body, _semantic_depth: int = 0):
         structural = _structural_edit_response(text, current_code, mem, body, cursor_line)
         if structural is not None:
             return _store_and_return(structural)
+        loop_count = _loop_count_response(text, current_code, mem)
+        if loop_count is not None:
+            return _store_and_return(loop_count)
         print_request = _print_request_response(text, current_code)
         if print_request is not None:
             return _store_and_return(print_request)
@@ -12921,7 +12975,14 @@ def _voice_command_impl(body, _semantic_depth: int = 0):
         if intent == "insert_variable":
             return _store_and_return({"success": True, "action": "insert_variable", "name": slots.get("name", "value"), "value": slots.get("value", ""), "confidence": confidence})
         if intent == "append_line":
-            return _store_and_return({"success": True, "action": "append_line", "text": slots.get("text", ""), "confidence": confidence})
+            line_text = str(slots.get("text", "") or "")
+            # append_line types the words in as one line of code. A loop
+            # description ("a loop that runs 6 times") is not a code line:
+            # sending it produced an empty or broken line in the editor.
+            if re.search(r"\b(?:loop|loops|repeat|repeats|times)\b", line_text, re.IGNORECASE) and \
+                    not re.match(r"^\s*(?:for|while)\b.*:?\s*$", line_text, re.IGNORECASE):
+                return _store_and_return(_unclear_loop_command_response(text))
+            return _store_and_return({"success": True, "action": "append_line", "text": line_text, "confidence": confidence})
         if intent == "replace_line":
             return _store_and_return({"success": True, "action": "replace_line", "line_number": slots.get("line_number", 1), "text": slots.get("text", ""), "confidence": confidence})
         if intent == "insert_line":

@@ -25,7 +25,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from codeup.commands import intent_repair
+from codeup.commands import intent_repair, variable_creation
 
 
 @dataclass
@@ -151,6 +151,11 @@ _TRAIL_RE = re.compile(r"\s+(?:please|too|as\s+well|also|now|there|here|karo|kar
 def build_statement(request: str, code: str = "") -> Optional[str]:
     """Python for the requested statement (may be several lines), unindented."""
     raw = " ".join(str(request or "").split())
+    # "make variable total with value 0", "make list marks 90 80": the
+    # variable-creation parser owns names, values and containers.
+    created = variable_creation.statement_for(raw, code)
+    if created:
+        return created
     hinglish = re.match(r"^(?P<c>.+?)\s+print\s+(?:karo|kar\s+do|kardo|kare|karna|kar)$", raw)
     if hinglish:
         return f"print({intent_repair.print_argument_python(hinglish.group('c'), code)})"

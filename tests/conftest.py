@@ -20,6 +20,7 @@ INTEGRATION_MODULES = {
     "test_run_tooltip_reflow.py",
     "test_semantic_run_browser.py",
     "test_tutorial_frontend.py",
+    "test_variable_creation_browser.py",
     "test_voice_engine.py",
     "test_voice_recognition_frontend.py",
     "test_voice_speech_frontend.py",

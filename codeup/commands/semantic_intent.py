@@ -27,6 +27,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from codeup.commands import variable_creation
+
 
 # ---------------------------------------------------------------------------
 # Intent inventory
@@ -64,6 +66,12 @@ _SPECS: List[IntentSpec] = [
                params=("aspect",), changes_code=True, needs_code=True),
     IntentSpec("EDIT_CODE", "a specific change to the current code (add/change/remove something concrete)",
                "delegate", label="change the code", changes_code=True),
+    IntentSpec("CREATE_VARIABLE", "create or set ONE variable, list, tuple, set or dictionary. params: name "
+               "(the variable name the learner said, or null), value_type (string, integer, float, boolean, none, "
+               "list, tuple, set, dictionary, or variable when the value is an existing variable's name), value "
+               "(JSON data: a string, number, true/false, null, an array of items, or an object of key to value; "
+               "null if they did not say it; words stay strings; never Python code)",
+               "direct", label="create a variable", params=("name", "value_type", "value"), changes_code=True),
     IntentSpec("GENERATE_CODE", "write a NEW program; param description: what the program should do in plain words "
                "(empty if they did not say)", "direct", label="make a new program", params=("description",),
                changes_code=True),
@@ -137,6 +145,9 @@ _IMPROVE_ASPECTS = ("readability", "features", "error_handling")
 _STYLE_VALUES = ("simple", "normal")
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,40}$")
 _DESCRIPTION_RE = re.compile(r"^[A-Za-z0-9 ,.'%?/&+-]{2,120}$")
+_VALUE_TYPE_ALIASES = {**{t: t for t in variable_creation.VALUE_TYPES if t != "expression"},
+                       "str": "string", "text": "string", "int": "integer", "number": "integer",
+                       "bool": "boolean", "dict": "dictionary", "null": "none", "array": "list"}
 _CODE_LIKE_RE = re.compile(r"[{}();=<>`\\]|\bimport\b|\bexec\b|\beval\b|__|https?:|\bos\.|\bsubprocess\b", re.I)
 
 
@@ -230,7 +241,7 @@ def _validate_params(intent: str, params: Any) -> Tuple[Optional[Dict[str, Any]]
         return None, "unexpected_param"
     clean: Dict[str, Any] = {}
     for key, value in params.items():
-        if value in (None, ""):
+        if value is None or (isinstance(value, str) and value == "" and key != "value"):
             continue
         if key == "line":
             try:
@@ -257,6 +268,20 @@ def _validate_params(intent: str, params: Any) -> Tuple[Optional[Dict[str, Any]]
             if style not in _STYLE_VALUES:
                 return None, "bad_style"
             clean[key] = style
+        elif key == "name" and intent == "CREATE_VARIABLE":
+            name = " ".join(str(value).split())
+            if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_ ]{0,40}", name):
+                return None, "bad_name"
+            clean[key] = name
+        elif key == "value_type":
+            kind = str(value).strip().lower()
+            if kind not in _VALUE_TYPE_ALIASES:
+                return None, "bad_value_type"
+            clean[key] = _VALUE_TYPE_ALIASES[kind]
+        elif key == "value":
+            if not variable_creation.valid_semantic_value(value):
+                return None, "bad_value"
+            clean[key] = value
         elif key == "description":
             desc = " ".join(str(value).split())
             if _CODE_LIKE_RE.search(desc) or not _DESCRIPTION_RE.match(desc):

@@ -36,6 +36,7 @@ from codeup.commands import clarification_flow
 from codeup.learning import concept_qa
 from codeup.commands import intent_repair
 from codeup.commands import structural_edit
+from codeup.commands import variable_creation
 from codeup.commands.intent_parser import parse_intent
 from codeup.projects.project_support import (
     PROJECT_MANIFEST,
@@ -8411,6 +8412,205 @@ def _structural_edit_response(text: str, current_code: str, mem, body, cursor_li
                                        summary=summary, confidence=0.95, mem=mem, source="structural_edit")
 
 
+def _variable_policy_block(text: str) -> Optional[Dict[str, Any]]:
+    allowed, _settings, blocked_message = _ai_capability_check("generate")
+    if allowed:
+        return None
+    return {"success": True, "action": "deterministic_message", "message": blocked_message,
+            "speech": blocked_message, "heard": text, "policy_blocked": True, "capability": "generate"}
+
+
+def _variable_ask(req, text: str, mem, *, where: str = "", source: str = "variable_creation",
+                  message: str = "") -> Dict[str, Any]:
+    """Ask for ONE missing slot; the slots already heard stay pending."""
+    question = message or variable_creation.question(req)
+    session_memory.set_pending(mem, {
+        "type": "variable_create", **req.to_pending(), "where": str(where or "")[:300],
+        "owner": _semantic_owner(), "created_at": time.time(), "attempts": 0, "question": question,
+    })
+    return {"success": True, "action": "clarify", "intent": "clarify", "message": question, "speech": question,
+            "needs_clarification": True, "heard": text, "reason": "variable_slot",
+            "missing": list(req.missing[:1]), "source": source, "variable_request": req.semantic()}
+
+
+def _variable_request_response(req, text: str, current_code: str, mem, *, cursor_line=None, where: str = "",
+                               source: str = "variable_creation") -> Dict[str, Any]:
+    """Create (or update) the variable a CREATE_VARIABLE request describes,
+    or ask for the next missing slot."""
+    blocked = _variable_policy_block(text)
+    if blocked is not None:
+        session_memory.clear_pending(mem)
+        return blocked
+    if req.missing or req.problem or req.value is None:
+        if not req.missing:
+            req.missing.append("value")
+        return _variable_ask(req, text, mem, where=where, source=source)
+    python = variable_creation.render(req.name, req.value)
+    if not python:
+        req.missing = ["value"]
+        return _variable_ask(req, text, mem, where=where, source=source,
+                             message="I could not turn that into a safe Python value. "
+                                     "Say the value again, for example: 95 or hello.")
+    code = str(current_code or "")
+    extra = {"variable_request": req.semantic(), "spoken_code": python}
+    if where and code.strip():
+        result = structural_edit.plan(where, code, cursor_line=cursor_line, statement=python,
+                                      recent_headers=mem.get("recent_structure_headers") or [])
+        if result.status == "ok":
+            target = result.target
+            mem["recent_structure_headers"] = [code.splitlines()[target.header_line - 1].strip()]
+            placement = {"body": "inside", "orelse": "inside", "parent": result.location.relation}[target.field]
+            summary = f"I added {' '.join(python.split())} {placement} {target.label}."
+            response = _natural_code_edit_response(text=text, current_code=code, updated_code=result.code,
+                                                   summary=summary, confidence=0.95, mem=mem, source=source,
+                                                   mapped_intent="create_variable")
+            response.update(extra)
+            return response
+        if result.status == "clarify":
+            return {"success": True, "action": "clarify", "intent": "clarify", "message": result.message,
+                    "speech": result.message, "needs_clarification": True, "heard": text, "source": source}
+    new_code, mode = variable_creation.apply(code, req.name, python, variable_creation.referenced_names(req.value))
+    speech = variable_creation.describe(req.name, req.value, python)
+    if mode == "append":
+        return {"success": True, "action": "conversational_edit", "intent": "create_variable",
+                "ai_action": {"action": "append_code", "code": python, "spoken_confirmation": speech},
+                "heard": text, "speech": speech, "source": source, **extra}
+    if mode == "replace":
+        speech = (f"I changed {req.name}. It is now {python.split(' = ', 1)[1]}." if "\n" not in python
+                  else f"I updated {req.name}.")
+    response = _natural_code_edit_response(text=text, current_code=code, updated_code=new_code, summary=speech,
+                                           confidence=0.95, mem=mem, source=source, mapped_intent="create_variable")
+    response.update(extra)
+    return response
+
+
+def _variable_creation_response(text: str, current_code: str, mem, body, cursor_line=None) -> Optional[Dict[str, Any]]:
+    code = str(current_code or "")
+    update = variable_creation.parse_container_update(text, code)
+    if update is not None:
+        blocked = _variable_policy_block(text)
+        if blocked is not None:
+            return blocked
+        if update["status"] != "ok":
+            return {"success": True, "action": "clarify", "intent": "clarify", "message": update["message"],
+                    "speech": update["message"], "needs_clarification": True, "heard": text,
+                    "source": "variable_update"}
+        response = _natural_code_edit_response(text=text, current_code=code, updated_code=update["code"],
+                                               summary=update["summary"], confidence=0.95, mem=mem,
+                                               source="variable_update", mapped_intent="update_variable")
+        response["spoken_code"] = update["python"]
+        return response
+    where, request_text = "", text
+    if code.strip():
+        split = structural_edit.split_request(text)
+        if split is not None:
+            where, request_text = text, split[1]
+    try:
+        req = variable_creation.parse(request_text, code)
+    except Exception as exc:   # a parser bug must never break the voice pipeline
+        _debug_log(f"variable_creation.parse failed: {exc!r}")
+        return None
+    if req is None:
+        return None
+    if where and req.complete:
+        return None   # structural_edit places it (build_statement knows variables)
+    if req.partial:
+        return _variable_semantic_response(text, mem, code, req)
+    return _variable_request_response(req, text, code, mem, cursor_line=cursor_line, where=where)
+
+
+def _variable_semantic_response(text: str, mem, code: str, req) -> Dict[str, Any]:
+    """Words CodeUp could only partly read as a variable request ("acha ek
+    variable bana dete hain jiska naam score ho..."): the semantic resolver
+    reads them, restricted to CREATE_VARIABLE. Without a model: a short
+    confirmation of what was heard, or an example to follow."""
+    blocked = _variable_policy_block(text)
+    if blocked is not None:
+        return blocked
+    if _structured_ai_available():
+        resolution = semantic_intent.resolve(
+            text, ai_fn=call_conversation_orchestrator_ai, context=_semantic_context(mem, code, ""),
+            restrict=["CREATE_VARIABLE"],
+        )
+        meta = {**resolution.to_log(), "source": "semantic_ai"}
+        _debug_log(f"variable semantic intent: {meta}")
+        if resolution.status == "resolved" and resolution.intent == "CREATE_VARIABLE":
+            response = _variable_request_response(variable_creation.request_from_semantic(resolution.params, code),
+                                                  text, code, mem, source="semantic_ai")
+            response.setdefault("semantic", meta)
+            return response
+    python = variable_creation.render(req.name, req.value) if req.name and req.value is not None else None
+    if python and "\n" not in python:
+        req.missing = ["confirm"]
+        return _variable_ask(req, text, mem, message=f"Should I add {python}? Say yes or no.")
+    message = ("I think you want to make a variable, but I did not catch all of it. "
+               "Say it like: make variable score with value 95.")
+    return {"success": True, "action": "clarify", "intent": "clarify", "message": message, "speech": message,
+            "needs_clarification": True, "heard": text, "source": "variable_creation"}
+
+
+_VARIABLE_REPLY_COMMANDS = {"run", "stop", "undo", "help", "exit", "clear", "pause", "resume", "repeat", "again",
+                            "explain", "hint", "tutorial", "fix", "read"}
+_VARIABLE_YES_RE = re.compile(r"^(?:yes|yeah|yep|sure|ok(?:ay)?|haan|ha|han|ji|haan ji|do it|go ahead|kar do|karo|"
+                              r"theek hai|thik hai|add it)$")
+_VARIABLE_NO_RE = re.compile(r"^(?:no|nope|nahi|nahin|na|not that|galat|wrong)$")
+
+
+def _variable_pending_reply(text, body, mem, current_code, store):
+    """The answer to "What should I name the variable?" / "What value should
+    score have?" completes the pending request; slots already heard are never
+    asked again. A clearly new command drops the question instead."""
+    pending = session_memory.get_pending(mem)
+    if not pending or pending.get("type") != "variable_create":
+        return None
+    if (pending.get("owner") and pending.get("owner") != _semantic_owner()) or \
+            semantic_intent.pending_is_stale(pending):
+        session_memory.clear_pending(mem)
+        return None
+    heard = " ".join(str(text or "").split())
+    core = semantic_intent.strip_fillers(heard)
+    missing = (pending.get("missing") or [""])[0]
+    if missing == "confirm":
+        session_memory.clear_pending(mem)
+        if _VARIABLE_YES_RE.match(core) or _VARIABLE_YES_RE.match(heard.lower()):
+            req = variable_creation.Request.from_pending(pending)
+            req.missing = []
+            return store(_variable_request_response(req, text, current_code, mem, where=pending.get("where") or ""))
+        if _VARIABLE_NO_RE.match(core) or _VARIABLE_NO_RE.match(heard.lower()) or variable_creation.is_cancel(core):
+            msg = "Okay, I did not add it. Say the variable again, for example: make variable score with value 95."
+            return store({"success": True, "action": "deterministic_message", "message": msg, "speech": msg,
+                          "heard": text, "source": "variable_creation"})
+        return None
+    if variable_creation.is_cancel(heard) or variable_creation.is_cancel(core):
+        session_memory.clear_pending(mem)
+        msg = "Okay, I did not create the variable."
+        return store({"success": True, "action": "deterministic_message", "message": msg, "speech": msg,
+                      "heard": text, "source": "variable_creation"})
+    words = core.split()
+    single_name = missing == "name" and len(words) == 1 and words[0] not in _VARIABLE_REPLY_COMMANDS
+    answer_lead = re.match(r"^(?:make|set|call|name)\s+it\b", core)
+    if not single_name and not answer_lead and (
+            _reply_is_new_command(core) or (len(words) == 1 and words[0] in _VARIABLE_REPLY_COMMANDS)):
+        # "actually run the code": the new command wins; the question is dropped.
+        session_memory.clear_pending(mem)
+        return None
+    req, _reason = variable_creation.complete(pending, heard, current_code)
+    if req is None:
+        attempts = int(pending.get("attempts") or 0) + 1
+        if attempts >= 3:
+            session_memory.clear_pending(mem)
+            msg = "Okay, I will leave the variable for now. Say it again whenever you are ready."
+            return store({"success": True, "action": "deterministic_message", "message": msg, "speech": msg,
+                          "heard": text, "source": "variable_creation"})
+        pending["attempts"] = attempts
+        question = pending.get("question") or "What should I name the variable?"
+        msg = f"Sorry, I did not catch that. {question}"
+        return store({"success": True, "action": "clarify", "intent": "clarify", "message": msg, "speech": msg,
+                      "needs_clarification": True, "heard": text, "source": "variable_creation"})
+    session_memory.clear_pending(mem)
+    return store(_variable_request_response(req, text, current_code, mem, where=pending.get("where") or ""))
+
+
 def _loop_count_response(text: str, current_code: str, mem) -> Optional[Dict[str, Any]]:
     """"insert loop run 5", "loop five times", "5 baar loop chala do": a loop
     whose body runs exactly that many times - range(5), never range(6)."""
@@ -10535,6 +10735,7 @@ def _validated_python_insert_response(intent: str, slots: Dict[str, Any], text: 
 # through anything named by model output.
 
 _SEMANTIC_CAPABILITY = {
+    "CREATE_VARIABLE": "generate",
     "GENERATE_CODE": "generate",
     "IMPROVE_CODE": "generate",
     "EDIT_CODE": "generate",
@@ -10679,6 +10880,11 @@ def _semantic_execute(intent: str, params: Dict[str, Any], text: str, body, mem,
             return _semantic_ask(text, mem, current_code, choices=["IMPROVE_CODE"], missing="aspect",
                                  intent="IMPROVE_CODE", store=store, meta=meta)
         return _semantic_redispatch(_IMPROVE_INSTRUCTIONS[aspect], body, text, meta)
+    if intent == "CREATE_VARIABLE":
+        request_obj = variable_creation.request_from_semantic(params, current_code)
+        response = _variable_request_response(request_obj, text, current_code, mem, source="semantic_ai")
+        response.setdefault("semantic", meta)
+        return store(response)
     if intent == "EDIT_CODE":
         mapped = _route_ai_natural_command_mapper(text, current_code, mem, body,
                                                   error_context=error_context)
@@ -11159,6 +11365,9 @@ def _voice_command_impl(body, _semantic_depth: int = 0):
         semantic_reply = _handle_semantic_pending_reply(text, body, mem, current_code, _store_and_return)
         if semantic_reply is not None:
             return semantic_reply
+        variable_reply = _variable_pending_reply(text, body, mem, current_code, _store_and_return)
+        if variable_reply is not None:
+            return variable_reply
         repeat_reply = _repeat_request_response(text, body, mem, current_code, _store_and_return)
         if repeat_reply is not None:
             return repeat_reply
@@ -12546,6 +12755,11 @@ def _voice_command_impl(body, _semantic_depth: int = 0):
         return _store_and_return(_report_response)
 
     if active_mode != "audio_blocks":
+        # "make variable score 95", "marks ki list banao 90 80 95", "add
+        # Amsterdam to cities": variable / container creation with slot filling.
+        variable_creation_reply = _variable_creation_response(text, current_code, mem, body, cursor_line)
+        if variable_creation_reply is not None:
+            return _store_and_return(variable_creation_reply)
         # "in loop print hello each time": WHERE as well as WHAT. Must run
         # before the plain print/append paths, which only know "add a line".
         structural = _structural_edit_response(text, current_code, mem, body, cursor_line)
